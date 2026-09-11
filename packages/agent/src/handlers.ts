@@ -8,6 +8,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import {
   CORE_VERSION, createWorkflow as coreCreateWorkflow, defaultRegistry, detectTools,
+  deleteWorkflow as coreDeleteWorkflow,
   deleteRun as coreDeleteRun, diffConfigLayer, getRun as coreGetRun, loadDoctorConfig,
   workingDiffFiles,
   globalConfigPath, initWorkspace as coreInitWorkspace, listWorkflows as coreListWorkflows,
@@ -20,6 +21,7 @@ import type { AttachmentSource, WorkspaceConfig } from '@whiphand/core';
 import type {
   CancelRunParams, CancelRunResult, ConfigGetParams, ConfigGetResult, ConfigSetParams,
   ConfigSetResult, CreateWorkflowParams, CreateWorkflowResult, DeleteRunParams, DeleteRunResult,
+  DeleteWorkflowParams, DeleteWorkflowResult,
   DoctorResult,
   EndSessionParams, EndSessionResult, GetWorkflowParams,
   ResolveManualParams, ResolveManualResult,
@@ -267,6 +269,11 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
   const updateWorkflow: Handler = async (params): Promise<UpdateWorkflowResult> => {
     const { workdir, name, workflow, scope } = params as UpdateWorkflowParams;
     return coreUpdateWorkflow(resolve(workdir), name, workflow, scope);
+  };
+
+  const deleteWorkflow: Handler = async (params): Promise<DeleteWorkflowResult> => {
+    const { workdir, name, scope } = params as DeleteWorkflowParams;
+    return coreDeleteWorkflow(resolve(workdir), name, scope);
   };
 
   const initWorkspace: Handler = async (params): Promise<InitWorkspaceResult> => {
@@ -660,7 +667,8 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
   const remoteAccessRotateToken: Handler = async () => requireRemote().rotateToken();
 
   return {
-    hello, listWorkflows, getWorkflow, createWorkflow, updateWorkflow, initWorkspace, doctor, configGet, configSet,
+    hello, listWorkflows, getWorkflow, createWorkflow, updateWorkflow, deleteWorkflow, initWorkspace, doctor,
+    configGet, configSet,
     startRun, resumeRun, cancelRun, deleteRun, setRunLocked, renameRun, pruneRuns, endSession, resolveManual,
     listRuns, getRun, getWorkingDiff, readArtifact, writeArtifact, statArtifact,
     ptyInput, ptyResize,

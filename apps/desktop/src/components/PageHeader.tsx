@@ -55,6 +55,7 @@ export const PAGE_HEADER_HEIGHT_FALLBACK = 56;
  *   Save                        -> Save20Regular
  *   Cancel / dismiss an edit    -> Dismiss20Regular
  *   Stop a running thing        -> Stop20Regular      (distinct from Dismiss)
+ *   Delete                      -> Delete20Regular
  *   Create (untyped)            -> Add20Regular
  *   Create (typed)              -> DocumentAdd* / FolderAdd* (already in use)
  *   Go back                     -> ArrowLeft20Regular

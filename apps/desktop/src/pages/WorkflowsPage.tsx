@@ -20,7 +20,8 @@ import { Add20Regular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
 import { PageHeader } from '../components/PageHeader.tsx';
-import { WorkflowCard } from '../components/WorkflowCard.tsx';
+import { WorkflowCard, isWorkflowFile } from '../components/WorkflowCard.tsx';
+import { DeleteWorkflowDialog } from '../components/DeleteWorkflowDialog.tsx';
 import type { WorkflowEntry } from '../components/WorkflowCard.tsx';
 import type { Scope } from '../../../../packages/core/src/types.ts';
 import { WorkflowEditor } from '../workflow-editor/WorkflowEditor.tsx';
@@ -41,7 +42,7 @@ export interface WorkflowsPageProps {
  * itself (`WorkflowEditor`) owns the draft, the save, and its own session-only
  * UI state; this page keeps only the editing identity — the list entry's
  * `name` + `source`, never the workflow's own possibly-mismatched `name:`
- * field — and reloads the list once a save lands.
+ * field — and reloads the list once a save or a delete lands.
  */
 export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
   const client = useAgentClient();
@@ -62,6 +63,8 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
   const [createError, setCreateError] = useState<string | null>(null);
 
   const [editing, setEditing] = useState<{ name: string; source: Scope } | null>(null);
+  /** The card awaiting delete confirmation; null when no dialog is open. */
+  const [deleting, setDeleting] = useState<{ name: string; source: Scope } | null>(null);
 
   useEffect(() => {
     if (!workspacePath) return;
@@ -123,6 +126,11 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
   function startEdit(entry: WorkflowEntry): void {
     if (!entry.workflow) return;
     setEditing({ name: entry.name, source: entry.source });
+  }
+
+  /** Deleting this project workflow uncovers a global one of the same name. */
+  function revealsGlobal(name: string, source: Scope): boolean {
+    return source === 'project' && workflows.some(w => w.source === 'global' && w.name === name && isWorkflowFile(w));
   }
 
   const newWorkflowDialog = (
@@ -191,7 +199,12 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
           source={editing.source}
           workdir={workspacePath}
           onCancel={() => setEditing(null)}
+          revealsGlobal={revealsGlobal(editing.name, editing.source)}
           onSaved={() => {
+            setEditing(null);
+            setReloadKey(k => k + 1);
+          }}
+          onDeleted={() => {
             setEditing(null);
             setReloadKey(k => k + 1);
           }}
@@ -220,6 +233,7 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
           entry={entry}
           onRun={() => onRunWorkflow(entry.name, entry.source)}
           onEdit={startEdit}
+          onDelete={target => setDeleting({ name: target.name, source: target.source })}
         />
       ))}
     </div>
@@ -262,6 +276,19 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
         </div>
       </PageHeader>
       <div style={{ marginTop: 16 }}>{body}</div>
+      {deleting && (
+        <DeleteWorkflowDialog
+          name={deleting.name}
+          source={deleting.source}
+          workdir={workspacePath}
+          revealsGlobal={revealsGlobal(deleting.name, deleting.source)}
+          onDeleted={() => {
+            setDeleting(null);
+            setReloadKey(k => k + 1);
+          }}
+          onDismiss={() => setDeleting(null)}
+        />
+      )}
     </div>
   );
 }

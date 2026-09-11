@@ -3,8 +3,9 @@ import {
   Badge, Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle,
   MessageBar, MessageBarBody, Spinner, Text,
 } from '@fluentui/react-components';
-import { Add20Regular, Dismiss20Regular, Save20Regular } from '@fluentui/react-icons';
+import { Add20Regular, Delete20Regular, Dismiss20Regular, Save20Regular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
+import { DeleteWorkflowDialog } from '../components/DeleteWorkflowDialog.tsx';
 import { PageHeader } from '../components/PageHeader.tsx';
 import { PageFooter } from '../components/PageFooter.tsx';
 import type { Scope, Workflow } from '../../../../packages/core/src/types.ts';
@@ -22,8 +23,12 @@ export interface WorkflowEditorProps {
   name: string;
   source: Scope;
   workdir: string;
+  /** A project workflow overriding a global one of the same name — the delete confirmation says so. */
+  revealsGlobal: boolean;
   onSaved: () => void;
   onCancel: () => void;
+  /** The workflow's file is gone. Any unsaved draft goes with it — the delete confirmation covers that. */
+  onDeleted: () => void;
 }
 
 /** True when hiding `row` because it sits inside a loop whose body is folded. */
@@ -49,7 +54,9 @@ function computeVisible(rows: EditorRow[], isBodyFolded: (id: string) => boolean
  * child of WorkflowsPage, which keeps the `{ name, source }` editing identity
  * and passes it down; the app has no router for this to be a destination of.
  */
-export function WorkflowEditor({ workflow, name, source, workdir, onSaved, onCancel }: WorkflowEditorProps) {
+export function WorkflowEditor({
+  workflow, name, source, workdir, revealsGlobal, onSaved, onCancel, onDeleted,
+}: WorkflowEditorProps) {
   const client = useAgentClient();
   const draftApi = useWorkflowDraft(workflow);
   const { draft, rows } = draftApi;
@@ -59,6 +66,7 @@ export function WorkflowEditor({ workflow, name, source, workdir, onSaved, onCan
   // A global workflow's save gets its own confirmation: every workspace on
   // the machine reads it, not just this one.
   const [confirmingGlobalSave, setConfirmingGlobalSave] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const notes = readerNotes(draft);
   const noteByStepId = new Map(notes.map(n => [n.stepId, n.text]));
@@ -112,11 +120,32 @@ export function WorkflowEditor({ workflow, name, source, workdir, onSaved, onCan
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
       {globalSaveConfirmDialog}
+      {confirmingDelete && (
+        <DeleteWorkflowDialog
+          name={name}
+          source={source}
+          workdir={workdir}
+          revealsGlobal={revealsGlobal}
+          onDeleted={onDeleted}
+          onDismiss={() => setConfirmingDelete(false)}
+        />
+      )}
       <PageHeader>
-        <Text weight="semibold" size={500}>
-          Edit workflow: {name}
-          {source === 'global' && <Badge appearance="tint" color="brand" style={{ marginLeft: 8 }}>Global</Badge>}
-        </Text>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text weight="semibold" size={500}>
+            Edit workflow: {name}
+            {source === 'global' && <Badge appearance="tint" color="brand" style={{ marginLeft: 8 }}>Global</Badge>}
+          </Text>
+          <Button
+            appearance="secondary"
+            icon={<Delete20Regular />}
+            aria-label={`Delete ${name}`}
+            disabled={saving}
+            onClick={() => setConfirmingDelete(true)}
+          >
+            Delete
+          </Button>
+        </div>
       </PageHeader>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 16, paddingBottom: 16 }}>

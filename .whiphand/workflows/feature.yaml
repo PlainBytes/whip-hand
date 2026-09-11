@@ -7,21 +7,21 @@ inputs:
     required: true
     prompt: What are we building?
 steps:
-  - id: plan          # live terminal chat; artifact harvested afterwards
+  - id: plan # live terminal chat; artifact harvested afterwards
     runner: claude
     mode: interactive
     writes: false
-    inputs: [attachments]   # files attached at start (--attach); dropped when there are none
+    inputs: [attachments] # files attached at start (--attach); dropped when there are none
     output: plan.md
     prompt: |
       We are planning: {{ inputs.feature }}. Work with me on a plan. Do not modify files.
 
-  - id: fix-cycle     # repeats its body until 'review' returns VERDICT: PASS
+  - id: fix-cycle # repeats its body until 'review' returns VERDICT: PASS
     kind: loop
     until: review
     max_iterations: 3
     steps:
-      - id: execute   # headless; may write
+      - id: execute # headless; may write
         runner: claude
         mode: headless
         writes: true
@@ -30,6 +30,7 @@ steps:
         inputs: [plan, review]
         output: execute-report.md
         prompt: Implement the attached plan.
+        model: sonnet
 
       # A shell step: no tokens, no runner. Uncomment to make the tests part of
       # the cycle — with 'verdict: true' a non-zero exit sends the loop round
@@ -40,7 +41,7 @@ steps:
       #   verdict: true
       #   output: tests.log
 
-      - id: review    # headless, read-only, must end with VERDICT: PASS|FAIL
+      - id: review # headless, read-only, must end with VERDICT: PASS|FAIL
         runner: claude
         mode: headless
         writes: false

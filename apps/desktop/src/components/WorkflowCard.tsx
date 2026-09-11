@@ -1,4 +1,5 @@
 import { Badge, Button, Card, MessageBar, MessageBarBody, Text } from '@fluentui/react-components';
+import { Delete20Regular } from '@fluentui/react-icons';
 import type { ListWorkflowsResult } from '../../../../packages/agent/src/protocol.ts';
 import type { Workflow } from '../../../../packages/core/src/types.ts';
 import { isLoopStep, flattenSteps } from '../../../../packages/core/src/steps.ts';
@@ -19,6 +20,17 @@ export interface WorkflowCardProps {
    * that silently writes to the wrong one.
    */
   onEdit: (entry: WorkflowEntry) => void;
+  /** Takes the whole entry for the same reason `onEdit` does: the target is its `name` + `source`. */
+  onDelete: (entry: WorkflowEntry) => void;
+}
+
+/**
+ * False for the entry listWorkflows emits when a whole scope's directory
+ * can't be read — its `path` is that directory, not a file, so there's
+ * nothing to delete.
+ */
+export function isWorkflowFile(entry: WorkflowEntry): boolean {
+  return /\.ya?ml$/.test(entry.path);
 }
 
 function plural(n: number, noun: string): string {
@@ -45,12 +57,25 @@ function summary(workflow: Workflow): string {
 
 /**
  * One workflow as a card: name, description and its ordered steps visible
- * without a click, with Run and Edit on the bottom edge of the card that owns
- * them. An entry that failed to parse shows the error instead — there's no
- * workflow object to run or edit.
+ * without a click, with Run, Edit and Delete on the bottom edge of the card
+ * that owns them. An entry that failed to parse shows the error instead —
+ * there's no workflow object to run or edit, but its file can still be deleted.
  */
-export function WorkflowCard({ entry, onRun, onEdit }: WorkflowCardProps) {
+export function WorkflowCard({ entry, onRun, onEdit, onDelete }: WorkflowCardProps) {
   const workflow = entry.workflow;
+  // Set apart from Run/Edit at the far end of the row: the one action that
+  // can't be taken back.
+  const deleteButton = (
+    <Button
+      appearance="subtle"
+      icon={<Delete20Regular />}
+      aria-label={`Delete ${entry.name}`}
+      style={{ marginLeft: 'auto' }}
+      onClick={() => onDelete(entry)}
+    >
+      Delete
+    </Button>
+  );
 
   return (
     <Card>
@@ -71,9 +96,14 @@ export function WorkflowCard({ entry, onRun, onEdit }: WorkflowCardProps) {
       )}
 
       {!workflow ? (
-        <MessageBar intent="error">
-          <MessageBarBody>{entry.error ?? 'This workflow could not be read.'}</MessageBarBody>
-        </MessageBar>
+        <>
+          <MessageBar intent="error">
+            <MessageBarBody>{entry.error ?? 'This workflow could not be read.'}</MessageBarBody>
+          </MessageBar>
+          {isWorkflowFile(entry) && (
+            <div style={{ display: 'flex', gap: 8, marginTop: 'auto' }}>{deleteButton}</div>
+          )}
+        </>
       ) : (
         <>
           {workflow.description ? (
@@ -98,12 +128,13 @@ export function WorkflowCard({ entry, onRun, onEdit }: WorkflowCardProps) {
           </ol>
 
           {/* Pinned to the card's bottom edge (the Card is a flex column), so
-              Run/Edit line up across a row however long each step list is.
+              Run/Edit/Delete line up across a row however long each step list is.
               Relies on the page grid's default `align-items: stretch` making
               every card in a row as tall as the tallest. */}
           <div style={{ display: 'flex', gap: 8, marginTop: 'auto' }}>
             <Button appearance="primary" onClick={onRun}>Run</Button>
             <Button appearance="secondary" onClick={() => onEdit(entry)}>Edit</Button>
+            {deleteButton}
           </div>
         </>
       )}

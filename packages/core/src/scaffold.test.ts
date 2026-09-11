@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  createWorkflow, initWorkspace, workflowTemplate, specDrivenTemplate, featureDevelopmentTemplate, updateWorkflow,
+  createWorkflow, deleteWorkflow, initWorkspace, workflowTemplate, specDrivenTemplate, featureDevelopmentTemplate,
+  updateWorkflow,
 } from './scaffold.ts';
 import { parseWorkflow, WorkflowError } from './schema.ts';
 import { loadWorkspaceConfig } from './config.ts';
@@ -197,4 +198,61 @@ test('updateWorkflow rejects a semantically invalid workflow and does not touch 
   await assert.rejects(() => updateWorkflow(ws, 'my-flow', invalid), (e: unknown) =>
     e instanceof WorkflowError && e.problems.some(p => p.includes('duplicate step id')));
   assert.equal(await readFile(path, 'utf8'), before);
+});
+
+test('deleteWorkflow removes a project workflow file', async () => {
+  const ws = await mkdtemp(join(tmpdir(), 'whiphand-scaffold-'));
+  const { path } = await createWorkflow(ws, 'my-flow');
+
+  assert.deepEqual(await deleteWorkflow(ws, 'my-flow'), { deleted: true });
+  await assert.rejects(() => access(path), /ENOENT/);
+});
+
+test('deleteWorkflow removes a global workflow when scope is global', async () => {
+  await withConfigHome(async configHome => {
+    const ws = await mkdtemp(join(tmpdir(), 'whiphand-scaffold-'));
+    await createWorkflow(ws, 'my-global-flow', 'global');
+
+    assert.deepEqual(await deleteWorkflow(ws, 'my-global-flow', 'global'), { deleted: true });
+    await assert.rejects(() => access(join(configHome, 'workflows', 'my-global-flow.yaml')), /ENOENT/);
+  });
+});
+
+test('deleteWorkflow of a project workflow leaves the global one of the same name in place', async () => {
+  await withConfigHome(async configHome => {
+    const ws = await mkdtemp(join(tmpdir(), 'whiphand-scaffold-'));
+    await createWorkflow(ws, 'shared', 'global');
+    await createWorkflow(ws, 'shared');
+
+    assert.deepEqual(await deleteWorkflow(ws, 'shared'), { deleted: true });
+    await assert.rejects(() => access(join(ws, '.whiphand', 'workflows', 'shared.yaml')), /ENOENT/);
+    await access(join(configHome, 'workflows', 'shared.yaml'));
+  });
+});
+
+test('deleteWorkflow falls back to <name>.yml', async () => {
+  const ws = await mkdtemp(join(tmpdir(), 'whiphand-scaffold-'));
+  const dir = join(ws, '.whiphand', 'workflows');
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, 'legacy.yml');
+  await writeFile(path, workflowTemplate('legacy'), 'utf8');
+
+  assert.deepEqual(await deleteWorkflow(ws, 'legacy'), { deleted: true });
+  await assert.rejects(() => access(path), /ENOENT/);
+});
+
+test('deleteWorkflow reports deleted: false when neither file exists', async () => {
+  const ws = await mkdtemp(join(tmpdir(), 'whiphand-scaffold-'));
+  assert.deepEqual(await deleteWorkflow(ws, 'never-there'), { deleted: false });
+});
+
+test('deleteWorkflow refuses an invalid name instead of unlinking outside the workflows dir', async () => {
+  const ws = await mkdtemp(join(tmpdir(), 'whiphand-scaffold-'));
+  const escapee = join(ws, '.whiphand', 'x.yaml');
+  await mkdir(join(ws, '.whiphand'), { recursive: true });
+  await writeFile(escapee, 'name: x\n', 'utf8');
+
+  await assert.rejects(() => deleteWorkflow(ws, join('..', 'x')), /invalid workflow name/);
+  await assert.rejects(() => deleteWorkflow(ws, 'Bad Name!'), /invalid workflow name/);
+  await access(escapee); // still there
 });

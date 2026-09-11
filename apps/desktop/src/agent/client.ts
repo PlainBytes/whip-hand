@@ -12,6 +12,8 @@ import type {
   CreateWorkflowResult,
   DeleteRunParams,
   DeleteRunResult,
+  DeleteWorkflowParams,
+  DeleteWorkflowResult,
   DoctorParams,
   DoctorResult,
   GetAppStateParams,
@@ -114,6 +116,7 @@ interface MethodMap {
   getWorkflow: { params: GetWorkflowParams; result: GetWorkflowResult };
   createWorkflow: { params: CreateWorkflowParams; result: CreateWorkflowResult };
   updateWorkflow: { params: UpdateWorkflowParams; result: UpdateWorkflowResult };
+  deleteWorkflow: { params: DeleteWorkflowParams; result: DeleteWorkflowResult };
   initWorkspace: { params: InitWorkspaceParams; result: InitWorkspaceResult };
   doctor: { params: DoctorParams; result: DoctorResult };
   configGet: { params: ConfigGetParams; result: ConfigGetResult };

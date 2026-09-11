@@ -3,7 +3,7 @@
  * (`whiphand init`, `whiphand new-workflow`) and the desktop app (via @whiphand/agent RPCs) so
  * the UI never grows an ability the CLI lacks.
  */
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import { globalWorkflowsDir } from './config-home.ts';
@@ -380,6 +380,29 @@ export async function updateWorkflow(
   const content = existing === undefined ? stringifyYaml(locked) : mergeWorkflow(existing, locked);
   await writeFile(path, content, 'utf8');
   return { path };
+}
+
+/**
+ * Hard-deletes one scoped workflow file. Touches only `scope`'s directory, so
+ * deleting a project workflow that overrides a global one uncovers the global
+ * one rather than removing it too. Tries `.yaml` then `.yml`, the two
+ * extensions `listWorkflows` shows. `{ deleted: false }` means neither file was
+ * there — already gone, which is what the caller wanted.
+ */
+export async function deleteWorkflow(
+  workdir: string, name: string, scope: Scope = 'project',
+): Promise<{ deleted: boolean }> {
+  assertValidWorkflowName(name);
+  const dir = workflowsDir(workdir, scope);
+  for (const ext of ['yaml', 'yml']) {
+    try {
+      await unlink(join(dir, `${name}.${ext}`));
+      return { deleted: true };
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+    }
+  }
+  return { deleted: false };
 }
 
 export async function initWorkspace(workdir: string): Promise<{ created: string[] }> {

@@ -37,6 +37,7 @@ function renderEditor(workflow: Workflow, overrides: Partial<{ name: string; sou
   const client = new AgentClient(transport);
   const onSaved = vi.fn();
   const onCancel = vi.fn();
+  const onDeleted = vi.fn();
   render(
     <AgentClientProvider client={client}>
       <WorkflowEditor
@@ -44,12 +45,14 @@ function renderEditor(workflow: Workflow, overrides: Partial<{ name: string; sou
         name={overrides.name ?? workflow.name}
         source={overrides.source ?? 'project'}
         workdir="/ws"
+        revealsGlobal={false}
         onSaved={onSaved}
         onCancel={onCancel}
+        onDeleted={onDeleted}
       />
     </AgentClientProvider>,
   );
-  return { transport, client, onSaved, onCancel };
+  return { transport, client, onSaved, onCancel, onDeleted };
 }
 
 async function lastRequest(transport: MockTransport, method: string) {
@@ -364,5 +367,33 @@ describe('WorkflowEditor: save', () => {
     transport.emitLine({ id: req.id, error: { message: "invalid workflow:\n  - duplicate step id 'plan'" } });
     expect(await screen.findByText(/duplicate step id/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^save$/i })).toBeInTheDocument();
+  });
+});
+
+describe('WorkflowEditor: delete', () => {
+  it('the header Delete opens the confirmation, and confirming deletes and hands back', async () => {
+    const { transport, onDeleted } = renderEditor(NESTED_WORKFLOW);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete feature-development' }));
+    expect(await screen.findByText("Delete workflow 'feature-development'?")).toBeInTheDocument();
+    expect(transport.sent.some(l => (JSON.parse(l) as { method: string }).method === 'deleteWorkflow')).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+    const req = await lastRequest(transport, 'deleteWorkflow');
+    expect(req.params).toEqual({ workdir: '/ws', name: 'feature-development' });
+    transport.emitLine({ id: req.id, result: { deleted: true } });
+    await waitFor(() => expect(onDeleted).toHaveBeenCalledTimes(1));
+  });
+
+  it('the header Delete is disabled while a save is in flight', async () => {
+    const { transport } = renderEditor(NESTED_WORKFLOW);
+    const deleteButton = screen.getByRole('button', { name: 'Delete feature-development' });
+    expect(deleteButton).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    const req = await lastRequest(transport, 'updateWorkflow');
+    await waitFor(() => expect(deleteButton).toBeDisabled());
+
+    transport.emitLine({ id: req.id, result: { path: '/ws/.whiphand/workflows/feature-development.yaml' } });
+    await waitFor(() => expect(deleteButton).toBeEnabled());
   });
 });

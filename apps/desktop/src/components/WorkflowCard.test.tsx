@@ -22,8 +22,9 @@ const FEATURE: WorkflowEntry = {
 function renderCard(entry: WorkflowEntry) {
   const onRun = vi.fn();
   const onEdit = vi.fn();
-  render(<WorkflowCard entry={entry} onRun={onRun} onEdit={onEdit} />);
-  return { onRun, onEdit };
+  const onDelete = vi.fn();
+  render(<WorkflowCard entry={entry} onRun={onRun} onEdit={onEdit} onDelete={onDelete} />);
+  return { onRun, onEdit, onDelete };
 }
 
 function stepRows() {
@@ -89,6 +90,30 @@ describe('WorkflowCard', () => {
     expect(screen.getByText(/duplicate step id/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^run$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^edit$/i })).not.toBeInTheDocument();
+  });
+
+  it('offers Delete on a parsed card, and hands the whole entry to onDelete', () => {
+    const { onDelete } = renderCard(FEATURE);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete feature' }));
+    expect(onDelete).toHaveBeenCalledWith(FEATURE);
+  });
+
+  it('offers Delete on a card whose YAML failed to parse', () => {
+    const broken: WorkflowEntry = {
+      name: 'broken', path: '/ws/.whiphand/workflows/broken.yaml', source: 'project', error: "duplicate step id 'plan'",
+    };
+    const { onDelete } = renderCard(broken);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete broken' }));
+    expect(onDelete).toHaveBeenCalledWith(broken);
+  });
+
+  it('offers no Delete on the entry for a workflows folder that could not be read', () => {
+    renderCard({
+      name: 'global', path: '/home/user/.config/whiphand/workflows', source: 'global',
+      error: 'cannot read /home/user/.config/whiphand/workflows: EACCES',
+    });
+    expect(screen.getByText(/cannot read/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument();
   });
 
   it('shows a Global badge and an "overridden" note for a shadowed global entry', () => {

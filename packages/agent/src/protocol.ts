@@ -113,6 +113,17 @@ export const updateWorkflowParams = z.object({
 });
 export const updateWorkflowResult = z.object({ path: z.string() });
 
+/**
+ * A name and a scope, never a path — the webview is untrusted, and a path
+ * would let it unlink any file the agent can reach. Constrained here as
+ * getWorkflowParams is, as well as in core's deleteWorkflow. `deleted: false`
+ * means the file was already gone.
+ */
+export const deleteWorkflowParams = z.object({
+  workdir: z.string().min(1), name: z.string().regex(WORKFLOW_NAME_RE), scope: scopeSchema.optional(),
+});
+export const deleteWorkflowResult = z.object({ deleted: z.boolean() });
+
 export const initWorkspaceParams = z.object({ workdir: z.string().min(1) });
 export const initWorkspaceResult = z.object({ created: z.array(z.string()) });
 
@@ -560,6 +571,7 @@ export const methods = {
   getWorkflow: { params: getWorkflowParams, result: getWorkflowResult },
   createWorkflow: { params: createWorkflowParams, result: createWorkflowResult },
   updateWorkflow: { params: updateWorkflowParams, result: updateWorkflowResult },
+  deleteWorkflow: { params: deleteWorkflowParams, result: deleteWorkflowResult },
   initWorkspace: { params: initWorkspaceParams, result: initWorkspaceResult },
   doctor: { params: doctorParams, result: doctorResult },
   configGet: { params: configGetParams, result: configGetResult },
@@ -604,6 +616,8 @@ export type CreateWorkflowParams = z.infer<typeof createWorkflowParams>;
 export type CreateWorkflowResult = z.infer<typeof createWorkflowResult>;
 export type UpdateWorkflowParams = z.infer<typeof updateWorkflowParams>;
 export type UpdateWorkflowResult = z.infer<typeof updateWorkflowResult>;
+export type DeleteWorkflowParams = z.infer<typeof deleteWorkflowParams>;
+export type DeleteWorkflowResult = z.infer<typeof deleteWorkflowResult>;
 export type InitWorkspaceParams = z.infer<typeof initWorkspaceParams>;
 export type InitWorkspaceResult = z.infer<typeof initWorkspaceResult>;
 export type DoctorParams = z.infer<typeof doctorParams>;

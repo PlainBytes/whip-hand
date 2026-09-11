@@ -339,6 +339,19 @@ test('updateWorkflow overwrites an existing workflow and getWorkflow reflects th
   assert.equal(reread.description, 'Edited via handler');
 });
 
+test('deleteWorkflow removes a workflow so listWorkflows no longer shows it', async () => {
+  const appState = await tempAppState();
+  const handlers = createHandlers({ jobs: new JobManager(), notify: () => {}, appState });
+  const ws = await mkdtemp(join(tmpdir(), 'whiphand-delete-'));
+  await handlers.createWorkflow({ workdir: ws, name: 'doomed' }, { notify: () => {} });
+
+  const result = await handlers.deleteWorkflow({ workdir: ws, name: 'doomed' }, { notify: () => {} });
+  assert.deepEqual(result, { deleted: true });
+
+  const listed = await handlers.listWorkflows({ workdir: ws }, { notify: () => {} }) as { name: string }[];
+  assert.ok(!listed.some(r => r.name === 'doomed'));
+});
+
 test('createWorkflow/updateWorkflow/getWorkflow honor an explicit global scope', async () => {
   const appState = await tempAppState();
   const handlers = createHandlers({ jobs: new JobManager(), notify: () => {}, appState });

@@ -74,6 +74,15 @@ test('methods: getWorkflow params accept an optional scope', () => {
   assert.equal(methods.getWorkflow.params.safeParse({ workdir: '/w', name: 'r', scope: 'nope' }).success, false);
 });
 
+test('methods: deleteWorkflow params take a workflow name and scope, never a path', () => {
+  assert.equal(methods.deleteWorkflow.params.safeParse({ workdir: '/w', name: 'r' }).success, true);
+  assert.equal(methods.deleteWorkflow.params.safeParse({ workdir: '/w', name: 'r', scope: 'global' }).success, true);
+  assert.equal(methods.deleteWorkflow.params.safeParse({ workdir: '/w', name: '../x' }).success, false);
+  assert.equal(methods.deleteWorkflow.params.safeParse({ workdir: '/w', name: '/etc/passwd' }).success, false);
+  assert.equal(methods.deleteWorkflow.params.safeParse({ workdir: '/w', name: 'Bad Name!' }).success, false);
+  assert.deepEqual(methods.deleteWorkflow.result.parse({ deleted: false }), { deleted: false });
+});
+
 test('methods: getWorkflow result requires a full workflow', () => {
   const workflow = {
     name: 'r', steps: [

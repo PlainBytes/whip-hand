@@ -85,7 +85,9 @@ export type { DeleteRunReason, DeleteRunResult, PruneRunsResult } from './engine
 export { executionKey, WORKFLOW_SNAPSHOT_NAME } from './engine/manifest.ts';
 export { planResume, ResumeError } from './engine/resume.ts';
 export type { ResumePlan, DoneExecution } from './engine/resume.ts';
-export { initWorkspace, createWorkflow, updateWorkflow, workflowTemplate, WORKFLOW_NAME_RE } from './scaffold.ts';
+export {
+  initWorkspace, createWorkflow, updateWorkflow, deleteWorkflow, workflowTemplate, WORKFLOW_NAME_RE,
+} from './scaffold.ts';
 export {
   isEnabled, disabledRoots, disabledIds, pruneDisabled, droppedRefs, droppedRefSentence, untilTargetOf,
 } from './enabled.ts';

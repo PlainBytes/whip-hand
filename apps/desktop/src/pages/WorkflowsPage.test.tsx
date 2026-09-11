@@ -237,3 +237,130 @@ describe('WorkflowsPage - delegating to the editor', () => {
     expect(req.params).toMatchObject({ workdir: '/ws', name: 'feature', scope: 'global' });
   });
 });
+
+function sentMethods(transport: MockTransport): string[] {
+  return transport.sent.map(line => (JSON.parse(line) as { method: string }).method);
+}
+
+describe('WorkflowsPage - deleting a workflow', () => {
+  const GLOBAL_FEATURE = {
+    ...FEATURE_WORKFLOW,
+    path: '/home/user/.config/whiphand/workflows/feature.yaml',
+    source: 'global' as const,
+  };
+
+  beforeEach(() => {
+    useAppStore.setState({ workspacePath: '/ws', workflows: [] });
+  });
+
+  afterEach(() => {
+    useAppStore.setState({ workspacePath: null, workflows: [] });
+  });
+
+  it('card Delete confirms, sends deleteWorkflow without a scope for a project workflow, and reloads the list', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete feature' }));
+
+    expect(await screen.findByText("Delete workflow 'feature'?")).toBeInTheDocument();
+    expect(screen.getByText(/this deletes its file\. this cannot be undone\. past runs keep their own copy\./i))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/will be used in this workspace instead/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+    const req = await lastRequest(transport, 'deleteWorkflow');
+    expect(req.params).toEqual({ workdir: '/ws', name: 'feature' });
+
+    await respond(transport, 'deleteWorkflow', { deleted: true });
+    await respond(transport, 'listWorkflows', []);
+    await waitFor(() => expect(screen.queryByText("Delete workflow 'feature'?")).not.toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Delete feature' })).not.toBeInTheDocument();
+  });
+
+  it('a global workflow gets the every-workspace wording and sends scope: global', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [GLOBAL_FEATURE]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete feature' }));
+
+    expect(await screen.findByText(/every workspace on this machine loses it/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+    const req = await lastRequest(transport, 'deleteWorkflow');
+    expect(req.params).toEqual({ workdir: '/ws', name: 'feature', scope: 'global' });
+  });
+
+  it('deleting a project workflow that overrides a global one says the global one takes over', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW, { ...GLOBAL_FEATURE, shadowed: true as const }]);
+    const [projectDelete, globalDelete] = await screen.findAllByRole('button', { name: 'Delete feature' });
+
+    fireEvent.click(projectDelete);
+    expect(await screen.findByText("The global 'feature' workflow will be used in this workspace instead."))
+      .toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    await waitFor(() => expect(screen.queryByText("Delete workflow 'feature'?")).not.toBeInTheDocument());
+
+    fireEvent.click(globalDelete);
+    expect(await screen.findByText(/every workspace on this machine loses it/i)).toBeInTheDocument();
+    expect(screen.queryByText(/will be used in this workspace instead/i)).not.toBeInTheDocument();
+  });
+
+  it('Cancel closes the dialog without sending anything', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete feature' }));
+    await screen.findByText("Delete workflow 'feature'?");
+
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    await waitFor(() => expect(screen.queryByText("Delete workflow 'feature'?")).not.toBeInTheDocument());
+    expect(sentMethods(transport)).not.toContain('deleteWorkflow');
+  });
+
+  it('an RPC error keeps the dialog open and shows the message', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete feature' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^delete$/i }));
+
+    const req = await lastRequest(transport, 'deleteWorkflow');
+    transport.emitLine({ id: req.id, error: { message: 'EACCES: permission denied' } });
+    expect(await screen.findByText(/permission denied/i)).toBeInTheDocument();
+    expect(screen.getByText("Delete workflow 'feature'?")).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^delete$/i })).toBeEnabled();
+    expect(sentMethods(transport).filter(m => m === 'listWorkflows')).toHaveLength(1);
+  });
+
+  it('a file that was already gone ({ deleted: false }) still closes the dialog and reloads', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete feature' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^delete$/i }));
+
+    await respond(transport, 'deleteWorkflow', { deleted: false });
+    await respond(transport, 'listWorkflows', []);
+    await waitFor(() => expect(screen.queryByText("Delete workflow 'feature'?")).not.toBeInTheDocument());
+  });
+
+  it('editor Delete, once confirmed, sends deleteWorkflow and returns to the card grid', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    fireEvent.click(await screen.findByRole('button', { name: /^edit$/i }));
+    await screen.findByText(/edit workflow: feature/i);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete feature' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^delete$/i }));
+    const req = await lastRequest(transport, 'deleteWorkflow');
+    expect(req.params).toEqual({ workdir: '/ws', name: 'feature' });
+
+    await respond(transport, 'deleteWorkflow', { deleted: true });
+    await respond(transport, 'listWorkflows', []);
+    expect(await screen.findByRole('button', { name: /new workflow/i })).toBeInTheDocument();
+    expect(screen.queryByText(/edit workflow: feature/i)).not.toBeInTheDocument();
+  });
+});

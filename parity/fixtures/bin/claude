@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Parity-suite stub: doctor only ever calls `claude --version`; dry runs
+# never invoke the binary at all. Any other invocation just exits clean.
+if [ "$1" = "--version" ]; then
+  echo "9.9.9-stub"
+  exit 0
+fi
+exit 0

@@ -1,0 +1,20 @@
+# Exercised by scripts/package/smoke.mjs against the packaged binary, never run
+# for real. Covers one agent step (prompt interpolation, model/tool policy) and
+# one command step, so a dry run touches both argv builders.
+name: smoke
+inputs:
+  subject:
+    required: true
+    prompt: What are we smoke-testing?
+steps:
+  - id: think
+    kind: agent
+    runner: claude
+    model: sonnet
+    mode: headless
+    writes: false
+    prompt: 'Consider {{ inputs.subject }}.'
+    output: think.md
+  - id: check
+    kind: command
+    run: 'true'

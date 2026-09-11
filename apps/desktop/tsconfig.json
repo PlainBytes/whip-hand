@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    // "node" is required here even though app code never imports node builtins
+    // itself: protocol.ts's type-only re-exports transitively reach into
+    // @whiphand/core's runtime modules (fs, path, child_process, ...) for tsc to
+    // resolve their declared types — verbatimModuleSyntax still guarantees
+    // none of that code is actually emitted/bundled.
+    "types": ["vite/client", "node"]
+  },
+  "include": ["src"]
+}

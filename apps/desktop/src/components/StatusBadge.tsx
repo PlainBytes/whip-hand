@@ -1,0 +1,22 @@
+import { Badge } from '@fluentui/react-components';
+
+const STATUS_COLOR: Record<string, 'brand' | 'success' | 'danger' | 'warning' | 'subtle'> = {
+  running: 'brand',
+  succeeded: 'success',
+  failed: 'danger',
+  cancelled: 'subtle',
+  interrupted: 'warning',
+  // Not a run status on disk: the runs list substitutes it for a live run
+  // whose session is blocked on the human.
+  waiting: 'warning',
+  unknown: 'subtle',
+};
+
+/** Shared run/job status pill: consistent colors for RunsPage and RunDetailPage. */
+export function StatusBadge({ status }: { status: string }) {
+  return (
+    <Badge appearance="filled" color={STATUS_COLOR[status] ?? 'subtle'}>
+      {status}
+    </Badge>
+  );
+}

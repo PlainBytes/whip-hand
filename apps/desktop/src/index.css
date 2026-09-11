@@ -1,0 +1,51 @@
+@import './markdown/markdown.css';
+
+/* Webview reset: the default body margin otherwise shows as a white ring
+   around the FluentProvider, and the 100% height chain must reach #root. */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* A guard, not a fix: the shell never scrolls at the document level, since
+   <main> is the scroller. Stray content that overflows the page is clipped
+   here instead of turning into a blank, scrollable strip. It only stops user
+   scrolling; focus() and scrollIntoView() can still move an overflow: hidden
+   page (overflow: clip on the root behaves as hidden), so whatever overflows
+   must still be fixed at its source (see DiffFileList's rows). */
+html,
+body {
+  overflow: hidden;
+}
+
+body {
+  margin: 0;
+  /* Match Fluent colorNeutralBackground1 before React mounts to avoid a
+     flash of the wrong background. */
+  background-color: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    background-color: #292929;
+  }
+}
+
+/*
+ * highlight.js token colours written against Fluent's own palette tokens, so
+ * they follow the app's light/dark theme with no stylesheet to swap. (The
+ * shipped github/github-dark stylesheets would need a runtime swap and don't
+ * survive vitest's `css: false` config.)
+ */
+.hljs { color: var(--colorNeutralForeground1); background: transparent; }
+.hljs-comment, .hljs-quote { color: var(--colorNeutralForeground3); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-type { color: var(--colorPaletteBerryForeground2); }
+.hljs-string, .hljs-attr, .hljs-symbol, .hljs-bullet { color: var(--colorPaletteGreenForeground2); }
+.hljs-number, .hljs-meta { color: var(--colorPaletteMarigoldForeground2); }
+.hljs-title, .hljs-section, .hljs-name { color: var(--colorBrandForeground1); }
+.hljs-variable, .hljs-template-variable, .hljs-attribute { color: var(--colorPaletteRedForeground2); }
+.hljs-addition { color: var(--colorPaletteGreenForeground2); }
+.hljs-deletion { color: var(--colorPaletteRedForeground2); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 600; }

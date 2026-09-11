@@ -1,0 +1,103 @@
+# feature-development — branch off trunk, plan, implement and review in a cycle,
+# then commit on sign-off. Reference: docs/design.md
+name: feature-development
+description: Branch off trunk, plan, implement and review in a cycle, then commit on sign-off.
+inputs:
+  feature:
+    required: true
+    prompt: What are we building?
+  base:
+    required: false
+    default: main
+    prompt: Branch to start from
+steps:
+  - id: sync-base       # a dirty tree or a diverged trunk fails the run here,
+    kind: command       # with git's own message in the artifact
+    run: git checkout "{{ inputs.base }}" && git pull --ff-only
+    output: sync-base.log
+
+  - id: branch
+    kind: command
+    run: git checkout -b "feature/{{ run.slug }}"
+    output: branch.log
+
+  - id: plan            # unchanged from the current local copy
+    kind: agent
+    runner: claude
+    model: opus
+    mode: interactive
+    writes: false
+    inputs: [attachments]   # files attached at start (--attach); dropped when there are none
+    output: plan.md
+    prompt: >
+      We are planning: {{ inputs.feature }}. Work with me on a plan.
+
+      Do not modify files.
+
+      Before you start your discovery, ask the user if there are any files that
+      you should be aware of. If there are, ask the user to provide them.
+
+  - kind: loop          # unchanged from the current local copy
+    id: human-review
+    until: sign-off
+    max_iterations: 5
+    steps:
+      - kind: loop
+        id: do-review
+        until: review
+        max_iterations: 10
+        steps:
+          - id: execute
+            inputs: [plan, review, sign-off]
+            kind: agent
+            runner: claude
+            model: sonnet
+            mode: headless
+            writes: true
+            prompt: Implement the attached plan.
+            output: execute-report.md
+          - id: review
+            inputs: [plan, execute]
+            verdict: true
+            kind: agent
+            runner: claude
+            model: opus
+            mode: headless
+            writes: false
+            prompt: Review the implementation against the attached plan.
+            output: review.md
+      - id: sign-off
+        inputs: [review]
+        kind: approval
+        verdict: true
+        title: Ship it?
+        instructions: Review the diff and the findings before this goes any further.
+        show_diff: true
+        capture: review
+        output: feedback.md
+
+  - id: stage           # everything but the run artifacts, so the message
+    kind: command       # writer below sees the whole change as one diff
+    run: git add -A -- . ":(exclude).whiphand/runs"
+    output: stage.log
+
+  - id: commit-message
+    inputs: [plan, review, sign-off]
+    kind: agent
+    runner: claude
+    model: haiku        # summarising a diff is not what the workflow's model is for
+    mode: headless
+    writes: false       # Write/Edit denied; Bash stays, which is how it reads the diff
+    output: commit-message.md
+    prompt: |
+      Write the commit message for the change staged on this branch. Read it with
+      `git diff --cached`, and read the attached plan, review and sign-off feedback
+      for why it was made.
+      A subject line in the imperative mood, at most 72 characters, no trailing
+      period. Then a blank line, then one to three short lines on what changed and
+      why. Write the message and nothing else — no preamble, no fences, no review.
+
+  - id: commit
+    kind: command
+    run: git commit -F ".whiphand/runs/{{ run.id }}/commit-message.md"
+    output: commit.log

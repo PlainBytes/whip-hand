@@ -1,0 +1,52 @@
+name: parity
+inputs:
+  goal: { required: true, prompt: "What's the goal?" }
+  label: { required: false, default: "x" }
+
+steps:
+  - id: plan
+    runner: claude
+    mode: interactive
+    writes: false
+    # Dropped when nothing is attached, which is every parity run but one.
+    inputs: [attachments]
+    output: plan.md
+    prompt: |
+      Goal: {{ inputs.goal }} (label: {{ inputs.label }})
+      Explore the codebase and work with me to produce an implementation plan.
+      Do not modify any files.
+
+  - id: fix-cycle
+    kind: loop
+    until: review
+    max_iterations: 3
+    steps:
+      - id: execute
+        runner: claude
+        mode: headless
+        writes: true
+        inputs: [plan]
+        output: report.md
+        prompt: |
+          Implement the attached plan. Report what you changed.
+
+      # Disabled on purpose: proves neither the CLI nor the agent spawns a
+      # session for a disabled step, even inside a loop.
+      - id: notes
+        runner: claude
+        mode: headless
+        writes: false
+        enabled: false
+        output: notes.md
+        prompt: |
+          Take extra notes on the implementation.
+
+      - id: review
+        runner: claude
+        mode: headless
+        writes: false
+        verdict: true
+        inputs: [execute]
+        output: findings.md
+        prompt: |
+          Review the diff against the plan. Report gaps and defects.

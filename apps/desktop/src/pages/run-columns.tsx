@@ -1,0 +1,100 @@
+/**
+ * The run table's shared shape: the workflow/run/status/started/duration
+ * columns, and the formatting they need. Used by both the per-workspace Runs
+ * grid and the cross-workspace Activity grid, which differ only in the
+ * leading Workspace column.
+ */
+import { createTableColumn, tokens, type TableColumnDefinition } from '@fluentui/react-components';
+import { LockClosed16Regular } from '@fluentui/react-icons';
+import type { RunSummary } from '../agent/client.ts';
+import { StatusBadge } from '../components/StatusBadge.tsx';
+import { elapsedMs, formatElapsed } from '../lib/duration.ts';
+
+export type RecentRun = RunSummary & { workspace: string };
+
+export const POLL_INTERVAL_MS = 5000;
+
+/**
+ * What to call a run in prose — a dialog title, an aria-label. The grid cell
+ * shows both the name and the id; everywhere else one string has to do, and
+ * the name is the one a human recognizes.
+ */
+export function runLabel(run: RunSummary): string {
+  return run.name ?? run.runId;
+}
+
+export function formatStarted(startedAt: unknown): string {
+  if (typeof startedAt !== 'string') return '—';
+  const parsed = Date.parse(startedAt);
+  return Number.isNaN(parsed) ? '—' : new Date(parsed).toLocaleString();
+}
+
+function formatDuration(run: RunSummary): string {
+  const startedAt = typeof run.startedAt === 'string' ? run.startedAt : undefined;
+  // A run that never wrote endedAt (one still going, or one abandoned before
+  // core could repair it) must not keep growing on every poll — fall back to
+  // the last sign of life we have.
+  const lastSeen = [run.endedAt, run.heartbeatAt, run.updatedAt]
+    .find((v): v is string => typeof v === 'string');
+  const end = lastSeen ? Date.parse(lastSeen) : Date.now();
+  const ms = elapsedMs(startedAt, end);
+  return ms === null ? '—' : formatElapsed(ms);
+}
+
+/** The columns every run grid shares. */
+export function runColumns<T extends RunSummary>(waiting: ReadonlySet<string>): TableColumnDefinition<T>[] {
+  return [
+    createTableColumn<T>({
+      columnId: 'workflow',
+      renderHeaderCell: () => 'Workflow',
+      renderCell: run => (typeof run.workflow === 'string' ? run.workflow : '—'),
+    }),
+    createTableColumn<T>({
+      // Still 'runId': both grids address this column by that id.
+      columnId: 'runId',
+      renderHeaderCell: () => 'Run',
+      // The glyph shows wherever a run appears — including the cross-workspace
+      // Activity grid, which is correct: a locked run reads as locked everywhere.
+      //
+      // A named run leads with its name and keeps the id beneath it, dimmed:
+      // the name is what a human recognizes, but the id is what `--resume`
+      // and `whiphand rename-run` take, so it must stay readable and copyable.
+      renderCell: run => (
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+          {run.locked && <LockClosed16Regular aria-label="locked" />}
+          {run.name === undefined ? run.runId : (
+            <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {run.name}
+              </span>
+              <span style={{
+                fontFamily: tokens.fontFamilyMonospace,
+                fontSize: tokens.fontSizeBase100,
+                color: tokens.colorNeutralForeground3,
+              }}>
+                {run.runId}
+              </span>
+            </span>
+          )}
+        </span>
+      ),
+    }),
+    createTableColumn<T>({
+      columnId: 'status',
+      renderHeaderCell: () => 'Status',
+      // A live run blocked on the human still reads 'running' on disk. Swap the
+      // pill people already scan rather than adding a column the grid must carry.
+      renderCell: run => <StatusBadge status={waiting.has(run.runId) ? 'waiting' : run.status} />,
+    }),
+    createTableColumn<T>({
+      columnId: 'started',
+      renderHeaderCell: () => 'Started',
+      renderCell: run => formatStarted(run.startedAt),
+    }),
+    createTableColumn<T>({
+      columnId: 'duration',
+      renderHeaderCell: () => 'Duration',
+      renderCell: run => formatDuration(run),
+    }),
+  ];
+}

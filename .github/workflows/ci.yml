@@ -1,0 +1,136 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A new push to a PR supersedes its running checks; a push to main never
+# cancels the one before it, so every main commit gets its `package` run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    timeout-minutes: 20
+    strategy:
+      # One red leg should not hide the others: while CI is being brought up,
+      # a single push has to surface every breakage, not just the first.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  parity:
+    # Real spawns end to end. Linux-only, but the gap is narrower than it was:
+    # packages/core/src/exec.win.test.ts round-trips adversarial argv on the
+    # `test` job's Windows leg — through a readable npm shim, which is the
+    # path a runner actually takes, and through an unreadable one, which is
+    # the cmd.exe fallback and the only place cmd's parser still applies. So
+    # argument fidelity is now checked on Windows rather than reasoned about.
+    # What stays uncovered there is a whole workflow's worth of spawning.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install build tools (node-pty source-build fallback)
+        run: sudo apt-get update && sudo apt-get install -y build-essential python3
+      - run: npm ci
+      - run: npm run test:parity
+
+  desktop:
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test -w desktop
+      - run: npm run build -w desktop
+
+  tauri:
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Install Tauri Linux deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      # tauri_build::build() copies bundle.externalBin and bundle.resources on
+      # every cargo invocation, `cargo check` included — and all three are
+      # gitignored build outputs that only `npm run package` produces. This job
+      # asks whether the Rust crate still compiles; whether a bundle can be
+      # assembled is the `package` job below. So drop the bundle inputs rather
+      # than fabricate empty ones. TAURI_CONFIG is an RFC 7386 merge patch, so
+      # null removes the key.
+      - name: The Rust crate still compiles
+        env:
+          TAURI_CONFIG: '{"bundle":{"externalBin":null,"resources":null}}'
+        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+  # The full `npm run package` pipeline — CLI SEA, agent sidecar, and the
+  # Tauri bundle — on push to main only, not on PRs: ~4 minutes per platform
+  # is too slow for a PR gate, but discovering a packaging break at release
+  # time (release.yml, on a pushed tag) is worse. Same runners release.yml
+  # uses, so a break here is a break there.
+  package:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install Tauri Linux deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - run: npm ci
+      - run: npm run package

@@ -1,0 +1,18 @@
+# research — plan interactively, then implement and review in a cycle
+# until the review passes. Reference: docs/design.md
+name: research
+description: Plan with a human, then implement and review in a cycle until the review passes.
+inputs:
+  feature:
+    required: true
+    prompt: What are we building?
+steps:
+  - id: plan # live terminal chat; artifact harvested afterwards
+    runner: claude
+    mode: interactive
+    writes: false
+    output: plan.md
+    prompt: |
+      We are planning: {{ inputs.feature }}. Work with me on a plan. Do not modify files.
+    inputs:
+      - attachments

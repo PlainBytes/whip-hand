@@ -1,0 +1,9 @@
+defaults:
+  runner: claude
+on_findings: report
+loop:
+  max_iterations: 3
+artifacts_dir: .whiphand/runs
+runs:
+  max_retained: null
+  auto_name: false

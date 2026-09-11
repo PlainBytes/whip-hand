@@ -1,0 +1,218 @@
+/*
+ * GitHub-faithful prose, written entirely against Fluent's palette tokens so
+ * it follows the app's light/dark theme with no stylesheet to swap — the same
+ * reasoning as the hljs block in index.css.
+ */
+.whiphand-markdown {
+  color: var(--colorNeutralForeground1);
+  font-size: var(--fontSizeBase300);
+  line-height: 1.6;
+  overflow-wrap: break-word;
+}
+
+.whiphand-markdown > *:first-child { margin-top: 0; }
+.whiphand-markdown > *:last-child { margin-bottom: 0; }
+
+.whiphand-markdown h1,
+.whiphand-markdown h2,
+.whiphand-markdown h3,
+.whiphand-markdown h4,
+.whiphand-markdown h5,
+.whiphand-markdown h6 {
+  margin: 24px 0 16px;
+  font-weight: var(--fontWeightSemibold);
+  line-height: 1.25;
+  /* Sticky page chrome must not cover a heading jumped to by anchor or find. */
+  scroll-margin-top: 16px;
+}
+
+.whiphand-markdown h1 { font-size: var(--fontSizeHero700); }
+.whiphand-markdown h2 { font-size: var(--fontSizeBase600); }
+.whiphand-markdown h3 { font-size: var(--fontSizeBase500); }
+.whiphand-markdown h4 { font-size: var(--fontSizeBase400); }
+.whiphand-markdown h5,
+.whiphand-markdown h6 { font-size: var(--fontSizeBase300); color: var(--colorNeutralForeground2); }
+
+.whiphand-markdown h1,
+.whiphand-markdown h2 {
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--colorNeutralStroke2);
+}
+
+.whiphand-markdown p,
+.whiphand-markdown ul,
+.whiphand-markdown ol,
+.whiphand-markdown blockquote,
+.whiphand-markdown pre,
+.whiphand-markdown table { margin: 0 0 16px; }
+
+.whiphand-markdown ul,
+.whiphand-markdown ol { padding-left: 24px; }
+.whiphand-markdown li + li { margin-top: 4px; }
+.whiphand-markdown li > ul,
+.whiphand-markdown li > ol { margin-bottom: 0; }
+
+/* Task lists: aligned, and read-only — the file is the source of truth. */
+.whiphand-markdown li:has(> input[type='checkbox']) { list-style: none; margin-left: -20px; }
+.whiphand-markdown input[type='checkbox'] { margin-right: 6px; vertical-align: middle; }
+
+.whiphand-markdown blockquote {
+  padding: 0 16px;
+  border-left: 3px solid var(--colorNeutralStroke1);
+  color: var(--colorNeutralForeground2);
+}
+
+.whiphand-markdown a { color: var(--colorBrandForegroundLink); text-decoration: none; }
+.whiphand-markdown a:hover { text-decoration: underline; }
+/* An unresolvable target: visible, obviously not clickable. Rendered as a
+   <span>, not an <a> — an anchor with no href is still announced as a link
+   by a screen reader, and there is nothing to follow. */
+.whiphand-markdown [data-inert='true'] {
+  color: var(--colorNeutralForeground3);
+  cursor: default;
+  text-decoration: line-through;
+}
+
+.whiphand-markdown code {
+  padding: 2px 5px;
+  border-radius: var(--borderRadiusSmall);
+  background: var(--colorNeutralBackground3);
+  font-family: var(--fontFamilyMonospace);
+  font-size: 0.9em;
+}
+
+.whiphand-markdown pre {
+  padding: 12px;
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: var(--borderRadiusMedium);
+  background: var(--colorNeutralBackground2);
+  overflow-x: auto;
+}
+
+.whiphand-markdown pre code { padding: 0; background: none; font-size: var(--fontSizeBase200); }
+
+/* A wide table scrolls itself rather than scrolling the whole pane. */
+.whiphand-markdown .whiphand-markdown-table-scroll { overflow-x: auto; margin-bottom: 16px; }
+.whiphand-markdown table { border-collapse: collapse; margin-bottom: 0; }
+.whiphand-markdown th,
+.whiphand-markdown td { padding: 6px 13px; border: 1px solid var(--colorNeutralStroke2); text-align: left; }
+.whiphand-markdown th { background: var(--colorNeutralBackground3); font-weight: var(--fontWeightSemibold); }
+
+.whiphand-markdown hr {
+  height: 1px;
+  margin: 24px 0;
+  border: 0;
+  background: var(--colorNeutralStroke2);
+}
+
+.whiphand-markdown img { max-width: 100%; }
+
+.whiphand-markdown-image-missing {
+  display: inline-block;
+  padding: 4px 8px;
+  border: 1px dashed var(--colorNeutralStroke2);
+  border-radius: var(--borderRadiusSmall);
+  color: var(--colorNeutralForeground3);
+  font-size: var(--fontSizeBase200);
+}
+
+/* Heading anchors: a pointer-only affordance, out of the way until hovered.
+   The anchor is aria-hidden and tabIndex: -1 (pipeline.ts) — keyboard and
+   screen-reader users navigate by the heading's own id (rehype-slug)
+   instead, so there is no focus state to reveal it for here. */
+.whiphand-markdown-anchor {
+  margin-left: 8px;
+  color: var(--colorNeutralForeground4);
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+
+.whiphand-markdown h1:hover .whiphand-markdown-anchor,
+.whiphand-markdown h2:hover .whiphand-markdown-anchor,
+.whiphand-markdown h3:hover .whiphand-markdown-anchor,
+.whiphand-markdown h4:hover .whiphand-markdown-anchor,
+.whiphand-markdown h5:hover .whiphand-markdown-anchor,
+.whiphand-markdown h6:hover .whiphand-markdown-anchor { opacity: 1; }
+
+.whiphand-markdown-code {
+  position: relative;
+  margin-bottom: 16px;
+}
+
+.whiphand-markdown-code-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+
+/* Keyboard users get the bar too — hover alone would strand them. */
+.whiphand-markdown-code:hover .whiphand-markdown-code-bar,
+.whiphand-markdown-code:focus-within .whiphand-markdown-code-bar { opacity: 1; }
+
+.whiphand-markdown-code-lang {
+  color: var(--colorNeutralForeground3);
+  font-family: var(--fontFamilyMonospace);
+  font-size: var(--fontSizeBase100);
+  text-transform: lowercase;
+}
+
+.whiphand-markdown .footnotes {
+  margin-top: 24px;
+  padding-top: 12px;
+  border-top: 1px solid var(--colorNeutralStroke2);
+  font-size: var(--fontSizeBase200);
+  color: var(--colorNeutralForeground2);
+}
+
+.whiphand-markdown-diagram {
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: var(--borderRadiusMedium);
+  background: var(--colorNeutralBackground1);
+  overflow-x: auto;
+}
+
+.whiphand-markdown-diagram svg { max-width: 100%; height: auto; }
+
+.whiphand-markdown-diagram-error {
+  margin-bottom: 4px;
+  color: var(--colorPaletteRedForeground1);
+  font-size: var(--fontSizeBase200);
+}
+
+/* Find in document. The bar lives in the pane's fixed header, above the
+   scroll container, so it does not scroll away from the reader. */
+.whiphand-markdown-findbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+/* The occurrences the rendered view cannot highlight (fenced code). Quieter
+   than the count itself: it is a caveat, not the answer. */
+.whiphand-markdown-findbar-note { color: var(--colorNeutralForeground3); }
+
+.whiphand-markdown mark {
+  padding: 0 1px;
+  border-radius: var(--borderRadiusSmall);
+  background: var(--colorPaletteYellowBackground2);
+  color: var(--colorNeutralForeground1);
+}
+
+.whiphand-markdown mark[data-find-active='true'] {
+  background: var(--colorPaletteDarkOrangeBackground2);
+  /* The current match must be findable at a glance among the others. */
+  outline: 1px solid var(--colorPaletteDarkOrangeBorderActive);
+  /* Sticky page chrome (and the find bar itself) must not cover the match
+     scrollIntoView just brought into view. */
+  scroll-margin: 24px 0;
+}

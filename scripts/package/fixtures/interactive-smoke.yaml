@@ -1,0 +1,15 @@
+# Exercised by scripts/package/smoke.mjs's smokeAgent() against the packaged
+# whiphand-agent binary, over its real NDJSON protocol — never run for real. The
+# `claude` on PATH is scripts/package/fixtures/bin's stub, which exits
+# immediately; the point is only to prove the interactive step reaches
+# startPty()/resolveNodePty() and opens a real pty in the packaged binary,
+# not to hold a conversation.
+name: interactive-smoke
+steps:
+  - id: chat
+    kind: agent
+    runner: claude
+    mode: interactive
+    writes: true
+    prompt: 'Say hello, then stop.'
+    output: chat.md

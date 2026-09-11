@@ -1,0 +1,11 @@
+{
+  "name": "@whiphand/agent",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "dependencies": {
+    "@whiphand/core": "*",
+    "node-pty": "1.1.0",
+    "ws": "^8.21.3"
+  }
+}

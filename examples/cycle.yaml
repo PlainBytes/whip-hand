@@ -1,0 +1,80 @@
+# Every step kind in one workflow: an agent turn, a shell command, a cycle that
+# repeats until a human ships it — with the option to send it back with
+# comments instead — and a captured note.
+#
+#   whiphand run examples/cycle.yaml --dry-run --input feature=demo
+#
+name: cycle
+inputs:
+  feature: { required: true, prompt: "What are we building?" }
+  # 'remember: true' keeps the last run's answer in the desktop's New run
+  # dialog. Without it — as with 'feature' — every new run starts blank.
+  branch:  { required: false, default: main, prompt: "Target branch", remember: true }
+
+steps:
+  - id: plan
+    runner: claude
+    model: opus
+    mode: interactive
+    writes: false
+    inputs: [attachments]   # files attached at start (--attach); dropped when there are none
+    output: plan.md
+    prompt: |
+      We are planning: {{ inputs.feature }}
+      Work with me on a plan. Do not modify any files.
+
+  - id: fix-cycle
+    kind: loop
+    until: sign-off         # a human's choice IS the loop's verdict
+    max_iterations: 3
+    on_exhausted: report    # report | interactive; default: the workspace's on_findings
+    steps:
+      - id: execute
+        runner: claude
+        model: sonnet
+        mode: headless
+        writes: true
+        # `review` and `sign-off` come later in this body, so both resolve to
+        # the PREVIOUS iteration's findings and feedback — and are skipped on
+        # the first pass, when there are none.
+        inputs: [plan, review, sign-off]
+        output: execute-report.md
+        prompt: |
+          Implement the attached plan. This is attempt {{ loop.iteration }} of
+          {{ loop.max_iterations }}. Report what you changed.
+
+      - id: tests
+        kind: command
+        run: npm test
+        verdict: true       # a non-zero exit is a signal to the loop, not a crash
+        output: tests.log
+        timeout_ms: 600000
+
+      - id: review
+        runner: claude
+        model: haiku
+        mode: headless
+        writes: false
+        verdict: true       # recorded, but sign-off — the `until` step — is what drives the loop
+        inputs: [plan, execute, tests]
+        output: findings.md
+        prompt: Review the diff against the plan and the test output.
+
+      - id: sign-off
+        kind: approval
+        verdict: true       # required: this is what `until` reads
+        title: "Ship {{ inputs.feature }} to {{ inputs.branch }}?"
+        instructions: |
+          Check the diff and the findings. Approve to ship, or send it back
+          with comments — on the whole change set, or on individual files.
+        show_diff: true
+        capture: review
+        inputs: [review]
+        output: feedback.md
+
+  - id: release-note
+    kind: manual
+    title: Release note
+    instructions: One line for the changelog.
+    capture: note
+    output: release-note.md

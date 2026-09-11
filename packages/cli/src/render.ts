@@ -1,0 +1,149 @@
+/**
+ * Renders core's event stream to the terminal.
+ *
+ * A renderer holds state now — a headless step's progress arrives as many
+ * small events and has to be summarised when the step ends — which is why
+ * this is a factory rather than the bare function it used to be. The sinks
+ * and clock are injectable so the output can be asserted directly.
+ *
+ * Deliberately no cursor control: `whiphand run` output is routinely piped to a
+ * file or read by CI, and an in-place spinner would corrupt both.
+ */
+import { join } from 'node:path';
+import { ATTACHMENTS_DIR, formatBytes } from '@whiphand/core';
+import type { WhiphandEvent } from '@whiphand/core';
+
+export interface RenderSinks {
+  out: (line: string) => void;
+  err: (line: string) => void;
+  now: () => number;
+}
+
+export interface RenderOptions {
+  /**
+   * Set for a dry run: where a run's directory is. A dry run copies no
+   * attachments, so this is how it still says where each one would have gone.
+   */
+  runDirOf?: (runId: string) => string;
+}
+
+/** What a headless step has told us so far, cleared when it finishes. */
+interface StepTally {
+  startedMs: number;
+  turns?: number;
+  costUsd?: number;
+  premiumRequests?: number;
+}
+
+/** Loop bodies are indented so a cycle reads as a cycle, not a flat replay. */
+function stepLine(event: Extract<WhiphandEvent, { type: 'step:start' }>): string {
+  const indent = event.loopId === undefined ? '' : '  ';
+  const detail = event.kind === 'agent'
+    ? `${event.runner}${event.model ? '/' + event.model : ''}, ${event.mode}`
+    : event.kind;
+  return `${indent}→ step ${event.stepId} (${detail})`;
+}
+
+function elapsed(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000));
+  const minutes = Math.floor(total / 60);
+  return minutes === 0 ? `${total}s` : `${minutes}m${String(total % 60).padStart(2, '0')}s`;
+}
+
+/**
+ * Elapsed time is always known because we measure it ourselves; everything
+ * else depends on what the runner chose to report, so an absent counter is
+ * omitted rather than printed as a zero.
+ */
+function summary(tally: StepTally, nowMs: number): string {
+  const parts: string[] = [];
+  if (tally.turns !== undefined) parts.push(`${tally.turns} turns`);
+  parts.push(elapsed(nowMs - tally.startedMs));
+  if (tally.costUsd !== undefined) parts.push(`$${tally.costUsd.toFixed(2)}`);
+  if (tally.premiumRequests !== undefined) parts.push(`${tally.premiumRequests} premium requests`);
+  return `  ${parts.join(' · ')}`;
+}
+
+export function createRenderer(
+  sinks: Partial<RenderSinks> = {}, opts: RenderOptions = {},
+): (event: WhiphandEvent) => void {
+  const out = sinks.out ?? ((line: string) => console.log(line));
+  // Both warnings and errors went to stderr before and still do.
+  const err = sinks.err ?? ((line: string) => console.error(line));
+  const now = sinks.now ?? Date.now;
+
+  // Only headless agent steps get an entry: they are the ones that used to
+  // run silently. A command step streams its own output as it goes.
+  const tallies = new Map<string, StepTally>();
+
+  /** The run's label, when it has one. The id stays: `--resume` takes that. */
+  const named = (name: string | undefined): string => (name === undefined ? '' : ` "${name}"`);
+
+  return function render(event: WhiphandEvent): void {
+    switch (event.type) {
+      case 'run:start': {
+        // Silent for the common (project) case; a global resolution is worth
+        // a mention but not a separate warning line on every single run.
+        out(`whiphand run ${event.runId}${named(event.name)} — workflow '${event.workflow}'`
+          + (event.source === 'global' ? ' (global)' : ''));
+        const attached = event.attachments ?? [];
+        if (attached.length === 0) return;
+        // The final names, which may differ from what was typed: sanitized,
+        // and suffixed when two files would otherwise collide.
+        out(`📎 ${attached.map(a => `${a.name} ${formatBytes(a.size)}`).join(' · ')}`);
+        const runDir = opts.runDirOf?.(event.runId);
+        if (runDir === undefined) return;
+        for (const a of attached) out(`  → ${join(runDir, ATTACHMENTS_DIR, a.name)}`);
+        return;
+      }
+      case 'run:resume':
+        return out(`whiphand resume ${event.runId}${named(event.name)} — workflow '${event.workflow}'`
+          + (event.from === undefined ? '' : `, from step '${event.from}'`));
+      case 'step:skipped':
+        // Reported rather than silent: a resumed run that printed nothing for
+        // its first three steps would look like it had lost them.
+        return out(`${event.loopId === undefined ? '' : '  '}↷ step ${event.stepId} (reused)`);
+      case 'step:start':
+        if (event.mode === 'headless') tallies.set(event.stepId, { startedMs: now() });
+        return out(stepLine(event));
+      case 'step:spawn':
+        return out(`  $ ${event.spec.argv.map(a => (a.includes(' ') ? JSON.stringify(a) : a)).join(' ')}`);
+      case 'step:artifact': return out(`  ✔ artifact ${event.path}`);
+      case 'step:verdict': return out(`  verdict: ${event.verdict.toUpperCase()}`);
+      case 'step:progress': {
+        const { progress } = event;
+        if (progress.kind === 'tool') {
+          return out(`  ${progress.tool}${progress.target === undefined ? '' : ` ${progress.target}`}`);
+        }
+        if (progress.kind === 'usage') {
+          const tally = tallies.get(event.stepId);
+          if (tally === undefined) return;
+          if (progress.turns !== undefined) tally.turns = progress.turns;
+          if (progress.costUsd !== undefined) tally.costUsd = progress.costUsd;
+          if (progress.premiumRequests !== undefined) tally.premiumRequests = progress.premiumRequests;
+        }
+        // Prose is deliberately dropped: it would drown the terminal.
+        return;
+      }
+      case 'step:done': {
+        const tally = tallies.get(event.stepId);
+        if (tally === undefined) return;
+        tallies.delete(event.stepId);
+        return out(summary(tally, now()));
+      }
+      case 'step:manual': return; // the prompt itself is the rendering, on stderr
+      case 'step:manual-resolved': return out(`  ↳ ${event.choice}`);
+      case 'loop:start': return out(`↻ loop ${event.loopId} (up to ${event.maxIterations} iterations)`);
+      case 'loop:iteration':
+        return out(`↻ ${event.loopId} — iteration ${event.iteration}/${event.maxIterations}`);
+      case 'loop:done':
+        return out(event.passed
+          ? `↻ ${event.loopId} passed after ${event.iterations} iteration(s)`
+          : `↻ ${event.loopId} exhausted after ${event.iterations} iteration(s)`);
+      case 'guard:warning': return err(`  ⚠ ${event.message}`);
+      case 'run:error': return err(`✘ ${event.message}`);
+      case 'run:cancelled': return out('✖ run cancelled');
+      case 'run:done': return out(event.ok ? '✔ run complete' : '✘ run failed');
+    }
+  };
+}

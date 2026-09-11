@@ -1,0 +1,10 @@
+node_modules/
+.whiphand/runs/
+apps/*/dist/
+apps/*/dist-web/
+apps/*/src-tauri/target/
+apps/*/src-tauri/gen/
+dist/
+apps/*/src-tauri/binaries/
+apps/*/src-tauri/resources/
+.worktrees/

@@ -1,0 +1,38 @@
+name: feature
+inputs:
+  feature: { required: true, prompt: "What are we building?" }
+
+steps:
+  - id: plan
+    runner: claude
+    model: opus
+    mode: interactive
+    writes: false
+    inputs: [attachments]   # files attached at start (--attach); dropped when there are none
+    output: plan.md
+    prompt: |
+      We are planning: {{ inputs.feature }}
+      Explore the codebase and work with me to produce an implementation plan.
+      Do not modify any files.
+
+  - id: execute
+    runner: copilot
+    model: gpt-5.5
+    mode: headless
+    writes: true
+    allow_paths: [src, tests]
+    inputs: [plan]
+    output: execute-report.md
+    prompt: |
+      Implement the attached plan. Report what you changed.
+
+  - id: review
+    runner: claude
+    model: haiku
+    mode: headless
+    writes: false
+    verdict: true
+    inputs: [plan, execute]
+    output: findings.md
+    prompt: |
+      Review the diff against the plan. Report gaps and defects.

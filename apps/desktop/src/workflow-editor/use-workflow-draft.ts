@@ -15,11 +15,18 @@ function freshId(existing: Step[]): string {
   return `step-${n}`;
 }
 
+/**
+ * `output` is omitted, not set to `''`: it is optional-shaped everywhere but
+ * `agent`, and core now treats `''` as present-but-blank, not absent. `prompt`
+ * stays `''` — it is required, and left that way is exactly what should be
+ * flagged as unfilled. The cast reflects that a fresh step is a deliberately
+ * incomplete draft, same as every other editor mutation in this file.
+ */
 function newStep(existing: Step[]): Step {
   return {
     kind: 'agent', id: freshId(existing), runner: 'claude', mode: 'headless',
-    writes: false, prompt: '', output: '',
-  };
+    writes: false, prompt: '',
+  } as Step;
 }
 
 export type Highlight = { kind: 'source' | 'dependent'; ids: Set<string> };

@@ -38,6 +38,16 @@ function errorMessage(e: unknown): string {
 }
 
 /**
+ * zod 4's own `ZodError.message` is a pretty-printed JSON dump of the issue
+ * array — readable in a debugger, not in an error toast. `path: message`,
+ * semicolon-joined, is what every RPC method's invalid-params error uses
+ * instead, `updateWorkflow` included.
+ */
+function formatZodError(error: z.ZodError): string {
+  return error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ');
+}
+
+/**
  * `methodSpecs` maps method name -> params schema; `handlers` maps method
  * name -> implementation. Both are required to route a call — a method
  * present in one but not the other is treated as not found.
@@ -84,7 +94,7 @@ export function createDispatcher(
         id,
         error: {
           code: ErrorCode.InvalidParams,
-          message: `invalid params: ${parsedParams.error.message}`,
+          message: `invalid params: ${formatZodError(parsedParams.error)}`,
         },
       });
     }

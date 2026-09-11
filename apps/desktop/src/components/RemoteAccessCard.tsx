@@ -184,7 +184,7 @@ export function RemoteAccessCard() {
             disabled={busy}
             onChange={(_e, data) => {
               const next = data.value ?? (data.displayValue ? Number(data.displayValue) : undefined);
-              if (typeof next !== 'number' || !Number.isFinite(next) || next < 1024 || next > 65535) return;
+              if (typeof next !== 'number' || !Number.isInteger(next) || next < 1024 || next > 65535) return;
               if (next === view.port) return;
               void act(() => client.request('remoteAccessSet', { port: next }));
             }}

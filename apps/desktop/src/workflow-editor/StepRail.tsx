@@ -1,5 +1,6 @@
+import { useEffect, useRef, useState } from 'react';
 import {
-  Dropdown, Field, Input, Option, Switch, Text,
+  Dropdown, Field, Input, Option, Switch, Text, Tooltip,
 } from '@fluentui/react-components';
 import type {
   AgentStep, CommandStep, EffortLevel, ManualStep, Step, StepKind, StepMode,
@@ -24,7 +25,11 @@ function numberOrUndefined(raw: string): number | undefined {
 export interface StepRailProps {
   step: AgentStep | CommandStep | ManualStep;
   earlierStepIds: string[];
+  /** Set when this step is a loop's `until:` target — Verdict is locked on, naming the loop. */
+  guardedByLoopId?: string;
   onUpdate: (next: Step) => void;
+  /** Field key -> message, from a failed Save — same gating as the card's problem badge. */
+  fieldErrors?: Record<string, string>;
 }
 
 /**
@@ -34,16 +39,59 @@ export interface StepRailProps {
  * prose sits beside, none of it stacked beneath a textarea any more. Each
  * field is a direct child, so each is its own cell of the rail's grid.
  */
-export function StepRail({ step, earlierStepIds, onUpdate }: StepRailProps) {
+export function StepRail({ step, earlierStepIds, guardedByLoopId, onUpdate, fieldErrors }: StepRailProps) {
   const styles = useStepLayoutStyles();
+  const guardTooltip = guardedByLoopId
+    ? `'${step.id}' ends loop '${guardedByLoopId}' — it must keep Verdict on`
+    : undefined;
 
   function patch(fields: Partial<Step>): void {
     onUpdate({ ...step, ...fields } as Step);
   }
 
+  // Allowed paths and Successful exit codes are both re-derived from the
+  // parsed array on the original render, which drops the comma or the
+  // spaces the user just typed on every keystroke. A local text mirror keeps
+  // what was typed; it is only overwritten by the step's own value when that
+  // value changed from something other than this field's own last edit —
+  // the same "external change" test StepIdField's useEffect makes for id.
+  const allowPaths = (step as AgentStep).allow_paths;
+  const [allowPathsText, setAllowPathsText] = useState(() => (allowPaths ?? []).join(', '));
+  const lastAllowPaths = useRef(allowPaths);
+  useEffect(() => {
+    if (allowPaths !== lastAllowPaths.current) {
+      setAllowPathsText((allowPaths ?? []).join(', '));
+      lastAllowPaths.current = allowPaths;
+    }
+  }, [allowPaths]);
   function setAllowPaths(raw: string): void {
+    setAllowPathsText(raw);
     const paths = raw.split(',').map(p => p.trim()).filter(Boolean);
-    patch({ allow_paths: paths.length > 0 ? paths : undefined } as Partial<Step>);
+    const next = paths.length > 0 ? paths : undefined;
+    lastAllowPaths.current = next;
+    patch({ allow_paths: next } as Partial<Step>);
+  }
+
+  const expectExit = (step as CommandStep).expect_exit;
+  const [expectExitText, setExpectExitText] = useState(() => (expectExit ?? []).join(', '));
+  const [expectExitError, setExpectExitError] = useState<string | null>(null);
+  const lastExpectExit = useRef(expectExit);
+  useEffect(() => {
+    if (expectExit !== lastExpectExit.current) {
+      setExpectExitText((expectExit ?? []).join(', '));
+      lastExpectExit.current = expectExit;
+    }
+  }, [expectExit]);
+  function setExpectExit(raw: string): void {
+    setExpectExitText(raw);
+    const tokens = raw.split(',').map(v => v.trim()).filter(Boolean);
+    const bad = tokens.some(t => !/^-?\d+$/.test(t));
+    setExpectExitError(bad ? "must be whole numbers, comma-separated" : null);
+    if (bad) return; // the field shows the error; the step keeps its last good value
+    const codes = tokens.map(t => Number.parseInt(t, 10));
+    const next = codes.length > 0 ? codes : undefined;
+    lastExpectExit.current = next;
+    patch({ expect_exit: next } as Partial<Step>);
   }
 
   /**
@@ -66,7 +114,12 @@ export function StepRail({ step, earlierStepIds, onUpdate }: StepRailProps) {
     <div data-testid={`step-rail-${step.id}`} className={styles.rail}>
       {isAgentStep(step) && (
         <>
-          <Field label="Runner">
+          <Field
+            label="Runner"
+            required
+            validationState={fieldErrors?.runner ? 'error' : 'none'}
+            validationMessage={fieldErrors?.runner}
+          >
             <Input value={step.runner} onChange={(_e, data) => patch({ runner: data.value } as Partial<Step>)} />
           </Field>
           <Field label="Model">
@@ -97,7 +150,7 @@ export function StepRail({ step, earlierStepIds, onUpdate }: StepRailProps) {
           </Field>
           <Switch label="Writes" checked={step.writes} onChange={(_e, data) => patch({ writes: data.checked } as Partial<Step>)} />
           <Field label="Allowed paths" hint="Comma-separated.">
-            <Input value={(step.allow_paths ?? []).join(', ')} onChange={(_e, data) => setAllowPaths(data.value)} />
+            <Input value={allowPathsText} onChange={(_e, data) => setAllowPaths(data.value)} />
           </Field>
         </>
       )}
@@ -107,14 +160,13 @@ export function StepRail({ step, earlierStepIds, onUpdate }: StepRailProps) {
           <Field label="Working directory" hint="Relative to the workspace. Blank = workspace root.">
             <Input value={step.cwd ?? ''} onChange={(_e, data) => patch({ cwd: data.value || undefined } as Partial<Step>)} />
           </Field>
-          <Field label="Successful exit codes" hint="Comma-separated. Blank = 0 only.">
-            <Input
-              value={(step.expect_exit ?? []).join(', ')}
-              onChange={(_e, data) => {
-                const codes = data.value.split(',').map(v => Number.parseInt(v.trim(), 10)).filter(Number.isInteger);
-                patch({ expect_exit: codes.length > 0 ? codes : undefined } as Partial<Step>);
-              }}
-            />
+          <Field
+            label="Successful exit codes"
+            hint="Comma-separated. Blank = 0 only."
+            validationState={expectExitError ? 'error' : 'none'}
+            validationMessage={expectExitError ?? undefined}
+          >
+            <Input value={expectExitText} onChange={(_e, data) => setExpectExit(data.value)} />
           </Field>
           <Field label="Timeout (ms)">
             <Input
@@ -127,7 +179,12 @@ export function StepRail({ step, earlierStepIds, onUpdate }: StepRailProps) {
 
       {isManualStep(step) && (
         <>
-          <Field label="Title">
+          <Field
+            label="Title"
+            required
+            validationState={fieldErrors?.title ? 'error' : 'none'}
+            validationMessage={fieldErrors?.title}
+          >
             <Input value={step.title} onChange={(_e, data) => patch({ title: data.value } as Partial<Step>)} />
           </Field>
           <Field label="Capture" hint="What the human is asked to write.">
@@ -159,14 +216,35 @@ export function StepRail({ step, earlierStepIds, onUpdate }: StepRailProps) {
       )}
 
       <Field label="Verdict" hint="This step's result ends a loop, or stands for on_findings.">
-        <Switch checked={step.verdict ?? false} onChange={(_e, data) => patch({ verdict: data.checked } as Partial<Step>)} />
+        {(() => {
+          const verdictSwitch = (
+            <Switch
+              checked={step.verdict ?? false}
+              disabled={guardedByLoopId !== undefined}
+              onChange={(_e, data) => patch({ verdict: data.checked || undefined } as Partial<Step>)}
+            />
+          );
+          return guardTooltip
+            ? <Tooltip content={guardTooltip} relationship="label">{verdictSwitch}</Tooltip>
+            : verdictSwitch;
+        })()}
       </Field>
 
-      <Field label="Output filename" hint={step.kind === 'agent' ? undefined : 'Optional: leave blank to keep no artifact.'}>
+      <Field
+        label="Output filename"
+        required={step.kind === 'agent'}
+        hint={step.kind === 'agent' ? 'Required: the file this step writes.' : 'Optional: leave blank to keep no artifact.'}
+        validationState={fieldErrors?.output ? 'error' : 'none'}
+        validationMessage={fieldErrors?.output}
+      >
         <Input value={step.output ?? ''} onChange={(_e, data) => patch({ output: data.value || undefined } as Partial<Step>)} />
       </Field>
 
-      <Field label="Reads from">
+      <Field
+        label="Reads from"
+        validationState={fieldErrors?.inputs ? 'error' : 'none'}
+        validationMessage={fieldErrors?.inputs}
+      >
         <Dropdown
           multiselect
           value={(step.inputs ?? []).join(', ')}
@@ -205,16 +283,20 @@ export function convertStep(step: Step, kind: StepKind): Step {
   const isLoop = step.kind === 'loop';
   const carried = {
     id: step.id,
-    ...(isLoop ? {} : { inputs: step.inputs, output: step.output, verdict: step.verdict, enabled: step.enabled }),
+    ...(isLoop ? {} : { inputs: step.inputs, verdict: step.verdict, enabled: step.enabled }),
   };
+  // Output is optional on every kind but 'agent': carried only when it is
+  // non-blank, so a blank or absent output never survives a kind switch as
+  // the very `''` core now rejects (or, for 'agent', requires and will flag).
+  const output = !isLoop && step.output && step.output.trim() !== '' ? step.output : undefined;
   switch (kind) {
     case 'agent':
       return {
         kind, runner: 'claude', mode: 'headless', writes: false, prompt: '',
-        ...carried, output: (isLoop ? '' : step.output) ?? '',
+        ...carried, ...(output !== undefined ? { output } : {}),
       } as AgentStep;
     case 'command':
-      return { kind, run: '', ...carried } as CommandStep;
+      return { kind, run: '', ...carried, ...(output !== undefined ? { output } : {}) } as CommandStep;
     case 'manual':
     case 'approval':
       return {
@@ -223,6 +305,7 @@ export function convertStep(step: Step, kind: StepKind): Step {
         instructions: isManualStep(step) ? step.instructions : '',
         ...(isManualStep(step) ? { capture: step.capture, show_diff: step.show_diff, default: step.default } : {}),
         ...carried,
+        ...(output !== undefined ? { output } : {}),
       } as ManualStep;
     case 'loop':
       return {

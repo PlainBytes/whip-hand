@@ -334,4 +334,29 @@ describe('WorkspaceSettingsPage', () => {
     expect(screen.getByDisplayValue('.whiphand/runs')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
   });
+
+  it('typing 2.5 into Max fix-loop iterations is rejected — Save stays disabled', async () => {
+    const { transport } = renderWorkspaceSettingsPage();
+    await respond(transport, 'configGet', SCRIPTED_CONFIG);
+    await respond(transport, 'doctor', []);
+    await screen.findByRole('spinbutton');
+
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '2.5' } });
+
+    // The input echoes what was typed, but a non-integer is never applied to
+    // the form state — Save stays disabled, and no request is ever sent.
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+
+  it('a blank artifacts directory shows the field error and disables Save', async () => {
+    const { transport } = renderWorkspaceSettingsPage();
+    await respond(transport, 'configGet', SCRIPTED_CONFIG);
+    await respond(transport, 'doctor', []);
+    const field = await screen.findByDisplayValue('.whiphand/runs');
+
+    fireEvent.change(field, { target: { value: '' } });
+
+    expect(await screen.findByText(/artifacts directory is required/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
 });

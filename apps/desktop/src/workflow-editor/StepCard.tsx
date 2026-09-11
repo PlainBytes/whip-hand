@@ -42,11 +42,17 @@ export interface StepCardProps {
   onRemove: () => void;
   onUpdate: (next: Step) => void;
   onRename: (nextId: string) => void;
+  /** A pending, uncommitted Step ID problem on this card — blocks Save until resolved. */
+  onIdError?: (error: string | null) => void;
   /** The persistent inline note when this card lost an input to a disabled step. */
   readerNote?: string;
   highlight?: 'source' | 'dependent';
   onReadsClick: (ids: string[]) => void;
   onWritesClick: (id: string) => void;
+  /** Save-time problems naming this card, shown only once Save has been tried at least once. */
+  problemCount?: number;
+  /** Field key -> message, for the fields this card owns — same gating as `problemCount`. */
+  fieldErrors?: Record<string, string>;
 }
 
 /**
@@ -59,7 +65,8 @@ export interface StepCardProps {
 export function StepCard({
   step, ordinal, earlierStepIds, idsInTree, endsLoop, dimmed, collapsed, onToggleCollapsed,
   bodyFolded, onToggleBodyFolded, isFirst, isLast, onMove, onInsertBelow, guardedByLoopId,
-  onToggleEnabled, onRemove, onUpdate, onRename, readerNote, highlight, onReadsClick, onWritesClick,
+  onToggleEnabled, onRemove, onUpdate, onRename, onIdError, readerNote, highlight, onReadsClick, onWritesClick,
+  problemCount, fieldErrors,
 }: StepCardProps) {
   const styles = useStepLayoutStyles();
   const isEnabled = step.enabled !== false;
@@ -95,6 +102,7 @@ export function StepCard({
             highlight={highlight}
             onReadsClick={onReadsClick}
             onWritesClick={onWritesClick}
+            problemCount={problemCount}
           />
         </div>
         {isLoopStep(step) && onToggleBodyFolded && (
@@ -147,12 +155,12 @@ export function StepCard({
       {!collapsed && (
         <div style={{ borderTop: '1px solid var(--colorNeutralStroke2)', padding: 12 }}>
           {isLoopStep(step) ? (
-            <LoopFields step={step} onUpdate={onUpdate} />
+            <LoopFields step={step} onUpdate={onUpdate} fieldErrors={fieldErrors} />
           ) : (
             <div className={styles.body} style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
               <div style={{ flex: '1 1 320px', display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                  <StepIdField id={step.id} idsInTree={idsInTree} onRename={onRename} />
+                  <StepIdField id={step.id} idsInTree={idsInTree} onRename={onRename} onErrorChange={onIdError} />
                   <Field label="Kind">
                     <Dropdown
                       aria-label="Kind"
@@ -166,22 +174,45 @@ export function StepCard({
                   </Field>
                 </div>
                 {step.kind === 'agent' && (
-                  <Field label="Prompt">
+                  <Field
+                    label="Prompt"
+                    required
+                    validationState={fieldErrors?.prompt ? 'error' : 'none'}
+                    validationMessage={fieldErrors?.prompt}
+                  >
                     <Textarea value={step.prompt} rows={12} onChange={(_e, data) => patch({ prompt: data.value })} />
                   </Field>
                 )}
                 {step.kind === 'command' && (
-                  <Field label="Command" hint="Run through /bin/sh -c, in the workspace directory.">
+                  <Field
+                    label="Command"
+                    required
+                    hint="Run through /bin/sh -c, in the workspace directory."
+                    validationState={fieldErrors?.run ? 'error' : 'none'}
+                    validationMessage={fieldErrors?.run}
+                  >
                     <Textarea value={step.run} rows={8} onChange={(_e, data) => patch({ run: data.value })} />
                   </Field>
                 )}
                 {(step.kind === 'manual' || step.kind === 'approval') && (
-                  <Field label="Instructions" hint="Shown to whoever is asked. Supports {{ inputs.* }}.">
+                  <Field
+                    label="Instructions"
+                    required
+                    hint="Shown to whoever is asked. Supports {{ inputs.* }}."
+                    validationState={fieldErrors?.instructions ? 'error' : 'none'}
+                    validationMessage={fieldErrors?.instructions}
+                  >
                     <Textarea value={step.instructions} rows={12} onChange={(_e, data) => patch({ instructions: data.value })} />
                   </Field>
                 )}
               </div>
-              <StepRail step={step} earlierStepIds={earlierStepIds} onUpdate={onUpdate} />
+              <StepRail
+                step={step}
+                earlierStepIds={earlierStepIds}
+                guardedByLoopId={guardedByLoopId}
+                onUpdate={onUpdate}
+                fieldErrors={fieldErrors}
+              />
             </div>
           )}
         </div>
@@ -191,19 +222,37 @@ export function StepCard({
 }
 
 /** A loop card has no prose, so its expanded state is a single row of three fields. */
-function LoopFields({ step, onUpdate }: { step: LoopStep; onUpdate: (next: Step) => void }) {
+function LoopFields({
+  step, onUpdate, fieldErrors,
+}: { step: LoopStep; onUpdate: (next: Step) => void; fieldErrors?: Record<string, string> }) {
   function patch(fields: Partial<LoopStep>): void {
     onUpdate({ ...step, ...fields });
   }
+  // Only a body step with Verdict on can end the loop — offering the rest
+  // just invites a save-time error the dropdown could have prevented. The
+  // current value stays selectable even once it no longer qualifies (e.g.
+  // Verdict got turned off), so the resulting field error stays visible
+  // instead of silently reverting to something the user never picked.
+  const verdictOptions = step.steps.filter(s => !isLoopStep(s) && s.verdict);
+  const options = step.until && !verdictOptions.some(s => s.id === step.until)
+    ? [...verdictOptions, ...step.steps.filter(s => s.id === step.until)]
+    : verdictOptions;
   return (
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-      <Field label="Repeat until" hint="A body step with Verdict on.">
+      <Field
+        label="Repeat until"
+        hint="A body step with Verdict on."
+        validationState={fieldErrors?.until ? 'error' : 'none'}
+        validationMessage={fieldErrors?.until}
+      >
         <Dropdown
           value={step.until}
           selectedOptions={step.until ? [step.until] : []}
           onOptionSelect={(_e, data) => data.optionValue && patch({ until: data.optionValue })}
         >
-          {step.steps.filter(s => !isLoopStep(s)).map(s => <Option key={s.id} value={s.id}>{s.id}</Option>)}
+          {options.length > 0
+            ? options.map(s => <Option key={s.id} value={s.id}>{s.id}</Option>)
+            : <Option value="" disabled>Turn on Verdict on a body step first</Option>}
         </Dropdown>
       </Field>
       <Field label="Max iterations" hint="Blank = the workspace default.">

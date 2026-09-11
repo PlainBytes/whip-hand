@@ -260,7 +260,7 @@ export function WorkspaceSettingsPage() {
           value={form.loop.max_iterations}
           onChange={(_e, data) => {
             const next = data.value ?? (data.displayValue ? Number(data.displayValue) : undefined);
-            if (typeof next === 'number' && Number.isFinite(next) && next >= 1) {
+            if (typeof next === 'number' && Number.isInteger(next) && next >= 1) {
               update(prev => ({ ...prev, loop: { ...prev.loop, max_iterations: next } }));
             }
           }}
@@ -271,7 +271,12 @@ export function WorkspaceSettingsPage() {
         />
       </Field>
 
-      <Field label="Artifacts directory">
+      <Field
+        label="Artifacts directory"
+        required
+        validationState={form.artifacts_dir.trim() === '' ? 'error' : 'none'}
+        validationMessage={form.artifacts_dir.trim() === '' ? 'Artifacts directory is required' : undefined}
+      >
         <Input
           value={form.artifacts_dir}
           onChange={(_e, data) => update(prev => ({ ...prev, artifacts_dir: data.value }))}
@@ -338,7 +343,7 @@ export function WorkspaceSettingsPage() {
               value={form.runs.max_retained}
               onChange={(_e, data) => {
                 const next = data.value ?? (data.displayValue ? Number(data.displayValue) : undefined);
-                if (typeof next === 'number' && Number.isFinite(next) && next >= 1) {
+                if (typeof next === 'number' && Number.isInteger(next) && next >= 1) {
                   update(prev => ({ ...prev, runs: { ...prev.runs, max_retained: next } }));
                 }
               }}
@@ -365,7 +370,7 @@ export function WorkspaceSettingsPage() {
 
       <Button
         appearance="primary"
-        disabled={!dirty || saving}
+        disabled={!dirty || saving || form.artifacts_dir.trim() === ''}
         icon={saving ? <Spinner size="tiny" /> : <Save20Regular />}
         onClick={() => void handleSave()}
       >

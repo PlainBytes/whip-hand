@@ -127,7 +127,7 @@ export function PreferencesPage() {
             value={maxRetained}
             onChange={(_e, data) => {
               const next = data.value ?? (data.displayValue ? Number(data.displayValue) : undefined);
-              if (typeof next === 'number' && Number.isFinite(next) && next >= 1) void setMaxRetained(next);
+              if (typeof next === 'number' && Number.isInteger(next) && next >= 1) void setMaxRetained(next);
             }}
           />
         )}

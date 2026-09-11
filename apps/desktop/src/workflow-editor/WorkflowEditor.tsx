@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge, Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle,
   MessageBar, MessageBarBody, Spinner, Text,
@@ -11,8 +11,10 @@ import { PageFooter } from '../components/PageFooter.tsx';
 import type { Scope, Workflow } from '../../../../packages/core/src/types.ts';
 import { isLoopStep } from '../../../../packages/core/src/steps.ts';
 import { untilTargetOf } from '../../../../packages/core/src/enabled.ts';
+import { validateWorkflowDraft } from '../../../../packages/core/src/schema.ts';
 import { readerNotes } from '../lib/disabled-copy.ts';
 import { referenceableIds } from '../lib/step-tree.ts';
+import { normalizeDraft } from '../lib/draft-normalize.ts';
 import { useWorkflowDraft } from './use-workflow-draft.ts';
 import { WorkflowSettingsCard } from './WorkflowSettingsCard.tsx';
 import { StepCard } from './StepCard.tsx';
@@ -67,6 +69,44 @@ export function WorkflowEditor({
   // the machine reads it, not just this one.
   const [confirmingGlobalSave, setConfirmingGlobalSave] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  // Inline errors appear only after the first Save attempt that found a
+  // problem — not on every keystroke of a workflow nobody has tried to save
+  // yet. Once shown, they recompute on every render, so they clear as the
+  // problems that caused them get fixed.
+  const [showProblems, setShowProblems] = useState(false);
+  // A pending, uncommitted Step ID edit on some card — keyed by that card's
+  // current committed id, which is also its React key here.
+  const [idFieldErrors, setIdFieldErrors] = useState<Record<string, string | null>>({});
+  // A blank or duplicate input name in the settings card's own row state —
+  // it can never be pushed into `workflow.inputs` as its own entry.
+  const [settingsProblem, setSettingsProblem] = useState<string | null>(null);
+  const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const [revealId, setRevealId] = useState<string | null>(null);
+
+  const normalized = useMemo(() => normalizeDraft(draft), [draft]);
+  const { problems: draftProblems, fieldProblems: draftFieldProblems } = useMemo(
+    () => validateWorkflowDraft(normalized), [normalized],
+  );
+  // Keyed by the card's own committed id, so this reads as a problem on that
+  // card, and its message matches the `step '<id>': ...` shape the footer's
+  // other lines use.
+  const idProblems = Object.entries(idFieldErrors)
+    .filter((entry): entry is [string, string] => entry[1] !== null)
+    .map(([stepId, message]) => ({ stepId, message: `step '${stepId}': Step ID ${message}` }));
+  const allProblems = [
+    ...draftProblems, ...idProblems.map(p => p.message), ...(settingsProblem ? [settingsProblem] : []),
+  ];
+
+  // Field-level errors for the step cards — populated only from the schema's
+  // own field problems (id problems are already visible at their source, the
+  // Step ID field itself). First problem per (step, field) wins.
+  const fieldErrorsByStepId = new Map<string, Record<string, string>>();
+  for (const fp of draftFieldProblems) {
+    if (fp.stepId === undefined || fp.field === undefined) continue;
+    const bucket = fieldErrorsByStepId.get(fp.stepId) ?? {};
+    if (!(fp.field in bucket)) bucket[fp.field] = fp.phrase;
+    fieldErrorsByStepId.set(fp.stepId, bucket);
+  }
 
   const notes = readerNotes(draft);
   const noteByStepId = new Map(notes.map(n => [n.stepId, n.text]));
@@ -75,8 +115,52 @@ export function WorkflowEditor({
   // expanded once, depth-first) — stable regardless of which bodies are
   // folded, so folding a loop never renumbers anything outside it.
   const ordinalByStepId = new Map(rows.map((row, i) => [row.step.id, i + 1]));
+  // Every stepId-bearing problem, in the same order as `allProblems` — built
+  // from the structured `fieldProblems` rather than re-parsing `problems`
+  // strings, since a "references" semantic problem (`step 'b' references
+  // unknown step 'a'`) has no colon right after the id for a regex to find.
+  const stepProblems = [
+    ...draftFieldProblems.flatMap(fp => (fp.stepId !== undefined ? [{ stepId: fp.stepId }] : [])),
+    ...idProblems,
+  ];
+  const problemCountByStepId = new Map<string, number>();
+  for (const { stepId } of stepProblems) {
+    problemCountByStepId.set(stepId, (problemCountByStepId.get(stepId) ?? 0) + 1);
+  }
+
+  // Expands the card (and unfolds any loop bodies above it), then scrolls it
+  // into view once that expansion has actually reached the DOM.
+  function revealStep(stepId: string): void {
+    const target = rows.find(r => r.step.id === stepId);
+    if (target === undefined) return;
+    for (const row of rows) {
+      if (!isLoopStep(row.step)) continue;
+      if (row.path.length >= target.path.length) continue;
+      if (!row.path.every((v, i) => v === target.path[i])) continue;
+      if (draftApi.isBodyFolded(row.step.id)) draftApi.toggleBodyFolded(row.step.id);
+    }
+    if (!draftApi.isExpanded(stepId)) draftApi.toggleExpanded(stepId);
+    setRevealId(stepId);
+  }
+
+  useEffect(() => {
+    if (revealId === null) return;
+    const el = cardRefs.current[revealId];
+    if (el === null || el === undefined) return;
+    // jsdom (tests) has no layout engine and does not implement this.
+    el.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    setRevealId(null);
+    // Runs again once the reveal's own state changes land in the DOM —
+    // `visibleRows` is what actually changes when a fold/expand takes effect.
+  }, [revealId, visibleRows]);
 
   async function save(): Promise<void> {
+    if (allProblems.length > 0) {
+      setShowProblems(true);
+      const firstStepId = stepProblems[0]?.stepId;
+      if (firstStepId !== undefined) revealStep(firstStepId);
+      return;
+    }
     if (source === 'global' && !confirmingGlobalSave) {
       setConfirmingGlobalSave(true);
       return;
@@ -85,7 +169,7 @@ export function WorkflowEditor({
     setSaveError(null);
     try {
       await client.request('updateWorkflow', {
-        workdir, name, workflow: draft,
+        workdir, name, workflow: normalized,
         ...(source === 'global' ? { scope: source } : {}),
       });
       setConfirmingGlobalSave(false);
@@ -154,6 +238,7 @@ export function WorkflowEditor({
           collapsed={draftApi.settingsCollapsed}
           onToggleCollapsed={draftApi.toggleSettingsCollapsed}
           onUpdate={draftApi.updateWorkflowSettings}
+          onProblem={setSettingsProblem}
         />
 
         {visibleRows.map(row => {
@@ -162,6 +247,7 @@ export function WorkflowEditor({
           return (
             <div
               key={row.step.id}
+              ref={el => { cardRefs.current[row.step.id] = el; }}
               style={{
                 marginLeft: row.depth * 20,
                 borderLeft: row.depth > 0 ? '2px solid var(--colorBrandStroke2)' : undefined,
@@ -188,10 +274,15 @@ export function WorkflowEditor({
                 onRemove={() => draftApi.removeStepAt(row.path)}
                 onUpdate={next => draftApi.updateStep(row.path, next)}
                 onRename={nextId => draftApi.commitRename(row.path, nextId)}
+                onIdError={error => setIdFieldErrors(prev => (
+                  prev[row.step.id] === error ? prev : { ...prev, [row.step.id]: error }
+                ))}
                 readerNote={noteByStepId.get(row.step.id)}
                 highlight={draftApi.highlightFor(row.step.id)}
                 onReadsClick={() => draftApi.highlightReads(row.step.id)}
                 onWritesClick={() => draftApi.highlightWrites(row.step.id)}
+                problemCount={showProblems ? problemCountByStepId.get(row.step.id) : undefined}
+                fieldErrors={showProblems ? fieldErrorsByStepId.get(row.step.id) : undefined}
               />
             </div>
           );
@@ -203,7 +294,22 @@ export function WorkflowEditor({
       </div>
 
       <PageFooter>
-        {saveError && <MessageBar intent="error"><MessageBarBody>{saveError}</MessageBarBody></MessageBar>}
+        {saveError && (
+          <MessageBar intent="error">
+            {/* A WorkflowError-style server message is several lines, joined with '\n  - '. */}
+            <MessageBarBody style={{ whiteSpace: 'pre-wrap' }}>{saveError}</MessageBarBody>
+          </MessageBar>
+        )}
+        {showProblems && allProblems.length > 0 && (
+          <MessageBar intent="error">
+            <MessageBarBody>
+              <div>{allProblems.length} problem{allProblems.length === 1 ? '' : 's'}:</div>
+              <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                {allProblems.map((problem, i) => <li key={`${i}:${problem}`}>{problem}</li>)}
+              </ul>
+            </MessageBarBody>
+          </MessageBar>
+        )}
         <div style={{ display: 'flex', gap: 8 }}>
           <Button appearance="secondary" icon={<Dismiss20Regular />} onClick={onCancel}>Cancel</Button>
           <Button

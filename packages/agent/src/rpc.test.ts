@@ -48,6 +48,15 @@ test('invalid params -> -32602', async () => {
   assert.equal(response.error.code, ErrorCode.InvalidParams);
 });
 
+test('invalid params message is a compact path: message list, not zod\'s pretty-printed JSON', async () => {
+  const { dispatcher } = setup();
+  const line = JSON.stringify({ id: 3, method: 'echo', params: { text: 42 } });
+  const response = JSON.parse(await dispatcher.handleLine(line));
+  assert.match(response.error.message, /^invalid params: text: /);
+  assert.ok(!response.error.message.includes('"origin"'), 'must not be zod\'s raw JSON issue dump');
+  assert.ok(!response.error.message.trim().endsWith('['), 'must not open a JSON array');
+});
+
 test('missing required params -> -32602', async () => {
   const { dispatcher } = setup();
   const line = JSON.stringify({ id: 4, method: 'echo', params: {} });

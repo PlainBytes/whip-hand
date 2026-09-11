@@ -1,10 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { WorkflowEditor } from './WorkflowEditor.tsx';
+import { convertStep } from './StepRail.tsx';
 import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
 import { AgentClientProvider } from '../agent/agent-context.tsx';
-import type { Workflow } from '../../../../packages/core/src/types.ts';
+import type { AgentStep, Step, Workflow } from '../../../../packages/core/src/types.ts';
+
+function flattenSteps(steps: Step[]): Step[] {
+  return steps.flatMap(s => ('steps' in s ? [s, ...flattenSteps(s.steps)] : [s]));
+}
 
 /** Mirrors feature-development.yaml's nesting: human-review wraps do-review wraps execute/review, then sign-off. */
 const NESTED_WORKFLOW: Workflow = {
@@ -82,11 +87,13 @@ describe('WorkflowEditor: density and collapse', () => {
   it('expanding a card shows its prompt and rail; collapsing hides them again', () => {
     renderEditor(NESTED_WORKFLOW);
     fireEvent.click(screen.getByTestId('step-collapse-execute'));
-    expect(screen.getByLabelText('Prompt')).toHaveValue('implement');
-    expect(screen.getByLabelText('Runner')).toHaveValue('claude');
+    // Required fields carry Fluent's own "*" marker on the label text —
+    // matched with a prefix regex rather than the bare word.
+    expect(screen.getByLabelText(/^Prompt/)).toHaveValue('implement');
+    expect(screen.getByLabelText(/^Runner/)).toHaveValue('claude');
 
     fireEvent.click(screen.getByTestId('step-collapse-execute'));
-    expect(screen.queryByLabelText('Prompt')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Prompt/)).not.toBeInTheDocument();
   });
 
   it('folding human-review hides its four descendants but keeps its own row', () => {
@@ -129,7 +136,7 @@ describe('WorkflowEditor: density', () => {
     fireEvent.click(screen.getByTestId('step-collapse-execute'));
     const card = screen.getByTestId('step-card-execute');
     const capped: HTMLElement[] = [];
-    for (let el = screen.getByLabelText('Prompt').parentElement; el && el !== card; el = el.parentElement) {
+    for (let el = screen.getByLabelText(/^Prompt/).parentElement; el && el !== card; el = el.parentElement) {
       if (el.style.maxWidth) capped.push(el);
     }
     expect(capped).toEqual([]);
@@ -152,7 +159,11 @@ describe('WorkflowEditor: the step rail', () => {
     const fields = [...kindFields, 'Verdict', 'Output filename', 'Reads from'];
 
     const cells = fields.map(label => {
-      const control = within(rail).getAllByLabelText(label)[0];
+      // A few fields carry Fluent's own "*" required marker on the label
+      // text — matched with an optional-suffix regex rather than the bare
+      // word (anchored at both ends, so e.g. "Mode" cannot match "Model").
+      const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const control = within(rail).getAllByLabelText(new RegExp(`^${escaped}\\*?$`))[0];
       return Array.from(rail.children).find(child => child.contains(control));
     });
     expect(cells.every(Boolean)).toBe(true);
@@ -273,6 +284,37 @@ describe('WorkflowEditor: insert below and rename', () => {
     fireEvent.blur(idField);
     expect(screen.getByText(/already a step/i)).toBeInTheDocument();
     expect(screen.getByTestId('step-card-plan')).toBeInTheDocument();
+  });
+
+  it('removing a card with a pending Step ID error clears it — Save is not stuck blocked forever', async () => {
+    const { transport } = renderEditor(NESTED_WORKFLOW);
+    fireEvent.click(screen.getByTestId('step-collapse-stage'));
+    const idField = screen.getByLabelText('Step ID');
+    fireEvent.change(idField, { target: { value: 'commit' } });
+    fireEvent.blur(idField);
+    expect(screen.getByText(/already a step/i)).toBeInTheDocument();
+
+    fireEvent.click(within(screen.getByTestId('step-card-stage')).getByLabelText('Remove step'));
+    expect(screen.queryByTestId('step-card-stage')).not.toBeInTheDocument();
+    expect(screen.queryByText(/already a step/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await lastRequest(transport, 'updateWorkflow');
+  });
+
+  it('collapsing a card with a pending Step ID error clears it, instead of leaving Save stuck', async () => {
+    const { transport } = renderEditor(NESTED_WORKFLOW);
+    fireEvent.click(screen.getByTestId('step-collapse-stage'));
+    const idField = screen.getByLabelText('Step ID');
+    fireEvent.change(idField, { target: { value: '' } });
+    fireEvent.blur(idField);
+    expect(screen.getByText(/an id is required/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('step-collapse-stage'));
+    expect(screen.queryByText(/an id is required/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await lastRequest(transport, 'updateWorkflow');
   });
 });
 
@@ -395,5 +437,157 @@ describe('WorkflowEditor: delete', () => {
 
     transport.emitLine({ id: req.id, result: { path: '/ws/.whiphand/workflows/feature-development.yaml' } });
     await waitFor(() => expect(deleteButton).toBeEnabled());
+  });
+});
+
+describe('WorkflowEditor: save-time validation', () => {
+  it('Add step, Kind command, type Command, Save: updateWorkflow is called and the payload has no output key', async () => {
+    const { transport } = renderEditor(NESTED_WORKFLOW);
+    fireEvent.click(screen.getByRole('button', { name: /add step/i }));
+    const newCard = screen.getByTestId('step-card-step-12');
+    fireEvent.click(within(newCard).getByRole('combobox', { name: 'Kind' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'command' }));
+    fireEvent.change(within(newCard).getByLabelText(/^Command/), { target: { value: 'npm test' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    const req = await lastRequest(transport, 'updateWorkflow');
+    const wf = (req.params as { workflow: Workflow }).workflow;
+    const step = wf.steps.find(s => s.id === 'step-12') as unknown as Record<string, unknown>;
+    expect('output' in step).toBe(false);
+  });
+
+  it('Save with a blank Prompt: no request is sent, the card expands, the field itself is flagged, and the footer lists the problem', async () => {
+    const { transport } = renderEditor(NESTED_WORKFLOW);
+    fireEvent.click(screen.getByRole('button', { name: /add step/i }));
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(transport.sent.some(l => (JSON.parse(l) as { method: string }).method === 'updateWorkflow')).toBe(false);
+
+    // The new agent step's card auto-expands to show the blank Prompt.
+    const prompt = await screen.findByLabelText(/^Prompt/);
+    expect(prompt).toBeInTheDocument();
+    expect(prompt).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByText(/step 'step-12': Prompt/)).toBeInTheDocument();
+
+    fireEvent.change(prompt, { target: { value: 'do it' } });
+    fireEvent.change(screen.getByLabelText(/^Output filename/), { target: { value: 'step-12.md' } });
+    await waitFor(() => expect(screen.queryByText(/step 'step-12': Prompt/)).not.toBeInTheDocument());
+    expect(prompt).not.toHaveAttribute('aria-invalid', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await lastRequest(transport, 'updateWorkflow');
+  });
+
+  it('a blank Runner and Output filename on the same step both show up as separate footer lines', async () => {
+    renderEditor(NESTED_WORKFLOW);
+    fireEvent.click(screen.getByRole('button', { name: /add step/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(await screen.findByText(/step 'step-12': Output filename is required/)).toBeInTheDocument();
+  });
+
+  it('convertStep: an agent with output: \'\' converted to command has no output key', () => {
+    const agent: AgentStep = {
+      kind: 'agent', id: 'a', runner: 'claude', mode: 'headless', writes: false, prompt: 'p', output: '',
+    };
+    const command = convertStep(agent, 'command') as unknown as Record<string, unknown>;
+    expect('output' in command).toBe(false);
+  });
+
+  it('convertStep: a non-blank output survives a kind switch', () => {
+    const agent: AgentStep = {
+      kind: 'agent', id: 'a', runner: 'claude', mode: 'headless', writes: false, prompt: 'p', output: 'out.md',
+    };
+    const command = convertStep(agent, 'command') as { output?: string };
+    expect(command.output).toBe('out.md');
+  });
+
+  it('typing "src, docs" into Allowed paths keeps the comma while typing, and commits the parsed array', async () => {
+    const { transport } = renderEditor(NESTED_WORKFLOW);
+    fireEvent.click(screen.getByTestId('step-collapse-execute'));
+    const field = screen.getByLabelText(/^Allowed paths/);
+    fireEvent.change(field, { target: { value: 'src, docs' } });
+    expect(field).toHaveValue('src, docs');
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    const req = await lastRequest(transport, 'updateWorkflow');
+    const wf = (req.params as { workflow: Workflow }).workflow;
+    const execute = flattenSteps(wf.steps).find(s => s.id === 'execute') as { allow_paths?: string[] };
+    expect(execute.allow_paths).toEqual(['src', 'docs']);
+  });
+
+  it('an exit-code token that is not an integer shows an inline error instead of silently dropping it', () => {
+    renderEditor(NESTED_WORKFLOW);
+    fireEvent.click(screen.getByTestId('step-collapse-sync-base'));
+    const field = screen.getByLabelText(/^Successful exit codes/);
+    fireEvent.change(field, { target: { value: '0, abc' } });
+    expect(screen.getByText(/whole numbers/i)).toBeInTheDocument();
+    expect(field).toHaveValue('0, abc');
+  });
+
+  it('the Verdict switch is disabled on a loop\'s until target, and Repeat until lists only verdict steps', () => {
+    renderEditor(NESTED_WORKFLOW);
+    fireEvent.click(screen.getByTestId('step-collapse-review'));
+    const rail = screen.getByTestId('step-rail-review');
+    expect(within(rail).getByLabelText(/^Verdict/)).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId('step-collapse-do-review'));
+    fireEvent.click(within(screen.getByTestId('step-card-do-review')).getByRole('combobox', { name: 'Repeat until' }));
+    const options = screen.getAllByRole('option').map(o => o.textContent);
+    expect(options).toEqual(['review']); // 'execute' has no verdict, so it is not offered
+  });
+
+  it('Save reveals and badges a reader whose reference is broken, not just a footer line pointing nowhere', async () => {
+    const refWorkflow: Workflow = {
+      name: 'w',
+      steps: [
+        { id: 'a', kind: 'command', run: 'echo hi', output: 'a.log' },
+        {
+          id: 'b', kind: 'agent', runner: 'claude', mode: 'headless', writes: false,
+          prompt: 'p', inputs: ['a'], output: 'b.md',
+        },
+      ],
+    };
+    const { transport } = renderEditor(refWorkflow);
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+    fireEvent.change(screen.getByLabelText(/^Output filename/), { target: { value: '' } });
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(transport.sent.some(l => (JSON.parse(l) as { method: string }).method === 'updateWorkflow')).toBe(false);
+    expect(
+      await screen.findByText(/step 'b' references step 'a', which produces no artifact/),
+    ).toBeInTheDocument();
+
+    // The reference problem names 'b', not 'a' — Save must reveal and badge
+    // b's card, and mark its Reads from field, not leave it collapsed with
+    // only the footer line to go on.
+    const readsFrom = within(screen.getByTestId('step-card-b')).getByRole('combobox', { name: 'Reads from' });
+    expect(readsFrom).toHaveAttribute('aria-invalid', 'true');
+    expect(within(screen.getByTestId('step-summary-b')).getByText(/1 problem/)).toBeInTheDocument();
+  });
+
+  it('Save reveals and badges a manual step whose capture has lost its output', async () => {
+    const captureWorkflow: Workflow = {
+      name: 'w',
+      steps: [
+        { id: 'a', kind: 'command', run: 'echo hi', output: 'a.log' },
+        { id: 'm', kind: 'manual', title: 't', instructions: 'i', capture: 'note', output: 'm.md' },
+      ],
+    };
+    const { transport } = renderEditor(captureWorkflow);
+    fireEvent.click(screen.getByTestId('step-collapse-m'));
+    fireEvent.change(screen.getByLabelText(/^Output filename/), { target: { value: '' } });
+    fireEvent.click(screen.getByTestId('step-collapse-m'));
+    expect(screen.queryByLabelText(/^Output filename/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(transport.sent.some(l => (JSON.parse(l) as { method: string }).method === 'updateWorkflow')).toBe(false);
+    expect(
+      await screen.findByText(/step 'm': capture 'note' needs an 'output' to write it to/),
+    ).toBeInTheDocument();
+
+    const output = within(screen.getByTestId('step-card-m')).getByLabelText(/^Output filename/);
+    expect(output).toHaveAttribute('aria-invalid', 'true');
+    expect(within(screen.getByTestId('step-summary-m')).getByText(/1 problem/)).toBeInTheDocument();
   });
 });

@@ -211,6 +211,28 @@ steps:
   assert.equal(out, text, 'default-before-prompt must not read as a change and blow away the node\'s key order');
 });
 
+test('save and reparse a workflow with a normalized blank field: the key is removed from the file, nothing else changes', () => {
+  const text = `name: w
+steps:
+  - id: a
+    kind: command
+    run: echo hi
+    cwd: "   "
+    output: a.log
+`;
+  const wf = parsed(text);
+  assert.equal('cwd' in (wf.steps[0] as object), false, 'a blank cwd parses as absent, not as a key with undefined');
+  const out = mergeWorkflow(text, wf);
+  assert.ok(!out.includes('cwd:'), 'the blank cwd key must be dropped from the file, not stringified as null');
+  assert.equal(out, `name: w
+steps:
+  - id: a
+    kind: command
+    run: echo hi
+    output: a.log
+`);
+});
+
 test('accepted limitation: an untouched folded (>) scalar is rewrapped onto one line', () => {
   const text = `name: w
 steps:

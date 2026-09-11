@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseWorkflow, validateWorkflowWarnings, WorkflowError } from './schema.ts';
+import {
+  parseWorkflow, validateWorkflowWarnings, validateWorkflowDraft, formatWorkflowIssues, formatWorkflowFieldIssues,
+  workflowSchema, WorkflowError,
+} from './schema.ts';
 
 const VALID = `
 name: feature
@@ -411,4 +414,306 @@ test('rejects attachments as a step id', () => {
 test('rejects attachments as a loop id — it would collide with the attachments directory', () => {
   assert.ok(problemsOf(CYCLE.replace('- id: fix', '- id: attachments'))
     .some(p => p.includes("loop id 'attachments' is reserved")));
+});
+
+// ---------------------------------------------------------------------------
+// Blank handling: '' and spaces-only parse as absent on optional fields,
+// and as a validation problem on required ones.
+// ---------------------------------------------------------------------------
+
+function draftProblems(raw: unknown): string[] {
+  return validateWorkflowDraft(raw).problems;
+}
+
+test('output: "" and "   " on a command step parse as absent, with the key missing from the result', () => {
+  for (const blank of ['', '   ']) {
+    const raw = {
+      name: 'x',
+      steps: [{ id: 'push', kind: 'command', run: 'git push', output: blank }],
+    };
+    const { workflow, problems } = validateWorkflowDraft(raw);
+    assert.deepEqual(problems, []);
+    const step = workflow!.steps[0] as { output?: string };
+    assert.equal('output' in step, false, `output key should be absent for ${JSON.stringify(blank)}`);
+  }
+});
+
+test('output: "" and "   " on a manual step parse as absent', () => {
+  const raw = {
+    name: 'x',
+    steps: [{ id: 'ask', kind: 'manual', title: 't', instructions: 'i', output: '   ' }],
+  };
+  const { workflow, problems } = validateWorkflowDraft(raw);
+  assert.deepEqual(problems, []);
+  assert.equal('output' in (workflow!.steps[0] as object), false);
+});
+
+test('model, cwd, shell and description parse as absent when blank', () => {
+  const raw = {
+    name: 'x',
+    description: '   ',
+    steps: [
+      {
+        id: 'a', runner: 'claude', mode: 'headless', writes: false, prompt: 'hi', output: 'a.md', model: '',
+      },
+      { id: 'b', kind: 'command', run: 'echo hi', cwd: '   ', shell: '' },
+    ],
+  };
+  const { workflow, problems } = validateWorkflowDraft(raw);
+  assert.deepEqual(problems, []);
+  assert.equal('description' in workflow!, false);
+  assert.equal('model' in (workflow!.steps[0] as object), false);
+  const b = workflow!.steps[1] as { cwd?: string; shell?: string };
+  assert.equal('cwd' in b, false);
+  assert.equal('shell' in b, false);
+});
+
+test('a blank required field is rejected as a validation problem, not silently accepted', () => {
+  const cases: Array<[Record<string, unknown>, string]> = [
+    [{ id: 'a', kind: 'command', run: '   ', output: 'a.log' }, 'Command'],
+    [{ id: 'a', runner: 'claude', mode: 'headless', writes: false, prompt: '  ', output: 'a.md' }, 'Prompt'],
+    [{ id: 'a', kind: 'manual', title: '  ', instructions: 'i' }, 'Title'],
+    [{ id: 'a', kind: 'manual', title: 't', instructions: '  ' }, 'Instructions'],
+    [{ id: 'a', runner: '  ', mode: 'headless', writes: false, prompt: 'p', output: 'a.md' }, 'Runner'],
+  ];
+  for (const [step, label] of cases) {
+    const problems = draftProblems({ name: 'x', steps: [step] });
+    assert.ok(
+      problems.some(p => p.includes(label) && (p.includes("can't be empty") || p.includes('is required'))),
+      `expected a ${label} problem, got: ${problems.join(' | ')}`,
+    );
+  }
+});
+
+test('a blank id or until is rejected the same way', () => {
+  const blankId = draftProblems({ name: 'x', steps: [{ id: '  ', kind: 'command', run: 'x', output: 'a.log' }] });
+  assert.ok(blankId.some(p => p.includes('Step ID') && p.includes('is required')));
+
+  const blankUntil = draftProblems({
+    name: 'x',
+    steps: [{
+      kind: 'loop', id: 'l', until: '  ',
+      steps: [{ id: 'a', kind: 'command', run: 'x', output: 'a.log', verdict: true }],
+    }],
+  });
+  assert.ok(blankUntil.some(p => p.includes('Repeat until') && p.includes('is required')));
+});
+
+test('an agent step without output gives "Output filename is required"', () => {
+  const problems = draftProblems({
+    name: 'x',
+    steps: [{ id: 'a', runner: 'claude', mode: 'headless', writes: false, prompt: 'hi' }],
+  });
+  assert.ok(problems.some(p => p === "step 'a': Output filename is required"),
+    `got: ${problems.join(' | ')}`);
+});
+
+// ---------------------------------------------------------------------------
+// formatWorkflowIssues: step naming (by id, or a depth-first ordinal fallback)
+// ---------------------------------------------------------------------------
+
+test('the formatter names a nested loop-body step by its id', () => {
+  const problems = draftProblems({
+    name: 'x',
+    steps: [{
+      kind: 'loop', id: 'l', until: 'inner',
+      steps: [{ id: 'inner', kind: 'command', run: '  ', verdict: true }],
+    }],
+  });
+  assert.ok(problems.some(p => p === "step 'inner': Command is required"), `got: ${problems.join(' | ')}`);
+});
+
+test('the formatter falls back to a 1-based depth-first ordinal when the step has no usable id', () => {
+  const problems = draftProblems({
+    name: 'x',
+    steps: [
+      { id: 'first', kind: 'command', run: 'x', output: 'a.log' },
+      { kind: 'command', run: '  ', output: 'b.log' }, // no id at all
+    ],
+  });
+  assert.ok(problems.some(p => p.startsWith('step #2:')), `got: ${problems.join(' | ')}`);
+});
+
+test('formatWorkflowIssues is usable directly against a bare zod parse', () => {
+  const raw = { name: 'x', steps: [{ id: 'a', kind: 'command', run: '  ', output: 'a.log' }] };
+  const parsed = workflowSchema.safeParse(raw);
+  assert.equal(parsed.success, false);
+  if (parsed.success) return;
+  const problems = formatWorkflowIssues(raw, parsed.error.issues);
+  assert.ok(problems.some(p => p === "step 'a': Command is required"), `got: ${problems.join(' | ')}`);
+});
+
+// ---------------------------------------------------------------------------
+// A present-but-wrong-type value is not "is required" — only an actually
+// missing value gets that wording; zod 4 does not put the offending value on
+// the issue itself, so the formatter has to walk `raw` to tell the two apart.
+// ---------------------------------------------------------------------------
+
+test('a quoted number ("5000") on a numeric field reports the type mismatch, not "is required"', () => {
+  const raw = {
+    name: 'x',
+    steps: [{ id: 'a', kind: 'command', run: 'x', output: 'a.log', timeout_ms: '5000' }],
+  };
+  const problems = draftProblems(raw);
+  assert.ok(problems.some(p => p.startsWith("step 'a': Timeout (ms)") && !p.includes('is required')),
+    `got: ${problems.join(' | ')}`);
+});
+
+test('a wrong-type value on a required text field reports the type mismatch, not "is required"', () => {
+  const raw = { name: 'x', steps: [{ id: 'a', kind: 'command', run: 5, output: 'a.log' }] };
+  const problems = draftProblems(raw);
+  assert.ok(problems.some(p => p.startsWith("step 'a': Command") && !p.includes('is required')),
+    `got: ${problems.join(' | ')}`);
+});
+
+test('a genuinely missing required field is still "is required"', () => {
+  const raw = { name: 'x', steps: [{ id: 'a', kind: 'command', output: 'a.log' }] };
+  const problems = draftProblems(raw);
+  assert.ok(problems.some(p => p === "step 'a': Command is required"), `got: ${problems.join(' | ')}`);
+});
+
+// ---------------------------------------------------------------------------
+// formatWorkflowFieldIssues: structured problems for an editor field
+// ---------------------------------------------------------------------------
+
+test('formatWorkflowFieldIssues addresses a shape problem to its step id and field key', () => {
+  const raw = { name: 'x', steps: [{ id: 'push', kind: 'command', run: '  ', output: 'a.log' }] };
+  const parsed = workflowSchema.safeParse(raw);
+  assert.equal(parsed.success, false);
+  if (parsed.success) return;
+  const [problem] = formatWorkflowFieldIssues(raw, parsed.error.issues);
+  assert.deepEqual(
+    { stepId: problem.stepId, field: problem.field, phrase: problem.phrase },
+    { stepId: 'push', field: 'run', phrase: 'is required' },
+  );
+});
+
+test('validateWorkflowDraft addresses a semantic "references" problem to the referencing step\'s inputs field', () => {
+  const { fieldProblems } = validateWorkflowDraft({
+    name: 'x',
+    steps: [{ id: 'a', kind: 'command', run: 'x', output: 'a.log', inputs: ['missing'] }],
+  });
+  const problem = fieldProblems.find(p => p.stepId === 'a');
+  assert.equal(problem?.field, 'inputs');
+  assert.ok(problem?.phrase.includes('references unknown step'), `got: ${problem?.phrase}`);
+});
+
+test('validateWorkflowDraft addresses a loop\'s bad "until" to that loop\'s until field', () => {
+  const { fieldProblems } = validateWorkflowDraft({
+    name: 'x',
+    steps: [{
+      kind: 'loop', id: 'l', until: 'nope',
+      steps: [{ id: 'a', kind: 'command', run: 'x', output: 'a.log', verdict: true }],
+    }],
+  });
+  const problem = fieldProblems.find(p => p.stepId === 'l');
+  assert.equal(problem?.field, 'until');
+  assert.ok(problem?.phrase.includes('not a step in its body'), `got: ${problem?.phrase}`);
+});
+
+test('validateWorkflowDraft addresses a manual step\'s capture without an output to that step\'s output field', () => {
+  const { fieldProblems } = validateWorkflowDraft({
+    name: 'x',
+    steps: [{ id: 'm', kind: 'manual', title: 't', instructions: 'i', capture: 'note' }],
+  });
+  const problem = fieldProblems.find(p => p.stepId === 'm');
+  assert.equal(problem?.field, 'output');
+  assert.equal(problem?.message, "step 'm': capture 'note' needs an 'output' to write it to");
+});
+
+test('validateWorkflowDraft still addresses any other semantic problem that names a step to that step', () => {
+  const { fieldProblems } = validateWorkflowDraft({
+    name: 'x',
+    steps: [{
+      kind: 'loop', id: 'l', until: 'a', on_exhausted: 'loop',
+      steps: [{ id: 'a', kind: 'command', run: 'x', output: 'a.log', verdict: true }],
+    }],
+  });
+  const problem = fieldProblems.find(p => p.message.includes('on_exhausted'));
+  assert.equal(problem?.stepId, 'l');
+  assert.equal(problem?.field, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// Input names
+// ---------------------------------------------------------------------------
+
+test('an empty input name is rejected', () => {
+  const problems = draftProblems({
+    name: 'x',
+    inputs: { '': { required: true } },
+    steps: [{ id: 'a', kind: 'command', run: 'x', output: 'a.log' }],
+  });
+  assert.ok(problems.some(p => p === 'input name is required'), `got: ${problems.join(' | ')}`);
+});
+
+test("an input name with a space ('my input') is rejected", () => {
+  const problems = draftProblems({
+    name: 'x',
+    inputs: { 'my input': { required: true } },
+    steps: [{ id: 'a', kind: 'command', run: 'x', output: 'a.log' }],
+  });
+  assert.ok(problems.some(p => p.includes("input name 'my input' must use letters, digits, '-' or '_'")),
+    `got: ${problems.join(' | ')}`);
+});
+
+test("'my-input_1' is an accepted input name", () => {
+  const problems = draftProblems({
+    name: 'x',
+    inputs: { 'my-input_1': { required: true } },
+    steps: [{ id: 'a', kind: 'command', run: 'x', output: 'a.log' }],
+  });
+  assert.deepEqual(problems, []);
+});
+
+// ---------------------------------------------------------------------------
+// A loop as its own until target
+// ---------------------------------------------------------------------------
+
+test('a loop named as its own until target gets the loop-specific message', () => {
+  const problems = draftProblems({
+    name: 'x',
+    steps: [{
+      kind: 'loop', id: 'outer', until: 'inner',
+      steps: [{
+        kind: 'loop', id: 'inner', until: 'leaf',
+        steps: [{ id: 'leaf', kind: 'command', run: 'x', output: 'a.log', verdict: true }],
+      }],
+    }],
+  });
+  assert.ok(problems.some(p => p === "loop 'outer': until step 'inner' is a loop "
+    + '— it must name a non-loop step with verdict on'), `got: ${problems.join(' | ')}`);
+});
+
+// ---------------------------------------------------------------------------
+// parseWorkflow uses the new formatter's wording, not zod's raw JSON
+// ---------------------------------------------------------------------------
+
+test('parseWorkflow error text uses the new plain-language format', () => {
+  const y = `
+name: x
+steps:
+  - id: push
+    kind: command
+    run: git push
+    output: ""
+`;
+  // output: "" now parses as absent on a command step, so this is valid.
+  assert.doesNotThrow(() => parseWorkflow(y));
+
+  const badY = `
+name: x
+steps:
+  - id: a
+    runner: claude
+    mode: headless
+    writes: false
+    prompt: ""
+`;
+  assert.throws(() => parseWorkflow(badY), (e: unknown) => {
+    if (!(e instanceof WorkflowError)) return false;
+    assert.ok(e.problems.some(p => p === "step 'a': Prompt is required"), `got: ${e.problems.join(' | ')}`);
+    assert.ok(!e.message.includes('"origin"'), 'must not be zod\'s raw JSON issue dump');
+    return true;
+  });
 });

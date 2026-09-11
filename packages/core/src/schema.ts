@@ -17,9 +17,36 @@ export class WorkflowError extends Error {
 // Shape
 // ---------------------------------------------------------------------------
 
+/**
+ * A blank string (`''` or spaces-only) on an optional field means "absent" —
+ * for every client, including hand-written YAML (`output: ""`). The
+ * `z.string().optional()` inside the preprocess is what keeps the *type*
+ * `string | undefined`; the preprocess is what actually does the blank-to-
+ * absent conversion before that type ever sees the value.
+ */
+function optionalText(): z.ZodType<string | undefined, unknown> {
+  return z.preprocess(
+    v => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  );
+}
+
+/**
+ * A required field that is present but blank (or spaces-only) is rejected as
+ * "is required", the same wording a missing field gets from
+ * `formatWorkflowIssues`'s `invalid_type` mapping — a field the user left
+ * untouched and a field they blanked out read as the same problem. Prose
+ * values are never trimmed, only tested: `trim() !== ''`.
+ */
+function requiredText(): z.ZodType<string, unknown> {
+  return z.string().superRefine((v, ctx) => {
+    if (v.trim() === '') ctx.addIssue({ code: 'custom', message: 'is required' });
+  });
+}
+
 const baseFields = {
-  id: z.string().min(1),
-  inputs: z.array(z.string().min(1)).optional(),
+  id: requiredText(),
+  inputs: z.array(requiredText()).optional(),
   verdict: z.boolean().optional(),
   enabled: z.boolean().optional(),
 };
@@ -35,13 +62,13 @@ export const stepSchema: z.ZodType<Step, unknown> = z.lazy(() => stepUnion);
 const agentStepSchema = z.object({
   ...baseFields,
   kind: z.literal('agent'),
-  runner: z.string().min(1),
-  model: z.string().min(1).optional(),
+  runner: requiredText(),
+  model: optionalText(),
   mode: z.enum(['interactive', 'headless']),
   writes: z.boolean(),
-  prompt: z.string().min(1),
-  output: z.string().min(1),
-  allow_paths: z.array(z.string().min(1)).optional(),
+  prompt: requiredText(),
+  output: requiredText(),
+  allow_paths: z.array(requiredText()).optional(),
   effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
 });
 
@@ -53,13 +80,13 @@ const expectExitSchema = z
 const commandStepSchema = z.object({
   ...baseFields,
   kind: z.literal('command'),
-  run: z.string().min(1),
-  shell: z.string().min(1).optional(),
-  cwd: z.string().min(1).optional(),
+  run: requiredText(),
+  shell: optionalText(),
+  cwd: optionalText(),
   env: z.record(z.string(), z.string()).optional(),
   timeout_ms: z.number().int().positive().optional(),
   expect_exit: expectExitSchema.optional(),
-  output: z.string().min(1).optional(),
+  output: optionalText(),
 });
 
 /** 'manual' and 'approval' are the same shape; two literals so the union stays discriminated. */
@@ -67,20 +94,20 @@ function manualShape<K extends 'manual' | 'approval'>(kind: K) {
   return z.object({
     ...baseFields,
     kind: z.literal(kind),
-    title: z.string().min(1),
-    instructions: z.string().min(1),
+    title: requiredText(),
+    instructions: requiredText(),
     capture: z.enum(['note', 'review']).optional(),
     show_diff: z.boolean().optional(),
     default: z.enum(['continue', 'abort']).optional(),
-    output: z.string().min(1).optional(),
+    output: optionalText(),
   });
 }
 
 const loopStepSchema = z.object({
   kind: z.literal('loop'),
-  id: z.string().min(1),
+  id: requiredText(),
   steps: z.array(stepSchema).min(1),
-  until: z.string().min(1),
+  until: requiredText(),
   max_iterations: z.number().int().positive().optional(),
   on_exhausted: z.enum(['report', 'loop', 'interactive']).optional(),
   enabled: z.boolean().optional(),
@@ -105,13 +132,28 @@ const stepUnion = z.preprocess(
   ]),
 );
 
+/**
+ * The only form a `{{ inputs.x }}` placeholder can reference — see
+ * template.ts's `PLACEHOLDER` regex. A name outside this alphabet would
+ * parse into the workflow but could never be filled in from a prompt.
+ */
+const INPUT_NAME_RE = /^[A-Za-z0-9_-]+$/;
+
+const inputNameSchema = z.string().superRefine((v, ctx) => {
+  if (v.trim() === '') {
+    ctx.addIssue({ code: 'custom', message: 'input name is required' });
+  } else if (!INPUT_NAME_RE.test(v)) {
+    ctx.addIssue({ code: 'custom', message: `input name '${v}' must use letters, digits, '-' or '_'` });
+  }
+});
+
 export const workflowSchema: z.ZodType<Workflow, unknown> = z.object({
-  name: z.string().min(1),
-  description: z.string().optional(),
-  inputs: z.record(z.string(), z.object({
+  name: requiredText(),
+  description: optionalText(),
+  inputs: z.record(inputNameSchema, z.object({
     required: z.boolean(),
-    prompt: z.string().optional(),
-    default: z.string().optional(),
+    prompt: optionalText(),
+    default: optionalText(),
     remember: z.boolean().optional(),
   })).optional(),
   on_findings: z.enum(['report', 'loop', 'interactive']).optional(),
@@ -287,7 +329,10 @@ function validateLoop(loop: LoopStep, problems: string[]): void {
     problems.push(`loop '${loop.id}': until '${loop.until}' is not a step in its body`);
     return;
   }
-  if (isLoopStep(target) || !target.verdict) {
+  if (isLoopStep(target)) {
+    problems.push(`loop '${loop.id}': until step '${loop.until}' is a loop `
+      + '— it must name a non-loop step with verdict on');
+  } else if (!target.verdict) {
     problems.push(`loop '${loop.id}': until step '${loop.until}' must set 'verdict: true'`);
   }
 }
@@ -329,6 +374,276 @@ export function validateWorkflowWarnings(workflow: Workflow): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// Turning a zod issue list into the editor's and the CLI's wording
+// ---------------------------------------------------------------------------
+
+/** The editor's own label for a field key, where it differs from the YAML key. */
+const FIELD_LABELS: Record<string, string> = {
+  id: 'Step ID',
+  name: 'Name',
+  output: 'Output filename',
+  run: 'Command',
+  prompt: 'Prompt',
+  instructions: 'Instructions',
+  title: 'Title',
+  runner: 'Runner',
+  until: 'Repeat until',
+  timeout_ms: 'Timeout (ms)',
+  expect_exit: 'Successful exit codes',
+  max_iterations: 'Max iterations',
+  cwd: 'Working directory',
+  allow_paths: 'Allowed paths',
+  inputs: 'Reads from',
+  steps: 'Steps',
+};
+
+function fieldLabel(key: unknown): string {
+  return typeof key === 'string' ? (FIELD_LABELS[key] ?? key) : String(key);
+}
+
+/** 1-based, depth-first ordinal per step path — matches the editor's card numbering. */
+function buildOrdinalMap(steps: unknown): Map<string, number> {
+  const map = new Map<string, number>();
+  let n = 0;
+  function walk(list: unknown, prefix: number[]): void {
+    if (!Array.isArray(list)) return;
+    list.forEach((item, i) => {
+      const path = [...prefix, i];
+      n += 1;
+      map.set(path.join(','), n);
+      const nested = item !== null && typeof item === 'object' ? (item as { steps?: unknown }).steps : undefined;
+      if (Array.isArray(nested)) walk(nested, path);
+    });
+  }
+  walk(steps, []);
+  return map;
+}
+
+interface StepLocation {
+  obj: Record<string, unknown>;
+  path: number[];
+  /** What remains of the issue's path once the step chain is consumed. */
+  fieldPath: PropertyKey[];
+}
+
+/** Walks `raw` along an issue's path, descending through `steps` arrays to find the deepest step it names. */
+function locateStep(raw: unknown, path: PropertyKey[]): StepLocation | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined;
+  let node: unknown = (raw as { steps?: unknown }).steps;
+  let idx = 0;
+  let result: StepLocation | undefined;
+  let stepPath: number[] = [];
+  while (path[idx] === 'steps' && typeof path[idx + 1] === 'number' && Array.isArray(node)) {
+    const i = path[idx + 1] as number;
+    const item = node[i];
+    if (item === null || typeof item !== 'object') break;
+    stepPath = [...stepPath, i];
+    result = { obj: item as Record<string, unknown>, path: stepPath, fieldPath: path.slice(idx + 2) };
+    node = (item as { steps?: unknown }).steps;
+    idx += 2;
+  }
+  return result;
+}
+
+function stepLabel(raw: unknown, loc: StepLocation, ordinals: Map<string, number>): string {
+  const id = loc.obj.id;
+  if (typeof id === 'string' && id.trim() !== '') return `step '${id}'`;
+  return `step #${ordinals.get(loc.path.join(',')) ?? '?'}`;
+}
+
+/** Walks `raw` along an issue's path to read the value that actually failed — zod 4 does not put it on the issue itself. */
+function valueAtPath(raw: unknown, path: readonly PropertyKey[]): unknown {
+  let node: unknown = raw;
+  for (const key of path) {
+    if (node === null || typeof node !== 'object') return undefined;
+    node = (node as Record<PropertyKey, unknown>)[key];
+  }
+  return node;
+}
+
+/**
+ * `invalid_type` covers two very different cases: a field the user never
+ * filled in (the value at its path is `undefined`) and a field they filled in
+ * with the wrong shape (`timeout_ms: "5000"`, `run: 5`). Only the first is
+ * "is required" — the second falls back to zod's own "expected X, received Y"
+ * message. zod 4 does not set `issue.input` unless `reportInput` is enabled,
+ * so the value has to be read back out of `raw` at the issue's own path.
+ */
+function phraseFor(issue: z.core.$ZodIssue, raw: unknown): string {
+  switch (issue.code) {
+    case 'too_small': {
+      const origin = (issue as { origin?: string }).origin;
+      if (origin === 'array') return 'needs at least one entry';
+      if (origin === 'number' || origin === 'int' || origin === 'bigint') return 'must be greater than 0';
+      return "can't be empty";
+    }
+    case 'invalid_type':
+      return valueAtPath(raw, issue.path) === undefined ? 'is required' : issue.message;
+    default:
+      return issue.message;
+  }
+}
+
+interface ClassifiedIssue {
+  stepId?: string;
+  field?: string;
+  /** Field-local text, with no step or label prefix — what a `Field`'s own `validationMessage` wants. */
+  phrase: string;
+  /** The full line, matching `formatWorkflowIssues`'s string form — for a problem list, not a single field. */
+  message: string;
+}
+
+function classifyIssue(raw: unknown, issue: z.core.$ZodIssue, ordinals: Map<string, number>): ClassifiedIssue {
+  const path = issue.path;
+
+  // A step's own `kind` failed to match any of the discriminated union's
+  // literals — this is about the field itself, not a value inside it, so it
+  // gets its own full sentence rather than a "<label> <phrase>" join.
+  if (issue.code === 'invalid_union' && (issue as { discriminator?: string }).discriminator === 'kind') {
+    const options = (issue as { options?: unknown[] }).options ?? [];
+    const loc = locateStep(raw, path.slice(0, -1));
+    const prefix = loc ? stepLabel(raw, loc, ordinals) : 'workflow';
+    const stepId = loc && typeof loc.obj.id === 'string' && loc.obj.id.trim() !== '' ? loc.obj.id : undefined;
+    const phrase = `kind must be one of ${options.join(', ')}`;
+    return { stepId, field: 'kind', phrase, message: `${prefix}: ${phrase}` };
+  }
+
+  // A named workflow input: either its name is malformed (own full-sentence
+  // message from `inputNameSchema`) or one of its fields (prompt, default,
+  // required) failed.
+  if (path[0] === 'inputs' && locateStep(raw, path) === undefined) {
+    if (issue.code === 'invalid_key') {
+      const nested = (issue as { issues?: z.core.$ZodIssue[] }).issues ?? [];
+      const phrase = nested[0]?.message ?? issue.message;
+      return { phrase, message: phrase };
+    }
+    if (typeof path[1] === 'string') {
+      const field = path.length > 2 ? fieldLabel(path[2]) : 'value';
+      const phrase = phraseFor(issue, raw);
+      return { phrase, message: `input '${path[1]}': ${field} ${phrase}` };
+    }
+  }
+
+  const loc = locateStep(raw, path);
+  if (loc !== undefined) {
+    const field = loc.fieldPath[0];
+    const stepId = typeof loc.obj.id === 'string' && loc.obj.id.trim() !== '' ? loc.obj.id : undefined;
+    const phrase = phraseFor(issue, raw);
+    return {
+      stepId,
+      field: typeof field === 'string' ? field : undefined,
+      phrase,
+      message: `${stepLabel(raw, loc, ordinals)}: ${fieldLabel(field)} ${phrase}`,
+    };
+  }
+
+  // Not inside any step: a workflow root field (name, description, steps…).
+  const field = path[0];
+  const phrase = phraseFor(issue, raw);
+  return { field: typeof field === 'string' ? field : undefined, phrase, message: `workflow: ${fieldLabel(field)} ${phrase}` };
+}
+
+/**
+ * Turns zod's issue array into the editor's and the CLI's plain-language
+ * problem list — `step 'push': Output filename can't be empty`, one line per
+ * issue, in place of zod 4's pretty-printed JSON. `raw` is the pre-parse
+ * value: the only place a step's `id` (or its depth-first ordinal, for a step
+ * whose own `id` is what's wrong) can still be read, since a failed parse
+ * produces no typed `Workflow` to read it from afterwards.
+ */
+export function formatWorkflowIssues(raw: unknown, issues: z.core.$ZodIssue[]): string[] {
+  const ordinals = buildOrdinalMap(raw !== null && typeof raw === 'object' ? (raw as { steps?: unknown }).steps : undefined);
+  return issues.map(issue => classifyIssue(raw, issue, ordinals).message);
+}
+
+/** One problem, addressed to a specific step and field when it names one — what an editor field's own error marker needs. */
+export interface WorkflowFieldProblem {
+  stepId?: string;
+  field?: string;
+  /** Field-local text, with no step or label prefix. */
+  phrase: string;
+  /** The full line, matching `formatWorkflowIssues`'s string form. */
+  message: string;
+}
+
+/** Like `formatWorkflowIssues`, but keeps each issue's step id and field key alongside its wording. */
+export function formatWorkflowFieldIssues(raw: unknown, issues: z.core.$ZodIssue[]): WorkflowFieldProblem[] {
+  const ordinals = buildOrdinalMap(raw !== null && typeof raw === 'object' ? (raw as { steps?: unknown }).steps : undefined);
+  return issues.map(issue => classifyIssue(raw, issue, ordinals));
+}
+
+/**
+ * `step '<id>' references …`, `loop '<id>': until …` and `step '<id>':
+ * capture …` are the `validateWorkflowSemantics` shapes an editor field can
+ * point at — Reads from, Repeat until and Output filename, respectively. Any
+ * other line that names a step (`loop '<id>': on_exhausted …`) still gets its
+ * step id, so an editor can reveal and badge that step's card.
+ */
+function classifySemanticProblem(problem: string): WorkflowFieldProblem {
+  const ref = /^step '([^']+)' (references.*)$/.exec(problem);
+  if (ref) return { stepId: ref[1], field: 'inputs', phrase: ref[2], message: problem };
+  const until = /^loop '([^']+)': (until.*)$/.exec(problem);
+  if (until) return { stepId: until[1], field: 'until', phrase: until[2], message: problem };
+  const capture = /^step '([^']+)': (capture.*)$/.exec(problem);
+  if (capture) return { stepId: capture[1], field: 'output', phrase: capture[2], message: problem };
+  const named = /^(?:step|loop) '([^']+)':/.exec(problem);
+  if (named) return { stepId: named[1], phrase: problem, message: problem };
+  return { phrase: problem, message: problem };
+}
+
+/**
+ * `z.preprocess(..., z.string().optional())` (what `optionalText` and the
+ * `expect_exit` transform are built on) can leave the parsed object holding
+ * an *own key* whose value is `undefined`, rather than no key at all — zod 4
+ * does not delete it. `data[key]` and `JSON.stringify` both already treat
+ * that the same as absent, but `'key' in obj` and `Object.keys(obj)` do not,
+ * and both `mergeWorkflow` and the desktop editor rely on real absence.
+ * Strips them recursively so the returned `Workflow` never carries one.
+ */
+function stripUndefinedKeys<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(stripUndefinedKeys) as unknown as T;
+  if (value === null || typeof value !== 'object') return value;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (v === undefined) continue;
+    out[k] = stripUndefinedKeys(v);
+  }
+  return out as T;
+}
+
+/**
+ * One-stop validation for a workflow draft, however it was produced (parsed
+ * YAML, or a desktop editor's in-memory object): misplaced fields, then shape
+ * (formatted through `formatWorkflowIssues`), then cross-field semantics.
+ * `workflow` is set whenever the shape check passed, even if semantics then
+ * added problems — a caller that wants to keep editing can still read it.
+ * `fieldProblems` carries the same problems as `problems`, addressed to a
+ * step id and field key where one applies — what an editor uses to mark the
+ * offending `Field` itself, rather than only listing the problem in a footer.
+ */
+export function validateWorkflowDraft(
+  raw: unknown,
+): { workflow?: Workflow; problems: string[]; fieldProblems: WorkflowFieldProblem[] } {
+  const misplaced: string[] = [];
+  checkRootFields(raw, misplaced);
+  if (raw !== null && typeof raw === 'object' && Array.isArray((raw as { steps?: unknown }).steps)) {
+    for (const step of (raw as { steps: unknown[] }).steps) checkMisplacedFields(step, misplaced);
+  }
+  if (misplaced.length > 0) {
+    return { problems: misplaced, fieldProblems: misplaced.map(m => ({ phrase: m, message: m })) };
+  }
+
+  const parsed = workflowSchema.safeParse(raw);
+  if (!parsed.success) {
+    const fieldProblems = formatWorkflowFieldIssues(raw, parsed.error.issues);
+    return { problems: fieldProblems.map(p => p.message), fieldProblems };
+  }
+  const workflow = stripUndefinedKeys(parsed.data);
+  const problems = validateWorkflowSemantics(workflow);
+  return { workflow, problems, fieldProblems: problems.map(classifySemanticProblem) };
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -340,19 +655,7 @@ export function parseWorkflow(yamlText: string): Workflow {
     throw new WorkflowError([`YAML parse error: ${(e as Error).message}`]);
   }
 
-  const misplaced: string[] = [];
-  checkRootFields(raw, misplaced);
-  if (raw !== null && typeof raw === 'object' && Array.isArray((raw as { steps?: unknown }).steps)) {
-    for (const step of (raw as { steps: unknown[] }).steps) checkMisplacedFields(step, misplaced);
-  }
-  if (misplaced.length > 0) throw new WorkflowError(misplaced);
-
-  const parsed = workflowSchema.safeParse(raw);
-  if (!parsed.success) {
-    throw new WorkflowError(parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`));
-  }
-  const workflow = parsed.data;
-  const problems = validateWorkflowSemantics(workflow);
+  const { workflow, problems } = validateWorkflowDraft(raw);
   if (problems.length > 0) throw new WorkflowError(problems);
-  return workflow;
+  return workflow!;
 }

@@ -29,6 +29,8 @@ export interface StepSummaryProps {
   onWritesClick?: (id: string) => void;
   /** Lit up because another card's chip named this one as a source or a dependent. */
   highlight?: 'source' | 'dependent';
+  /** Save-time problems naming this step, shown only once Save has been tried at least once. */
+  problemCount?: number;
 }
 
 function readsIds(step: Step): string[] {
@@ -49,7 +51,7 @@ const HIGHLIGHT_BACKGROUND: Record<'source' | 'dependent', string> = {
  * summary text instead, since `inputs:` is a runtime no-op for one.
  */
 export function StepSummary({
-  step, ordinal, endsLoop, disabled, showModeAndWrites, onReadsClick, onWritesClick, highlight,
+  step, ordinal, endsLoop, disabled, showModeAndWrites, onReadsClick, onWritesClick, highlight, problemCount,
 }: StepSummaryProps) {
   const writes = isLoopStep(step) ? undefined : step.output;
   const reads = readsIds(step);
@@ -73,6 +75,11 @@ export function StepSummary({
       {!isLoopStep(step) && step.verdict && <Badge appearance="tint" color="success" size="small">verdict</Badge>}
       {endsLoop && <Badge appearance="tint" color="brand" size="small">ends loop</Badge>}
       {disabled && <Badge appearance="tint" color="subtle" size="small">disabled</Badge>}
+      {!!problemCount && (
+        <Badge appearance="tint" color="danger" size="small">
+          {problemCount} problem{problemCount === 1 ? '' : 's'}
+        </Badge>
+      )}
       {showModeAndWrites && isAgentStep(step) && (
         <Badge appearance="tint" color={step.mode === 'interactive' ? 'brand' : 'informative'} size="small">
           {step.mode}

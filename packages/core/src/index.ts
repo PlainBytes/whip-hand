@@ -1,8 +1,10 @@
 export const CORE_VERSION = '0.1.0';
 export * from './types.ts';
 export {
-  parseWorkflow, validateWorkflowSemantics, validateWorkflowWarnings, WorkflowError, stepSchema, workflowSchema,
+  parseWorkflow, validateWorkflowSemantics, validateWorkflowWarnings, validateWorkflowDraft, formatWorkflowIssues,
+  formatWorkflowFieldIssues, WorkflowError, stepSchema, workflowSchema,
 } from './schema.ts';
+export type { WorkflowFieldProblem } from './schema.ts';
 export {
   isAgentStep, isCommandStep, isManualStep, isLoopStep, isLeafStep,
   flattenSteps, findStep, collectLoops,

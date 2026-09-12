@@ -5,7 +5,7 @@ import { EMPTY_APP_STATE } from '../../../../packages/agent/src/app-state.ts';
 /** A JobState with the fields these selector tests do not care about filled in. */
 function baseJob(jobId: string): JobState {
   return {
-    jobId, finished: false, stepOrder: [], steps: {}, currentExecution: {}, events: [], logTail: [], activityTail: [], hasNarrated: false,
+    jobId, finished: false, stepOrder: [], steps: {}, currentExecution: {}, events: [], logTail: [], logRows: [], activityTail: [], hasNarrated: false,
     ptyActive: true, ptyDataBuffer: [], ptyDataBaseIndex: 0, ptyDataTrimmed: false, ptyExited: false,
   };
 }

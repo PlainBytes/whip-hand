@@ -918,9 +918,9 @@ test('a headless step reports each parsed progress line as an event', async () =
     workflow: oneStep, workdir: dir, inputs: {}, config: DEFAULT_CONFIG,
     registry: progressRegistry(), frontend,
     spawnHeadless: async (spec, _signal, onLine) => {
-      onLine?.(toolLine);
-      onLine?.('this is not json and must not become an event');
-      onLine?.(resultLine);
+      onLine?.(toolLine, 'stdout');
+      onLine?.('this is not json and must not become an event', 'stdout');
+      onLine?.(resultLine, 'stdout');
       await writeFile(spec.argv[3], '# out\n');
       return 0;
     },
@@ -932,7 +932,7 @@ test('a headless step reports each parsed progress line as an event', async () =
   );
 });
 
-test('a step that asked for no progress is handed no line callback', async () => {
+test('a step that asked for no progress still gets a line callback, and its lines become step:log', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'whiphand-run-'));
   const { events, frontend } = collector();
   let sawCallback: boolean | undefined;
@@ -941,12 +941,18 @@ test('a step that asked for no progress is handed no line callback', async () =>
     registry: registry(), frontend,
     spawnHeadless: async (spec, _signal, onLine) => {
       sawCallback = onLine !== undefined;
+      onLine?.('hello', 'stdout');
+      onLine?.('uh oh', 'stderr');
       await writeFile(spec.argv[3], '# out\n');
       return 0;
     },
   });
-  assert.equal(sawCallback, false, 'plain headless specs stream nothing to parse');
+  assert.equal(sawCallback, true, 'plain headless specs still get a line callback, for step:log');
   assert.equal(events.filter(e => e.type === 'step:progress').length, 0);
+  assert.deepEqual(
+    events.filter(e => e.type === 'step:log').map(e => ({ stream: e.stream, line: e.line })),
+    [{ stream: 'stdout', line: 'hello' }, { stream: 'stderr', line: 'uh oh' }],
+  );
 });
 
 // ---------------------------------------------------------------------------

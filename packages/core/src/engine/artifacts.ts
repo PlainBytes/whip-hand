@@ -4,7 +4,13 @@ import { randomBytes } from 'node:crypto';
 import type { LoopFrame } from '../types.ts';
 
 export class ArtifactError extends Error {
-  constructor(message: string) { super(message); this.name = 'ArtifactError'; }
+  /** Which of assertArtifact's two checks failed — what lets a caller emit `step:artifact-missing` distinctly from a crash. */
+  reason: 'absent' | 'empty';
+  constructor(message: string, reason: 'absent' | 'empty') {
+    super(message);
+    this.name = 'ArtifactError';
+    this.reason = reason;
+  }
 }
 
 export async function createRunDir(
@@ -44,7 +50,7 @@ export async function assertArtifact(path: string): Promise<void> {
   try {
     text = await readFile(path, 'utf8');
   } catch {
-    throw new ArtifactError(`expected artifact was not written: ${path}`);
+    throw new ArtifactError(`expected artifact was not written: ${path}`, 'absent');
   }
-  if (text.trim().length === 0) throw new ArtifactError(`artifact is empty: ${path}`);
+  if (text.trim().length === 0) throw new ArtifactError(`artifact is empty: ${path}`, 'empty');
 }

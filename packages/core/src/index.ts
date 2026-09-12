@@ -1,4 +1,4 @@
-export const CORE_VERSION = '0.1.0';
+export { CORE_VERSION } from './version.ts';
 export * from './types.ts';
 export {
   parseWorkflow, validateWorkflowSemantics, validateWorkflowWarnings, validateWorkflowDraft, formatWorkflowIssues,
@@ -44,7 +44,12 @@ export { scopeSchema } from './events.ts';
 export {
   createRunDir, artifactPath, ensureArtifactDir, assertArtifact, ArtifactError,
 } from './engine/artifacts.ts';
-export { snapshotTree, diffSnapshots } from './engine/git-guard.ts';
+export { snapshotTree, diffSnapshots, headSha, pathsFromStatusLines } from './engine/git-guard.ts';
+export {
+  RUN_LOG_NAME, MAX_LOG_LINE_BYTES, DEFAULT_RUN_LOG_CAP_BYTES,
+  summarizeEvent, formatLogLine, parseLogLine, readRunLog,
+} from './engine/run-log.ts';
+export type { LogRow, ReadRunLogResult } from './engine/run-log.ts';
 export {
   workingDiffFiles, parseNumstatZ, splitPatch, pairPatches,
   MAX_DIFF_FILES, MAX_PATCH_BYTES, MAX_TOTAL_PATCH_BYTES,

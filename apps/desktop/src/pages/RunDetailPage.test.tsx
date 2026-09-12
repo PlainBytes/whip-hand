@@ -1818,3 +1818,258 @@ describe('RunDetailPage: cycles and manual steps', () => {
     }
   });
 });
+
+/**
+ * The run-audit Logs tab: one merged, seq-ordered feed of the run's audit
+ * trail (whiphandEvents) and its output (`step:log`), live or read back from
+ * a finished run's run.log through `readRunLog`. See RunDetailPage's
+ * `liveLogRows`/`finishedLogRows` and packages/core/src/engine/manifest.ts.
+ */
+describe('RunDetailPage: Logs tab (run audit)', () => {
+  beforeEach(() => {
+    useAppStore.setState({ workspacePath: '/ws', jobs: {} });
+  });
+
+  function emitWithSeq(
+    transport: MockTransport, jobId: string, runId: string, event: WhiphandEvent, ts: string, seq: number,
+  ): void {
+    transport.emitLine({ method: 'whiphandEvent', params: { jobId, runId, event, ts, seq } });
+  }
+
+  it('merges audit events and step:log output into one feed, in seq order', async () => {
+    const { transport } = renderRunDetail('job-logs');
+    emitWithSeq(transport, 'job-logs', 'r-logs', { type: 'run:start', runId: 'r-logs', workflow: 'w' }, 't1', 1);
+    emitWithSeq(
+      transport, 'job-logs', 'r-logs',
+      { type: 'step:start', stepId: 'build', kind: 'command' }, 't2', 2,
+    );
+    emitWithSeq(
+      transport, 'job-logs', 'r-logs',
+      { type: 'step:log', stepId: 'build', stream: 'stdout', line: 'compiling now' }, 't3', 3,
+    );
+    emitWithSeq(
+      transport, 'job-logs', 'r-logs',
+      { type: 'step:log', stepId: 'build', stream: 'stderr', line: 'a warning appeared' }, 't4', 4,
+    );
+
+    const rows = await screen.findAllByTestId('log-row');
+    expect(rows).toHaveLength(4);
+    expect(rows[0]).toHaveTextContent(/run started/);
+    expect(rows[1]).toHaveTextContent(/step started/);
+    expect(rows[2]).toHaveTextContent('compiling now');
+    expect(rows[3]).toHaveTextContent('a warning appeared');
+  });
+
+  it('"Hide output" keeps the audit spine and drops step:log rows', async () => {
+    const { transport } = renderRunDetail('job-logs2');
+    emitWithSeq(transport, 'job-logs2', 'r-logs2', { type: 'run:start', runId: 'r-logs2', workflow: 'w' }, 't1', 1);
+    emitWithSeq(
+      transport, 'job-logs2', 'r-logs2',
+      { type: 'step:log', stepId: 'a', stream: 'stdout', line: 'noisy build output' }, 't2', 2,
+    );
+    await screen.findAllByTestId('log-row');
+
+    fireEvent.click(screen.getByTestId('log-filter-hide-output'));
+    await waitFor(() => expect(screen.queryByText('noisy build output')).not.toBeInTheDocument());
+    expect(screen.getByText(/run started/)).toBeInTheDocument();
+  });
+
+  it('"Errors only" keeps stderr and error-kind rows, and drops ordinary stdout', async () => {
+    const { transport } = renderRunDetail('job-logs3');
+    emitWithSeq(
+      transport, 'job-logs3', 'r-logs3',
+      { type: 'step:log', stepId: 'a', stream: 'stdout', line: 'ordinary output' }, 't1', 1,
+    );
+    emitWithSeq(
+      transport, 'job-logs3', 'r-logs3',
+      { type: 'step:log', stepId: 'a', stream: 'stderr', line: 'a real error' }, 't2', 2,
+    );
+    await screen.findAllByTestId('log-row');
+
+    fireEvent.click(screen.getByTestId('log-filter-errors-only'));
+    await waitFor(() => expect(screen.queryByText('ordinary output')).not.toBeInTheDocument());
+    expect(screen.getByText('a real error')).toBeInTheDocument();
+  });
+
+  it('a run with no live job reads its rows from run.log via readRunLog', async () => {
+    const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'r-finished');
+    await respondGetRun(transport, {
+      runId: 'r-finished', runDir: '/ws/.whiphand/runs/r-finished', status: 'succeeded',
+      workflow: 'w', inputs: {}, artifacts: [], steps: [],
+    });
+
+    const req = await waitFor(() => {
+      const i = transport.sent.findIndex(l => (JSON.parse(l) as { method?: string }).method === 'readRunLog');
+      if (i === -1) throw new Error('readRunLog not sent yet');
+      return transport.sentRequest(i);
+    });
+    expect(req.params).toMatchObject({ workdir: '/ws', runId: 'r-finished' });
+    transport.emitLine({
+      id: req.id,
+      result: {
+        lines: [
+          "2026-01-01T00:00:00.000Z  1  run:start  -  run started: workflow 'w'",
+          '2026-01-01T00:00:01.000Z  2  step:log:stdout  a  hello from disk',
+        ],
+        total: 2,
+        truncated: false,
+      },
+    });
+
+    expect(await screen.findByText('hello from disk')).toBeInTheDocument();
+    expect(screen.getByText(/run started/)).toBeInTheDocument();
+  });
+
+  it('falls back to readRunLog when the bound job is a rowless entry from listJobs/applyJobSummaries', async () => {
+    // use-job-attach.ts calls listJobs on every reconnect, and applyJobSummaries
+    // (store.ts) seeds an *empty* JobState — events: [], logRows: [] — for every
+    // job the agent still has registered, including ones this window never
+    // watched live. A job object existing must not by itself select the live
+    // path, or a reconnect/reload leaves the Logs tab blank for a run whose
+    // complete audit is sitting in run.log on disk.
+    useAppStore.setState({
+      workspacePath: '/ws',
+      jobs: {
+        'job-seeded': {
+          jobId: 'job-seeded', runId: 'r-seeded', finished: true, workdir: '/ws',
+          stepOrder: [], steps: {}, currentExecution: {},
+          events: [], logTail: [], logRows: [], activityTail: [], hasNarrated: false,
+          ptyActive: false, ptyDataBuffer: [], ptyDataBaseIndex: 0, ptyDataTrimmed: false, ptyExited: false,
+        } as never,
+      },
+    });
+    const { transport } = renderRunDetail('job-seeded', vi.fn(), vi.fn(), 'r-seeded');
+    await respondGetRun(transport, {
+      runId: 'r-seeded', runDir: '/ws/.whiphand/runs/r-seeded', status: 'succeeded',
+      workflow: 'w', inputs: {}, artifacts: [], steps: [],
+    });
+
+    const req = await waitFor(() => {
+      const i = transport.sent.findIndex(l => (JSON.parse(l) as { method?: string }).method === 'readRunLog');
+      if (i === -1) throw new Error('readRunLog not sent yet');
+      return transport.sentRequest(i);
+    });
+    expect(req.params).toMatchObject({ workdir: '/ws', runId: 'r-seeded' });
+    transport.emitLine({
+      id: req.id,
+      result: { lines: ["2026-01-01T00:00:00.000Z  1  run:start  -  run started: workflow 'w'"], total: 1, truncated: false },
+    });
+
+    expect(await screen.findByText(/run started/)).toBeInTheDocument();
+  });
+
+  it('reconnecting to a still-running run keeps its pre-reconnect history once a live row arrives', async () => {
+    // Iteration 2's B1 fix made a rowless job fall back to readRunLog, but the
+    // fallback was an outright switch: usingLiveLogFeed flipped to true the
+    // instant the run's next event arrived, and the page rendered only
+    // job.events/job.logRows from that point on — discarding the history the
+    // readRunLog fetch had just rendered. This asserts the merge instead:
+    // fetched rows stay, and only live rows past the last fetched seq append.
+    useAppStore.setState({
+      workspacePath: '/ws',
+      jobs: {
+        'job-running': {
+          jobId: 'job-running', runId: 'r-running', finished: false, workdir: '/ws',
+          stepOrder: [], steps: {}, currentExecution: {},
+          events: [], logTail: [], logRows: [], activityTail: [], hasNarrated: false,
+          ptyActive: false, ptyDataBuffer: [], ptyDataBaseIndex: 0, ptyDataTrimmed: false, ptyExited: false,
+        } as never,
+      },
+    });
+    const { transport } = renderRunDetail('job-running', vi.fn(), vi.fn(), 'r-running');
+    await respondGetRun(transport, {
+      runId: 'r-running', runDir: '/ws/.whiphand/runs/r-running', status: 'running',
+      workflow: 'w', inputs: {}, artifacts: [], steps: [],
+    });
+
+    const req = await waitFor(() => {
+      const i = transport.sent.findIndex(l => (JSON.parse(l) as { method?: string }).method === 'readRunLog');
+      if (i === -1) throw new Error('readRunLog not sent yet');
+      return transport.sentRequest(i);
+    });
+    transport.emitLine({
+      id: req.id,
+      result: {
+        lines: [
+          "2026-01-01T00:00:00.000Z  1  run:start  -  run started: workflow 'w'",
+          '2026-01-01T00:00:01.000Z  2  step:log:stdout  a  history line from before the reconnect',
+        ],
+        total: 2,
+        truncated: false,
+      },
+    });
+    expect(await screen.findByText('history line from before the reconnect')).toBeInTheDocument();
+
+    emitWithSeq(
+      transport, 'job-running', 'r-running',
+      { type: 'step:log', stepId: 'a', stream: 'stdout', line: 'new line after the reconnect' }, 't3', 3,
+    );
+
+    expect(await screen.findByText('new line after the reconnect')).toBeInTheDocument();
+    expect(screen.getByText('history line from before the reconnect')).toBeInTheDocument();
+  });
+
+  it('shows a resumed attempt\'s live rows even though its journal seq restarts at 1', async () => {
+    // B1-residual-2: the merge used to key on "live seq > highest fetched
+    // seq", but seq is monotonic per RunJournal instance
+    // (packages/core/src/engine/manifest.ts), not per run. A resumed run
+    // rebinds this page to a new job whose journal starts over at seq 1, so
+    // every one of its rows failed that comparison against the old attempt's
+    // (much higher) fetched max and got silently dropped — the pane froze on
+    // the dead attempt while the resumed one ran. The fix keys the merge on
+    // row identity instead of seq order, so this must render the resumed
+    // attempt's first row without needing its seq to exceed the old one's.
+    const { transport, onResumed } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'r-resume-log');
+    await respondGetRun(transport, {
+      runId: 'r-resume-log', runDir: '/ws/.whiphand/runs/r-resume-log', status: 'failed',
+      workflow: 'w', inputs: {}, artifacts: [],
+      steps: [{ id: 'a', status: 'failed' }],
+    });
+
+    const readReq = await waitFor(() => {
+      const i = transport.sent.findIndex(l => (JSON.parse(l) as { method?: string }).method === 'readRunLog');
+      if (i === -1) throw new Error('readRunLog not sent yet');
+      return transport.sentRequest(i);
+    });
+    transport.emitLine({
+      id: readReq.id,
+      result: {
+        lines: [
+          "2026-01-01T00:00:00.000Z  1  run:start  -  run started: workflow 'w'",
+          '2026-01-01T00:00:01.000Z  420  step:log:stdout  a  last line of the failed attempt',
+        ],
+        total: 2,
+        truncated: false,
+      },
+    });
+    expect(await screen.findByText('last line of the failed attempt')).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume' }));
+    await respondResumeRun(transport, 'job-resumed-2');
+    await waitFor(() => expect(onResumed).toHaveBeenCalledWith({ jobId: 'job-resumed-2', runId: 'r-resume-log' }));
+
+    emitWithSeq(
+      transport, 'job-resumed-2', 'r-resume-log',
+      { type: 'step:log', stepId: 'a', stream: 'stdout', line: 'first line of the resumed attempt' }, 't2', 1,
+    );
+
+    expect(await screen.findByText('first line of the resumed attempt')).toBeInTheDocument();
+    expect(screen.getByText('last line of the failed attempt')).toBeInTheDocument();
+  });
+
+  it('says a run predates the persisted log rather than rendering an unexplained blank pane', async () => {
+    const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'r-old');
+    await respondGetRun(transport, {
+      runId: 'r-old', runDir: '/ws/.whiphand/runs/r-old', status: 'succeeded',
+      workflow: 'w', inputs: {}, artifacts: [], steps: [],
+    });
+    const req = await waitFor(() => {
+      const i = transport.sent.findIndex(l => (JSON.parse(l) as { method?: string }).method === 'readRunLog');
+      if (i === -1) throw new Error('readRunLog not sent yet');
+      return transport.sentRequest(i);
+    });
+    transport.emitLine({ id: req.id, result: { lines: [], total: 0, truncated: false } });
+
+    expect(await screen.findByText(/predates the persisted log/)).toBeInTheDocument();
+  });
+});

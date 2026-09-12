@@ -21,6 +21,8 @@ import type {
   GetWorkflowParams,
   GetWorkflowResult,
   GetRunParams,
+  ReadRunLogParams,
+  ReadRunLogResult,
   GetWorkingDiffParams,
   GetWorkingDiffResult,
   HelloParams,
@@ -135,6 +137,7 @@ interface MethodMap {
   resolveManual: { params: ResolveManualParams; result: ResolveManualResult };
   listRuns: { params: ListRunsParams; result: RunSummary[] };
   getRun: { params: GetRunParams; result: RunDetail | null };
+  readRunLog: { params: ReadRunLogParams; result: ReadRunLogResult };
   getWorkingDiff: { params: GetWorkingDiffParams; result: GetWorkingDiffResult };
   readArtifact: { params: ReadArtifactParams; result: ReadArtifactResult };
   writeArtifact: { params: WriteArtifactParams; result: WriteArtifactResult };

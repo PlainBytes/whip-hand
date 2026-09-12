@@ -60,7 +60,7 @@ describe('Sidebar', () => {
   it('badges Activity with live jobs from every workspace', () => {
     const job = (jobId: string, workdir: string, awaiting = false) => ({
       jobId, workdir, finished: false, stepOrder: [], steps: {}, currentExecution: {},
-      events: [], logTail: [], activityTail: [], hasNarrated: false, ptyActive: false, ptyDataBuffer: [], ptyDataBaseIndex: 0,
+      events: [], logTail: [], logRows: [], activityTail: [], hasNarrated: false, ptyActive: false, ptyDataBuffer: [], ptyDataBaseIndex: 0,
       ptyDataTrimmed: false, ptyExited: false,
       ...(awaiting ? { awaiting: { stepId: 's', reason: 'permission' as const } } : {}),
     });
@@ -134,7 +134,7 @@ describe('Sidebar', () => {
     // its "· basename" suffix; tests about the no-workdir case override it.
     const job = (jobId: string, extra: Partial<JobState> = {}): JobState => ({
       jobId, finished: false, stepOrder: [], steps: {}, currentExecution: {},
-      events: [], logTail: [], activityTail: [], hasNarrated: false, ptyActive: false, ptyDataBuffer: [], ptyDataBaseIndex: 0,
+      events: [], logTail: [], logRows: [], activityTail: [], hasNarrated: false, ptyActive: false, ptyDataBuffer: [], ptyDataBaseIndex: 0,
       ptyDataTrimmed: false, ptyExited: false,
       workdir: '/repos/whip-hand',
       ...extra,

@@ -22,6 +22,8 @@ import type {
 } from '../../../../packages/agent/src/protocol.ts';
 import type { ManualRequest, StepKind, StepMode, StepProgress } from '../../../../packages/core/src/types.ts';
 import type { AppState as AppStateData } from '../../../../packages/agent/src/app-state.ts';
+import type { LogRow } from '../lib/log-rows.ts';
+import { summarizeEvent } from '../lib/log-rows.ts';
 
 /**
  * Task 8 scope: workflows, runs list, per-job live state, doctor results,
@@ -127,8 +129,21 @@ export interface JobState {
   currentExecution: Record<string, string>;
   /** Set while a manual/approval step is waiting on this human. */
   pendingManual?: ManualRequest;
+  /**
+   * Every audit whiphandEvent this job has seen, in arrival order — the Logs
+   * tab's audit spine. `step:log` is deliberately excluded (see applyWhiphandEvent):
+   * this array is unbounded, and a chatty step's output would otherwise grow
+   * it without limit for the life of the process.
+   */
   events: WhiphandEventNotificationParams[];
   logTail: LogLine[];
+  /**
+   * `step:log` whiphandEvents only, as LogRow — the merged Logs tab's output
+   * half. Capped like logTail, and for the same reason. Merging this with
+   * `events` (mapped through log-rows.ts's summarizeEvent) and sorting by
+   * `seq` reproduces exactly what run.log holds on disk — see RunDetailPage.
+   */
+  logRows: LogRow[];
   /**
    * Live transcript of the step running now. Live-only by design: the run
    * manifest persists each step's summary, not its prose, so this is gone on
@@ -179,6 +194,8 @@ export interface JobState {
 }
 
 const LOG_TAIL_CAP = 2000;
+/** Same budget as logTail, and for the same reason — see JobState.logRows. */
+const LOG_ROWS_CAP = LOG_TAIL_CAP;
 /** The activity feed is prose and tool calls, so the same line budget suits it. */
 const ACTIVITY_TAIL_CAP = LOG_TAIL_CAP;
 
@@ -268,6 +285,7 @@ function emptyJob(jobId: string): JobState {
     currentExecution: {},
     events: [],
     logTail: [],
+    logRows: [],
     activityTail: [],
   hasNarrated: false,
     ptyActive: false,
@@ -654,6 +672,23 @@ export const useAppStore = create<AppState>((set) => ({
         break;
       case 'guard:warning':
         break;
+      case 'step:log': {
+        const rows = [...job.logRows, {
+          seq: params.seq ?? 0, ts: params.ts, ...summarizeEvent(event),
+        }];
+        if (rows.length > LOG_ROWS_CAP) rows.splice(0, rows.length - LOG_ROWS_CAP);
+        job = { ...job, logRows: rows };
+        break;
+      }
+      case 'step:artifact-missing':
+      case 'step:timeout':
+      case 'step:retry':
+      case 'session:await':
+      case 'session:ended':
+      case 'step:pty-exit':
+      case 'run:env':
+      case 'step:tree-delta':
+        break; // no per-field state to fold; the Logs tab reads these straight out of `events`
       // A run that is over is not waiting on anybody — drop the card in each
       // terminal case rather than inside finalizeRunningSteps, which returns
       // early when no step is in flight. Mirrors RunJournal.record in core.
@@ -672,7 +707,10 @@ export const useAppStore = create<AppState>((set) => ({
         break;
     }
 
-    job = { ...job, events: [...job.events, params] };
+    // step:log already landed in logRows above; keeping it out of this
+    // unbounded array is what keeps a chatty step's output from growing it
+    // forever — see JobState.events.
+    if (event.type !== 'step:log') job = { ...job, events: [...job.events, params] };
     return { jobs: { ...state.jobs, [jobId]: job } };
   }),
 

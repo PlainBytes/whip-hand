@@ -26,7 +26,8 @@ const FILES = {
     + '  } }\n}\n',
   'apps/desktop/src/lib/updater.ts':
     "const RELEASE_PAGE_URL = 'https://github.com/PlainBytes/whip-hand/releases/latest';\n",
-  'packages/core/src/index.ts': "export const CORE_VERSION = '0.1.0';\nexport * from './types.ts';\n",
+  'packages/core/src/version.ts': "export const CORE_VERSION = '0.1.0';\n",
+  'packages/core/src/index.ts': "export { CORE_VERSION } from './version.ts';\nexport * from './types.ts';\n",
 };
 
 // version.mjs resolves its target files relative to its own location on
@@ -104,8 +105,8 @@ test('writing a version updates every location, including the CLI’s pinned @wh
     const tauriConf = JSON.parse(fs.readFileSync(path.join(root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'));
     assert.equal(tauriConf.version, '0.2.0');
 
-    const coreIndex = fs.readFileSync(path.join(root, 'packages/core/src/index.ts'), 'utf8');
-    assert.match(coreIndex, /CORE_VERSION = '0\.2\.0'/);
+    const coreVersion = fs.readFileSync(path.join(root, 'packages/core/src/version.ts'), 'utf8');
+    assert.match(coreVersion, /CORE_VERSION = '0\.2\.0'/);
 
     const checkOut = run(root, ['--check', '0.2.0']);
     assert.match(checkOut, /ok: every location agrees on 0\.2\.0/);

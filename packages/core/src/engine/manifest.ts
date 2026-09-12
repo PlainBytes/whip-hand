@@ -9,6 +9,7 @@ import { isEndMarkerName } from './session-end.ts';
 import { isAwaitStateName } from './await-state.ts';
 import { LOCK_MARKER_NAME, isRunLocked } from './run-lock.ts';
 import { NAME_MARKER_NAME, SUGGEST_CAPTURE_NAME, readRunName, setRunName } from './run-name.ts';
+import { RUN_LOG_NAME, DEFAULT_RUN_LOG_CAP_BYTES, summarizeEvent, formatLogLine } from './run-log.ts';
 
 const manifestStepSchema = z.object({
   id: z.string().min(1),
@@ -184,6 +185,8 @@ export interface RunJournalInit {
   }>;
   /** Override for tests; production uses HEARTBEAT_INTERVAL_MS. */
   heartbeatIntervalMs?: number;
+  /** Override for tests; production uses DEFAULT_RUN_LOG_CAP_BYTES. 0 disables the cap. */
+  runLogCapBytes?: number;
 }
 
 const TERMINAL_EVENTS = new Set<WhiphandEvent['type']>(['run:done', 'run:error', 'run:cancelled']);
@@ -247,6 +250,13 @@ export class RunJournal {
   private readonly tmpName: string;
   private chain: Promise<void> = Promise.resolve();
   private heartbeat: ReturnType<typeof setInterval> | undefined;
+  /** Monotonic per-instance ordinal, assigned to every event that passes through `record()`. */
+  private seq = 0;
+  private readonly runLogCapBytes: number;
+  /** How many bytes of run.log this instance has written so far, seeded from the file's own size on reopen — see seedRunLogBytes. */
+  private runLogBytes = 0;
+  /** Output lines dropped once the cap was reached; reported once, in a `log:truncated` line, at the run's terminal event. */
+  private outputDropped = 0;
 
   /**
    * `existing` is the resume path: rather than seeding a fresh manifest, carry
@@ -261,6 +271,7 @@ export class RunJournal {
     const now = new Date().toISOString();
     this.runDir = init.runDir;
     this.tmpName = `run.json.${process.pid}.${nextJournalSeq()}.tmp`;
+    this.runLogCapBytes = init.runLogCapBytes ?? DEFAULT_RUN_LOG_CAP_BYTES;
     this.manifest = existing === undefined
       ? {
           version: MANIFEST_VERSION,
@@ -310,7 +321,19 @@ export class RunJournal {
     // in the window before the first write — and with auto-naming that window
     // is up to SUGGEST_TIMEOUT_MS wide, not a few microseconds.
     this.persist();
+    // First on the chain, so it settles before any scheduled run.log append
+    // runs: a reopened run's cap has to account for what a previous attempt
+    // already wrote, or a few resumes could blow well past runLogCapBytes.
+    this.chain = this.chain.then(() => this.seedRunLogBytes());
     this.startHeartbeat(init.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS);
+  }
+
+  private async seedRunLogBytes(): Promise<void> {
+    try {
+      this.runLogBytes = (await stat(join(this.runDir, RUN_LOG_NAME))).size;
+    } catch {
+      this.runLogBytes = 0;
+    }
   }
 
   /**
@@ -319,7 +342,10 @@ export class RunJournal {
    * than appending a duplicate, which is what "the retry overwrites its failed
    * attempt" means on disk.
    */
-  static reopen(runDir: string, manifest: RunManifest, heartbeatIntervalMs?: number): RunJournal {
+  static reopen(
+    runDir: string, manifest: RunManifest,
+    opts: { heartbeatIntervalMs?: number; runLogCapBytes?: number } = {},
+  ): RunJournal {
     return new RunJournal({
       runDir,
       runId: manifest.runId,
@@ -330,7 +356,8 @@ export class RunJournal {
       sessionIds: manifest.sessionIds,
       // Ignored — `existing` supplies the steps.
       steps: [],
-      ...(heartbeatIntervalMs === undefined ? {} : { heartbeatIntervalMs }),
+      ...(opts.heartbeatIntervalMs === undefined ? {} : { heartbeatIntervalMs: opts.heartbeatIntervalMs }),
+      ...(opts.runLogCapBytes === undefined ? {} : { runLogCapBytes: opts.runLogCapBytes }),
     }, manifest);
   }
 
@@ -452,8 +479,17 @@ export class RunJournal {
     }
   }
 
-  record(event: WhiphandEvent): void {
+  /**
+   * Returns the ordinal this event was assigned, so the caller (runner.ts's
+   * `emit`) can hand the same number to `frontend.onEvent` — live and on-disk
+   * readers then agree on order down to the same integer, not just the same
+   * millisecond. Monotonic per process attempt; a resume's journal starts its
+   * own instance and its own count, same as events.ndjson already restarting
+   * mid-file across a resume.
+   */
+  record(event: WhiphandEvent): number {
     const now = new Date().toISOString();
+    const seq = (this.seq += 1);
     this.manifest.updatedAt = now;
     switch (event.type) {
       case 'run:start':
@@ -491,7 +527,17 @@ export class RunJournal {
         // memory until the next real event — step:done always follows — so a
         // finished step's summary is still durable.
         this.foldProgress(event.stepId, event.progress);
-        return;
+        return seq;
+      case 'step:artifact-missing':
+      case 'step:timeout':
+      case 'step:retry':
+      case 'step:log':
+      case 'session:await':
+      case 'session:ended':
+      case 'step:pty-exit':
+      case 'run:env':
+      case 'step:tree-delta':
+        break; // updatedAt (and, for step:log, run.log) only — nothing folded into the manifest
       case 'step:verdict':
         // A verdict is only ever emitted for a step that ran to completion —
         // core fails the run before this point otherwise. So the step is done,
@@ -559,22 +605,76 @@ export class RunJournal {
         break;
     }
     if (TERMINAL_EVENTS.has(event.type)) this.close();
-    this.schedule(event, now);
+    this.schedule(event, now, seq);
+    return seq;
   }
 
   private async writeManifest(): Promise<void> {
     await writeManifestAtomic(this.runDir, this.manifest, this.tmpName);
   }
 
-  private schedule(event: WhiphandEvent, ts: string): void {
-    const line = `${JSON.stringify({ ts, event })}\n`;
+  /**
+   * `step:log` — the merged output feed — goes to run.log only, and skips the
+   * manifest entirely: it folds nothing into it (see record()'s `step:log`
+   * case), so paying for a `structuredClone` plus an atomic rewrite on what is
+   * by far the highest-frequency event in the system would be pure waste.
+   * Every other event goes to events.ndjson, run.log and a manifest rewrite.
+   */
+  private schedule(event: WhiphandEvent, ts: string, seq: number): void {
+    if (event.type === 'step:log') {
+      if (this.manifest.dryRun) return; // same "bookkeeping only" contract as below
+      const logLine = formatLogLine({ seq, ts, ...summarizeEvent(event) });
+      this.chain = this.chain.then(() => this.appendRunLog(logLine, true));
+      return;
+    }
+    const line = `${JSON.stringify({ ts, seq, event })}\n`;
+    const logLine = formatLogLine({ seq, ts, ...summarizeEvent(event) });
     // Snapshotted synchronously, before joining the chain, so writes land on
     // disk in call order and a later one can never persist an earlier state.
     const snapshot = structuredClone(this.manifest);
+    const isTerminal = TERMINAL_EVENTS.has(event.type);
+    // A dry run spawns nothing and writes no step output, so run.log would be
+    // nothing but the audit spine — and the existing dry-run contract is
+    // "bookkeeping only" (events.ndjson, run.json, the workflow snapshot).
+    const skipRunLog = this.manifest.dryRun;
     this.chain = this.chain.then(async () => {
       await appendFile(join(this.runDir, 'events.ndjson'), line, 'utf8');
+      if (!skipRunLog) {
+        await this.appendRunLog(logLine, false);
+        if (isTerminal && this.outputDropped > 0) {
+          await this.appendRunLog(
+            formatLogLine({
+              seq, ts,
+              kind: 'log:truncated',
+              text: `${this.outputDropped} output line(s) dropped once run.log reached its `
+                + `${this.runLogCapBytes}-byte cap; audit entries were unaffected`,
+            }),
+            false,
+          );
+        }
+      }
       await writeManifestAtomic(this.runDir, snapshot, this.tmpName);
     });
+  }
+
+  /**
+   * Applies the per-run byte cap (0 disables it): audit entries always land,
+   * but an output line stops landing once the cap is hit — dropping the
+   * merged feed rather than rotating the file, which would break "one file
+   * you can open". The drop itself is only noted once the run ends (see
+   * schedule's terminal-event handling), with an accurate total — a note
+   * written the instant the cap trips could only ever guess how many more
+   * lines would follow.
+   */
+  private async appendRunLog(line: string, isOutputLine: boolean): Promise<void> {
+    const bytes = Buffer.byteLength(line, 'utf8');
+    const overCap = this.runLogCapBytes > 0 && this.runLogBytes + bytes > this.runLogCapBytes;
+    if (overCap && isOutputLine) {
+      this.outputDropped += 1;
+      return;
+    }
+    this.runLogBytes += bytes;
+    await appendFile(join(this.runDir, RUN_LOG_NAME), line, 'utf8');
   }
 
   /**
@@ -794,7 +894,7 @@ export function isSafeRunId(runId: string): boolean {
  * step whose output is `events.ndjson`, is an ordinary file and must be listed.
  */
 function isBookkeepingFile(name: string): boolean {
-  return name === 'run.json' || name === 'events.ndjson' || name.endsWith('.tmp')
+  return name === 'run.json' || name === 'events.ndjson' || name === RUN_LOG_NAME || name.endsWith('.tmp')
     || name === LOCK_MARKER_NAME || name === NAME_MARKER_NAME
     || name === SUGGEST_CAPTURE_NAME
     || name === WORKFLOW_SNAPSHOT_NAME

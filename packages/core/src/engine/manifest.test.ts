@@ -1258,3 +1258,190 @@ test('getRun lists a bookkeeping name below the top level — an attachment call
     'attachments/.locked', 'attachments/events.ndjson', 'attachments/run.json', 'attachments/workflow.yaml',
   ], 'the top-level run.json, workflow.yaml and .locked are still bookkeeping');
 });
+
+// ---------------------------------------------------------------------------
+// run.log: the human audit
+// ---------------------------------------------------------------------------
+
+test('run.log gets one formatted line per event, in seq order, and step:log is excluded from events.ndjson', async () => {
+  const runDir = await tmpRunDir();
+  const journal = new RunJournal(baseInit(runDir, 'run-log-1'));
+  journal.record({ type: 'run:start', runId: 'run-log-1', workflow: 'r' });
+  journal.record({ type: 'step:start', stepId: 'a', kind: 'agent', runner: 'fake', mode: 'headless' });
+  journal.record({ type: 'step:log', stepId: 'a', stream: 'stdout', line: 'hello world' });
+  journal.record({ type: 'step:done', stepId: 'a', exitCode: 0 });
+  journal.record({ type: 'run:done', runId: 'run-log-1', ok: true });
+  await journal.flush();
+
+  const log = (await readFile(join(runDir, 'run.log'), 'utf8')).trim().split('\n');
+  assert.equal(log.length, 5, 'one run.log line per event, including step:log');
+  // Fixed prefix: `<ts>  <seq>  <kind>  <stepId|->  <text>`.
+  const rows = log.map(line => {
+    const [ts, seq, kind, stepId, ...rest] = line.split('  ');
+    return { ts, seq: Number(seq), kind, stepId, text: rest.join('  ') };
+  });
+  assert.deepEqual(rows.map(r => r.seq), [1, 2, 3, 4, 5], 'seq is monotonic across the whole stream');
+  assert.equal(rows[2].kind, 'step:log:stdout', 'the stream rides on kind so it survives round-tripping');
+  assert.equal(rows[2].stepId, 'a');
+  assert.equal(rows[2].text, 'hello world');
+
+  const eventsRaw = (await readFile(join(runDir, 'events.ndjson'), 'utf8')).trim().split('\n');
+  assert.equal(eventsRaw.length, 4, 'step:log never reaches events.ndjson');
+  assert.ok(!eventsRaw.some(line => JSON.parse(line).event.type === 'step:log'));
+  // events.ndjson carries the same seq the run.log line and the live
+  // notification (journal.record's return value) agree on.
+  assert.deepEqual(eventsRaw.map(line => JSON.parse(line).seq), [1, 2, 4, 5]);
+});
+
+test('record() returns the seq it assigned, for the caller to hand to a live notification', async () => {
+  const runDir = await tmpRunDir();
+  const journal = new RunJournal(baseInit(runDir, 'run-log-2'));
+  const first = journal.record({ type: 'run:start', runId: 'run-log-2', workflow: 'r' });
+  const second = journal.record({ type: 'step:start', stepId: 'a', kind: 'agent', runner: 'fake', mode: 'headless' });
+  assert.equal(first, 1);
+  assert.equal(second, 2);
+  await journal.flush();
+});
+
+test('a dry run writes no run.log at all', async () => {
+  const runDir = await tmpRunDir();
+  const journal = new RunJournal({ ...baseInit(runDir, 'run-log-dry'), dryRun: true });
+  journal.record({ type: 'run:start', runId: 'run-log-dry', workflow: 'r' });
+  journal.record({ type: 'run:done', runId: 'run-log-dry', ok: true });
+  await journal.flush();
+  const entries = await readdir(runDir);
+  assert.ok(!entries.includes('run.log'));
+});
+
+test('a line over the 8KB budget is truncated with a marker, not dropped outright', async () => {
+  const runDir = await tmpRunDir();
+  const journal = new RunJournal(baseInit(runDir, 'run-log-3'));
+  const huge = 'x'.repeat(20_000);
+  journal.record({ type: 'step:log', stepId: 'a', stream: 'stdout', line: huge });
+  journal.record({ type: 'run:done', runId: 'run-log-3', ok: true });
+  await journal.flush();
+  const log = (await readFile(join(runDir, 'run.log'), 'utf8')).trim().split('\n');
+  const firstLine = log[0];
+  assert.ok(firstLine.length < huge.length, 'the line was cut down');
+  assert.ok(firstLine.endsWith('…[truncated]'));
+  assert.ok(Buffer.byteLength(firstLine, 'utf8') <= 8192);
+});
+
+test('the per-run byte cap drops output lines but keeps audit entries flowing, and notes the drop once', async () => {
+  const runDir = await tmpRunDir();
+  const journal = new RunJournal({ ...baseInit(runDir, 'run-log-4'), runLogCapBytes: 200 });
+  journal.record({ type: 'run:start', runId: 'run-log-4', workflow: 'r' });
+  for (let i = 0; i < 50; i++) {
+    journal.record({ type: 'step:log', stepId: 'a', stream: 'stdout', line: `output line number ${i}` });
+  }
+  journal.record({ type: 'step:done', stepId: 'a', exitCode: 0 });
+  journal.record({ type: 'run:done', runId: 'run-log-4', ok: true });
+  await journal.flush();
+
+  const log = (await readFile(join(runDir, 'run.log'), 'utf8')).trim().split('\n');
+  const kinds = log.map(line => line.split('  ')[2]);
+  // Every audit entry still landed...
+  assert.ok(kinds.includes('run:start'));
+  assert.ok(kinds.includes('step:done'));
+  assert.ok(kinds.includes('run:done'));
+  // ...but not every output line did, and the cap is noted.
+  assert.ok(kinds.filter(k => k === 'step:log:stdout').length < 50, 'some output lines were dropped once the cap hit');
+  assert.ok(kinds.includes('log:truncated'), 'the drop is noted in the file');
+  assert.equal(kinds.filter(k => k === 'log:truncated').length, 1, 'noted exactly once, not once per dropped line');
+});
+
+test('a resumed run seeds its byte counter from the existing run.log, so the cap holds across resumes', async () => {
+  const runDir = await tmpRunDir();
+  const original = new RunJournal({ ...baseInit(runDir, 'run-log-5'), runLogCapBytes: 100_000 });
+  original.record({ type: 'run:start', runId: 'run-log-5', workflow: 'r' });
+  original.record({ type: 'step:log', stepId: 'a', stream: 'stdout', line: 'x'.repeat(500) });
+  await original.flush();
+  const sizeAfterFirstAttempt = (await readFile(join(runDir, 'run.log'), 'utf8')).length;
+  assert.ok(sizeAfterFirstAttempt > 0);
+
+  // A tiny remaining budget: the seed should already have consumed most of
+  // it, so this next line trips the cap almost immediately rather than
+  // getting another full 100_000 bytes to itself.
+  const reopened = RunJournal.reopen(runDir, original.manifest, { runLogCapBytes: sizeAfterFirstAttempt + 10 });
+  reopened.record({ type: 'step:log', stepId: 'a', stream: 'stdout', line: 'y'.repeat(500) });
+  reopened.record({ type: 'run:done', runId: 'run-log-5', ok: true });
+  await reopened.flush();
+
+  const finalSize = (await readFile(join(runDir, 'run.log'), 'utf8')).length;
+  // Grew by roughly the note line and the audit entries, not by another full
+  // 500-byte output line — proof the seed accounted for what was already there.
+  assert.ok(finalSize < sizeAfterFirstAttempt + 500, 'the second output line was dropped, its budget already spent');
+});
+
+test("a command step's declared env is redacted in run.log but kept in full in events.ndjson", async () => {
+  const runDir = await tmpRunDir();
+  const journal = new RunJournal(baseInit(runDir, 'run-log-6'));
+  journal.record({
+    type: 'step:spawn',
+    stepId: 'build',
+    phase: 'main',
+    spec: {
+      argv: ['/bin/sh', '-c', 'echo $API_TOKEN'],
+      cwd: '/work',
+      env: { API_TOKEN: 'super-secret', WHIPHAND_RUN_DIR: '/work/.whiphand/runs/run-log-6' },
+      interactive: false,
+    },
+  });
+  await journal.flush();
+
+  const log = (await readFile(join(runDir, 'run.log'), 'utf8')).trim().split('\n');
+  assert.ok(!log.some(line => line.includes('super-secret')), 'the secret value never reaches run.log');
+  assert.ok(log.some(line => line.includes('API_TOKEN=<redacted>')), 'the key is still named');
+  assert.ok(!log.some(line => line.includes('WHIPHAND_RUN_DIR=<redacted>')), "whiphand's own env keys are never redacted");
+
+  const eventsRaw = await readFile(join(runDir, 'events.ndjson'), 'utf8');
+  assert.ok(eventsRaw.includes('super-secret'), 'the full-fidelity machine record keeps the real value');
+});
+
+test('readRunLog pages a finished run.log and reports total/truncated', async () => {
+  const runDir = await tmpRunDir();
+  const journal = new RunJournal(baseInit(runDir, 'run-log-7'));
+  for (let i = 0; i < 10; i++) {
+    journal.record({ type: 'guard:warning', message: `warning ${i}` });
+  }
+  await journal.flush();
+
+  const { readRunLog } = await import('./run-log.ts');
+  const page1 = await readRunLog(runDir, 0, 4);
+  assert.equal(page1.lines.length, 4);
+  assert.equal(page1.total, 10);
+  assert.equal(page1.truncated, true);
+
+  const page3 = await readRunLog(runDir, 8, 4);
+  assert.equal(page3.lines.length, 2);
+  assert.equal(page3.truncated, false);
+
+  const missing = await readRunLog(await tmpRunDir(), 0, 10);
+  assert.deepEqual(missing, { lines: [], total: 0, truncated: false });
+});
+
+test('formatLogLine/parseLogLine round-trip, including a newline in the text and a step:log stream', async () => {
+  const { formatLogLine, parseLogLine } = await import('./run-log.ts');
+  const original = { seq: 3, ts: '2026-01-01T00:00:00.000Z', kind: 'step:log:stderr', stepId: 'build', text: 'line one\nline two', stream: 'stderr' as const };
+  const line = formatLogLine(original);
+  const parsed = parseLogLine(line.trimEnd());
+  assert.deepEqual(parsed, { seq: 3, ts: original.ts, kind: 'step:log', stepId: 'build', text: original.text, stream: 'stderr' });
+});
+
+test('formatLogLine/parseLogLine round-trip a literal backslash-n, distinct from an actual newline', async () => {
+  const { formatLogLine, parseLogLine } = await import('./run-log.ts');
+  // The two-character sequence a tool's own JSON output prints literally — not
+  // an actual newline — must survive unchanged, and not be read back as one.
+  const original = { seq: 4, ts: '2026-01-01T00:00:00.000Z', kind: 'step:log:stdout', stepId: 'build', text: 'json: {"msg":"line one\\nline two"}', stream: 'stdout' as const };
+  const line = formatLogLine(original);
+  const parsed = parseLogLine(line.trimEnd());
+  assert.deepEqual(parsed, { seq: 4, ts: original.ts, kind: 'step:log', stepId: 'build', text: original.text, stream: 'stdout' });
+});
+
+test('formatLogLine/parseLogLine round-trip mixed real newlines, literal backslash-n and bare backslashes', async () => {
+  const { formatLogLine, parseLogLine } = await import('./run-log.ts');
+  const original = { seq: 5, ts: '2026-01-01T00:00:00.000Z', kind: 'run:error', text: 'path C:\\foo\\bar\nnext: literal \\n here', stepId: undefined };
+  const line = formatLogLine(original);
+  const parsed = parseLogLine(line.trimEnd());
+  assert.deepEqual(parsed, { seq: 5, ts: original.ts, kind: 'run:error', stepId: undefined, text: original.text });
+});

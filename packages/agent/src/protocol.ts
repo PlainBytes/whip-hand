@@ -341,6 +341,26 @@ export const getRunParams = z.object({ workdir: z.string().min(1), runId: z.stri
 export const getRunResult = runDetailSchema.nullable();
 
 /**
+ * A paged read of a run's `run.log` — the human audit, including the merged
+ * output feed — for a finished or reopened run's Logs tab. Unlike
+ * readArtifact this has no whole-file size cap; `offset`/`limit` are the cap,
+ * and `run.log` is excluded from getRun's artifact listing the same way
+ * events.ndjson is. Lines come back raw (the fixed `formatLogLine` format);
+ * the client parses them into rows with the same logic it already applies to
+ * a live run's own event stream.
+ */
+export const readRunLogParams = z.object({
+  workdir: z.string().min(1), runId: z.string().min(1),
+  offset: z.number().int().nonnegative().optional(),
+  limit: z.number().int().positive().max(5000).optional(),
+});
+export const readRunLogResult = z.object({
+  lines: z.array(z.string()),
+  total: z.number().int().nonnegative(),
+  truncated: z.boolean(),
+});
+
+/**
  * The working tree's change set, file by file, for a review screen.
  *
  * A pull RPC rather than a fatter `manualRequest` notification: the transport
@@ -617,6 +637,7 @@ export const methods = {
   resolveManual: { params: resolveManualParams, result: resolveManualResult },
   listRuns: { params: listRunsParams, result: listRunsResult },
   getRun: { params: getRunParams, result: getRunResult },
+  readRunLog: { params: readRunLogParams, result: readRunLogResult },
   getWorkingDiff: { params: getWorkingDiffParams, result: getWorkingDiffResult },
   readArtifact: { params: readArtifactParams, result: readArtifactResult },
   writeArtifact: { params: writeArtifactParams, result: writeArtifactResult },
@@ -696,6 +717,8 @@ export type ResolveManualParams = z.infer<typeof resolveManualParams>;
 export type ResolveManualResult = z.infer<typeof resolveManualResult>;
 export type ListRunsParams = z.infer<typeof listRunsParams>;
 export type GetRunParams = z.infer<typeof getRunParams>;
+export type ReadRunLogParams = z.infer<typeof readRunLogParams>;
+export type ReadRunLogResult = z.infer<typeof readRunLogResult>;
 export type GetWorkingDiffParams = z.infer<typeof getWorkingDiffParams>;
 export type GetWorkingDiffResult = z.infer<typeof getWorkingDiffResult>;
 export type ReadArtifactParams = z.infer<typeof readArtifactParams>;
@@ -732,6 +755,8 @@ export { CORE_VERSION };
 export const whiphandEventNotificationParams = z.object({
   jobId: z.string(), workdir: z.string().optional(),
   runId: z.string().optional(), event: whiphandEventSchema, ts: z.string(),
+  /** The ordinal core's journal assigned this event — see engine/manifest.ts. Optional so an older agent's replayed stream still parses. */
+  seq: z.number().int().nonnegative().optional(),
 });
 export type WhiphandEventNotificationParams = z.infer<typeof whiphandEventNotificationParams>;
 

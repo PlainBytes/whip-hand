@@ -417,13 +417,43 @@ export type WhiphandEvent =
    */
   | { type: 'step:skipped'; stepId: string; loopId?: string; iteration?: number }
   | { type: 'step:spawn'; stepId: string; spec: SpawnSpec; phase: 'main' | 'harvest' }
-  | { type: 'step:artifact'; stepId: string; path: string }
+  /** `bytes` is the artifact's size once written — the cheapest signal that a step silently stubbed it out. */
+  | { type: 'step:artifact'; stepId: string; path: string; bytes?: number }
   /**
-   * A headless step reported what it is doing. Ephemeral: RunJournal folds the
-   * counters into the manifest but neither logs it to events.ndjson nor lets it
-   * schedule a manifest write — see the note on RunJournal.schedule.
+   * `assertArtifact` refused the step's declared output: it was never written
+   * ('absent'), or it exists but is blank ('empty'). Both used to collapse
+   * into a generic `run:error` string — this keeps the two, highly
+   * diagnostic, failure modes apart from an ordinary crash.
    */
-  | { type: 'step:progress'; stepId: string; progress: StepProgress }
+  | { type: 'step:artifact-missing'; stepId: string; path: string; reason: 'absent' | 'empty' }
+  /** A command step's process was killed for running past its `timeout_ms`, rather than exiting on its own. */
+  | { type: 'step:timeout'; stepId: string; timeoutMs: number }
+  /**
+   * `on_findings: loop` is about to re-run a writes:true step with a
+   * reviewer's findings attached. `attempt` is 1-based, counting this run.
+   */
+  | { type: 'step:retry'; stepId: string; attempt: number }
+  /**
+   * The merged output lines from a headless spawn (a plain step, or an
+   * interactive step's harvest phase) — the CLI and the agent both tee these
+   * back to core now, in addition to forwarding them live. Never folded into
+   * the manifest and never written to events.ndjson: see RunJournal's routing.
+   */
+  | { type: 'step:log'; stepId: string; stream: 'stdout' | 'stderr'; line: string }
+  /**
+   * A live interactive session is (or is no longer) blocked on the human.
+   * Mirrors the desktop's own ptyAwait notification, but funneled through
+   * core so it lands in the run's audit — nothing before this recorded that a
+   * run sat blocked on a permission prompt for 40 minutes.
+   */
+  | {
+      type: 'session:await'; stepId: string; awaiting: boolean;
+      reason?: 'turn' | 'permission' | 'away' | 'attention';
+    }
+  /** How an interactive session actually ended: the model's own marker, the human quitting, or the process just exiting. */
+  | { type: 'session:ended'; stepId: string; via: 'marker' | 'quit' | 'exit' }
+  /** The interactive session's pty process exited. `reason` distinguishes whiphand closing it deliberately from it exiting on its own. */
+  | { type: 'step:pty-exit'; stepId: string; exitCode: number; reason?: 'exit' | 'ended' }
   | { type: 'step:verdict'; stepId: string; verdict: 'pass' | 'fail' }
   | { type: 'step:done'; stepId: string; exitCode: number }
   | { type: 'step:manual'; stepId: string; request: ManualRequest }
@@ -431,20 +461,52 @@ export type WhiphandEvent =
   | { type: 'loop:start'; loopId: string; maxIterations: number }
   | { type: 'loop:iteration'; loopId: string; iteration: number; maxIterations: number }
   | { type: 'loop:done'; loopId: string; iterations: number; passed: boolean }
-  | { type: 'guard:warning'; message: string }
+  /** `stepId` is absent for a workflow-level warning (a dropped ref, an exhausted loop) — present when one step's own guard tripped. */
+  | { type: 'guard:warning'; message: string; stepId?: string }
+  /**
+   * One entry per run, right after `run:start`/`run:resume`: what ran it.
+   * The highest-value single line for an issue report, and the thing `doctor`
+   * already knows how to gather — resolved here rather than duplicated.
+   */
+  | {
+      type: 'run:env'; runId: string; whiphandVersion: string; nodeVersion: string; platform: string;
+      runners: Array<{ id: string; installed: boolean; version?: string }>;
+      git?: { sha: string; dirty: boolean };
+    }
+  /**
+   * Which files a step's execution touched, from the same before/after
+   * snapshot git-guard already takes — recording it rather than discarding it
+   * turns the log into "which step touched which files" for a run that moves
+   * several agents over one tree. Absent when the workdir isn't a git repo.
+   */
+  | { type: 'step:tree-delta'; stepId: string; files: string[] }
+  /**
+   * A headless step reported what it is doing. Ephemeral: RunJournal folds the
+   * counters into the manifest but neither logs it to events.ndjson nor lets it
+   * schedule a manifest write — see the note on RunJournal.schedule.
+   */
+  | { type: 'step:progress'; stepId: string; progress: StepProgress }
   | { type: 'run:done'; runId: string; ok: boolean }
   | { type: 'run:error'; stepId?: string; message: string }
   | { type: 'run:cancelled'; runId: string };
 
 export interface Frontend {
   // resolves with exit code; signal is an optional trailing param so existing
-  // implementations stay assignment-compatible
-  runInteractive(spec: SpawnSpec, signal?: AbortSignal): Promise<number>;
+  // implementations stay assignment-compatible. `onEvent` is a third,
+  // for the same reason: it is how a live session reports the Tier 2 events
+  // it alone knows about (session:await, session:ended, step:pty-exit) back
+  // through core's own emit/journal path, rather than opening a second one.
+  // A frontend that ignores it simply never reports those — exactly as before.
+  runInteractive(
+    spec: SpawnSpec, signal?: AbortSignal, onEvent?: (event: WhiphandEvent) => void,
+  ): Promise<number>;
   /**
    * Asks the human. Optional for the same assignment-compatibility reason:
    * a frontend without it simply cannot run workflows that contain manual
    * steps, and validateWorkflowFrontend says so before anything spawns.
    */
   runManual?(request: ManualRequest, signal?: AbortSignal): Promise<ManualResponse>;
-  onEvent(event: WhiphandEvent): void;
+  // `seq` is the ordinal core's journal assigned this event — optional so an
+  // existing onEvent implementation that ignores it stays assignment-compatible.
+  onEvent(event: WhiphandEvent, seq?: number): void;
 }

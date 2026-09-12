@@ -65,6 +65,7 @@ export const REMOTE_METHOD_NAMES = [
   'resolveManual',
   'listRuns',
   'getRun',
+  'readRunLog',
   'getWorkingDiff',
   'readArtifact',
   'writeArtifact',

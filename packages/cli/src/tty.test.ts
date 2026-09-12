@@ -61,6 +61,55 @@ test('a progress spec goes to onLine and is never echoed to the terminal', async
   assert.ok(!written.some(w => w.includes(token)), 'raw structured output must not reach the terminal');
 });
 
+test('a plain headless spec still reaches the terminal unchanged after the inherit -> pipe+tee switch, and also reaches onLine', async () => {
+  // Regression for the run-audit design: core now always wants stdout/stderr
+  // lines back (to fold into step:log), which meant giving up stdio:'inherit'
+  // for the plain path. The one thing that must never change is what a human
+  // watching `whiphand run` in a terminal actually sees.
+  const outToken = 'zzq-stdout-8214';
+  const errToken = 'zzq-stderr-8215';
+  const written: string[] = [];
+  const originalOut = process.stdout.write.bind(process.stdout);
+  const originalErr = process.stderr.write.bind(process.stderr);
+  process.stdout.write = ((chunk: unknown, ...rest: unknown[]) => {
+    written.push(String(chunk));
+    return (originalOut as (...args: unknown[]) => boolean)(chunk, ...rest);
+  }) as typeof process.stdout.write;
+  process.stderr.write = ((chunk: unknown, ...rest: unknown[]) => {
+    written.push(String(chunk));
+    return (originalErr as (...args: unknown[]) => boolean)(chunk, ...rest);
+  }) as typeof process.stderr.write;
+
+  const seen: Array<{ line: string; stream: 'stdout' | 'stderr' }> = [];
+  let code: number;
+  try {
+    code = await spawnHeadless(
+      {
+        argv: node(`console.log(${JSON.stringify(outToken)}); console.error(${JSON.stringify(errToken)})`),
+        cwd: process.cwd(), env: {}, interactive: false,
+      },
+      undefined,
+      (line, stream) => seen.push({ line, stream }),
+    );
+  } finally {
+    process.stdout.write = originalOut as typeof process.stdout.write;
+    process.stderr.write = originalErr as typeof process.stderr.write;
+  }
+
+  assert.equal(code, 0);
+  assert.ok(written.some(w => w.includes(outToken)), 'stdout still reaches the terminal');
+  assert.ok(written.some(w => w.includes(errToken)), 'stderr still reaches the terminal');
+  assert.deepEqual(seen.sort((a, b) => a.stream.localeCompare(b.stream)), [
+    { line: errToken, stream: 'stderr' },
+    { line: outToken, stream: 'stdout' },
+  ]);
+});
+
+test('a plain headless spec with no onLine reader falls back to the original inherit path', async () => {
+  const code = await spawnHeadless({ argv: EXIT_OK, cwd: process.cwd(), env: {}, interactive: false });
+  assert.equal(code, 0);
+});
+
 test('spawnInteractive resolves with a sentinel exit code when aborted mid-flight (stdio inherit)', async () => {
   const controller = new AbortController();
   const start = Date.now();

@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
@@ -12,8 +12,9 @@ import { collectLoops, flattenSteps, isAgentStep, isCommandStep, isLoopStep, isM
 import { disabledIds, droppedRefs, droppedRefSentence, pruneDisabled } from '../enabled.ts';
 import { ATTACHMENTS_REF } from '../attachments.ts';
 import { copyAttachments, recordOf, validateAttachments } from './attachments.ts';
-import { artifactPath, assertArtifact, ensureArtifactDir } from './artifacts.ts';
-import { snapshotTree, diffSnapshots } from './git-guard.ts';
+import { artifactPath, assertArtifact, ArtifactError, ensureArtifactDir } from './artifacts.ts';
+import { snapshotTree, diffSnapshots, headSha, pathsFromStatusLines } from './git-guard.ts';
+import { CORE_VERSION } from '../version.ts';
 import { parseVerdict, verdictFromExit, verdictFromChoice, VERDICT_INSTRUCTION } from './verdict.ts';
 import { parseProgressLine } from './progress.ts';
 import { commandSpec, captureHeader, captureFooter } from './command.ts';
@@ -61,13 +62,16 @@ export interface RunOptions {
    */
   attachments?: AttachmentSource[];
   // signal and onLine are optional trailing params on spawnHeadless so existing
-  // implementations stay assignment-compatible. onLine is handed back each
-  // stdout line when — and only when — the spec asked for a progress stream;
-  // core parses them, so a frontend decides nothing.
+  // implementations stay assignment-compatible. onLine is now handed every
+  // stdout/stderr line from a headless spawn (a plain step, or an interactive
+  // step's harvest phase): core decides whether a line is progress telemetry
+  // (spec.progress is set and the line parses) or ordinary output — the
+  // latter becomes a `step:log` event. A frontend that ignores onLine simply
+  // loses the feed, exactly as it always could.
   spawnHeadless?: (
     spec: SpawnSpec,
     signal?: AbortSignal,
-    onLine?: (line: string) => void,
+    onLine?: (line: string, stream: 'stdout' | 'stderr') => void,
   ) => Promise<number>;
   signal?: AbortSignal;
 }
@@ -229,7 +233,26 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     : RunJournal.reopen(runDir, opts.resume.manifest);
   // Tee every WhiphandEvent to both the frontend and the run journal; every
   // emission site below (including error paths) must go through this.
-  const emit = (e: WhiphandEvent) => { frontend.onEvent(e); journal.record(e); };
+  // journal.record runs first so the ordinal it assigns can ride along on the
+  // same notification the frontend forwards live — "what you saw live" and
+  // "what is in the file" then agree down to the same seq, not just the same
+  // millisecond.
+  // Set the instant run:done is emitted — the true last event on every path
+  // (fail/cancelled/endWith all emit it last). Guards the fire-and-forget
+  // run:env probe below: a run that fails or finishes before the probe
+  // resolves must never have it land AFTER run:done.
+  let runEnded = false;
+  const emit = (e: WhiphandEvent) => {
+    if (e.type === 'run:done') runEnded = true;
+    const seq = journal.record(e);
+    frontend.onEvent(e, seq);
+  };
+  // `run:env`'s runner probe is fire-and-forget (see runSteps) so it can never
+  // delay step one; this is what lets the `finally` below wait for it to have
+  // actually landed before the journal flushes, so a run that finishes faster
+  // than a runner's own --version probe still keeps the line rather than
+  // losing it to the process exiting first.
+  let runEnvSettled: Promise<void> = Promise.resolve();
 
   try {
     // Phase 2 of 2. Inside the try, so a copy that fails (a full disk) ends
@@ -281,6 +304,12 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       const stopped = await snapshotTree(workdir);
       if (stopped !== null) journal.noteStoppedTree(stopped);
     }
+    // By this point run:done has always already been emitted (every path
+    // through runSteps/the catch above ends with it), so runEnvSettled's own
+    // `!runEnded` guard means this can no longer cause a late emission — it
+    // only makes sure the background probe has actually finished (no
+    // dangling subprocess reference) before the process that owns it exits.
+    await runEnvSettled;
     await journal.flush();
     // Best-effort: a prune failure must not fail a run that otherwise succeeded.
     await pruneRuns(workdir, config, opts.maxRetainedRuns ?? config.runs.max_retained).catch(() => {});
@@ -306,6 +335,20 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       emit({ type: 'guard:warning', message: sentence });
     }
 
+    // One line naming what actually ran this: the highest-value single line
+    // in the file for an issue report. Deliberately NOT awaited: probing a
+    // runner's binary is a subprocess spawn with its own (multi-second)
+    // timeout, and step one must never wait on it — a slow or wedged runner
+    // binary would otherwise delay every run that names it, not just the
+    // doctor page that already probes this on demand. Skipped on a dry run,
+    // which spawns nothing and shouldn't have to probe anything to prove it.
+    if (!opts.dryRun) {
+      // Dropped, not queued, if the run already ended by the time this
+      // resolves: emitting it after run:done would corrupt the one ordering
+      // invariant every reader depends on (run:done is always last).
+      runEnvSettled = buildRunEnv().then(env => { if (!runEnded) emit(env); }).catch(() => {});
+    }
+
     let warnedNoGit = false;
     let verdict: 'pass' | 'fail' | undefined;
 
@@ -326,13 +369,47 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       return { ok, runId, runDir, artifacts: ctx.artifacts, verdict };
     };
 
-    /** Take a pre-step tree snapshot for read-only agent steps (null disables the guard). */
+    /**
+     * `run:env`'s payload: what whiphand, node and the workflow's own runners
+     * resolve to right now, plus the tree's HEAD and dirty state. Scoped to
+     * the runners this workflow actually names (not every registered
+     * adapter) — this fires once per run, and probing an adapter nobody uses
+     * would just be a slower run:start for no reader's benefit.
+     */
+    async function buildRunEnv(): Promise<WhiphandEvent> {
+      const runnerIds = [...new Set(
+        planned.map(({ step }) => step).filter(isAgentStep).map(step => step.runner),
+      )];
+      const [sha, snapshot, runners] = await Promise.all([
+        headSha(workdir),
+        snapshotTree(workdir),
+        Promise.all(runnerIds.map(async (id): Promise<{ id: string; installed: boolean; version?: string }> => {
+          try {
+            const detected = await registry.get(id).detect();
+            return { id, installed: detected.installed, ...(detected.version === undefined ? {} : { version: detected.version }) };
+          } catch {
+            return { id, installed: false };
+          }
+        })),
+      ]);
+      return {
+        type: 'run:env', runId,
+        whiphandVersion: CORE_VERSION, nodeVersion: process.version, platform: process.platform,
+        runners,
+        ...(sha === null ? {} : { git: { sha, dirty: snapshot !== null && snapshot !== '' } }),
+      };
+    }
+
+    /** Take a pre-step tree snapshot for every agent/command step — the read-only guard's own check, and step:tree-delta's, share it. */
     const guardBefore = async (step: Step): Promise<string | null> => {
-      if (!isAgentStep(step) || step.writes) return null;
+      if (!isAgentStep(step) && !isCommandStep(step)) return null;
       const before = await snapshotTree(workdir);
-      if (before === null && !warnedNoGit) {
+      if (before === null && isAgentStep(step) && !step.writes && !warnedNoGit) {
         warnedNoGit = true;
-        emit({ type: 'guard:warning', message: 'not a git repository: read-only tree assertion disabled' });
+        emit({
+          type: 'guard:warning', stepId: step.id,
+          message: 'not a git repository: read-only tree assertion disabled',
+        });
       }
       return before;
     };
@@ -350,6 +427,9 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         const after = await snapshotTree(workdir);
         const changed = diffSnapshots(before, after ?? '');
         if (changed.length > 0) {
+          emit({ type: 'step:tree-delta', stepId: step.id, files: pathsFromStatusLines(changed) });
+        }
+        if (isAgentStep(step) && !step.writes && changed.length > 0) {
           return fail(`read-only step '${step.id}' modified the tree: ${changed.join(', ')}`, step.id);
         }
       }
@@ -359,9 +439,13 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         try {
           await assertArtifact(artifact);
         } catch (e) {
+          if (e instanceof ArtifactError) {
+            emit({ type: 'step:artifact-missing', stepId: step.id, path: artifact, reason: e.reason });
+          }
           return fail((e as Error).message, step.id);
         }
-        emit({ type: 'step:artifact', stepId: step.id, path: artifact });
+        const bytes = await stat(artifact).then(s => s.size).catch(() => undefined);
+        emit({ type: 'step:artifact', stepId: step.id, path: artifact, ...(bytes === undefined ? {} : { bytes }) });
       }
 
       if (!step.verdict) return null;
@@ -408,17 +492,21 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     };
 
     /**
-     * A line reader for specs that stream structured progress, and undefined
-     * for those that do not — which is what keeps a plain headless step (and
-     * every command step) on exactly the path it was on before.
+     * Every headless spawn's line handler: a structured-progress spec's stdout
+     * is parsed into `step:progress` and never becomes log output (unchanged
+     * from before); every other line — both streams on an ordinary step, and
+     * stderr even on a progress-format one — becomes a `step:log` event, which
+     * RunJournal routes into run.log. This is the one place a frontend's
+     * onLine forwarding turns into the merged audit feed.
      */
-    const progressSink = (stepId: string, spec: SpawnSpec): ((line: string) => void) | undefined => {
+    const lineSink = (stepId: string, spec: SpawnSpec) => (line: string, stream: 'stdout' | 'stderr'): void => {
       const format = spec.progress?.format;
-      if (format === undefined) return undefined;
-      return line => {
+      if (format !== undefined && stream === 'stdout') {
         const progress = parseProgressLine(format, line);
         if (progress !== null) emit({ type: 'step:progress', stepId, progress });
-      };
+        return;
+      }
+      emit({ type: 'step:log', stepId, stream, line });
     };
 
     /** Records where a step's artifact went, both as "latest" and in the history. */
@@ -465,14 +553,14 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         await clearAwaitState(runDir, step.id);
         const main = adapter.interactive(eff, ctx);
         emit({ type: 'step:spawn', stepId: step.id, spec: main, phase: 'main' });
-        const sessionExit = await frontend.runInteractive(main, opts.signal);
+        const sessionExit = await frontend.runInteractive(main, opts.signal, emit);
         if (opts.signal?.aborted) return cancelled();
         if (sessionExit !== 0) {
           return fail(`interactive step '${step.id}' session exited with code ${sessionExit}`, step.id);
         }
         const hSpec = adapter.harvest(eff, ctx);
         emit({ type: 'step:spawn', stepId: step.id, spec: hSpec, phase: 'harvest' });
-        const harvestExit = await spawnHeadless(hSpec, opts.signal);
+        const harvestExit = await spawnHeadless(hSpec, opts.signal, lineSink(step.id, hSpec));
         if (opts.signal?.aborted) return cancelled();
         emit({ type: 'step:done', stepId: step.id, exitCode: harvestExit });
         if (harvestExit !== 0) {
@@ -481,7 +569,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       } else {
         const spec = adapter.headless(eff, ctx);
         emit({ type: 'step:spawn', stepId: step.id, spec, phase: 'main' });
-        const exitCode = await spawnHeadless(spec, opts.signal, progressSink(step.id, spec));
+        const exitCode = await spawnHeadless(spec, opts.signal, lineSink(step.id, spec));
         if (opts.signal?.aborted) return cancelled();
         emit({ type: 'step:done', stepId: step.id, exitCode });
         if (exitCode !== 0) return fail(`step '${step.id}' exited with code ${exitCode}`, step.id);
@@ -512,8 +600,9 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       if (capture !== undefined) await writeFile(capture, captureHeader(step, spec.argv, frame));
 
       const spawnHeadless = requireSpawn();
+      const before = await guardBefore(step);
       emit({ type: 'step:spawn', stepId: step.id, spec, phase: 'main' });
-      const { exitCode, timedOut } = await runWithTimeout(step, spec, spawnHeadless);
+      const { exitCode, timedOut } = await runWithTimeout(step, spec, spawnHeadless, lineSink(step.id, spec));
       if (opts.signal?.aborted) return cancelled();
       emit({ type: 'step:done', stepId: step.id, exitCode });
       if (capture !== undefined) {
@@ -523,7 +612,9 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       }
       if (timedOut) {
         // Whatever code a killed child reports is an artefact of how it died,
-        // not a result; say what actually happened instead.
+        // not a result; say what actually happened instead — 'exited 1' and
+        // 'killed at the 10-minute mark' must never look the same in the log.
+        emit({ type: 'step:timeout', stepId: step.id, timeoutMs: step.timeout_ms! });
         return fail(`command step '${step.id}' timed out after ${step.timeout_ms}ms`, step.id);
       }
 
@@ -531,7 +622,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       if (!step.verdict && v === 'fail') {
         return fail(`command step '${step.id}' exited with code ${exitCode}`, step.id);
       }
-      return finishStep(step, null, v);
+      return finishStep(step, before, v);
     }
 
     async function executeManual(step: ManualStep, frame?: LoopFrame): Promise<StepOutcome> {
@@ -598,7 +689,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     }
 
     function requireSpawn(): (
-      spec: SpawnSpec, signal?: AbortSignal, onLine?: (line: string) => void,
+      spec: SpawnSpec, signal?: AbortSignal, onLine?: (line: string, stream: 'stdout' | 'stderr') => void,
     ) => Promise<number> {
       const spawnHeadless = opts.spawnHeadless;
       if (!spawnHeadless) throw new Error('spawnHeadless is required for non-dry runs');
@@ -742,21 +833,22 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       await clearAwaitState(runDir, triage.id);
       // Triage goes through adapter.interactive too, so it inherits the
       // guidance and the end-of-session spec without asking for them.
-      await frontend.runInteractive(adapter.interactive(triage, ctx), opts.signal);
+      await frontend.runInteractive(adapter.interactive(triage, ctx), opts.signal, emit);
       if (opts.signal?.aborted) return cancelled();
       return null;
     }
 
     async function runWithTimeout(
       step: CommandStep, spec: SpawnSpec,
-      spawnHeadless: (spec: SpawnSpec, signal?: AbortSignal) => Promise<number>,
+      spawnHeadless: (spec: SpawnSpec, signal?: AbortSignal, onLine?: (line: string, stream: 'stdout' | 'stderr') => void) => Promise<number>,
+      onLine: (line: string, stream: 'stdout' | 'stderr') => void,
     ): Promise<{ exitCode: number; timedOut: boolean }> {
       if (step.timeout_ms === undefined) {
-        return { exitCode: await spawnHeadless(spec, opts.signal), timedOut: false };
+        return { exitCode: await spawnHeadless(spec, opts.signal, onLine), timedOut: false };
       }
       const timeout = AbortSignal.timeout(step.timeout_ms);
       const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
-      const exitCode = await spawnHeadless(spec, signal);
+      const exitCode = await spawnHeadless(spec, signal, onLine);
       // The run's own cancellation wins: that is not this step timing out.
       return { exitCode, timedOut: timeout.aborted && !opts.signal?.aborted };
     }
@@ -777,6 +869,10 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
           const targetIdx = loopTargetIndex(effective.steps, i);
           const target = effective.steps[targetIdx];
           extraFindings.set(target.id, [...new Set([...(extraFindings.get(target.id) ?? []), step.id])]);
+          // A step showing up three times in the log with no explanation is
+          // worse than no log: name it as a review-driven retry, not a
+          // mysterious re-run.
+          emit({ type: 'step:retry', stepId: target.id, attempt: (ctx.attempts[target.id]?.length ?? 0) + 1 });
           i = targetIdx;
           continue;
         }

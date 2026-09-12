@@ -17,7 +17,7 @@ function baseJob(jobId: string, overrides: Partial<JobState> = {}): JobState {
     steps: {},
     currentExecution: {},
     events: [],
-    logTail: [], activityTail: [], hasNarrated: false,
+    logTail: [], logRows: [], activityTail: [], hasNarrated: false,
     ptyActive: true,
     ptyDataBuffer: [],
     ptyDataBaseIndex: 0,

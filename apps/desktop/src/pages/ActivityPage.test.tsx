@@ -82,7 +82,7 @@ describe('ActivityPage', () => {
       jobs: {
         j1: {
           jobId: 'j1', runId: 'r-b', workdir: '/dev/other', finished: false, stepOrder: [],
-          steps: {}, currentExecution: {}, events: [], logTail: [], activityTail: [], hasNarrated: false, ptyActive: true,
+          steps: {}, currentExecution: {}, events: [], logTail: [], logRows: [], activityTail: [], hasNarrated: false, ptyActive: true,
           ptyDataBuffer: [], ptyDataBaseIndex: 0, ptyDataTrimmed: false, ptyExited: false,
           awaiting: { stepId: 'plan', reason: 'permission' },
         },

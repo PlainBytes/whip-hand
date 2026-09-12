@@ -37,6 +37,9 @@ export const spawnSpecSchema: z.ZodType<SpawnSpec> = z.object({
 
 export const manualChoiceSchema = z.enum(['continue', 'abort', 'retry']);
 
+/** Matches core's own AwaitReason (engine/await-state.ts) — duplicated, not imported, the same way manualChoiceSchema stands beside ManualChoice. */
+const awaitReasonSchema = z.enum(['turn', 'permission', 'away', 'attention']);
+
 export const loopFrameSchema = z.object({
   id: z.string(),
   iteration: z.number().int().positive(),
@@ -98,7 +101,40 @@ export const whiphandEventSchema: z.ZodType<WhiphandEvent> = z.discriminatedUnio
     type: z.literal('step:spawn'), stepId: z.string(), spec: spawnSpecSchema,
     phase: z.enum(['main', 'harvest']),
   }),
-  z.object({ type: z.literal('step:artifact'), stepId: z.string(), path: z.string() }),
+  z.object({
+    type: z.literal('step:artifact'), stepId: z.string(), path: z.string(),
+    bytes: z.number().int().nonnegative().optional(),
+  }),
+  z.object({
+    type: z.literal('step:artifact-missing'), stepId: z.string(), path: z.string(),
+    reason: z.enum(['absent', 'empty']),
+  }),
+  z.object({ type: z.literal('step:timeout'), stepId: z.string(), timeoutMs: z.number().int().nonnegative() }),
+  z.object({ type: z.literal('step:retry'), stepId: z.string(), attempt: z.number().int().positive() }),
+  z.object({
+    type: z.literal('step:log'), stepId: z.string(),
+    stream: z.enum(['stdout', 'stderr']), line: z.string(),
+  }),
+  z.object({
+    type: z.literal('session:await'), stepId: z.string(), awaiting: z.boolean(),
+    reason: awaitReasonSchema.optional(),
+  }),
+  z.object({
+    type: z.literal('session:ended'), stepId: z.string(), via: z.enum(['marker', 'quit', 'exit']),
+  }),
+  z.object({
+    type: z.literal('step:pty-exit'), stepId: z.string(), exitCode: z.number().int(),
+    reason: z.enum(['exit', 'ended']).optional(),
+  }),
+  z.object({
+    type: z.literal('run:env'), runId: z.string(),
+    whiphandVersion: z.string(), nodeVersion: z.string(), platform: z.string(),
+    runners: z.array(z.object({
+      id: z.string(), installed: z.boolean(), version: z.string().optional(),
+    })),
+    git: z.object({ sha: z.string(), dirty: z.boolean() }).optional(),
+  }),
+  z.object({ type: z.literal('step:tree-delta'), stepId: z.string(), files: z.array(z.string()) }),
   z.object({
     type: z.literal('step:progress'), stepId: z.string(), progress: stepProgressSchema,
   }),
@@ -119,7 +155,7 @@ export const whiphandEventSchema: z.ZodType<WhiphandEvent> = z.discriminatedUnio
     type: z.literal('loop:done'), loopId: z.string(),
     iterations: z.number().int(), passed: z.boolean(),
   }),
-  z.object({ type: z.literal('guard:warning'), message: z.string() }),
+  z.object({ type: z.literal('guard:warning'), message: z.string(), stepId: z.string().optional() }),
   z.object({ type: z.literal('run:done'), runId: z.string(), ok: z.boolean() }),
   z.object({ type: z.literal('run:error'), stepId: z.string().optional(), message: z.string() }),
   z.object({ type: z.literal('run:cancelled'), runId: z.string() }),

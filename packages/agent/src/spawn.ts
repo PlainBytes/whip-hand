@@ -15,11 +15,13 @@ const DEFAULT_KILL_GRACE_MS = 5000;
 
 export function createSpawnHeadless(
   jobId: string, notify: NotifyFn, opts: { killGraceMs?: number } = {},
-): (spec: SpawnSpec, signal?: AbortSignal, onLine?: (line: string) => void) => Promise<number> {
+): (
+  spec: SpawnSpec, signal?: AbortSignal, onLine?: (line: string, stream: 'stdout' | 'stderr') => void,
+) => Promise<number> {
   const killGraceMs = opts.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
 
   return function spawnHeadless(
-    spec: SpawnSpec, signal?: AbortSignal, onLine?: (line: string) => void,
+    spec: SpawnSpec, signal?: AbortSignal, onLine?: (line: string, stream: 'stdout' | 'stderr') => void,
   ): Promise<number> {
     return new Promise((resolvePromise, reject) => {
       const child = spawn(spec.argv, {
@@ -36,14 +38,25 @@ export function createSpawnHeadless(
         if (stream === 'stdout' || capturesStderr) capture?.write(`${line}\n`);
       };
       // A progress spec's stdout is structured output for core to parse, not
-      // prose for a human: forwarding it as a log would fill the panel with
-      // raw JSON. Without a reader we still log it, so a frontend that ignores
-      // onLine loses the feed rather than the output.
+      // prose for a human: when there is a reader for it, it skips
+      // stepLog/capture entirely and goes to onLine alone, exactly as before.
+      // Belt and braces: with no reader it still falls back to being logged,
+      // so a frontend that ignores onLine never silently swallows the
+      // child's output outright. Every other line — both streams on an
+      // ordinary step, and stderr even on a progress-format one — is
+      // forwarded as always AND handed to onLine, so core can also fold it
+      // into `step:log`/run.log.
       const streamsProgress = spec.progress !== undefined && onLine !== undefined;
       const outRl = createInterface({ input: child.stdout! });
-      outRl.on('line', streamsProgress ? line => onLine(line) : forward('stdout'));
+      outRl.on('line', line => {
+        if (!streamsProgress) forward('stdout')(line);
+        onLine?.(line, 'stdout');
+      });
       const errRl = createInterface({ input: child.stderr! });
-      errRl.on('line', forward('stderr'));
+      errRl.on('line', line => {
+        forward('stderr')(line);
+        onLine?.(line, 'stderr');
+      });
 
       let killTimer: NodeJS.Timeout | undefined;
       const onAbort = (): void => {

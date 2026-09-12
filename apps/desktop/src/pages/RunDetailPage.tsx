@@ -27,13 +27,15 @@ import {
   ToggleButton,
 } from '@fluentui/react-components';
 import {
-  ArrowLeft20Regular, Delete20Regular, DocumentFolder48Regular, LockClosed20Regular, LockOpen20Regular,
+  ArrowDown20Regular, ArrowLeft20Regular, Copy20Regular, Delete20Regular, DocumentFolder48Regular,
+  LockClosed20Regular, LockOpen20Regular,
   PlayCircle20Regular, PlugDisconnected20Regular, PlugDisconnected48Regular, Prompt48Regular,
   Rename20Regular, Stop20Regular, Replay20Regular, TextBulletListSquare48Regular,
 } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore, executionKey, type JobState, type StepState } from '../state/store.ts';
 import type { RunDetail as RunDetailResult } from '../agent/client.ts';
+import { summarizeEvent, parseLogLine, type LogRow } from '../lib/log-rows.ts';
 import { StatusBadge } from '../components/StatusBadge.tsx';
 import { AttentionBadge } from '../components/AttentionBadge.tsx';
 import { PageHeader } from '../components/PageHeader.tsx';
@@ -200,6 +202,37 @@ const RECESSED_SURFACE = {
 
 type RunTab = 'terminal' | 'artifacts' | 'logs';
 
+/** Kinds the "Errors only" chip keeps, beyond any row on the stderr stream. */
+const ERROR_LOG_KINDS: ReadonlySet<string> = new Set(['run:error', 'step:timeout', 'step:artifact-missing']);
+
+/**
+ * How many of a finished run's `run.log` rows to fetch in one page. Simpler
+ * than wiring up incremental "load more" paging for a first cut — a run
+ * pathological enough to exceed this is also one whose "Copy log" and "open
+ * the log file" affordances below matter more than infinite scroll would.
+ */
+const FINISHED_LOG_PAGE_SIZE = 5000;
+
+function plainLogLine(row: LogRow): string {
+  return `${row.ts}  ${row.kind}  ${row.stepId ?? '-'}  ${row.text}`;
+}
+
+/**
+ * Identity for de-duplicating a fetched row against a live one. Not `seq`
+ * alone: `seq` is monotonic per `RunJournal` instance
+ * (`packages/core/src/engine/manifest.ts`), not per run, so a resumed attempt
+ * restarts it at 1 while `run.log` keeps appending to the same file. A
+ * fetched row from the attempt before the resume and a live row from the
+ * attempt after it can share a `seq` while being different rows entirely —
+ * comparing on `seq` alone either drops the resumed attempt's rows (too
+ * strict) or would collide two unrelated rows (too loose). `ts`/`kind`/`text`
+ * together make the pair unambiguous without assuming anything about how
+ * `seq` behaves across a resume.
+ */
+function logRowKey(row: LogRow): string {
+  return `${row.seq} ${row.ts} ${row.kind} ${row.text}`;
+}
+
 export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: RunDetailPageProps) {
   const client = useAgentClient();
   const workspacePath = useAppStore(state => state.workspacePath);
@@ -354,12 +387,13 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
 
   useEffect(() => {
     // jsdom (vitest) doesn't implement scrollTo; auto-scroll is a real-browser-only nicety.
-    for (const el of [logRef.current, activityRef.current]) {
-      if (!el || typeof el.scrollTo !== 'function') continue;
-      el.scrollTo({ top: el.scrollHeight });
-    }
-    // Two scrollers on two tabs now, each following its own source.
-  }, [job?.logTail.length, job?.activityTail.length]);
+    const el = activityRef.current;
+    if (!el || typeof el.scrollTo !== 'function') return;
+    el.scrollTo({ top: el.scrollHeight });
+    // The Logs tab's own scroller follows `followLogs` instead — see the
+    // effect keyed on filteredLogRows.length below, which can release "follow"
+    // when a human scrolls up mid-investigation; this one can't.
+  }, [job?.activityTail.length]);
 
   const steps: StepState[] = useMemo(() => mergeSteps(manifest, job), [job, manifest]);
   const currentStepIndex = useMemo(() => findCurrentStepIndex(steps), [steps]);
@@ -443,6 +477,137 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
   // and the view must not bounce back to Logs in the gap that leaves.
   const hasLiveOutput = hadSession || job?.hasNarrated === true;
   const activeTab: RunTab = chosenTab ?? (hasLiveOutput ? 'terminal' : 'logs');
+
+  // ---------------------------------------------------------------------
+  // Logs tab: one merged, seq-ordered feed of the run's audit trail and its
+  // output, from whichever source this page actually has. A job this window
+  // started or is still watching already carries everything live; a run
+  // opened cold (no job — reopened later, or started from a terminal) reads
+  // the same rows back from run.log through readRunLog. Same LogRow shape
+  // either way, so the rendering below never has to know which source it got.
+  // ---------------------------------------------------------------------
+  const auditLogRows: LogRow[] = useMemo(
+    () => (job?.events ?? []).map(p => ({ seq: p.seq ?? 0, ts: p.ts, ...summarizeEvent(p.event) })),
+    [job?.events],
+  );
+  const liveLogRows: LogRow[] = useMemo(() => {
+    const merged = [...auditLogRows, ...(job?.logRows ?? [])];
+    merged.sort((a, b) => a.seq - b.seq);
+    return merged;
+  }, [auditLogRows, job?.logRows]);
+
+  // A job this window actually watched live carries rows, richer than a
+  // re-read of the file could be (it has the manifest-independent audit trail
+  // as it happened). But `listJobs` on every reconnect (use-job-attach.ts) and
+  // applyJobSummaries seed an *empty* JobState for every job the agent still
+  // has registered — finished jobs are never evicted from its map — so a job
+  // object existing is not proof this page holds its rows. Gate on rows
+  // actually being present instead; the read path covers a run this window
+  // never watched, whether or not a (rowless) job entry exists for it.
+  const jobHasLiveRows = job !== undefined && ((job.events?.length ?? 0) > 0 || (job.logRows?.length ?? 0) > 0);
+  // Read only at the moment the fetch effect actually fires, not as a reactive
+  // dependency: a reconnect to a *running* run starts with jobHasLiveRows
+  // false (triggering the fetch below) and can flip true mid-flight the
+  // instant the run's next event arrives. If that flip were a dependency, the
+  // effect would tear down and cancel its own in-flight request, so the fetch
+  // it just started would never resolve and its history would be lost.
+  const jobHasLiveRowsRef = useRef(jobHasLiveRows);
+  useEffect(() => { jobHasLiveRowsRef.current = jobHasLiveRows; }, [jobHasLiveRows]);
+
+  const [finishedLogRows, setFinishedLogRows] = useState<LogRow[] | null>(null);
+  const [finishedLogTotal, setFinishedLogTotal] = useState(0);
+  const [finishedLogTruncated, setFinishedLogTruncated] = useState(false);
+  const [finishedLogError, setFinishedLogError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (jobHasLiveRowsRef.current || activeTab !== 'logs' || !workspacePath || !effectiveRunId) return;
+    let cancelled = false;
+    client
+      .request('readRunLog', { workdir: workspacePath, runId: effectiveRunId, offset: 0, limit: FINISHED_LOG_PAGE_SIZE })
+      .then(result => {
+        if (cancelled) return;
+        const parsed = result.lines.map(parseLogLine).filter((r): r is LogRow => r !== null);
+        setFinishedLogRows(parsed);
+        setFinishedLogTotal(result.total);
+        setFinishedLogTruncated(result.truncated);
+        setFinishedLogError(null);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setFinishedLogError(err instanceof Error ? err.message : String(err));
+      });
+    return () => { cancelled = true; };
+  }, [client, workspacePath, effectiveRunId, activeTab]);
+
+  // Merge rather than switch: a reconnect to a still-running run fetches its
+  // pre-reconnect history via readRunLog (above) while the live feed carries
+  // only what arrives from here on. Choosing one source over the other loses
+  // whichever side is discarded — the fetched rows once a live row arrives
+  // (this is what iteration 2's B1-residual regression was), or the live tail
+  // if we stuck with the fetch forever.
+  //
+  // De-duplicate on identity (logRowKey), not on "seq past the fetched max":
+  // a resumed run rebinds this page to a new job whose journal — and so
+  // whose `seq` — restarts at 1 (manifest.ts's `RunJournal` numbers events
+  // per instance, not per run), while `run.log` keeps appending to the same
+  // file. A high-water mark taken from the attempt fetched before the resume
+  // would then reject every one of the resumed attempt's rows, freezing the
+  // pane on the dead attempt while the new one runs (B1-residual-2). Keying
+  // on the row's own content instead makes the merge correct whether or not
+  // `seq` happens to be comparable across the two sources.
+  const logRows = useMemo(() => {
+    if (finishedLogRows === null) return liveLogRows;
+    if (liveLogRows.length === 0) return finishedLogRows;
+    const fetchedKeys = new Set(finishedLogRows.map(logRowKey));
+    const newLiveRows = liveLogRows.filter(r => !fetchedKeys.has(logRowKey(r)));
+    return newLiveRows.length === 0 ? finishedLogRows : [...finishedLogRows, ...newLiveRows];
+  }, [finishedLogRows, liveLogRows]);
+  const logRunPredatesRunLog = finishedLogRows !== null
+    && finishedLogRows.length === 0 && finishedLogTotal === 0;
+
+  const [hideLogOutput, setHideLogOutput] = useState(false);
+  const [logErrorsOnly, setLogErrorsOnly] = useState(false);
+  const [logStepFilter, setLogStepFilter] = useState('');
+  const [logFind, setLogFind] = useState('');
+  const [followLogs, setFollowLogs] = useState(true);
+
+  const logStepIds = useMemo(
+    () => [...new Set(logRows.map(r => r.stepId).filter((s): s is string => s !== undefined))],
+    [logRows],
+  );
+
+  const filteredLogRows = useMemo(() => {
+    const find = logFind.trim().toLowerCase();
+    return logRows.filter(row => {
+      if (hideLogOutput && row.stream !== undefined) return false;
+      if (logErrorsOnly && row.stream !== 'stderr' && !ERROR_LOG_KINDS.has(row.kind)) return false;
+      if (logStepFilter && row.stepId !== logStepFilter) return false;
+      if (find && !row.text.toLowerCase().includes(find)) return false;
+      return true;
+    });
+  }, [logRows, hideLogOutput, logErrorsOnly, logStepFilter, logFind]);
+
+  useEffect(() => {
+    if (!followLogs) return;
+    const el = logRef.current;
+    if (!el || typeof el.scrollTo !== 'function') return;
+    el.scrollTo({ top: el.scrollHeight });
+  }, [filteredLogRows.length, followLogs]);
+
+  /** Releases "follow" the moment a human scrolls away from the bottom, so a live feed doesn't fight an investigation mid-scroll. */
+  function handleLogScroll(): void {
+    const el = logRef.current;
+    if (!el) return;
+    setFollowLogs(el.scrollHeight - el.scrollTop - el.clientHeight < 40);
+  }
+
+  async function handleCopyLog(): Promise<void> {
+    await navigator.clipboard.writeText(filteredLogRows.map(plainLogLine).join('\n'));
+  }
+
+  async function handleCopyLogPath(): Promise<void> {
+    if (!runDir) return;
+    await navigator.clipboard.writeText(`${runDir}/run.log`);
+  }
 
   /**
    * Ends only the live interactive session — the step then harvests and the run
@@ -1311,31 +1476,153 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
 
         <div
           data-testid="run-panel-logs"
-          style={{ display: activeTab === 'logs' ? 'flex' : 'none', height: '100%', minHeight: 0 }}
+          style={{ display: activeTab === 'logs' ? 'flex' : 'none', flexDirection: 'column', height: '100%', minHeight: 0, gap: 8 }}
         >
-          <div
-            ref={logRef}
-            data-testid="log-tail"
-            style={{
-              ...RECESSED_SURFACE,
-              flex: 1,
-              minHeight: 0,
-              overflow: 'auto',
-              fontFamily: 'monospace',
-              fontSize: 12,
-            }}
-          >
-            {/*
-              Raw command output only. What a headless agent step is doing is
-              live output, so it narrates the Terminal tab alongside the pty —
-              the two never shared a timestamp anyway, so interleaving them
-              here always implied an ordering we could not honestly claim.
-            */}
-            {(job?.logTail ?? []).map((entry, idx) => (
-              <div key={idx} style={{ color: entry.stream === 'stderr' ? 'var(--colorPaletteRedForeground1)' : undefined }}>
-                {entry.line}
-              </div>
-            ))}
+          {/*
+            The run audit: every important action, plus the merged output feed,
+            in one chronological view — always backed by run.log on disk (see
+            packages/core/src/engine/manifest.ts), live or read back afterwards.
+          */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            <ToggleButton
+              size="small"
+              checked={hideLogOutput}
+              onClick={() => setHideLogOutput(v => !v)}
+              data-testid="log-filter-hide-output"
+            >
+              Hide output
+            </ToggleButton>
+            <ToggleButton
+              size="small"
+              checked={logErrorsOnly}
+              onClick={() => setLogErrorsOnly(v => !v)}
+              data-testid="log-filter-errors-only"
+            >
+              Errors only
+            </ToggleButton>
+            {logStepIds.length > 0 && (
+              <select
+                aria-label="Filter by step"
+                data-testid="log-filter-step"
+                value={logStepFilter}
+                onChange={e => setLogStepFilter(e.target.value)}
+                style={{ height: 32, borderRadius: 4 }}
+              >
+                <option value="">All steps</option>
+                {logStepIds.map(id => <option key={id} value={id}>{id}</option>)}
+              </select>
+            )}
+            <Input
+              size="small"
+              placeholder="Find…"
+              value={logFind}
+              onChange={(_e, data) => setLogFind(data.value)}
+              data-testid="log-find-input"
+              style={{ minWidth: 160 }}
+            />
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <Button size="small" icon={<Copy20Regular />} onClick={() => void handleCopyLog()}>
+                Copy log
+              </Button>
+              <Button
+                size="small"
+                disabled={!runDir}
+                title={runDir ? `${runDir}/run.log` : undefined}
+                onClick={() => void handleCopyLogPath()}
+              >
+                Copy log path
+              </Button>
+            </div>
+          </div>
+
+          {finishedLogTruncated && (
+            <MessageBar intent="info" data-testid="log-truncated-notice">
+              <MessageBarBody>
+                Showing the first {FINISHED_LOG_PAGE_SIZE.toLocaleString()} of {finishedLogTotal.toLocaleString()} lines.
+                Copy the log path above to open the rest from disk.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {finishedLogError && (
+            <MessageBar intent="error" data-testid="log-read-error">
+              <MessageBarBody>Could not read run.log: {finishedLogError}</MessageBarBody>
+            </MessageBar>
+          )}
+
+          <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex' }}>
+            <div
+              ref={logRef}
+              data-testid="log-tail"
+              onScroll={handleLogScroll}
+              style={{
+                ...RECESSED_SURFACE,
+                flex: 1,
+                minHeight: 0,
+                overflow: 'auto',
+                fontFamily: 'monospace',
+                fontSize: 12,
+                ...(logRows.length === 0 ? { display: 'flex' } : {}),
+              }}
+            >
+              {logRows.length === 0 ? (
+                // logRunPredatesRunLog is checked here, not before the
+                // logRows.length check, because a merged live row can arrive
+                // after a fetch that found the file empty (a fresh reconnect
+                // to a running, not-yet-logged run) — that row must render,
+                // not be shadowed by the "predates run.log" message.
+                logRunPredatesRunLog ? (
+                  // The bug this feature fixes must not be replaced by a silent
+                  // one: a run from before run.log existed says so, plainly,
+                  // rather than rendering an unexplained blank pane.
+                  <EmptyState>This run predates the persisted log — nothing was recorded to run.log.</EmptyState>
+                ) : (
+                  <EmptyState>No log entries yet.</EmptyState>
+                )
+              ) : filteredLogRows.length === 0 ? (
+                <EmptyState>No entries match the current filters.</EmptyState>
+              ) : (
+                filteredLogRows.map((row, index) => (
+                  <div
+                    // Not unique on its own: a resumed run's journal restarts `seq`
+                    // at 1 in the new RunJournal instance while appending to the
+                    // same run.log, and `log:truncated` reuses its terminal
+                    // event's seq — so a file can hold duplicate seqs. Rows render
+                    // in file/arrival order regardless, so the index disambiguates
+                    // without affecting what's shown.
+                    key={`${row.seq}-${index}`}
+                    data-testid="log-row"
+                    data-kind={row.kind}
+                    style={{
+                      display: 'flex', gap: 8,
+                      color: row.stream === 'stderr'
+                        ? 'var(--colorPaletteRedForeground1)'
+                        : row.stream !== undefined ? 'var(--colorNeutralForeground3)' : undefined,
+                      fontWeight: row.stream !== undefined ? undefined : 600,
+                    }}
+                  >
+                    <span style={{ color: 'var(--colorNeutralForeground3)', fontWeight: 400, flexShrink: 0 }}>
+                      {row.ts.slice(11, 23)}
+                    </span>
+                    <span style={{ color: 'var(--colorNeutralForeground3)', fontWeight: 400, flexShrink: 0, width: 90 }}>
+                      {row.stepId ?? ''}
+                    </span>
+                    <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{row.text}</span>
+                  </div>
+                ))
+              )}
+            </div>
+            {!followLogs && (
+              <Button
+                size="small"
+                shape="circular"
+                icon={<ArrowDown20Regular />}
+                data-testid="log-jump-to-latest"
+                onClick={() => { setFollowLogs(true); logRef.current?.scrollTo({ top: logRef.current.scrollHeight }); }}
+                style={{ position: 'absolute', bottom: 12, right: 12 }}
+              >
+                Jump to latest
+              </Button>
+            )}
           </div>
         </div>
       </div>

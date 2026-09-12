@@ -95,7 +95,7 @@ describe('RunsPage', () => {
     useAppStore.setState({
       jobs: {
         j1: {
-          jobId: 'j1', runId: 'r1', workdir: '/ws', finished: false, stepOrder: [], steps: {}, currentExecution: {}, events: [], logTail: [], activityTail: [], hasNarrated: false,
+          jobId: 'j1', runId: 'r1', workdir: '/ws', finished: false, stepOrder: [], steps: {}, currentExecution: {}, events: [], logTail: [], logRows: [], activityTail: [], hasNarrated: false,
           ptyActive: true, ptyDataBuffer: [], ptyDataBaseIndex: 0, ptyDataTrimmed: false, ptyExited: false,
           awaiting: { stepId: 'plan', reason: 'permission' },
         },
@@ -119,7 +119,7 @@ describe('RunsPage', () => {
       jobs: {
         j1: {
           jobId: 'j1', runId: 'r1', workdir: '/elsewhere', finished: false, stepOrder: [], steps: {},
-          currentExecution: {}, events: [], logTail: [], activityTail: [], hasNarrated: false, ptyActive: true, ptyDataBuffer: [],
+          currentExecution: {}, events: [], logTail: [], logRows: [], activityTail: [], hasNarrated: false, ptyActive: true, ptyDataBuffer: [],
           ptyDataBaseIndex: 0, ptyDataTrimmed: false, ptyExited: false,
           awaiting: { stepId: 'plan', reason: 'permission' },
         },

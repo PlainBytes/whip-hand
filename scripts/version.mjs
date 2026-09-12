@@ -3,7 +3,7 @@
  * `0.1.0` lives in six places that nothing keeps in sync automatically:
  * `apps/desktop/package.json`, the three `packages/{core,cli,agent}/package.json` files,
  * `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, and the literal
- * `CORE_VERSION` in `packages/core/src/index.ts`. The Tauri updater compares
+ * `CORE_VERSION` in `packages/core/src/version.ts`. The Tauri updater compares
  * `tauri.conf.json`'s version against `latest.json`, and `whiphand --version`
  * prints `CORE_VERSION` — so a release where these disagree is a bug class,
  * not untidiness. `Cargo.lock`'s own `desktop` entry is a seventh, mechanical
@@ -37,7 +37,7 @@ const PACKAGE_JSON_FILES = [
 const CARGO_TOML = 'apps/desktop/src-tauri/Cargo.toml';
 const CARGO_LOCK = 'apps/desktop/src-tauri/Cargo.lock';
 const TAURI_CONF = 'apps/desktop/src-tauri/tauri.conf.json';
-const CORE_INDEX = 'packages/core/src/index.ts';
+const CORE_INDEX = 'packages/core/src/version.ts';
 const CLI_PACKAGE_JSON = 'packages/cli/package.json';
 
 /**

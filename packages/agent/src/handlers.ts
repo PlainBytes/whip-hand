@@ -10,7 +10,7 @@ import {
   CORE_VERSION, createWorkflow as coreCreateWorkflow, defaultRegistry, detectTools,
   deleteWorkflow as coreDeleteWorkflow, ModelCatalog,
   deleteRun as coreDeleteRun, diffConfigLayer, getRun as coreGetRun, loadDoctorConfig,
-  workingDiffFiles,
+  readRunLog as coreReadRunLog, workingDiffFiles,
   globalConfigPath, initWorkspace as coreInitWorkspace, listWorkflows as coreListWorkflows,
   listRuns as coreListRuns, loadConfigLayer, loadGlobalConfig, loadWorkspaceConfig,
   mergeConfig, DEFAULT_CONFIG, parseWorkflow, planResume,
@@ -28,6 +28,7 @@ import type {
   ResolveManualParams, ResolveManualResult,
   GetWorkflowResult, GetRunParams, GetWorkingDiffParams, HelloResult, InitWorkspaceParams, InitWorkspaceResult,
   ListWorkflowsResult, ListRunsParams, PruneRunsParams, PruneRunsResult,
+  ReadRunLogParams, ReadRunLogResult,
   PtyInputParams, PtyInputResult,
   PtyResizeParams, PtyResizeResult, ReadArtifactParams, ReadArtifactResult,
   SetRunLockedParams, SetRunLockedResult, RenameRunParams, RenameRunResult,
@@ -485,6 +486,21 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
   };
 
   /**
+   * Resolved through coreGetRun the same way getRun is, rather than joining
+   * `runId` straight onto the artifacts dir — that keeps this on the same
+   * containment path (isSafeRunId, a real run directory) every other run
+   * lookup already goes through.
+   */
+  const readRunLog: Handler = async (params): Promise<ReadRunLogResult> => {
+    const { workdir, runId, offset = 0, limit = 500 } = params as ReadRunLogParams;
+    const resolved = resolve(workdir);
+    const config = await loadWorkspaceConfig(resolved);
+    const detail = await coreGetRun(resolved, config, runId);
+    if (!detail) throw new Error(`unknown run '${runId}'`);
+    return coreReadRunLog(detail.runDir, offset, limit);
+  };
+
+  /**
    * Runs git in the client's workdir — the same trust startRun takes, and
    * unlike readArtifact it is not resolved against a run's own listing. Core
    * returns null only for "not a git repo"; a clean tree is an empty list.
@@ -693,7 +709,7 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
     listModels,
     configGet, configSet,
     startRun, resumeRun, cancelRun, deleteRun, setRunLocked, renameRun, pruneRuns, endSession, resolveManual,
-    listRuns, getRun, getWorkingDiff, readArtifact, writeArtifact, statArtifact,
+    listRuns, getRun, readRunLog, getWorkingDiff, readArtifact, writeArtifact, statArtifact,
     ptyInput, ptyResize,
     getAppState, touchRecentWorkspace, setWorkspacePinned, setUiState, listRecentRuns,
     listJobs, getJobScrollback,

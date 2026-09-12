@@ -41,8 +41,16 @@ export function spawnInteractive(spec: SpawnSpec, signal?: AbortSignal): Promise
  * A command step asks for its output to be kept (`spec.capture`), which the
  * inherited-stdio path cannot do. Only then do we take over the pipes — and we
  * write every chunk straight back out, so what the operator sees is unchanged.
+ *
+ * `onLine`, when given, is fed every line on top of that raw tee — a second,
+ * line-oriented reader on the same streams, so core can fold the command's
+ * output into `step:log` without changing a byte of what actually reaches the
+ * terminal or the capture file.
  */
-function doSpawnCaptured(spec: SpawnSpec, capturePath: string, signal?: AbortSignal): Promise<number> {
+function doSpawnCaptured(
+  spec: SpawnSpec, capturePath: string, signal?: AbortSignal,
+  onLine?: (line: string, stream: 'stdout' | 'stderr') => void,
+): Promise<number> {
   return new Promise((resolvePromise, reject) => {
     const file = createWriteStream(capturePath, { flags: 'a' });
     const child = spawn(spec.argv, {
@@ -63,11 +71,18 @@ function doSpawnCaptured(spec: SpawnSpec, capturePath: string, signal?: AbortSig
     tee(child.stdout!, process.stdout, true);
     tee(child.stderr!, process.stderr, (spec.capture?.streams ?? 'both') === 'both');
 
+    const outRl = onLine ? createInterface({ input: child.stdout! }) : undefined;
+    outRl?.on('line', line => onLine!(line, 'stdout'));
+    const errRl = onLine ? createInterface({ input: child.stderr! }) : undefined;
+    errRl?.on('line', line => onLine!(line, 'stderr'));
+
     let exitCode: number | null = null;
     let settled = false;
     const finish = async (code: number): Promise<void> => {
       if (settled) return;
       settled = true;
+      outRl?.close();
+      errRl?.close();
       file.end();
       await once(file, 'close').catch(() => {});
       resolvePromise(code);
@@ -80,6 +95,8 @@ function doSpawnCaptured(spec: SpawnSpec, capturePath: string, signal?: AbortSig
       }
       if (settled) return;
       settled = true;
+      outRl?.close();
+      errRl?.close();
       file.end();
       reject(err);
     });
@@ -93,28 +110,35 @@ function doSpawnCaptured(spec: SpawnSpec, capturePath: string, signal?: AbortSig
 /**
  * A progress spec's stdout is structured output, so it cannot be inherited:
  * dumping raw NDJSON at the terminal is worse than the silence it replaces.
- * Pipe it, hand every line to the reader, and echo none of it. stderr stays
- * inherited, so real errors still reach the terminal untouched.
+ * Pipe it and hand every line to `onLine`, which parses it into `step:progress`
+ * and echoes none of it. stderr is piped too (rather than inherited): real
+ * errors still reach the terminal via the raw tee below, and are also handed
+ * to `onLine` so core can fold them into `step:log` — a progress-format step
+ * that fails is not exempt from the audit.
  */
 function doSpawnProgress(
-  spec: SpawnSpec, onLine: (line: string) => void, signal?: AbortSignal,
+  spec: SpawnSpec, onLine: (line: string, stream: 'stdout' | 'stderr') => void, signal?: AbortSignal,
 ): Promise<number> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(spec.argv, {
       cwd: spec.cwd,
       env: { ...process.env, ...spec.env },
-      stdio: ['ignore', 'pipe', 'inherit'],
+      stdio: ['ignore', 'pipe', 'pipe'],
       signal,
     });
-    const rl = createInterface({ input: child.stdout! });
-    rl.on('line', onLine);
+    const outRl = createInterface({ input: child.stdout! });
+    outRl.on('line', line => onLine(line, 'stdout'));
+    child.stderr!.on('data', (chunk: Buffer) => process.stderr.write(chunk));
+    const errRl = createInterface({ input: child.stderr! });
+    errRl.on('line', line => onLine(line, 'stderr'));
 
     let exitCode: number | null = null;
     let settled = false;
     const finish = (code: number): void => {
       if (settled) return;
       settled = true;
-      rl.close();
+      outRl.close();
+      errRl.close();
       resolvePromise(code);
     };
 
@@ -125,7 +149,8 @@ function doSpawnProgress(
       }
       if (settled) return;
       settled = true;
-      rl.close();
+      outRl.close();
+      errRl.close();
       reject(err);
     });
     child.on('exit', code => { exitCode = code ?? 1; });
@@ -135,10 +160,63 @@ function doSpawnProgress(
   });
 }
 
-export function spawnHeadless(
-  spec: SpawnSpec, signal?: AbortSignal, onLine?: (line: string) => void,
+/**
+ * The plain headless path, now that core always wants the lines back: pipes
+ * both streams, tees the raw bytes straight to the terminal (so a human
+ * watching sees exactly what `inherit` used to show), and hands each line to
+ * `onLine` on the side so core can fold it into `step:log`/run.log — the
+ * asymmetry the design fixes, where a terminal-run headless step persisted
+ * nothing of its own output anywhere.
+ */
+function doSpawnTeeLines(
+  spec: SpawnSpec, onLine: (line: string, stream: 'stdout' | 'stderr') => void, signal?: AbortSignal,
 ): Promise<number> {
-  if (spec.capture !== undefined) return doSpawnCaptured(spec, spec.capture.path, signal);
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(spec.argv, {
+      cwd: spec.cwd,
+      env: { ...process.env, ...spec.env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      signal,
+    });
+    child.stdout!.on('data', (chunk: Buffer) => process.stdout.write(chunk));
+    child.stderr!.on('data', (chunk: Buffer) => process.stderr.write(chunk));
+    const outRl = createInterface({ input: child.stdout! });
+    outRl.on('line', line => onLine(line, 'stdout'));
+    const errRl = createInterface({ input: child.stderr! });
+    errRl.on('line', line => onLine(line, 'stderr'));
+
+    let exitCode: number | null = null;
+    let settled = false;
+    const finish = (code: number): void => {
+      if (settled) return;
+      settled = true;
+      outRl.close();
+      errRl.close();
+      resolvePromise(code);
+    };
+
+    child.on('error', err => {
+      if ((err as NodeJS.ErrnoException).code === 'ABORT_ERR') {
+        finish(ABORTED_EXIT_CODE);
+        return;
+      }
+      if (settled) return;
+      settled = true;
+      outRl.close();
+      errRl.close();
+      reject(err);
+    });
+    child.on('exit', code => { exitCode = code ?? 1; });
+    // 'close' (not 'exit'): the same drain guarantee as the other spawn paths.
+    child.on('close', () => finish(exitCode ?? 1));
+  });
+}
+
+export function spawnHeadless(
+  spec: SpawnSpec, signal?: AbortSignal, onLine?: (line: string, stream: 'stdout' | 'stderr') => void,
+): Promise<number> {
+  if (spec.capture !== undefined) return doSpawnCaptured(spec, spec.capture.path, signal, onLine);
   if (spec.progress !== undefined && onLine !== undefined) return doSpawnProgress(spec, onLine, signal);
+  if (onLine !== undefined) return doSpawnTeeLines(spec, onLine, signal);
   return doSpawn(spec, ['ignore', 'inherit', 'inherit'], signal);
 }

@@ -7,7 +7,7 @@ import type { InstallKind, Updater } from '../lib/updater.ts';
 
 const job = (jobId: string, status: 'running' | 'succeeded') => ({
   jobId, workdir: '/ws', status, finished: status !== 'running', stepOrder: [], steps: {}, currentExecution: {},
-  events: [], logTail: [], activityTail: [], hasNarrated: false, ptyActive: false, ptyDataBuffer: [],
+  events: [], logTail: [], logRows: [], activityTail: [], hasNarrated: false, ptyActive: false, ptyDataBuffer: [],
   ptyDataBaseIndex: 0, ptyDataTrimmed: false, ptyExited: false,
 });
 

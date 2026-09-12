@@ -47,7 +47,7 @@ export function createFrontend(
   let lastStepId: string | undefined;
 
   return {
-    onEvent(event: WhiphandEvent): void {
+    onEvent(event: WhiphandEvent, seq?: number): void {
       // A resumed run emits run:resume in place of run:start. Without it here
       // every notification for a resumed run goes out with runId undefined and
       // the desktop cannot tell which run they belong to.
@@ -55,6 +55,7 @@ export function createFrontend(
       if (event.type === 'step:start') lastStepId = event.stepId;
       notify('whiphandEvent', {
         jobId, workdir: job.workdir, runId: runIdBox.current, event, ts: new Date().toISOString(),
+        ...(seq === undefined ? {} : { seq }),
       });
       if (event.type === 'run:start' || event.type === 'run:resume') {
         notify('runStateChanged', {
@@ -97,7 +98,9 @@ export function createFrontend(
       });
     },
 
-    runInteractive(spec: SpawnSpec, signal?: AbortSignal): Promise<number> {
+    runInteractive(
+      spec: SpawnSpec, signal?: AbortSignal, onEvent?: (event: WhiphandEvent) => void,
+    ): Promise<number> {
       if (job.pty) {
         return Promise.reject(
           new Error(`job '${jobId}' already has a live PTY (only one interactive step runs at a time)`));
@@ -134,6 +137,7 @@ export function createFrontend(
           if (next === reportedAwait) return;
           reportedAwait = next;
           notify('ptyAwait', { jobId, stepId, awaiting: next !== undefined, reason: next });
+          onEvent?.({ type: 'session:await', stepId, awaiting: next !== undefined, ...(next === undefined ? {} : { reason: next }) });
         };
 
         let handle;
@@ -157,6 +161,11 @@ export function createFrontend(
               // our say-so, and runWorkflow fails the step on any nonzero code.
               const reported = ending ? 0 : exitCode;
               notify('ptyExit', { jobId, exitCode: reported, reason: ending ? 'ended' : 'exit' });
+              onEvent?.({ type: 'step:pty-exit', stepId, exitCode: reported, reason: ending ? 'ended' : 'exit' });
+              onEvent?.({
+                type: 'session:ended', stepId,
+                via: ending === 'marker' ? 'marker' : ending === 'user' ? 'quit' : 'exit',
+              });
               resolvePromise(reported);
             },
             signal,

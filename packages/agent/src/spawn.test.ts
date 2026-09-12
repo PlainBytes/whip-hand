@@ -55,6 +55,24 @@ test('forwards each stdout/stderr line as a stepLog notification', async () => {
   ]);
 });
 
+test('an ordinary (non-progress) spec still hands every line to onLine too, tagged with its stream', async () => {
+  // Regression for the run-audit design: onLine used to be reserved for
+  // progress specs; core now wants every headless spawn's output back, to
+  // fold into step:log, on top of the stepLog notification it already got.
+  const { calls, notify } = collectNotify();
+  const spawnHeadless = createSpawnHeadless('job-1', notify);
+  const seen: Array<{ line: string; stream: string }> = [];
+  await spawnHeadless(
+    nodeSpec("console.log('out1'); console.error('err1')"),
+    undefined,
+    (line, stream) => seen.push({ line, stream }),
+  );
+  seen.sort((a, b) => a.stream.localeCompare(b.stream));
+  assert.deepEqual(seen, [{ line: 'err1', stream: 'stderr' }, { line: 'out1', stream: 'stdout' }]);
+  // And the stepLog notification still went out exactly as before — onLine is additive.
+  assert.equal(calls.filter(c => c.method === 'stepLog').length, 2);
+});
+
 test('abort sends SIGTERM and the promise resolves once the child exits', posixSignals, async () => {
   const { notify } = collectNotify();
   let onReady: () => void;

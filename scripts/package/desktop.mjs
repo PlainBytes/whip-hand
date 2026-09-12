@@ -78,7 +78,18 @@ export async function prepareDesktopBuild() {
   return { triple, isWindows, bundleFormats, bundleExtensions };
 }
 
-if (import.meta.filename === process.argv[1]) {
+/**
+ * The other half: prepare, then actually run Tauri's bundler and collect what
+ * it produced into `dist/`. Exported — rather than living in the main block
+ * below — so reinstall.mjs can build and then install the very artifact this
+ * returns, instead of re-deriving its name. That name is not guessable from
+ * anything in this file: it is `<productName>_<version>_<arch>.<format>`, so
+ * `Whiphand_0.1.0_amd64.deb` with a capital W the dpkg package name does not
+ * share.
+ *
+ * @returns {Promise<string[]>} absolute paths of the artifacts now in dist/
+ */
+export async function buildDesktopBundles() {
   const { isWindows, bundleFormats, bundleExtensions } = await prepareDesktopBuild();
 
   // `npm` on Windows is `npm.cmd`, which execFileSync cannot launch without a
@@ -110,6 +121,11 @@ if (import.meta.filename === process.argv[1]) {
   }
 
   if (collected.length === 0) throw new Error(`tauri build produced no bundles under ${bundleRoot}`);
+  return collected;
+}
+
+if (import.meta.filename === process.argv[1]) {
+  const collected = await buildDesktopBundles();
   process.stdout.write('\n');
   for (const artifact of collected) process.stdout.write(`  ${artifact}\n`);
 }

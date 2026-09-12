@@ -339,6 +339,7 @@ Both artifacts can be built as self-contained executables that need no repo, no
 npm run package:cli       # dist/whiphand (dist/whiphand.exe on Windows) — the CLI as one file
 npm run package:desktop   # dist/*.deb + dist/*.AppImage on Linux, an NSIS installer on Windows
 npm run package           # both
+npm run reinstall         # Ubuntu: build the .deb, then apt-remove and reinstall it
 ```
 
 `dist/whiphand` is an esbuild bundle injected into a copy of this machine's Node binary
@@ -351,6 +352,12 @@ reports them, along with everything else this machine needs.
 Tauri's bundler as an `externalBin`, and produces a `.deb` to install and an
 `.AppImage` to run from anywhere. Each packaging script finishes by smoke-testing what
 it built (`scripts/package/smoke.mjs`), so a broken binary is not produced silently.
+
+`npm run reinstall` is the Ubuntu edit/install/verify loop in one command: it builds the
+`.deb`, removes the installed package, then installs what it just built (`sudo` is used
+for the two apt steps, so expect a password prompt). The removal is not just tidiness —
+the version is pinned across builds, so `apt-get install` over an already-installed
+`0.1.0` is a no-op and the new bundle would silently not land.
 
 **These are built natively and link this machine's glibc**, so they run on the Ubuntu
 release that built them, not on older ones. Building for wider reach means building in

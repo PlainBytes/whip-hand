@@ -100,3 +100,6 @@ steps:
     kind: command
     run: git commit -F ".whiphand/runs/{{ run.id }}/commit-message.md"
     output: commit.log
+  - id: push
+    kind: command
+    run: git push

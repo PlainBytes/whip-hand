@@ -45,7 +45,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "REPLACE_WITH_OPERATOR_GENERATED_PUBKEY",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJGNTM1NTZBMEU1NjAzNEYKUldSUEExWU9hbFZUTDZjVlZPM2hYR0loWDRmUlF1VTFYT2pPaUdtaTdOeTlrQlMrMnNiSGlNcFkK",
       "endpoints": [
         "https://github.com/PlainBytes/whip-hand/releases/latest/download/latest.json"
       ],

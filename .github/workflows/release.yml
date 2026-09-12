@@ -157,7 +157,7 @@ jobs:
         with:
           projectPath: apps/desktop
           releaseId: ${{ needs.create-release.outputs.id }}
-          includeUpdaterJson: true
+          uploadUpdaterJson: true
           updaterJsonPreferNsis: true
           args: '--config {"bundle":{"createUpdaterArtifacts":true}} --bundles ${{ steps.prepare.outputs.bundles }}'
 

@@ -1656,7 +1656,22 @@ describe('RunDetailPage: cycles and manual steps', () => {
     expect(await within(dialog).findByText(/positive whole number/i)).toBeInTheDocument();
 
     fireEvent.change(input, { target: { value: '2' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Resume' }));
+    // `hidden: true`, uniquely among this file's dialog tests, because this is
+    // the only dialog opened from a Menu. Tabster stamps `aria-hidden="true"`
+    // on the surface roughly 10-50ms after the menu that opened it tears down
+    // — measured, not guessed — which takes every role inside it out of the
+    // accessibility tree for good. Every other dialog here is opened from a
+    // plain button and stays accessible, so none of them need this.
+    //
+    // Not a wait: the attribute never comes back off, so `findByRole` would
+    // only spend its timeout. It reads as a Windows failure purely because CI
+    // there is slow enough to cross the 10ms line; on Linux the same test wins
+    // the race and passes, which is why this landed green locally.
+    //
+    // Whether a real browser does the same to a screen reader is NOT settled
+    // by this test — jsdom drives none of the focus machinery tabster keys
+    // off. Worth checking by hand against a real dialog-from-a-menu.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Resume', hidden: true }));
 
     const req = await waitFor(() => {
       const i = transport.sent.findIndex(l => (JSON.parse(l) as { method?: string }).method === 'resumeRun');

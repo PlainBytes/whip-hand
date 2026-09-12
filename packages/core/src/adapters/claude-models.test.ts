@@ -76,6 +76,26 @@ test('mergeWithAliases: an empty live list is just the aliases', () => {
  * — an injected fake spawn function could not catch a regression that put
  * `--no-session-persistence` or `CLAUDE_CODE_SAFE_MODE` behind a typo.
  */
+/**
+ * These stubs are POSIX-only, for two independent reasons, so they are skipped
+ * on Windows rather than papered over: PATH there is `;`-delimited, and even
+ * spelled correctly an extensionless `claude` is invisible to the PATHEXT walk
+ * in exec.ts — a `.cmd` would be found, but then cmd.exe runs it, and a
+ * `#!/usr/bin/env bash` body is not a batch file. Skipped rather than left to
+ * run because the fallback cases below would otherwise pass vacuously: on
+ * Windows the probe finds no stub at all, which is the same `fallback` they
+ * assert, so they would be green without exercising anything.
+ *
+ * The way to get these back is a stub pair — `claude.cmd` shelling to a
+ * `node` script beside it — which is also the only shape that would exercise
+ * the shim path exec.ts actually takes on Windows. "claude missing from PATH
+ * entirely" below is deliberately not skipped: it needs no stub and the
+ * behaviour it pins is the same on both platforms.
+ */
+const posixStubs = {
+  skip: process.platform === 'win32' && 'stub binaries on PATH are POSIX-only; see the comment above stubBinDir',
+};
+
 function stubBinDir(t: import('node:test').TestContext): string {
   const dir = mkdtempSync(join(tmpdir(), 'whiphand-claude-stub-'));
   const previousPath = process.env.PATH;
@@ -93,7 +113,7 @@ function writeStub(dir: string, script: string): void {
   chmodSync(file, 0o755);
 }
 
-test('probeClaudeModels: a real reply -> live, merged with aliases; argv and env are correct', async t => {
+test('probeClaudeModels: a real reply -> live, merged with aliases; argv and env are correct', posixStubs, async t => {
   const dir = stubBinDir(t);
   const argvFile = join(dir, 'argv.txt');
   const envFile = join(dir, 'env.txt');
@@ -120,7 +140,7 @@ test('probeClaudeModels: a real reply -> live, merged with aliases; argv and env
   assert.equal(env, '1', 'CLAUDE_CODE_SAFE_MODE=1 must reach the child — it is load-bearing (no hooks, no transcript)');
 });
 
-test('probeClaudeModels: a hanging claude times out to the fallback, and the child is killed', async t => {
+test('probeClaudeModels: a hanging claude times out to the fallback, and the child is killed', posixStubs, async t => {
   const dir = stubBinDir(t);
   const aliveMarker = join(dir, 'still-alive.txt');
   writeStub(dir, [
@@ -143,7 +163,7 @@ test('probeClaudeModels: a hanging claude times out to the fallback, and the chi
   await assert.rejects(readFileP(aliveMarker, 'utf8'), 'the child must have been killed before it could write this');
 });
 
-test('probeClaudeModels: claude exiting non-zero with no reply -> fallback', async t => {
+test('probeClaudeModels: claude exiting non-zero with no reply -> fallback', posixStubs, async t => {
   const dir = stubBinDir(t);
   writeStub(dir, ['#!/usr/bin/env bash', 'IFS= read -r _line', 'exit 1', ''].join('\n'));
 
@@ -152,7 +172,7 @@ test('probeClaudeModels: claude exiting non-zero with no reply -> fallback', asy
   assert.equal(result.note, "couldn't query claude; showing built-in aliases");
 });
 
-test('probeClaudeModels: a malformed reply -> fallback', async t => {
+test('probeClaudeModels: a malformed reply -> fallback', posixStubs, async t => {
   const dir = stubBinDir(t);
   writeStub(dir, [
     '#!/usr/bin/env bash',

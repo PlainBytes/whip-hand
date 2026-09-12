@@ -930,7 +930,17 @@ test('statArtifact: the same containment as readArtifact, symlink escape include
  * PATH entirely: its probe fails fast (ENOENT) and always falls back, which
  * is fine here since these tests are about caching and invalidation, not
  * claude's own wire format (that's claude-models.test.ts).
+ *
+ * POSIX-only, and skipped on Windows for the same two reasons the equivalent
+ * stubs in claude-models.test.ts are: PATH is `;`-delimited there, and the
+ * PATHEXT walk in exec.ts cannot see an extensionless `copilot` anyway. The
+ * caching and invalidation these pin are platform-independent, so nothing
+ * about them is Windows-specific — only the way the probe is fed is.
  */
+const posixStubs = {
+  skip: process.platform === 'win32' && 'a stub `copilot` on PATH is POSIX-only; see the comment above stubCopilotPath',
+};
+
 async function stubCopilotPath(modelId: string): Promise<{ dir: string; rewrite: (nextModelId: string) => Promise<void> }> {
   const dir = await mkdtemp(join(tmpdir(), 'whiphand-handlers-copilot-'));
   const script = (id: string) => [
@@ -963,7 +973,7 @@ test('listModels: returns one ModelList per adapter that offers listModels, keye
   }
 });
 
-test('listModels caches within the agent process; doctor invalidates it so the next call re-probes', async t => {
+test('listModels caches within the agent process; doctor invalidates it so the next call re-probes', posixStubs, async t => {
   const { dir, rewrite } = await stubCopilotPath('model-a');
   const previousPath = process.env.PATH;
   // Prepended, not replaced: the stub script's own `#!/usr/bin/env bash`
@@ -987,7 +997,7 @@ test('listModels caches within the agent process; doctor invalidates it so the n
   assert.ok(third.copilot.models.some(m => m.id === 'model-b'), 'doctor invalidated the catalog: this call re-probed');
 });
 
-test('listModels: refresh: true re-probes even without a doctor call', async t => {
+test('listModels: refresh: true re-probes even without a doctor call', posixStubs, async t => {
   const { dir, rewrite } = await stubCopilotPath('model-a');
   const previousPath = process.env.PATH;
   process.env.PATH = `${dir}:${previousPath ?? ''}`;

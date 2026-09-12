@@ -102,6 +102,18 @@ describe('PreferencesPage', () => {
     expect(useAppStore.getState().appState?.theme).toBe('dark');
   });
 
+  it('saves the ongoing-runs preference via setUiState', async () => {
+    useAppStore.setState({ workspacePath: null, appState: EMPTY_APP_STATE, restoreDone: true });
+    const { transport } = renderPreferences();
+    await respondToGlobalConfigGet(transport);
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: /show ongoing runs in the sidebar/i }));
+
+    const req = await waitForRequest(transport, 'setUiState');
+    expect(req.params).toEqual({ showOngoingRuns: false });
+    expect(useAppStore.getState().appState?.showOngoingRuns).toBe(false);
+  });
+
   it('fetches only the global config layer, with no workdir, even with no workspace open', async () => {
     useAppStore.setState({ workspacePath: null, appState: EMPTY_APP_STATE, restoreDone: true });
     const { transport } = renderPreferences();

@@ -1639,6 +1639,34 @@ describe('RunDetailPage: cycles and manual steps', () => {
     });
     expect(req.params).toMatchObject({ workdir: '/ws', runId: 'r-fresh', freshSession: true });
   });
+
+  it('can resume with more iterations, via its own dialog', async () => {
+    const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'r-extra');
+    await respondGetRun(transport, {
+      runId: 'r-extra', runDir: '/ws/.whiphand/runs/r-extra', status: 'failed',
+      workflow: 'cycle', inputs: {}, artifacts: [], steps: [{ id: 'plan', status: 'failed' }],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'More resume options' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /more iterations/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    const input = within(dialog).getByTestId('resume-extra-iterations-input');
+    fireEvent.change(input, { target: { value: 'abc' } });
+    expect(await within(dialog).findByText(/positive whole number/i)).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: '2' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Resume' }));
+
+    const req = await waitFor(() => {
+      const i = transport.sent.findIndex(l => (JSON.parse(l) as { method?: string }).method === 'resumeRun');
+      if (i === -1) throw new Error('resumeRun not sent yet');
+      return transport.sentRequest(i);
+    });
+    expect(req.params).toMatchObject({ workdir: '/ws', runId: 'r-extra', extraIterations: 2 });
+    expect((req.params as { freshSession?: boolean }).freshSession).toBeUndefined();
+  });
+
   it('follows the job the resume starts rather than the attempt that failed', async () => {
     const { transport, onResumed } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'r-follow');
     await respondGetRun(transport, {

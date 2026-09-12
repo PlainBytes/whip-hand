@@ -69,6 +69,10 @@ export const appStateSchema = z.object({
   // existed still parses, and gets the "keep everything" default rather than
   // discarding the whole file as EMPTY_APP_STATE would.
   runsRetention: runsRetentionSchema.default({ maxPerWorkspace: 0 }),
+  // .default() rather than .optional(), per the comment above: a file written
+  // before this preference existed keeps parsing instead of being discarded
+  // wholesale as EMPTY_APP_STATE.
+  showOngoingRuns: z.boolean().default(true),
 });
 export type AppState = z.infer<typeof appStateSchema>;
 
@@ -80,6 +84,7 @@ export const EMPTY_APP_STATE: AppState = {
   theme: 'system',
   workspaces: {},
   runsRetention: { maxPerWorkspace: 0 },
+  showOngoingRuns: true,
 };
 
 export const MAX_RECENT_WORKSPACES = 10;

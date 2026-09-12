@@ -67,6 +67,19 @@ test('buildProgram: --max-iterations rejects anything that is not a positive int
   }
 });
 
+test('buildProgram: run exposes --extra-iterations, and its parseArg rejects non-positive integers', () => {
+  const program = buildProgram();
+  const run = program.commands.find(c => c.name() === 'run');
+  const flags = run!.options.map(o => o.flags);
+  assert.ok(flags.some(f => f.startsWith('--extra-iterations')), `expected --extra-iterations in ${flags}`);
+
+  const parseArg = run!.options.find(o => o.long === '--extra-iterations')!.parseArg!;
+  assert.equal(parseArg('2', undefined), 2);
+  for (const bad of ['0', '-1', 'x', '1.5']) {
+    assert.throws(() => parseArg(bad, undefined), /positive integer/, `should reject '${bad}'`);
+  }
+});
+
 test('buildProgram: run takes a workflow argument, optional so --resume can stand alone', () => {
   const program = buildProgram();
   const run = program.commands.find(c => c.name() === 'run');

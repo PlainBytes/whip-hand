@@ -89,6 +89,9 @@ test('an app-state file written before pinning existed still parses', async () =
   // Written before runsRetention existed too: it must default to "keep
   // everything" rather than the whole file being discarded as EMPTY_APP_STATE.
   assert.deepEqual(state.runsRetention, { maxPerWorkspace: 0 });
+  // Same story for showOngoingRuns: a file written before it existed still
+  // parses, defaulting to "show it" rather than being discarded wholesale.
+  assert.equal(state.showOngoingRuns, true);
 });
 
 test('rememberRun records lastWorkflow and per-workflow inputs without clobbering other workflows', () => {

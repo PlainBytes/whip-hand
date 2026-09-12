@@ -27,6 +27,7 @@ whiphand new-workflow review-pr                                              # s
 whiphand run examples/cycle.yaml --dry-run --input feature=demo              # print every argv, spend nothing
 whiphand run examples/feature.yaml --input feature="oauth support"           # the real thing
 whiphand run examples/cycle.yaml --input feature=x --max-iterations 5 --yes  # override the loop budget; don't ask
+whiphand run --resume 20260907-141233-a3f1 --extra-iterations 2              # continue a stopped run; grant 2 more iterations to any exhausted loop
 whiphand run feature --input feature="oauth support" --name "OAuth support"  # label the run
 whiphand run feature --input feature="fix login" --attach ./bug.png --attach ./server.log  # hand files to the plan step
 whiphand rename-run 20260907-141233-a3f1 "Something better"                  # relabel it later ('' clears)
@@ -205,7 +206,11 @@ agent's `VERDICT:` line, a command's exit code, or a human's answer. That is wha
 `max_iterations`. Each iteration keeps its own artifacts under
 `.whiphand/runs/<run-id>/<loop-id>/iter-<n>/`, so nothing overwrites the previous attempt.
 Inside a loop body, referencing a *later* step means "that step's artifact from the
-previous iteration" — which is how review findings feed back into the next attempt.
+previous iteration" — which is how review findings feed back into the next attempt. A loop
+that exhausts its budget fails the run, but the run is resumable: `whiphand run --resume
+<id>` grants the exhausted loop one more iteration by default, or `--extra-iterations <n>`
+to grant more; each resume's grant is recorded, so a second resume raises the budget again
+from there.
 
 **Human steps.** `manual` and `approval` stop the run and ask. On a terminal `whiphand` prompts
 you; without one it fails naming the step, unless you pass `--yes` to take the step's
@@ -264,6 +269,12 @@ The sidebar is grouped by scope: a workspace switcher on top, then the pages tha
 on the open workspace (Runs, Workflows, Files, Settings), then the ones that don't
 (Activity, Doctor, Preferences). Activity lists runs across every recent workspace;
 workspaces can be pinned, and Ctrl/Cmd+K switches between them.
+
+Above Activity, an "Ongoing runs" section lists live jobs — running, or blocked on
+you — as clickable rows with a status pill, so switching to the one that needs
+attention doesn't require a detour through the Activity grid; waiting jobs sort to the
+top. It's capped at 5 rows, with a "+N more" row into Activity, and can be turned off
+from Preferences.
 
 The Files tab reaches the filesystem through Tauri's fs plugin, whose scope
 starts empty and is extended at runtime to directories you explicitly open, pick in a

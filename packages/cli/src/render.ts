@@ -98,7 +98,8 @@ export function createRenderer(
       }
       case 'run:resume':
         return out(`whiphand resume ${event.runId}${named(event.name)} — workflow '${event.workflow}'`
-          + (event.from === undefined ? '' : `, from step '${event.from}'`));
+          + (event.from === undefined ? '' : `, from step '${event.from}'`)
+          + (event.iteration === undefined ? '' : ` (iteration ${event.iteration})`));
       case 'step:skipped':
         // Reported rather than silent: a resumed run that printed nothing for
         // its first three steps would look like it had lost them.

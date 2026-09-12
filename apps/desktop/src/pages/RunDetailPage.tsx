@@ -84,6 +84,13 @@ export interface RunDetailPageProps {
  * running, so at most one unfinished job per run can exist. Store order is
  * first-notification order and jobIds are random, so neither is a tiebreak.
  */
+/** Blank or non-numeric shows the validation error; anything else must be a real count. */
+function parsePositiveInt(raw: string): number | undefined {
+  if (!/^\d+$/.test(raw.trim())) return undefined;
+  const n = Number(raw.trim());
+  return n > 0 ? n : undefined;
+}
+
 function findJobByRunId(jobs: Record<string, JobState>, runId: string): JobState | undefined {
   let finished: JobState | undefined;
   for (const job of Object.values(jobs)) {
@@ -232,6 +239,8 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
   const [renaming, setRenaming] = useState(false);
+  const [extraIterationsOpen, setExtraIterationsOpen] = useState(false);
+  const [extraIterationsRaw, setExtraIterationsRaw] = useState('1');
   const [renameError, setRenameError] = useState<string | null>(null);
   /**
    * Whether the review screen is up. Auto-opened when a decision arrives (the
@@ -455,7 +464,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
    * escape hatch for an interactive step whose recorded agent session no
    * longer exists — resuming it would fail every time otherwise.
    */
-  async function handleResume(freshSession = false): Promise<void> {
+  async function handleResume(freshSession = false, extraIterations?: number): Promise<void> {
     if (!workspacePath || !effectiveRunId) return;
     setResuming(true);
     try {
@@ -463,6 +472,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
         workdir: workspacePath,
         runId: effectiveRunId,
         ...(freshSession ? { freshSession: true } : {}),
+        ...(extraIterations === undefined ? {} : { extraIterations }),
       });
       // Tag the job before any of its notifications can land, the way
       // NewRunDialog does — otherwise the store has no entry for it for a
@@ -513,6 +523,13 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
     } finally {
       setRenaming(false);
     }
+  }
+
+  async function handleConfirmExtraIterations(): Promise<void> {
+    const extraIterations = parsePositiveInt(extraIterationsRaw);
+    if (extraIterations === undefined) return;
+    setExtraIterationsOpen(false);
+    await handleResume(false, extraIterations);
   }
 
   async function handleToggleLock(): Promise<void> {
@@ -855,9 +872,57 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
                     <MenuItem onClick={() => void handleResume(true)}>
                       Resume with a fresh session
                     </MenuItem>
+                    <MenuItem onClick={() => {
+                      setExtraIterationsRaw('1');
+                      setExtraIterationsOpen(true);
+                    }}
+                    >
+                      Resume with more iterations…
+                    </MenuItem>
                   </MenuList>
                 </MenuPopover>
               </Menu>
+            )}
+            {canResume && (
+              <Dialog
+                open={extraIterationsOpen}
+                onOpenChange={(_e, data) => { if (!resuming) setExtraIterationsOpen(data.open); }}
+              >
+                <DialogSurface>
+                  <DialogBody>
+                    <DialogTitle>Resume with more iterations</DialogTitle>
+                    <DialogContent>
+                      <Field
+                        label="Extra iterations"
+                        hint="Granted to every loop this run recorded as exhausted."
+                        validationState={parsePositiveInt(extraIterationsRaw) === undefined ? 'error' : 'none'}
+                        validationMessage={
+                          parsePositiveInt(extraIterationsRaw) === undefined
+                            ? 'Must be a positive whole number.'
+                            : undefined
+                        }
+                      >
+                        <Input
+                          data-testid="resume-extra-iterations-input"
+                          value={extraIterationsRaw}
+                          disabled={resuming}
+                          onChange={(_e, data) => setExtraIterationsRaw(data.value)}
+                        />
+                      </Field>
+                    </DialogContent>
+                    <DialogActions>
+                      <Button disabled={resuming} onClick={() => setExtraIterationsOpen(false)}>Cancel</Button>
+                      <Button
+                        appearance="primary"
+                        disabled={resuming || parsePositiveInt(extraIterationsRaw) === undefined}
+                        onClick={() => void handleConfirmExtraIterations()}
+                      >
+                        {resuming ? <Spinner size="tiny" /> : 'Resume'}
+                      </Button>
+                    </DialogActions>
+                  </DialogBody>
+                </DialogSurface>
+              </Dialog>
             )}
             {!isRunning && typeof manifest?.workflow === 'string' && (
               <Button

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { FluentProvider, webDarkTheme, webLightTheme } from '@fluentui/react-components';
-import { useAppStore } from './state/store.ts';
+import { useAppStore, type JobState } from './state/store.ts';
 import { useAgentClient } from './agent/agent-context.tsx';
 import { useDarkTheme } from './lib/use-dark-theme.ts';
 import { useStartupRestore } from './lib/use-startup-restore.ts';
 import { useJobAttach } from './lib/use-job-attach.ts';
-import { settlePendingWorkspaceSwitch } from './lib/workspace-switch.ts';
+import { openWorkspace, settlePendingWorkspaceSwitch } from './lib/workspace-switch.ts';
 import { useGlobalShortcut } from './lib/use-global-shortcut.ts';
 import { useWindowTitle } from './lib/use-window-title.ts';
 import { noopNotifier, type Notifier } from './lib/notifier.ts';
@@ -32,8 +32,12 @@ export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
   const filesDirty = useAppStore(state => state.filesDirty);
   const setFilesDirty = useAppStore(state => state.setFilesDirty);
   const [runDetailTarget, setRunDetailTarget] = useState<RunDetailTarget | null>(null);
-  /** Page the unsaved-edits guard is holding until the user decides. */
-  const [pendingPage, setPendingPage] = useState<PageId | null>(null);
+  /**
+   * Navigation the unsaved-edits guard is holding until the user decides.
+   * Carries a run-detail target too, so a sidebar "Ongoing runs" click that
+   * gets deferred still lands on the right run once the human answers.
+   */
+  const [pendingPage, setPendingPage] = useState<{ id: PageId; runDetailTarget?: RunDetailTarget } | null>(null);
   const [quickSwitchOpen, setQuickSwitchOpen] = useState(false);
   const workspacePath = useAppStore(state => state.workspacePath);
   const pendingWorkspaceSwitch = useAppStore(state => state.pendingWorkspaceSwitch);
@@ -50,8 +54,8 @@ export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
   useGlobalShortcut(QUICK_SWITCH, useCallback(() => setQuickSwitchOpen(true), []));
   useWindowTitle();
 
-  function goToPage(next: PageId): void {
-    setRunDetailTarget(null);
+  function goToPage(next: PageId, target: RunDetailTarget | null = null): void {
+    setRunDetailTarget(target);
     setPage(next);
     void client.request('setUiState', { lastPage: next }).catch(() => {});
   }
@@ -62,10 +66,38 @@ export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
     // (spec: "selecting another file, switching tabs, or closing with
     // unsaved edits").
     if (page === 'files' && next !== 'files' && filesDirty) {
-      setPendingPage(next);
+      setPendingPage({ id: next });
       return;
     }
     goToPage(next);
+  }
+
+  /**
+   * Opens a run from the sidebar's "Ongoing runs" section. Two guards, but
+   * only one ever applies to a given click:
+   *  1. A job from another workspace switches first, via the same
+   *     `openWorkspace` every other switch path uses — including its own
+   *     unsaved-edits dialog. A `false` return means the human chose to keep
+   *     editing, so this must not navigate. That dialog already resolved
+   *     `filesDirty` for this click, so guard 2 must not re-check the
+   *     (now-stale) closure value on this path.
+   *  2. A same-workspace click still leaves Files, which can silently drop an
+   *     unsaved draft — the same guard `requestPage` applies. This only runs
+   *     when guard 1 didn't, since nothing switched.
+   */
+  async function openRun(job: JobState): Promise<void> {
+    const target: RunDetailTarget = { jobId: job.jobId, runId: job.runId };
+    if (job.workdir !== undefined && job.workdir !== workspacePath) {
+      const opened = await openWorkspace(client, job.workdir).catch(() => false);
+      if (!opened) return;
+      goToPage('runs', target);
+      return;
+    }
+    if (page === 'files' && filesDirty) {
+      setPendingPage({ id: 'runs', runDetailTarget: target });
+      return;
+    }
+    goToPage('runs', target);
   }
 
   return (
@@ -79,7 +111,7 @@ export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         <AgentDownBanner />
         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-          <Sidebar page={page} onSelectPage={requestPage} />
+          <Sidebar page={page} onSelectPage={requestPage} onOpenRun={job => void openRun(job)} />
           <main
             style={{
               flex: 1, overflow: 'auto',
@@ -124,7 +156,7 @@ export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
             const next = pendingPage;
             setPendingPage(null);
             setFilesDirty(false);
-            goToPage(next);
+            goToPage(next.id, next.runDetailTarget ?? null);
           }}
           onKeepEditing={() => setPendingPage(null)}
         />

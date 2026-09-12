@@ -31,6 +31,7 @@ const DEFAULT_OVERRIDE_MAX_RETAINED = 10;
 export function PreferencesPage() {
   const client = useAgentClient();
   const themePref = useAppStore(state => state.appState?.theme ?? 'system');
+  const showOngoingRuns = useAppStore(state => state.appState?.showOngoingRuns ?? true);
   const patchAppState = useAppStore(state => state.patchAppState);
   const workspacePath = useAppStore(state => state.workspacePath);
 
@@ -90,6 +91,16 @@ export function PreferencesPage() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 480 }}>
+      <Checkbox
+        label="Show ongoing runs in the sidebar"
+        checked={showOngoingRuns}
+        onChange={(_e, data) => {
+          const next = Boolean(data.checked);
+          patchAppState({ showOngoingRuns: next });
+          void client.request('setUiState', { showOngoingRuns: next }).catch(() => {});
+        }}
+      />
+
       <Field label="Theme">
         <Dropdown
           aria-label="Theme"

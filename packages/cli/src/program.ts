@@ -12,6 +12,15 @@ import { renameRunCommand } from './commands/rename-run.ts';
  * main.ts so it can be introspected (commands/options) without a process
  * exiting underneath the caller — e.g. by a CI parity check.
  */
+// Number.parseInt would happily read '1.5' as 1; a budget the operator did
+// not type is worse than an error.
+function positiveInt(value: string): number {
+  if (!/^\d+$/.test(value)) throw new InvalidArgumentError('must be a positive integer');
+  const n = Number(value);
+  if (n < 1) throw new InvalidArgumentError('must be a positive integer');
+  return n;
+}
+
 export function buildProgram(): Command {
   const program = new Command();
   program.name('whiphand').description('workflow runner for LLM CLIs').version(CORE_VERSION);
@@ -40,26 +49,20 @@ export function buildProgram(): Command {
     .option('--name <name>',
       'label this run, shown instead of its id and available to steps as {{ run.name }} '
       + "/ {{ run.slug }} and $WHIPHAND_RUN_NAME / $WHIPHAND_RUN_SLUG")
-    .option('--max-iterations <n>', "override every loop's iteration budget for this run",
-      value => {
-        // Number.parseInt would happily read '1.5' as 1; a budget the operator
-        // did not type is worse than an error.
-        if (!/^\d+$/.test(value)) throw new InvalidArgumentError('must be a positive integer');
-        const n = Number(value);
-        if (n < 1) throw new InvalidArgumentError('must be a positive integer');
-        return n;
-      })
+    .option('--max-iterations <n>', "override every loop's iteration budget for this run", positiveInt)
+    .option('--extra-iterations <n>',
+      'on resume, grant each loop that ran out this many more iterations (default 1)', positiveInt)
     .action(async (
       workflowRef: string | undefined,
       opts: {
         dryRun: boolean; input: string[]; attach: string[]; C: string; json: boolean;
-        yes: boolean; maxIterations?: number; resume?: string; freshSession: boolean;
+        yes: boolean; maxIterations?: number; extraIterations?: number; resume?: string; freshSession: boolean;
         name?: string;
       },
     ) => {
       process.exitCode = await runCommand(workflowRef, {
         dryRun: opts.dryRun, input: opts.input, attach: opts.attach, cwd: opts.C, json: opts.json,
-        yes: opts.yes, maxIterations: opts.maxIterations,
+        yes: opts.yes, maxIterations: opts.maxIterations, extraIterations: opts.extraIterations,
         resume: opts.resume, freshSession: opts.freshSession, name: opts.name,
       });
     });

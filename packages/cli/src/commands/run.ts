@@ -26,6 +26,8 @@ export interface RunCommandOptions {
   json?: boolean;
   yes?: boolean;
   maxIterations?: number;
+  /** On resume, grant each loop that ran out this many more iterations; default 1. */
+  extraIterations?: number;
   /** Run id to continue instead of starting a new run. */
   resume?: string;
   /** On resume, mint fresh sessions rather than continuing recorded ones. */
@@ -48,6 +50,12 @@ export async function runCommand(
 ): Promise<number> {
   const workdir = resolve(opts.cwd);
   const promptOpts = { yes: !!opts.yes, ...(opts.json ? { isTty: false } : {}) };
+
+  if (opts.extraIterations !== undefined && opts.resume === undefined) {
+    console.error('--extra-iterations only means something with --resume; a fresh run sets its budget with '
+      + '--max-iterations');
+    return USAGE_ERROR;
+  }
 
   if (opts.resume !== undefined) {
     // The run's own snapshot decides what executes, so a workflow ref could
@@ -72,6 +80,13 @@ export async function runCommand(
       console.error('--resume keeps the files the run was started with; --attach cannot add to them');
       return USAGE_ERROR;
     }
+    // Not incoherent together — the precedence chain handles it — but a run
+    // where one silently wins is worse than an error.
+    if (opts.extraIterations !== undefined && opts.maxIterations !== undefined) {
+      console.error('--max-iterations sets an absolute budget and --extra-iterations raises the recorded one; '
+        + 'pass one or the other');
+      return USAGE_ERROR;
+    }
   } else if (workflowRef === undefined) {
     console.error('missing workflow: name one, or pass --resume <runId> to continue a stopped run');
     return USAGE_ERROR;
@@ -82,7 +97,8 @@ export async function runCommand(
   let plan: ResumePlan | undefined;
   if (opts.resume !== undefined) {
     try {
-      plan = await planResume(workdir, config, opts.resume);
+      plan = await planResume(workdir, config, opts.resume,
+        opts.extraIterations === undefined ? undefined : { extraIterations: opts.extraIterations });
     } catch (e) {
       // A refusal is a run that did not happen, not a mistyped command.
       if (e instanceof ResumeError) {

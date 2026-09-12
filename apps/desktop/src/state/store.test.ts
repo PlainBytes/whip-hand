@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { useAppStore, waitingRunIds, type JobState } from './store.ts';
+import { ongoingJobs, useAppStore, waitingRunIds, type JobState } from './store.ts';
 import { EMPTY_APP_STATE } from '../../../../packages/agent/src/app-state.ts';
 
 /** A JobState with the fields these selector tests do not care about filled in. */
@@ -470,6 +470,47 @@ describe('waitingRunIds', () => {
     expect(waitingRunIds({
       a: { ...baseJob('a'), awaiting: { stepId: 'plan', reason: 'turn' } },
     })).toEqual(new Set());
+  });
+});
+
+describe('ongoingJobs', () => {
+  it('excludes finished jobs', () => {
+    const jobs = {
+      a: { ...baseJob('a'), finished: true },
+      b: { ...baseJob('b') },
+    };
+    expect(ongoingJobs(jobs).map(j => j.jobId)).toEqual(['b']);
+  });
+
+  it('sorts jobs waiting on the human before running ones', () => {
+    const pendingManual = {
+      stepId: 's', kind: 'approval' as const, title: 'Ship it?', instructions: '',
+      choices: ['continue' as const, 'abort' as const], context: { artifacts: [] },
+      defaultChoice: 'continue' as const,
+    };
+    const jobs = {
+      a: { ...baseJob('a') },
+      b: { ...baseJob('b'), awaiting: { stepId: 's', reason: 'permission' as const } },
+      c: { ...baseJob('c'), pendingManual },
+    };
+    expect(ongoingJobs(jobs).map(j => j.jobId)).toEqual(['b', 'c', 'a']);
+  });
+
+  it('keeps arrival order stable within each group', () => {
+    const jobs = {
+      first: { ...baseJob('first') },
+      second: { ...baseJob('second') },
+      third: { ...baseJob('third') },
+    };
+    expect(ongoingJobs(jobs).map(j => j.jobId)).toEqual(['first', 'second', 'third']);
+  });
+
+  it('a job that starts waiting jumps to the top', () => {
+    const jobs = {
+      first: { ...baseJob('first') },
+      second: { ...baseJob('second'), awaiting: { stepId: 's', reason: 'turn' as const } },
+    };
+    expect(ongoingJobs(jobs).map(j => j.jobId)).toEqual(['second', 'first']);
   });
 });
 

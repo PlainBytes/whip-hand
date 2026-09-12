@@ -458,6 +458,175 @@ test('planResume resumes a session the run really opened', async () => {
   assert.equal(plan.resumedStepIds.has('plan'), true);
 });
 
+// ---------------------------------------------------------------------------
+// Loop budgets: what a resume grants an unfinished loop
+// ---------------------------------------------------------------------------
+
+const WORKFLOW_DECLARED_5 = WORKFLOW.replace(
+  '  - kind: loop\n    id: fix\n    until: check\n',
+  '  - kind: loop\n    id: fix\n    until: check\n    max_iterations: 5\n');
+
+test('an exhausted loop row grants the default +1', async () => {
+  const workdir = await fixture([
+    { id: 'fix', kind: 'loop', status: 'failed', iterations: 3, maxIterations: 3, verdict: 'fail' },
+  ]);
+
+  const plan = await planResume(workdir, DEFAULT_CONFIG, RUN_ID);
+
+  assert.deepEqual(plan.loopBudgets.fix, { budget: 4, completed: 3 });
+});
+
+test('an explicit extraIterations grants that many instead of the default', async () => {
+  const workdir = await fixture([
+    { id: 'fix', kind: 'loop', status: 'failed', iterations: 3, maxIterations: 3, verdict: 'fail' },
+  ]);
+
+  const plan = await planResume(workdir, DEFAULT_CONFIG, RUN_ID, { extraIterations: 2 });
+
+  assert.deepEqual(plan.loopBudgets.fix, { budget: 5, completed: 3 });
+});
+
+test('an interrupted loop row with no explicit option keeps its recorded budget and gets no bump', async () => {
+  const workdir = await fixture([
+    { id: 'fix', kind: 'loop', status: 'interrupted', iterations: 1, maxIterations: 3 },
+  ]);
+
+  const plan = await planResume(workdir, DEFAULT_CONFIG, RUN_ID);
+
+  assert.deepEqual(plan.loopBudgets.fix, { budget: 3, completed: 1 });
+});
+
+test('the same interrupted row is bumped when extraIterations is explicit', async () => {
+  const workdir = await fixture([
+    { id: 'fix', kind: 'loop', status: 'interrupted', iterations: 1, maxIterations: 3 },
+  ]);
+
+  const plan = await planResume(workdir, DEFAULT_CONFIG, RUN_ID, { extraIterations: 1 });
+
+  assert.deepEqual(plan.loopBudgets.fix, { budget: 4, completed: 1 });
+});
+
+test('a done loop row (it passed) produces no budget entry at all', async () => {
+  const workdir = await fixture([
+    { id: 'fix', kind: 'loop', status: 'done', iterations: 2, maxIterations: 3, verdict: 'pass' },
+  ]);
+
+  const plan = await planResume(workdir, DEFAULT_CONFIG, RUN_ID);
+
+  assert.equal(plan.loopBudgets.fix, undefined);
+});
+
+test('a manifest predating maxIterations falls back to the loop\'s declared budget', async () => {
+  const workdir = await fixture(
+    [{ id: 'fix', kind: 'loop', status: 'failed', iterations: 5 }], {}, { snapshot: false });
+  await writeFile(
+    join(workdir, DEFAULT_CONFIG.artifacts_dir, RUN_ID, WORKFLOW_SNAPSHOT_NAME), WORKFLOW_DECLARED_5, 'utf8');
+
+  const plan = await planResume(workdir, DEFAULT_CONFIG, RUN_ID);
+
+  assert.deepEqual(plan.loopBudgets.fix, { budget: 6, completed: 5 });
+});
+
+test('a manifest with no recorded or declared budget falls back to config', async () => {
+  const workdir = await fixture([
+    { id: 'fix', kind: 'loop', status: 'failed', iterations: 2 },
+  ]);
+
+  const plan = await planResume(workdir, DEFAULT_CONFIG, RUN_ID);
+
+  assert.deepEqual(plan.loopBudgets.fix, { budget: DEFAULT_CONFIG.loop.max_iterations + 1, completed: 2 });
+});
+
+test('a loop id the snapshot no longer declares falls back to config instead of throwing', async () => {
+  const workdir = await fixture([
+    { id: 'ghost', kind: 'loop', status: 'failed', iterations: 1 },
+  ]);
+
+  const plan = await planResume(workdir, DEFAULT_CONFIG, RUN_ID);
+
+  assert.deepEqual(plan.loopBudgets.ghost, { budget: DEFAULT_CONFIG.loop.max_iterations + 1, completed: 1 });
+});
+
+test('accumulation: an earlier resume\'s grant is this one\'s base', async () => {
+  const workdir = await fixture([
+    { id: 'fix', kind: 'loop', status: 'failed', iterations: 4, maxIterations: 4 },
+  ]);
+
+  const plan = await planResume(workdir, DEFAULT_CONFIG, RUN_ID);
+
+  assert.deepEqual(plan.loopBudgets.fix, { budget: 5, completed: 4 });
+});
+
+test('planResume warns once per loop it raises', async () => {
+  const workdir = await fixture([
+    { id: 'fix', kind: 'loop', status: 'failed', iterations: 3, maxIterations: 3 },
+  ]);
+
+  const plan = await planResume(workdir, DEFAULT_CONFIG, RUN_ID);
+
+  assert.ok(plan.warnings.some(w => w.includes("loop 'fix' ran out of iterations at 3") && w.includes('allows 4')));
+});
+
+test('planResume warns when extraIterations is explicit but no loop is eligible', async () => {
+  const workdir = await fixture([{ id: 'plan', kind: 'agent', status: 'failed' }]);
+
+  const plan = await planResume(workdir, DEFAULT_CONFIG, RUN_ID, { extraIterations: 2 });
+
+  assert.ok(plan.warnings.some(w => w.includes('no loop in this run has iterations left to raise')));
+});
+
+test('restartAt names the exhausted loop\'s body at completed + 1, not the step after the loop', async () => {
+  const workdir = await fixture([
+    { id: 'plan', kind: 'agent', status: 'done', artifact: '/r/plan.md' },
+    { id: 'fix', kind: 'loop', status: 'failed', iterations: 3, maxIterations: 3, verdict: 'fail' },
+    { id: 'edit', kind: 'agent', loopId: 'fix', iteration: 1, status: 'done', artifact: '/r/1.md' },
+    {
+      id: 'check', kind: 'command', loopId: 'fix', iteration: 1, status: 'done',
+      verdict: 'fail', artifact: '/r/c1.md',
+    },
+    { id: 'edit', kind: 'agent', loopId: 'fix', iteration: 2, status: 'done', artifact: '/r/2.md' },
+    {
+      id: 'check', kind: 'command', loopId: 'fix', iteration: 2, status: 'done',
+      verdict: 'fail', artifact: '/r/c2.md',
+    },
+    { id: 'edit', kind: 'agent', loopId: 'fix', iteration: 3, status: 'done', artifact: '/r/3.md' },
+    {
+      id: 'check', kind: 'command', loopId: 'fix', iteration: 3, status: 'done',
+      verdict: 'fail', artifact: '/r/c3.md',
+    },
+  ]);
+
+  const plan = await planResume(workdir, DEFAULT_CONFIG, RUN_ID);
+
+  assert.deepEqual(plan.restartAt, { stepId: 'edit', iteration: 4 });
+});
+
+test('nested loops: an inner loop\'s grant applies to the inner id only', async () => {
+  const workdir = await fixture([
+    { id: 'outer', kind: 'loop', status: 'interrupted', iterations: 1, maxIterations: 2 },
+    { id: 'inner', kind: 'loop', loopId: 'outer', iteration: 1, status: 'failed', iterations: 2, maxIterations: 2 },
+  ]);
+
+  const plan = await planResume(workdir, DEFAULT_CONFIG, RUN_ID);
+
+  assert.deepEqual(plan.loopBudgets.inner, { budget: 3, completed: 2 }, 'the inner loop exhausted, so it is bumped');
+  assert.deepEqual(plan.loopBudgets.outer, { budget: 2, completed: 1 }, 'the outer loop is merely interrupted');
+});
+
+test('restartAt still prefers a loop interrupted mid-iteration over its next-iteration refinement', async () => {
+  // The recorded iteration (1) is not finished — 'check' never ran — so the
+  // plain scan finding it must win over jumping ahead to iteration 2.
+  const workdir = await fixture([
+    { id: 'fix', kind: 'loop', status: 'interrupted', iterations: 1, maxIterations: 3 },
+    { id: 'edit', kind: 'agent', loopId: 'fix', iteration: 1, status: 'done', artifact: '/r/1.md' },
+    { id: 'check', kind: 'command', loopId: 'fix', iteration: 1, status: 'interrupted' },
+  ]);
+
+  const plan = await planResume(workdir, DEFAULT_CONFIG, RUN_ID);
+
+  assert.deepEqual(plan.restartAt, { stepId: 'check', iteration: 1 });
+});
+
 test('a run recorded before sessions were tracked keeps the old heuristic', async () => {
   // Nothing in a version 2 manifest can say whether a session opened, and
   // guessing "no" would hand `--session-id` an id that is already taken.

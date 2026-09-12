@@ -142,6 +142,28 @@ test('--resume with --attach is a usage error', async () => {
   assert.match(err, /--attach/);
 });
 
+test('--extra-iterations without --resume is a usage error', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'whiphand-cli-'));
+  const { code, err } = await withStderr(() => runCommand('cycle', {
+    dryRun: false, input: [], cwd, extraIterations: 2,
+  }));
+
+  assert.equal(code, 2);
+  assert.match(err, /--extra-iterations/);
+  assert.match(err, /--resume/);
+});
+
+test('--extra-iterations with --max-iterations is a usage error', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'whiphand-cli-'));
+  const { code, err } = await withStderr(() => runCommand(undefined, {
+    dryRun: false, input: [], cwd, resume: '20260101-000000-aaaa', extraIterations: 2, maxIterations: 5,
+  }));
+
+  assert.equal(code, 2);
+  assert.match(err, /--max-iterations/);
+  assert.match(err, /--extra-iterations/);
+});
+
 test('a missing --attach file is refused with ✘ and exit 2, before any run exists', async () => {
   const cwd = await attachWorkspace();
   const missing = join(cwd, 'nope.png');

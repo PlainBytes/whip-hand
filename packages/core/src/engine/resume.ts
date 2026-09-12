@@ -10,7 +10,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { Scope, Workflow, WorkspaceConfig } from '../types.ts';
 import { parseWorkflow, WorkflowError } from '../schema.ts';
-import { findStep, isLeafStep } from '../steps.ts';
+import { collectLoops, findStep, isLeafStep, isLoopStep } from '../steps.ts';
 import { resolveWorkflowPath } from '../workspace.ts';
 import { artifactPath, assertArtifact } from './artifacts.ts';
 import { diffSnapshots, snapshotTree } from './git-guard.ts';
@@ -30,6 +30,14 @@ export class ResumeError extends Error {
 export interface DoneExecution {
   artifact?: string;
   verdict?: 'pass' | 'fail';
+}
+
+/** The iteration budget a resume grants one loop, and how much of it is already spent. */
+export interface LoopBudget { budget: number; completed: number }
+
+export interface ResumeOptions {
+  /** Extra iterations to grant. Absent = the default +1 on exhausted loops only. */
+  extraIterations?: number;
 }
 
 export interface ResumePlan {
@@ -57,14 +65,55 @@ export interface ResumePlan {
   attachments: string[];
   /** First not-done execution. Display only — the mechanism is skip-based. */
   restartAt: { stepId: string; iteration?: number } | undefined;
+  /** loopId -> the budget this resume allows it, and what it has already run. */
+  loopBudgets: Record<string, LoopBudget>;
   warnings: string[];
 }
 
 /** A run in any of these states is half-finished and can be continued. */
 const RESUMABLE = new Set(['failed', 'interrupted', 'cancelled']);
 
+/**
+ * The iteration budget each unfinished loop gets on this resume, plus the
+ * warnings that explain any change. Computed as its own pre-pass so both the
+ * done/restartAt walk below and the runner afterwards can just look values up
+ * rather than re-deriving them.
+ */
+function computeLoopBudgets(
+  detail: RunManifest, workflow: Workflow, config: WorkspaceConfig,
+  opts: ResumeOptions | undefined, warnings: string[],
+): Record<string, LoopBudget> {
+  const extra = opts?.extraIterations ?? 1;
+  const explicit = opts?.extraIterations !== undefined;
+  const declared = new Map(collectLoops(workflow.steps).map(loop => [loop.id, loop]));
+  const budgets: Record<string, LoopBudget> = {};
+  let anyEligible = false;
+
+  for (const step of detail.steps) {
+    if (step.kind !== 'loop' || step.status === 'done') continue;
+    anyEligible = true;
+    const base = step.maxIterations ?? declared.get(step.id)?.max_iterations ?? config.loop.max_iterations;
+    const completed = step.iterations ?? 0;
+    // The default +1 only rescues an exhausted ('failed') loop; an explicit
+    // count is a deliberate ask and applies to every loop not yet passed,
+    // exhausted or merely interrupted mid-run.
+    const bump = step.status === 'failed' || explicit ? extra : 0;
+    const budget = base + bump;
+    budgets[step.id] = { budget, completed };
+    if (bump > 0) {
+      warnings.push(`loop '${step.id}' ran out of iterations at ${completed}; this resume allows ${budget}`);
+    }
+  }
+
+  if (explicit && !anyEligible) {
+    warnings.push('no loop in this run has iterations left to raise, so the extra iterations had no effect');
+  }
+
+  return budgets;
+}
+
 export async function planResume(
-  workdir: string, config: WorkspaceConfig, runId: string,
+  workdir: string, config: WorkspaceConfig, runId: string, opts?: ResumeOptions,
 ): Promise<ResumePlan> {
   if (!isSafeRunId(runId)) throw new ResumeError(`'${runId}' is not a valid run id`);
   const detail = await getRun(workdir, config, runId);
@@ -83,12 +132,22 @@ export async function planResume(
   const warnings: string[] = [];
   const workflow = await loadWorkflow(detail, workdir, warnings);
   await healOrphanedDone(detail, workflow, warnings);
+  const loopBudgets = computeLoopBudgets(detail, workflow, config, opts, warnings);
 
   const done = new Map<string, DoneExecution>();
   const artifacts: Record<string, string> = {};
   const attempts: Record<string, string[]> = {};
   const resumedStepIds = new Set<string>();
   let restartAt: ResumePlan['restartAt'];
+
+  // A loop interrupted mid-iteration already has a not-done body row — that
+  // row is precisely where the ordinary scan below lands, and it must win
+  // over the loop-row refinement: the recorded iteration is not finished, so
+  // jumping ahead to "the next one" would skip re-running what it left undone.
+  // Only once every recorded body execution is done is there truly nothing
+  // for the plain scan to find, which is what the refinement exists for.
+  const loopsWithUnfinishedBody = new Set(
+    detail.steps.filter(s => s.loopId !== undefined && s.status !== 'done').map(s => s.loopId!));
 
   for (const step of detail.steps) {
     if (step.status === 'done') {
@@ -104,12 +163,27 @@ export async function planResume(
       }
       continue;
     }
-    // A loop's own entry is not a step anyone restarts at — its body is.
-    if (restartAt === undefined && step.kind !== 'loop') {
-      restartAt = {
-        stepId: step.id,
-        ...(step.iteration === undefined ? {} : { iteration: step.iteration }),
-      };
+    // A loop's own entry is not a step anyone restarts at — its body is. But
+    // when this resume grants it more room than it has used, the loop is
+    // exactly where execution is headed next, so name that rather than
+    // falling through to whatever pending step follows it.
+    if (restartAt === undefined) {
+      if (step.kind === 'loop') {
+        const grant = loopBudgets[step.id];
+        if (grant !== undefined && grant.budget > grant.completed && !loopsWithUnfinishedBody.has(step.id)) {
+          const declaredLoop = findStep(workflow.steps, step.id);
+          const firstBody = declaredLoop !== undefined && isLoopStep(declaredLoop)
+            ? declaredLoop.steps[0] : undefined;
+          if (firstBody !== undefined) {
+            restartAt = { stepId: firstBody.id, iteration: grant.completed + 1 };
+          }
+        }
+      } else {
+        restartAt = {
+          stepId: step.id,
+          ...(step.iteration === undefined ? {} : { iteration: step.iteration }),
+        };
+      }
     }
     // Ids are minted for every interactive step up front, so having one says
     // nothing about whether a conversation was ever opened under it — and
@@ -142,6 +216,7 @@ export async function planResume(
     resumedStepIds,
     attachments,
     restartAt,
+    loopBudgets,
     warnings,
   };
 }

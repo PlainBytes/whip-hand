@@ -895,16 +895,31 @@ export const useAppStore = create<AppState>((set) => ({
   setFilesDirty: filesDirty => set({ filesDirty }),
 }));
 
+/** A job blocked on the human — an interactive session waiting for a turn, or a manual/approval step waiting for an answer. */
+export function isWaitingJob(job: JobState): boolean {
+  return job.awaiting !== undefined || job.pendingManual !== undefined;
+}
+
 /**
- * Jobs blocked on the human right now — either an interactive session waiting
- * for a turn, or a manual/approval step waiting for an answer. A finished
- * job's flag is stale by definition — a sidecar that died mid-session never
- * sent its ptyExit — so filtering here keeps that harmless without JobState
- * needing timestamps.
+ * Jobs blocked on the human right now. A finished job's flag is stale by
+ * definition — a sidecar that died mid-session never sent its ptyExit — so
+ * filtering here keeps that harmless without JobState needing timestamps.
  */
 export function waitingJobs(jobs: Record<string, JobState>): JobState[] {
-  return Object.values(jobs).filter(
-    job => !job.finished && (job.awaiting !== undefined || job.pendingManual !== undefined));
+  return Object.values(jobs).filter(job => !job.finished && isWaitingJob(job));
+}
+
+/**
+ * Live jobs for the sidebar's "Ongoing runs" section: everything not yet
+ * finished, waiting-on-the-human ones first. `Array.prototype.sort` is
+ * stable, so within each of those two groups the order stays arrival order —
+ * `Object.values`' own insertion order — rather than churning under the
+ * cursor on every store update.
+ */
+export function ongoingJobs(jobs: Record<string, JobState>): JobState[] {
+  return Object.values(jobs)
+    .filter(job => !job.finished)
+    .sort((a, b) => Number(isWaitingJob(b)) - Number(isWaitingJob(a)));
 }
 
 /** runIds of runs blocked on the human — the runs list renders disk rows keyed by runId. */

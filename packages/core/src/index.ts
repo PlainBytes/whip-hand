@@ -89,7 +89,7 @@ export type { DeleteRunReason, DeleteRunResult, PruneRunsResult } from './engine
 // isSafeRunId is already re-exported above, alongside the journal.
 export { executionKey, WORKFLOW_SNAPSHOT_NAME } from './engine/manifest.ts';
 export { planResume, ResumeError } from './engine/resume.ts';
-export type { ResumePlan, DoneExecution } from './engine/resume.ts';
+export type { ResumePlan, DoneExecution, LoopBudget, ResumeOptions } from './engine/resume.ts';
 export {
   initWorkspace, createWorkflow, updateWorkflow, deleteWorkflow, workflowTemplate, WORKFLOW_NAME_RE,
 } from './scaffold.ts';

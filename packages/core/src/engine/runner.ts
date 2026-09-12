@@ -296,7 +296,11 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         }
       : {
           type: 'run:resume', runId, workflow: workflow.name, ...label,
-          ...(opts.resume.restartAt === undefined ? {} : { from: opts.resume.restartAt.stepId }),
+          ...(opts.resume.restartAt === undefined ? {} : {
+            from: opts.resume.restartAt.stepId,
+            ...(opts.resume.restartAt.iteration === undefined
+              ? {} : { iteration: opts.resume.restartAt.iteration }),
+          }),
         });
     for (const sentence of droppedRefSentence(droppedRefs(workflow))) {
       emit({ type: 'guard:warning', message: sentence });
@@ -647,8 +651,19 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
 
     async function executeLoop(loop: LoopStep): Promise<StepOutcome> {
       const outer = ctx.loop;
+      const grant = opts.resume?.loopBudgets[loop.id];
       const maxIterations =
-        opts.maxIterations ?? loop.max_iterations ?? config.loop.max_iterations;
+        opts.maxIterations ?? grant?.budget ?? loop.max_iterations ?? config.loop.max_iterations;
+      // opts.maxIterations is absolute, so it can be set below what this loop
+      // already ran; without this, that instantly re-fails with nothing else
+      // said, and it looks like resume itself is broken rather than the budget.
+      if (grant !== undefined && maxIterations <= grant.completed) {
+        emit({
+          type: 'guard:warning',
+          message: `loop '${loop.id}' has already completed ${grant.completed} iterations but this run `
+            + `allows only ${maxIterations}, so it cannot pass`,
+        });
+      }
       emit({ type: 'loop:start', loopId: loop.id, maxIterations });
 
       let passed = false;

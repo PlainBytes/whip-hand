@@ -208,7 +208,8 @@ async function resumeJobInBackground(
   try {
     const workdir = resolve(params.workdir);
     const config = await loadWorkspaceConfig(workdir);
-    let plan = await planResume(workdir, config, params.runId);
+    let plan = await planResume(workdir, config, params.runId,
+      params.extraIterations === undefined ? undefined : { extraIterations: params.extraIterations });
     if (params.freshSession) plan = { ...plan, resumedStepIds: new Set() };
     for (const message of plan.warnings) {
       notify('whiphandEvent', {
@@ -373,7 +374,8 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
     // rather than a jobId whose run dies a moment later. A ResumeError thrown
     // here becomes a -32000 response via rpc.ts's handler wrapper.
     const config = await loadWorkspaceConfig(workdir);
-    await planResume(workdir, config, p.runId);
+    await planResume(workdir, config, p.runId,
+      p.extraIterations === undefined ? undefined : { extraIterations: p.extraIterations });
 
     const job = jobs.create(workdir);
     job.promise = resumeJobInBackground(ctx.notify, job, p);
@@ -639,6 +641,7 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
       ...(patch.lastPage !== undefined ? { lastPage: patch.lastPage } : {}),
       ...(patch.theme !== undefined ? { theme: patch.theme } : {}),
       ...(patch.runsRetention !== undefined ? { runsRetention: patch.runsRetention } : {}),
+      ...(patch.showOngoingRuns !== undefined ? { showOngoingRuns: patch.showOngoingRuns } : {}),
     }));
     return { ok: true as const };
   };

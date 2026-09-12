@@ -256,6 +256,8 @@ export const resumeRunParams = z.object({
   runId: z.string().min(1),
   /** Start new agent sessions instead of continuing the recorded ones. */
   freshSession: z.boolean().optional(),
+  /** Grant each loop that ran out this many more iterations; `whiphand run --extra-iterations`. */
+  extraIterations: z.number().int().positive().optional(),
 });
 export const resumeRunResult = z.object({ jobId: z.string() });
 
@@ -455,6 +457,7 @@ export const setUiStateParams = z.object({
   // Named for UI state, and this isn't quite that — but `theme` already lives
   // here, and a fourth method to patch one number is worse than the smell.
   runsRetention: runsRetentionSchema.optional(),
+  showOngoingRuns: z.boolean().optional(),
 });
 export const setUiStateResult = z.object({ ok: z.literal(true) });
 

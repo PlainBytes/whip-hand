@@ -110,6 +110,13 @@ test('startRun carries a maxIterations override over the wire', () => {
   assert.throws(() => methods.startRun.params.parse({ workdir: '/w', workflow: 'r', maxIterations: 0 }));
 });
 
+test('resumeRun carries an extraIterations grant over the wire', () => {
+  assert.deepEqual(
+    methods.resumeRun.params.parse({ workdir: '/w', runId: 'r', extraIterations: 2 }),
+    { workdir: '/w', runId: 'r', extraIterations: 2 });
+  assert.throws(() => methods.resumeRun.params.parse({ workdir: '/w', runId: 'r', extraIterations: 0 }));
+});
+
 test('a per-iteration loop artifact is readable by its nested name', async () => {
   const { mkdtemp, mkdir, writeFile } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');

@@ -1,7 +1,8 @@
 import { Button, CounterBadge, Tooltip } from '@fluentui/react-components';
 import { pagesInGroup, type NavGroup, type PageDef, type PageId } from '../nav.ts';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher.tsx';
-import { useAppStore, waitingJobs } from '../state/store.ts';
+import { OngoingRuns } from './OngoingRuns.tsx';
+import { useAppStore, ongoingJobs, waitingJobs, type JobState } from '../state/store.ts';
 import { useCapabilities } from '../capabilities.tsx';
 
 /**
@@ -48,6 +49,8 @@ export interface SidebarProps {
   page: PageId;
   /** App owns this because the unsaved-edits guard may defer or refuse the move. */
   onSelectPage: (next: PageId) => void;
+  /** App owns this too: opening a run from another workspace goes through the same guard. */
+  onOpenRun: (job: JobState) => void;
 }
 
 function NavItem({ def, selected, disabled, badge, badgeUrgent, onSelect }: {
@@ -90,15 +93,17 @@ function NavItem({ def, selected, disabled, badge, badgeUrgent, onSelect }: {
   );
 }
 
-export function Sidebar({ page, onSelectPage }: SidebarProps) {
+export function Sidebar({ page, onSelectPage, onOpenRun }: SidebarProps) {
   const capabilities = useCapabilities();
   const workspacePath = useAppStore(state => state.workspacePath);
   const jobs = useAppStore(state => state.jobs);
+  const showOngoingRuns = useAppStore(state => state.appState?.showOngoingRuns ?? true);
 
   // Activity is the one item that counts: live jobs across every workspace,
   // which is precisely what it lists. Turns urgent when one wants an answer.
   const running = Object.values(jobs).filter(j => !j.finished).length;
   const urgent = waitingJobs(jobs).length > 0;
+  const ongoing = ongoingJobs(jobs);
 
   function group(name: NavGroup) {
     return (
@@ -133,7 +138,9 @@ export function Sidebar({ page, onSelectPage }: SidebarProps) {
         gap: 2,
         borderRight: '1px solid var(--colorNeutralStroke2)',
         padding: 8,
-        minWidth: 200,
+        width: 220,
+        flexShrink: 0,
+        boxSizing: 'border-box',
       }}
     >
       <WorkspaceSwitcher />
@@ -141,6 +148,9 @@ export function Sidebar({ page, onSelectPage }: SidebarProps) {
       {group('workspace')}
       {/* Everything below the spacer is app-scoped: it outlives any one workspace. */}
       <div style={{ flex: 1, minHeight: 16 }} />
+      {showOngoingRuns && (
+        <OngoingRuns jobs={ongoing} onOpenRun={onOpenRun} onShowMore={() => onSelectPage('activity')} />
+      )}
       <RemoteAccessIndicator />
       {group('app')}
     </nav>

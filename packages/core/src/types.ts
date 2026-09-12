@@ -402,7 +402,11 @@ export type WhiphandEvent =
    * `run:start` rather than joining it: a second `run:start` would read as a
    * second run to every consumer. `from` names the step it restarts at.
    */
-  | { type: 'run:resume'; runId: string; workflow: string; from?: string; name?: string }
+  | {
+      type: 'run:resume'; runId: string; workflow: string; from?: string; name?: string;
+      /** Which iteration of `from`'s loop this resume is about to run, when `from` is a loop body step. */
+      iteration?: number;
+    }
   | {
       type: 'step:start'; stepId: string; kind: StepKind; runner?: string;
       model?: string; mode?: StepMode; loopId?: string; iteration?: number;

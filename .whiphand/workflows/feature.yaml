@@ -13,8 +13,11 @@ steps:
     writes: false
     inputs: [attachments] # files attached at start (--attach); dropped when there are none
     output: plan.md
-    prompt: |
-      We are planning: {{ inputs.feature }}. Work with me on a plan. Do not modify files.
+    prompt: |-
+      We are planning: {{ inputs.feature }}.
+      Work with me on a plan. Do not modify files.
+
+      Before getting started, always ask for initial files that will allow you to improve your discovery.
 
   - id: fix-cycle # repeats its body until 'review' returns VERDICT: PASS
     kind: loop

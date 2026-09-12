@@ -54,6 +54,9 @@ export const uiActions: Record<string, Record<string, string>> = {
     // The same button's menu, for when the recorded agent session is gone and
     // continuing it would fail — drives resumeRun's `freshSession`.
     '--fresh-session': 'run-detail:resumeFreshSessionMenuItem',
+    // The same button's menu, "Resume with more iterations…" — opens a dialog
+    // whose Input drives resumeRun's `extraIterations`.
+    '--extra-iterations': 'run-detail:resumeExtraIterationsInput',
   },
   'rename-run': {
     // RunDetailPage's "Rename" button beside Lock/Delete, opening the rename

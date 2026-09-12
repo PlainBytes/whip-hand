@@ -15,6 +15,7 @@ import { endMarkerPath } from './session-end.ts';
 import { awaitStatePath } from './await-state.ts';
 import { AdapterRegistry } from '../registry.ts';
 import { DEFAULT_CONFIG } from '../config.ts';
+import { planResume } from './resume.ts';
 import type { RunManifest } from './manifest.ts';
 import type {
   AgentStep, Frontend, ManualRequest, ManualResponse, WhiphandEvent, Workflow, RunCtx,
@@ -260,6 +261,162 @@ test('--max-iterations overrides the loop budget for one run', async () => {
   });
 
   assert.equal(h.events.filter(e => e.type === 'loop:iteration').length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Resuming an exhausted loop
+// ---------------------------------------------------------------------------
+
+test('a run whose loop exhausted resumes to run exactly the next iteration', async () => {
+  const dir = await tmpWorkdir();
+  let attempts = 0;
+  const spawnHeadless = async (spec: SpawnSpec): Promise<number> => {
+    if (spec.argv[0] === 'fake') {
+      attempts += 1;
+      await writeFile(spec.argv[3], `attempt ${attempts}\n`);
+      return 0;
+    }
+    // The 'tests' command step: pass only once the fourth attempt has run.
+    return attempts > 3 ? 0 : 1;
+  };
+
+  const broken = await runWorkflow({
+    workflow: flakyCommandWorkflow(3, 3), workdir: dir, inputs: {}, config: DEFAULT_CONFIG,
+    registry: registry(), frontend: harness().frontend, spawnHeadless,
+  });
+  assert.equal(broken.ok, false, 'the loop exhausts at 3 iterations');
+  assert.equal(attempts, 3);
+
+  const plan = await planResume(dir, DEFAULT_CONFIG, broken.runId);
+  assert.deepEqual(plan.loopBudgets.fix, { budget: 4, completed: 3 }, 'the default +1');
+
+  const resumed = harness();
+  const result = await runWorkflow({
+    workflow: flakyCommandWorkflow(3, 3), workdir: dir, inputs: {}, config: DEFAULT_CONFIG,
+    registry: registry(), frontend: resumed.frontend, resume: plan, spawnHeadless,
+  });
+
+  assert.equal(result.ok, true, 'the granted iteration 4 passes');
+  assert.equal(attempts, 4, 'only iteration 4 spawns anything new');
+  const skipped = resumed.events.filter(e => e.type === 'step:skipped');
+  assert.equal(skipped.length, 6, 'both body steps of iterations 1-3 are skipped, not re-run');
+  assert.ok(resumed.events.some(e => e.type === 'loop:iteration' && e.iteration === 4));
+});
+
+test('opts.maxIterations still beats a grant', async () => {
+  const dir = await tmpWorkdir();
+  const spawnHeadless = async (spec: SpawnSpec): Promise<number> => {
+    if (spec.argv[0] === 'fake') { await writeFile(spec.argv[3], 'work\n'); return 0; }
+    return 1;
+  };
+
+  const broken = await runWorkflow({
+    workflow: flakyCommandWorkflow(99, 3), workdir: dir, inputs: {}, config: DEFAULT_CONFIG,
+    registry: registry(), frontend: harness().frontend, spawnHeadless,
+  });
+  assert.equal(broken.ok, false);
+
+  const plan = await planResume(dir, DEFAULT_CONFIG, broken.runId);
+  const resumed = harness();
+  await runWorkflow({
+    workflow: flakyCommandWorkflow(99, 3), workdir: dir, inputs: {}, config: DEFAULT_CONFIG,
+    registry: registry(), frontend: resumed.frontend, resume: plan, maxIterations: 7, spawnHeadless,
+  });
+
+  const start = resumed.events.find(e => e.type === 'loop:start');
+  assert.ok(start && start.type === 'loop:start' && start.maxIterations === 7,
+    'the absolute override wins over the default +1 grant');
+});
+
+test('an absolute override at or below what already ran warns and fails without spawning', async () => {
+  const dir = await tmpWorkdir();
+  const spawnHeadless = async (spec: SpawnSpec): Promise<number> => {
+    if (spec.argv[0] === 'fake') { await writeFile(spec.argv[3], 'work\n'); return 0; }
+    return 1;
+  };
+
+  const broken = await runWorkflow({
+    workflow: flakyCommandWorkflow(99, 3), workdir: dir, inputs: {}, config: DEFAULT_CONFIG,
+    registry: registry(), frontend: harness().frontend, spawnHeadless,
+  });
+  assert.equal(broken.ok, false);
+
+  const plan = await planResume(dir, DEFAULT_CONFIG, broken.runId);
+  const resumed = harness();
+  let spawned = false;
+  const result = await runWorkflow({
+    workflow: flakyCommandWorkflow(99, 3), workdir: dir, inputs: {}, config: DEFAULT_CONFIG,
+    registry: registry(), frontend: resumed.frontend, resume: plan, maxIterations: 3,
+    spawnHeadless: async spec => { spawned = true; return spawnHeadless(spec); },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(spawned, false, 'nothing new spawns: every iteration within the override is already recorded');
+  const warning = resumed.events.find(e => e.type === 'guard:warning');
+  assert.ok(warning && warning.type === 'guard:warning'
+    && warning.message.includes("loop 'fix'") && warning.message.includes('already completed 3')
+    && warning.message.includes('allows only 3'));
+});
+
+test('a loop that already passed is untouched by a resume that grants elsewhere', async () => {
+  const dir = await tmpWorkdir();
+  const workflow: Workflow = {
+    name: 'two-loops',
+    steps: [
+      {
+        kind: 'loop', id: 'good', until: 'checkGood', max_iterations: 3,
+        steps: [agent({ id: 'executeGood', writes: true }), {
+          kind: 'command', id: 'checkGood', verdict: true, output: 'checkGood.log', run: 'exit 0',
+        }],
+      },
+      {
+        kind: 'loop', id: 'bad', until: 'checkBad', max_iterations: 2,
+        steps: [agent({ id: 'executeBad', writes: true }), {
+          kind: 'command', id: 'checkBad', verdict: true, output: 'checkBad.log', run: 'exit 1',
+        }],
+      },
+    ],
+  };
+  let goodSpawns = 0;
+  const spawnHeadless = async (spec: SpawnSpec): Promise<number> => {
+    if (spec.argv[0] === 'fake') {
+      if (spec.argv[2] === 'executeGood') goodSpawns += 1;
+      await writeFile(spec.argv[3], 'work\n');
+      return 0;
+    }
+    // command steps: 'good' passes immediately, 'bad' never does.
+    return spec.env.WHIPHAND_STEP_ID === 'checkGood' ? 0 : 1;
+  };
+
+  const broken = await runWorkflow({
+    workflow, workdir: dir, inputs: {}, config: DEFAULT_CONFIG,
+    registry: registry(), frontend: harness().frontend, spawnHeadless,
+  });
+  assert.equal(broken.ok, false, 'the bad loop exhausts');
+  assert.equal(goodSpawns, 1, 'the good loop passed on its first iteration');
+
+  const plan = await planResume(dir, DEFAULT_CONFIG, broken.runId);
+  assert.equal(plan.loopBudgets.good, undefined, 'a passed loop gets no budget entry');
+  assert.deepEqual(plan.loopBudgets.bad, { budget: 3, completed: 2 });
+
+  const resumed = harness();
+  const result = await runWorkflow({
+    workflow, workdir: dir, inputs: {}, config: DEFAULT_CONFIG,
+    registry: registry(), frontend: resumed.frontend, resume: plan,
+    spawnHeadless: async spec => {
+      if (spec.argv[0] === 'fake') {
+        if (spec.argv[2] === 'executeGood') goodSpawns += 1;
+        await writeFile(spec.argv[3], 'work\n');
+        return 0;
+      }
+      // 'bad' passes now that it has been granted a third iteration.
+      return 0;
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(goodSpawns, 1, 'the good loop spawns nothing new on resume — it just replays its pass');
+  assert.ok(!resumed.events.some(e => e.type === 'step:spawn' && e.stepId === 'executeGood'));
 });
 
 test('a hard failure inside a loop body stops the run rather than iterating', async () => {

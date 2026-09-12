@@ -531,6 +531,15 @@ test('setUiState patches runsRetention', async () => {
   assert.equal((await appState.get()).runsRetention.maxPerWorkspace, 10);
 });
 
+test('setUiState persists showOngoingRuns', async () => {
+  const appState = await tempAppState();
+  const handlers = createHandlers({ jobs: new JobManager(), notify: () => {}, appState });
+  assert.equal((await appState.get()).showOngoingRuns, true);
+
+  await handlers.setUiState({ showOngoingRuns: false }, { notify: () => {} });
+  assert.equal((await appState.get()).showOngoingRuns, false);
+});
+
 test('endSession ends only the live interactive session, and says so when there is none', async () => {
   const appState = await tempAppState();
   const jobs = new JobManager();

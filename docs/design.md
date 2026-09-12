@@ -461,6 +461,18 @@ Three rules carry the weight, and all three are deliberate:
 `--max-iterations` on `whiphand run` (and the matching field in the desktop's New Run dialog)
 overrides every loop's budget for one run, without editing the workflow.
 
+**Resuming an exhausted loop.** A loop that runs out of iterations fails the run the normal
+way, but the run stays resumable: `whiphand run --resume <id>` grants every loop the manifest
+records as exhausted (its own row `failed`, from `loop:done` with `passed: false`) one more
+iteration by default, or `--extra-iterations <n>` to grant `n` (applied to every loop not yet
+passed, not only exhausted ones, and warning if none is eligible). The *recorded* budget —
+the loop row's own `maxIterations`, which `loop:start` rewrites on every resume — wins over
+the workflow's declared `max_iterations` or the config default, so a config edit between runs
+cannot silently change the allowance, and each grant becomes the next resume's base. An
+absolute `--max-iterations` still overrides everything, including a grant; setting it at or
+below what the loop already ran emits a `guard:warning` explaining the otherwise-baffling
+instant re-failure, rather than failing silently.
+
 ### Relationship to `on_findings`
 
 `on_findings` (below) predates loops and still governs a `verdict` step that is **not**

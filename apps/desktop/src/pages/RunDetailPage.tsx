@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
   CounterBadge,
@@ -206,12 +206,15 @@ type RunTab = 'terminal' | 'artifacts' | 'logs';
 const ERROR_LOG_KINDS: ReadonlySet<string> = new Set(['run:error', 'step:timeout', 'step:artifact-missing']);
 
 /**
- * How many of a finished run's `run.log` rows to fetch in one page. Simpler
- * than wiring up incremental "load more" paging for a first cut — a run
- * pathological enough to exceed this is also one whose "Copy log" and "open
- * the log file" affordances below matter more than infinite scroll would.
+ * How many of a finished run's `run.log` rows to fetch per tail read: the
+ * initial "open on the end" fetch, and each subsequent "Load earlier" page.
  */
-const FINISHED_LOG_PAGE_SIZE = 5000;
+const TAIL_LOG_PAGE_SIZE = 2000;
+
+/** Kinds whose text is real transcript content (tool calls, assistant prose), not a structured audit event. */
+function isContentLogRow(row: LogRow): boolean {
+  return row.stream !== undefined || row.kind.startsWith('step:progress:');
+}
 
 function plainLogLine(row: LogRow): string {
   return `${row.ts}  ${row.kind}  ${row.stepId ?? '-'}  ${row.text}`;
@@ -391,8 +394,8 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
     if (!el || typeof el.scrollTo !== 'function') return;
     el.scrollTo({ top: el.scrollHeight });
     // The Logs tab's own scroller follows `followLogs` instead — see the
-    // effect keyed on filteredLogRows.length below, which can release "follow"
-    // when a human scrolls up mid-investigation; this one can't.
+    // effect keyed on the last filtered row's identity below, which can
+    // release "follow" when a human scrolls up mid-investigation; this one can't.
   }, [job?.activityTail.length]);
 
   const steps: StepState[] = useMemo(() => mergeSteps(manifest, job), [job, manifest]);
@@ -515,21 +518,26 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
   useEffect(() => { jobHasLiveRowsRef.current = jobHasLiveRows; }, [jobHasLiveRows]);
 
   const [finishedLogRows, setFinishedLogRows] = useState<LogRow[] | null>(null);
-  const [finishedLogTotal, setFinishedLogTotal] = useState(0);
-  const [finishedLogTruncated, setFinishedLogTruncated] = useState(false);
+  /** Byte offset in run.log the currently-loaded window starts at — what a "Load earlier" fetch pages backward from. */
+  const [finishedLogStartByte, setFinishedLogStartByte] = useState(0);
+  /** True once the loaded window reaches byte 0 of run.log — nothing earlier to load. */
+  const [finishedAtStart, setFinishedAtStart] = useState(true);
   const [finishedLogError, setFinishedLogError] = useState<string | null>(null);
+  const [loadingEarlierLogs, setLoadingEarlierLogs] = useState(false);
+  /** Set by handleLoadEarlier just before it prepends rows; consumed by the scroll-restore layout effect below. */
+  const pendingLogPrependRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
 
   useEffect(() => {
     if (jobHasLiveRowsRef.current || activeTab !== 'logs' || !workspacePath || !effectiveRunId) return;
     let cancelled = false;
     client
-      .request('readRunLog', { workdir: workspacePath, runId: effectiveRunId, offset: 0, limit: FINISHED_LOG_PAGE_SIZE })
+      .request('readRunLog', { workdir: workspacePath, runId: effectiveRunId, fromEnd: true, limit: TAIL_LOG_PAGE_SIZE })
       .then(result => {
         if (cancelled) return;
         const parsed = result.lines.map(parseLogLine).filter((r): r is LogRow => r !== null);
         setFinishedLogRows(parsed);
-        setFinishedLogTotal(result.total);
-        setFinishedLogTruncated(result.truncated);
+        setFinishedLogStartByte(result.startByte ?? 0);
+        setFinishedAtStart(result.atStart ?? true);
         setFinishedLogError(null);
       })
       .catch((err: unknown) => {
@@ -537,6 +545,44 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
       });
     return () => { cancelled = true; };
   }, [client, workspacePath, effectiveRunId, activeTab]);
+
+  /**
+   * Pages backward from the currently-loaded window's start byte and prepends
+   * the result. Snapshots the scroller's height/position first so the layout
+   * effect below can hold the viewport in place once the DOM grows at the top
+   * — otherwise the browser keeps `scrollTop` fixed and the prepend yanks
+   * whatever the human was reading downward, off-screen.
+   */
+  async function handleLoadEarlier(): Promise<void> {
+    if (finishedAtStart || loadingEarlierLogs || !workspacePath || !effectiveRunId) return;
+    setLoadingEarlierLogs(true);
+    const el = logRef.current;
+    if (el) pendingLogPrependRef.current = { scrollHeight: el.scrollHeight, scrollTop: el.scrollTop };
+    try {
+      const result = await client.request('readRunLog', {
+        workdir: workspacePath, runId: effectiveRunId, beforeByte: finishedLogStartByte, limit: TAIL_LOG_PAGE_SIZE,
+      });
+      const parsed = result.lines.map(parseLogLine).filter((r): r is LogRow => r !== null);
+      setFinishedLogRows(current => [...parsed, ...(current ?? [])]);
+      setFinishedLogStartByte(result.startByte ?? 0);
+      setFinishedAtStart(result.atStart ?? true);
+      setFinishedLogError(null);
+    } catch (err) {
+      pendingLogPrependRef.current = null;
+      setFinishedLogError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoadingEarlierLogs(false);
+    }
+  }
+
+  useLayoutEffect(() => {
+    const pending = pendingLogPrependRef.current;
+    if (!pending) return;
+    pendingLogPrependRef.current = null;
+    const el = logRef.current;
+    if (!el) return;
+    el.scrollTop = pending.scrollTop + (el.scrollHeight - pending.scrollHeight);
+  }, [finishedLogRows]);
 
   // Merge rather than switch: a reconnect to a still-running run fetches its
   // pre-reconnect history via readRunLog (above) while the live feed carries
@@ -562,10 +608,9 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
     return newLiveRows.length === 0 ? finishedLogRows : [...finishedLogRows, ...newLiveRows];
   }, [finishedLogRows, liveLogRows]);
   const logRunPredatesRunLog = finishedLogRows !== null
-    && finishedLogRows.length === 0 && finishedLogTotal === 0;
+    && finishedLogRows.length === 0 && finishedAtStart;
 
-  const [hideLogOutput, setHideLogOutput] = useState(false);
-  const [logErrorsOnly, setLogErrorsOnly] = useState(false);
+  const [logView, setLogView] = useState<'all' | 'audit' | 'errors'>('all');
   const [logStepFilter, setLogStepFilter] = useState('');
   const [logFind, setLogFind] = useState('');
   const [followLogs, setFollowLogs] = useState(true);
@@ -578,20 +623,36 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
   const filteredLogRows = useMemo(() => {
     const find = logFind.trim().toLowerCase();
     return logRows.filter(row => {
-      if (hideLogOutput && row.stream !== undefined) return false;
-      if (logErrorsOnly && row.stream !== 'stderr' && !ERROR_LOG_KINDS.has(row.kind)) return false;
+      if (logView === 'audit' && isContentLogRow(row)) return false;
+      if (logView === 'errors' && row.stream !== 'stderr' && !ERROR_LOG_KINDS.has(row.kind)) return false;
       if (logStepFilter && row.stepId !== logStepFilter) return false;
       if (find && !row.text.toLowerCase().includes(find)) return false;
       return true;
     });
-  }, [logRows, hideLogOutput, logErrorsOnly, logStepFilter, logFind]);
+  }, [logRows, logView, logStepFilter, logFind]);
+
+  const logFiltersActive = logView !== 'all' || logStepFilter !== '' || logFind.trim() !== '';
+
+  function handleClearLogFilters(): void {
+    setLogView('all');
+    setLogStepFilter('');
+    setLogFind('');
+  }
+
+  // Keyed on the last filtered row's own identity, not `filteredLogRows.length`:
+  // a "Load earlier" prepend also changes the length (and would yank the view
+  // to the bottom mid-investigation) but never changes the last row, so it
+  // leaves this effect's dependency untouched — only a genuinely new row at
+  // the tail re-triggers the scroll.
+  const lastFilteredLogRowKey = filteredLogRows.length === 0
+    ? null : logRowKey(filteredLogRows[filteredLogRows.length - 1]);
 
   useEffect(() => {
     if (!followLogs) return;
     const el = logRef.current;
     if (!el || typeof el.scrollTo !== 'function') return;
     el.scrollTo({ top: el.scrollHeight });
-  }, [filteredLogRows.length, followLogs]);
+  }, [lastFilteredLogRowKey, followLogs]);
 
   /** Releases "follow" the moment a human scrolls away from the bottom, so a live feed doesn't fight an investigation mid-scroll. */
   function handleLogScroll(): void {
@@ -1483,23 +1544,44 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
             in one chronological view — always backed by run.log on disk (see
             packages/core/src/engine/manifest.ts), live or read back afterwards.
           */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          <div
+            role="group"
+            aria-label="Log view"
+            style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4, flexShrink: 0 }}
+          >
             <ToggleButton
               size="small"
-              checked={hideLogOutput}
-              onClick={() => setHideLogOutput(v => !v)}
-              data-testid="log-filter-hide-output"
+              appearance={logView === 'all' ? 'primary' : 'subtle'}
+              aria-pressed={logView === 'all'}
+              checked={logView === 'all'}
+              onClick={() => setLogView('all')}
+              data-testid="log-filter-all"
             >
-              Hide output
+              All
             </ToggleButton>
             <ToggleButton
               size="small"
-              checked={logErrorsOnly}
-              onClick={() => setLogErrorsOnly(v => !v)}
+              appearance={logView === 'audit' ? 'primary' : 'subtle'}
+              aria-pressed={logView === 'audit'}
+              checked={logView === 'audit'}
+              onClick={() => setLogView('audit')}
+              data-testid="log-filter-audit-only"
+            >
+              Audit only
+            </ToggleButton>
+            <ToggleButton
+              size="small"
+              appearance={logView === 'errors' ? 'primary' : 'subtle'}
+              aria-pressed={logView === 'errors'}
+              checked={logView === 'errors'}
+              onClick={() => setLogView('errors')}
               data-testid="log-filter-errors-only"
             >
               Errors only
             </ToggleButton>
+          </div>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, flexShrink: 0 }}>
             {logStepIds.length > 0 && (
               <select
                 aria-label="Filter by step"
@@ -1520,6 +1602,14 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
               data-testid="log-find-input"
               style={{ minWidth: 160 }}
             />
+            <Text size={200} style={{ color: 'var(--colorNeutralForeground3)' }} data-testid="log-filter-count">
+              {filteredLogRows.length.toLocaleString()} of {logRows.length.toLocaleString()} rows
+            </Text>
+            {logFiltersActive && (
+              <Button size="small" appearance="subtle" onClick={handleClearLogFilters} data-testid="log-filter-clear">
+                Clear filters
+              </Button>
+            )}
             <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
               <Button size="small" icon={<Copy20Regular />} onClick={() => void handleCopyLog()}>
                 Copy log
@@ -1535,14 +1625,6 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
             </div>
           </div>
 
-          {finishedLogTruncated && (
-            <MessageBar intent="info" data-testid="log-truncated-notice">
-              <MessageBarBody>
-                Showing the first {FINISHED_LOG_PAGE_SIZE.toLocaleString()} of {finishedLogTotal.toLocaleString()} lines.
-                Copy the log path above to open the rest from disk.
-              </MessageBarBody>
-            </MessageBar>
-          )}
           {finishedLogError && (
             <MessageBar intent="error" data-testid="log-read-error">
               <MessageBarBody>Could not read run.log: {finishedLogError}</MessageBarBody>
@@ -1564,6 +1646,19 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
                 ...(logRows.length === 0 ? { display: 'flex' } : {}),
               }}
             >
+              {finishedLogRows !== null && !finishedAtStart && (
+                <div style={{ textAlign: 'center', padding: '4px 0' }}>
+                  <Button
+                    size="small"
+                    appearance="subtle"
+                    disabled={loadingEarlierLogs}
+                    onClick={() => void handleLoadEarlier()}
+                    data-testid="log-load-earlier"
+                  >
+                    {loadingEarlierLogs ? 'Loading…' : 'Load earlier'}
+                  </Button>
+                </div>
+              )}
               {logRows.length === 0 ? (
                 // logRunPredatesRunLog is checked here, not before the
                 // logRows.length check, because a merged live row can arrive

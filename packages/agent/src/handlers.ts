@@ -492,12 +492,12 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
    * lookup already goes through.
    */
   const readRunLog: Handler = async (params): Promise<ReadRunLogResult> => {
-    const { workdir, runId, offset = 0, limit = 500 } = params as ReadRunLogParams;
+    const { workdir, runId, offset, limit = 500, fromEnd, beforeByte } = params as ReadRunLogParams;
     const resolved = resolve(workdir);
     const config = await loadWorkspaceConfig(resolved);
     const detail = await coreGetRun(resolved, config, runId);
     if (!detail) throw new Error(`unknown run '${runId}'`);
-    return coreReadRunLog(detail.runDir, offset, limit);
+    return coreReadRunLog(detail.runDir, { offset, limit, fromEnd, beforeByte });
   };
 
   /**

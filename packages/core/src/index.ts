@@ -49,7 +49,7 @@ export {
   RUN_LOG_NAME, MAX_LOG_LINE_BYTES, DEFAULT_RUN_LOG_CAP_BYTES,
   summarizeEvent, formatLogLine, parseLogLine, readRunLog,
 } from './engine/run-log.ts';
-export type { LogRow, ReadRunLogResult } from './engine/run-log.ts';
+export type { LogRow, ReadRunLogParams, ReadRunLogResult } from './engine/run-log.ts';
 export {
   workingDiffFiles, parseNumstatZ, splitPatch, pairPatches,
   MAX_DIFF_FILES, MAX_PATCH_BYTES, MAX_TOTAL_PATCH_BYTES,

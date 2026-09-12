@@ -353,11 +353,21 @@ export const readRunLogParams = z.object({
   workdir: z.string().min(1), runId: z.string().min(1),
   offset: z.number().int().nonnegative().optional(),
   limit: z.number().int().positive().max(5000).optional(),
+  /** Open on the last `limit` lines via a bounded tail read instead of forward paging from `offset`. */
+  fromEnd: z.boolean().optional(),
+  /** Page backwards from a byte offset a prior tail read reported as `startByte` — a "load earlier" request. */
+  beforeByte: z.number().int().nonnegative().optional(),
 });
 export const readRunLogResult = z.object({
   lines: z.array(z.string()),
-  total: z.number().int().nonnegative(),
-  truncated: z.boolean(),
+  // Only set in offset mode: a tail read would have to pay for a full-file
+  // read just to compute total, which is exactly what it exists to avoid.
+  total: z.number().int().nonnegative().optional(),
+  truncated: z.boolean().optional(),
+  // Only set in tail mode (fromEnd or beforeByte): the byte offset the
+  // returned window starts at, and whether that offset is byte 0.
+  startByte: z.number().int().nonnegative().optional(),
+  atStart: z.boolean().optional(),
 });
 
 /**

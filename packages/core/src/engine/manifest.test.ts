@@ -1350,6 +1350,54 @@ test('the per-run byte cap drops output lines but keeps audit entries flowing, a
   assert.equal(kinds.filter(k => k === 'log:truncated').length, 1, 'noted exactly once, not once per dropped line');
 });
 
+test('a step:progress event appends exactly one run.log line, nothing to events.ndjson, and triggers no run.json rewrite', async () => {
+  const runDir = await tmpRunDir();
+  const journal = new RunJournal(baseInit(runDir, 'run-progress-1'));
+  journal.record({ type: 'step:start', stepId: 'a', kind: 'agent', runner: 'fake', mode: 'headless' });
+  journal.record({ type: 'step:progress', stepId: 'a', progress: { kind: 'tool', tool: 'Read', target: 'foo.ts' } });
+  await journal.flush();
+
+  // Folded into the in-memory manifest immediately (the summary and run.json
+  // still depend on this)...
+  const a = journal.manifest.steps.find(s => s.id === 'a')!;
+  assert.equal(a.progress?.lastAction, 'Read foo.ts');
+
+  // ...but the run.json on disk is exactly what step:start last wrote: the
+  // progress event itself never triggered a structuredClone + rewrite.
+  const onDisk: RunManifest = JSON.parse(await readFile(join(runDir, 'run.json'), 'utf8'));
+  const diskStep = onDisk.steps.find(s => s.id === 'a')!;
+  assert.equal(diskStep.progress, undefined, 'run.json was not rewritten for the progress event');
+
+  const log = (await readFile(join(runDir, 'run.log'), 'utf8')).trim().split('\n');
+  const kinds = log.map(line => line.split('  ')[2]);
+  assert.deepEqual(kinds, ['step:start', 'step:progress:tool'], 'one run.log line per event, including step:progress');
+
+  const eventsRaw = (await readFile(join(runDir, 'events.ndjson'), 'utf8')).trim().split('\n');
+  assert.equal(eventsRaw.length, 1, 'step:progress never reaches events.ndjson');
+  assert.equal(JSON.parse(eventsRaw[0]).event.type, 'step:start');
+});
+
+test('step:progress lines count against the per-run byte cap and surface log:truncated, same as step:log', async () => {
+  const runDir = await tmpRunDir();
+  const journal = new RunJournal({ ...baseInit(runDir, 'run-progress-2'), runLogCapBytes: 200 });
+  journal.record({ type: 'run:start', runId: 'run-progress-2', workflow: 'r' });
+  for (let i = 0; i < 50; i++) {
+    journal.record({
+      type: 'step:progress', stepId: 'a',
+      progress: { kind: 'text', text: `thinking out loud, iteration ${i}` },
+    });
+  }
+  journal.record({ type: 'run:done', runId: 'run-progress-2', ok: true });
+  await journal.flush();
+
+  const log = (await readFile(join(runDir, 'run.log'), 'utf8')).trim().split('\n');
+  const kinds = log.map(line => line.split('  ')[2]);
+  assert.ok(kinds.includes('run:start'));
+  assert.ok(kinds.includes('run:done'));
+  assert.ok(kinds.filter(k => k === 'step:progress:text').length < 50, 'some progress lines were dropped once the cap hit');
+  assert.ok(kinds.includes('log:truncated'), 'the drop is noted in the file');
+});
+
 test('a resumed run seeds its byte counter from the existing run.log, so the cap holds across resumes', async () => {
   const runDir = await tmpRunDir();
   const original = new RunJournal({ ...baseInit(runDir, 'run-log-5'), runLogCapBytes: 100_000 });
@@ -1407,16 +1455,16 @@ test('readRunLog pages a finished run.log and reports total/truncated', async ()
   await journal.flush();
 
   const { readRunLog } = await import('./run-log.ts');
-  const page1 = await readRunLog(runDir, 0, 4);
+  const page1 = await readRunLog(runDir, { offset: 0, limit: 4 });
   assert.equal(page1.lines.length, 4);
   assert.equal(page1.total, 10);
   assert.equal(page1.truncated, true);
 
-  const page3 = await readRunLog(runDir, 8, 4);
+  const page3 = await readRunLog(runDir, { offset: 8, limit: 4 });
   assert.equal(page3.lines.length, 2);
   assert.equal(page3.truncated, false);
 
-  const missing = await readRunLog(await tmpRunDir(), 0, 10);
+  const missing = await readRunLog(await tmpRunDir(), { offset: 0, limit: 10 });
   assert.deepEqual(missing, { lines: [], total: 0, truncated: false });
 });
 

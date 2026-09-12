@@ -520,14 +520,14 @@ export class RunJournal {
         this.upsertStep(event.stepId, { artifact: event.path });
         break;
       case 'step:progress':
-        // Ephemeral, and the only event that returns early. A chatty step can
-        // emit hundreds of these; letting them reach schedule() would persist
-        // the whole transcript to events.ndjson and rewrite run.json once per
-        // line, while the desktop polls that same file. The fold lives in
-        // memory until the next real event — step:done always follows — so a
-        // finished step's summary is still durable.
+        // The fold still feeds the manifest step summary and run.json — see
+        // foldProgress. The event itself reaches schedule() below, which
+        // routes it to run.log only (same as step:log): a chatty step can
+        // emit hundreds of these, and events.ndjson plus a structuredClone
+        // rewrite of run.json per line, while the desktop polls that same
+        // file, is exactly the cost step:log already avoids the same way.
         this.foldProgress(event.stepId, event.progress);
-        return seq;
+        break;
       case 'step:artifact-missing':
       case 'step:timeout':
       case 'step:retry':
@@ -614,14 +614,15 @@ export class RunJournal {
   }
 
   /**
-   * `step:log` — the merged output feed — goes to run.log only, and skips the
-   * manifest entirely: it folds nothing into it (see record()'s `step:log`
-   * case), so paying for a `structuredClone` plus an atomic rewrite on what is
-   * by far the highest-frequency event in the system would be pure waste.
+   * `step:log` and `step:progress` — the merged output feed — go to run.log
+   * only, and skip the manifest entirely: `step:log` folds nothing into it,
+   * and `step:progress`'s fold already happened in record() (foldProgress),
+   * so paying for a `structuredClone` plus an atomic rewrite on what are by
+   * far the highest-frequency events in the system would be pure waste.
    * Every other event goes to events.ndjson, run.log and a manifest rewrite.
    */
   private schedule(event: WhiphandEvent, ts: string, seq: number): void {
-    if (event.type === 'step:log') {
+    if (event.type === 'step:log' || event.type === 'step:progress') {
       if (this.manifest.dryRun) return; // same "bookkeeping only" contract as below
       const logLine = formatLogLine({ seq, ts, ...summarizeEvent(event) });
       this.chain = this.chain.then(() => this.appendRunLog(logLine, true));

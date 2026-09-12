@@ -142,8 +142,21 @@ export function summarizeEvent(event: WhiphandEvent): Omit<LogRow, 'seq' | 'ts'>
       return { kind: event.type, stepId: event.stepId, text: event.message };
     case 'run:cancelled':
       return { kind: event.type, text: 'run cancelled' };
-    case 'step:progress':
-      return { kind: event.type, stepId: event.stepId, text: 'progress' };
+    case 'step:progress': {
+      const { progress } = event;
+      if (progress.kind === 'tool') {
+        const text = `${progress.tool}${progress.target === undefined ? '' : ` ${progress.target}`}`;
+        return { kind: 'step:progress:tool', stepId: event.stepId, text };
+      }
+      if (progress.kind === 'text') {
+        return { kind: 'step:progress:text', stepId: event.stepId, text: progress.text };
+      }
+      const parts: string[] = [];
+      if (progress.turns !== undefined) parts.push(`${progress.turns} turns`);
+      if (progress.costUsd !== undefined) parts.push(`$${progress.costUsd}`);
+      if (progress.premiumRequests !== undefined) parts.push(`${progress.premiumRequests} premium requests`);
+      return { kind: 'step:progress:usage', stepId: event.stepId, text: parts.join(', ') };
+    }
   }
 }
 
@@ -159,6 +172,8 @@ export function parseLogLine(line: string): LogRow | null {
   const [ts, seqRaw, rawKind, stepIdRaw, ...rest] = parts;
   const seq = Number(seqRaw);
   if (!Number.isFinite(seq)) return null;
+  // step:progress:(tool|text|usage) kinds need no inverse mapping here either
+  // — see core's run-log.ts parseLogLine for why.
   const streamMatch = /^step:log:(stdout|stderr)$/.exec(rawKind);
   const kind = streamMatch ? 'step:log' : rawKind;
   const stream = streamMatch ? (streamMatch[1] as 'stdout' | 'stderr') : undefined;

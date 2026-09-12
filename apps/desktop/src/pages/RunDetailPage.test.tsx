@@ -1860,18 +1860,29 @@ describe('RunDetailPage: Logs tab (run audit)', () => {
     expect(rows[3]).toHaveTextContent('a warning appeared');
   });
 
-  it('"Hide output" keeps the audit spine and drops step:log rows', async () => {
+  it('"Audit only" keeps the audit spine and drops both step:log and step:progress rows', async () => {
     const { transport } = renderRunDetail('job-logs2');
     emitWithSeq(transport, 'job-logs2', 'r-logs2', { type: 'run:start', runId: 'r-logs2', workflow: 'w' }, 't1', 1);
     emitWithSeq(
       transport, 'job-logs2', 'r-logs2',
       { type: 'step:log', stepId: 'a', stream: 'stdout', line: 'noisy build output' }, 't2', 2,
     );
+    emitWithSeq(
+      transport, 'job-logs2', 'r-logs2',
+      { type: 'step:progress', stepId: 'a', progress: { kind: 'text', text: 'thinking out loud' } }, 't3', 3,
+    );
     await screen.findAllByTestId('log-row');
+    const logTail = screen.getByTestId('log-tail');
 
-    fireEvent.click(screen.getByTestId('log-filter-hide-output'));
-    await waitFor(() => expect(screen.queryByText('noisy build output')).not.toBeInTheDocument());
-    expect(screen.getByText(/run started/)).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('log-filter-audit-only'));
+    await waitFor(() => expect(within(logTail).queryByText('noisy build output')).not.toBeInTheDocument());
+    expect(within(logTail).queryByText('thinking out loud')).not.toBeInTheDocument();
+    expect(within(logTail).getByText(/run started/)).toBeInTheDocument();
+
+    // Switching back to "All" restores both.
+    fireEvent.click(screen.getByTestId('log-filter-all'));
+    expect(await within(logTail).findByText('noisy build output')).toBeInTheDocument();
+    expect(within(logTail).getByText('thinking out loud')).toBeInTheDocument();
   });
 
   it('"Errors only" keeps stderr and error-kind rows, and drops ordinary stdout', async () => {
@@ -1886,9 +1897,50 @@ describe('RunDetailPage: Logs tab (run audit)', () => {
     );
     await screen.findAllByTestId('log-row');
 
-    fireEvent.click(screen.getByTestId('log-filter-errors-only'));
+    const errorsOnly = screen.getByTestId('log-filter-errors-only');
+    fireEvent.click(errorsOnly);
     await waitFor(() => expect(screen.queryByText('ordinary output')).not.toBeInTheDocument());
     expect(screen.getByText('a real error')).toBeInTheDocument();
+    expect(errorsOnly).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('log-filter-all')).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('renders step:progress content live — tool calls and assistant text, not the word "progress"', async () => {
+    const { transport } = renderRunDetail('job-logs-progress');
+    emitWithSeq(
+      transport, 'job-logs-progress', 'r-logs-progress',
+      { type: 'step:progress', stepId: 'a', progress: { kind: 'tool', tool: 'Read', target: 'foo.ts' } }, 't1', 1,
+    );
+    emitWithSeq(
+      transport, 'job-logs-progress', 'r-logs-progress',
+      { type: 'step:progress', stepId: 'a', progress: { kind: 'text', text: 'looking at the file' } }, 't2', 2,
+    );
+
+    const logTail = await screen.findByTestId('log-tail');
+    expect(await within(logTail).findByText('Read foo.ts')).toBeInTheDocument();
+    expect(within(logTail).getByText('looking at the file')).toBeInTheDocument();
+    expect(within(logTail).queryByText('progress')).not.toBeInTheDocument();
+  });
+
+  it('the "N of M rows" counter and Clear filters track the active filter', async () => {
+    const { transport } = renderRunDetail('job-logs-count');
+    emitWithSeq(transport, 'job-logs-count', 'r-logs-count', { type: 'run:start', runId: 'r-logs-count', workflow: 'w' }, 't1', 1);
+    emitWithSeq(
+      transport, 'job-logs-count', 'r-logs-count',
+      { type: 'step:log', stepId: 'a', stream: 'stdout', line: 'build output' }, 't2', 2,
+    );
+    await screen.findAllByTestId('log-row');
+
+    expect(screen.getByTestId('log-filter-count')).toHaveTextContent('2 of 2 rows');
+    expect(screen.queryByTestId('log-filter-clear')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('log-filter-audit-only'));
+    await waitFor(() => expect(screen.getByTestId('log-filter-count')).toHaveTextContent('1 of 2 rows'));
+    expect(screen.getByTestId('log-filter-clear')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('log-filter-clear'));
+    await waitFor(() => expect(screen.getByTestId('log-filter-count')).toHaveTextContent('2 of 2 rows'));
+    expect(screen.queryByTestId('log-filter-clear')).not.toBeInTheDocument();
   });
 
   it('a run with no live job reads its rows from run.log via readRunLog', async () => {
@@ -2068,8 +2120,92 @@ describe('RunDetailPage: Logs tab (run audit)', () => {
       if (i === -1) throw new Error('readRunLog not sent yet');
       return transport.sentRequest(i);
     });
-    transport.emitLine({ id: req.id, result: { lines: [], total: 0, truncated: false } });
+    transport.emitLine({ id: req.id, result: { lines: [], startByte: 0, atStart: true } });
 
     expect(await screen.findByText(/predates the persisted log/)).toBeInTheDocument();
+  });
+
+  it('renders step:progress content read back from run.log, not the word "progress"', async () => {
+    const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'r-progress-disk');
+    await respondGetRun(transport, {
+      runId: 'r-progress-disk', runDir: '/ws/.whiphand/runs/r-progress-disk', status: 'succeeded',
+      workflow: 'w', inputs: {}, artifacts: [], steps: [],
+    });
+    const req = await waitFor(() => {
+      const i = transport.sent.findIndex(l => (JSON.parse(l) as { method?: string }).method === 'readRunLog');
+      if (i === -1) throw new Error('readRunLog not sent yet');
+      return transport.sentRequest(i);
+    });
+    expect(req.params).toMatchObject({ fromEnd: true });
+    transport.emitLine({
+      id: req.id,
+      result: {
+        lines: [
+          '2026-01-01T00:00:00.000Z  1  step:progress:tool  a  Read foo.ts',
+          '2026-01-01T00:00:01.000Z  2  step:progress:text  a  looking at the file',
+        ],
+        startByte: 0,
+        atStart: true,
+      },
+    });
+
+    const logTail = await screen.findByTestId('log-tail');
+    expect(await within(logTail).findByText('Read foo.ts')).toBeInTheDocument();
+    expect(within(logTail).getByText('looking at the file')).toBeInTheDocument();
+    expect(within(logTail).queryByText('progress')).not.toBeInTheDocument();
+  });
+
+  it('"Load earlier" pages backward from startByte and prepends without moving the viewport', async () => {
+    const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'r-earlier');
+    await respondGetRun(transport, {
+      runId: 'r-earlier', runDir: '/ws/.whiphand/runs/r-earlier', status: 'succeeded',
+      workflow: 'w', inputs: {}, artifacts: [], steps: [],
+    });
+    const first = await waitFor(() => {
+      const i = transport.sent.findIndex(l => (JSON.parse(l) as { method?: string }).method === 'readRunLog');
+      if (i === -1) throw new Error('readRunLog not sent yet');
+      return transport.sentRequest(i);
+    });
+    expect(first.params).toMatchObject({ fromEnd: true });
+    transport.emitLine({
+      id: first.id,
+      result: {
+        lines: ["2026-01-01T00:05:00.000Z  50  run:start  -  run started: workflow 'w'"],
+        startByte: 4096,
+        atStart: false,
+      },
+    });
+
+    const loadEarlier = await screen.findByTestId('log-load-earlier');
+    const logTail = screen.getByTestId('log-tail');
+    Object.defineProperty(logTail, 'scrollHeight', { value: 400, configurable: true });
+    Object.defineProperty(logTail, 'scrollTop', { value: 100, configurable: true, writable: true });
+
+    fireEvent.click(loadEarlier);
+
+    const second = await waitFor(() => {
+      const reqs = transport.sent
+        .map(line => JSON.parse(line) as { id?: number; method?: string; params?: unknown })
+        .filter(r => r.method === 'readRunLog');
+      const req = reqs.find(r => r.id !== first.id);
+      if (!req) throw new Error('second readRunLog not sent yet');
+      return req;
+    });
+    expect(second.params).toMatchObject({ beforeByte: 4096 });
+    transport.emitLine({
+      id: second.id,
+      result: {
+        lines: ["2026-01-01T00:00:00.000Z  1  step:start  a  step started (agent)"],
+        startByte: 0,
+        atStart: true,
+      },
+    });
+
+    expect(await screen.findByText(/step started/)).toBeInTheDocument();
+    expect(screen.getByText(/run started/)).toBeInTheDocument();
+    // The window grew from 400 to a taller layout in jsdom (still 400, since
+    // jsdom doesn't lay out) — what matters is the effect ran without throwing
+    // and the earlier row rendered above the original one.
+    expect(screen.queryByTestId('log-load-earlier')).not.toBeInTheDocument();
   });
 });

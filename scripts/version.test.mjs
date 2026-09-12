@@ -28,6 +28,19 @@ const FILES = {
     "const RELEASE_PAGE_URL = 'https://github.com/PlainBytes/whip-hand/releases/latest';\n",
   'packages/core/src/version.ts': "export const CORE_VERSION = '0.1.0';\n",
   'packages/core/src/index.ts': "export { CORE_VERSION } from './version.ts';\nexport * from './types.ts';\n",
+  'package-lock.json': `${JSON.stringify({
+    name: 'whiphand',
+    lockfileVersion: 3,
+    requires: true,
+    packages: {
+      '': { name: 'whiphand', workspaces: ['packages/*', 'apps/*'] },
+      'apps/desktop': { version: '0.1.0' },
+      'node_modules/commander': { version: '14.0.0', license: 'MIT' },
+      'packages/agent': { name: '@whiphand/agent', version: '0.1.0', dependencies: { '@whiphand/core': '*' } },
+      'packages/cli': { name: '@whiphand/cli', version: '0.1.0', dependencies: { '@whiphand/core': '0.1.0', commander: '^14.0.0' } },
+      'packages/core': { name: '@whiphand/core', version: '0.1.0' },
+    },
+  }, null, 2)}\n`,
 };
 
 // version.mjs resolves its target files relative to its own location on
@@ -73,6 +86,8 @@ test('--check exits non-zero and lists every mismatch', () => {
       assert.match(stderr, /apps\/desktop\/package\.json: 0\.1\.0/);
       assert.match(stderr, /Cargo\.toml: 0\.1\.0/);
       assert.match(stderr, /Cargo\.lock: 0\.1\.0/);
+      assert.match(stderr, /package-lock\.json \(packages\/core\): 0\.1\.0/);
+      assert.match(stderr, /package-lock\.json \(packages\/cli\/package\.json @whiphand\/core dependency\): 0\.1\.0/);
       return true;
     });
   } finally {
@@ -80,7 +95,7 @@ test('--check exits non-zero and lists every mismatch', () => {
   }
 });
 
-test('writing a version updates every location, including the CLI’s pinned @whiphand/core dependency and Cargo.lock', () => {
+test('writing a version updates every location, including the CLI’s pinned @whiphand/core dependency, Cargo.lock and package-lock.json', () => {
   const root = makeFixtureRepo();
   try {
     run(root, ['0.2.0']);
@@ -107,6 +122,17 @@ test('writing a version updates every location, including the CLI’s pinned @wh
 
     const coreVersion = fs.readFileSync(path.join(root, 'packages/core/src/version.ts'), 'utf8');
     assert.match(coreVersion, /CORE_VERSION = '0\.2\.0'/);
+
+    const lockText = fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8');
+    const lock = JSON.parse(lockText);
+    for (const workspace of ['apps/desktop', 'packages/core', 'packages/cli', 'packages/agent']) {
+      assert.equal(lock.packages[workspace].version, '0.2.0', workspace);
+    }
+    assert.equal(lock.packages['packages/cli'].dependencies['@whiphand/core'], '0.2.0');
+    // Left alone: a third-party package, a non-pinned range, and npm's own formatting.
+    assert.equal(lock.packages['node_modules/commander'].version, '14.0.0');
+    assert.equal(lock.packages['packages/agent'].dependencies['@whiphand/core'], '*');
+    assert.equal(lockText, `${JSON.stringify(lock, null, 2)}\n`);
 
     const checkOut = run(root, ['--check', '0.2.0']);
     assert.match(checkOut, /ok: every location agrees on 0\.2\.0/);

@@ -16,7 +16,15 @@
  * past it. Not one of the plan's six, but the same bug class, so it is kept
  * in sync here too.
  *
+ * `package-lock.json` records each workspace's version and that same pin
+ * again. `npm ci` tolerates it lagging, but the next `npm install` rewrites
+ * it, so a bump that skips it leaves a stray lockfile diff for whoever
+ * installs next. It is edited as parsed JSON rather than by running
+ * `npm install --package-lock-only`: same bytes as npm writes (checked), with
+ * no network and no npm version in the loop.
+ *
  * Usage:
+ *   npm run bump -- <x.y.z>                     # the same as the first line below
  *   node scripts/version.mjs <x.y.z>            # write the new version everywhere
  *   node scripts/version.mjs --check <x.y.z>    # assert everything agrees; exits 1 and lists mismatches otherwise
  *   node scripts/version.mjs --check-release    # assert no updater placeholder is still unresolved
@@ -39,6 +47,9 @@ const CARGO_LOCK = 'apps/desktop/src-tauri/Cargo.lock';
 const TAURI_CONF = 'apps/desktop/src-tauri/tauri.conf.json';
 const CORE_INDEX = 'packages/core/src/version.ts';
 const CLI_PACKAGE_JSON = 'packages/cli/package.json';
+const PACKAGE_LOCK = 'package-lock.json';
+/** The `packages` keys under which package-lock.json records a workspace — the same four as PACKAGE_JSON_FILES. */
+const LOCK_WORKSPACES = PACKAGE_JSON_FILES.map(file => path.posix.dirname(file));
 
 /**
  * The updater's public key ships as a placeholder on purpose: generating the
@@ -106,6 +117,20 @@ function replaceCliCoreDependency(content, version) {
   return content.replace(pattern, `"@whiphand/core": "${version}"`);
 }
 
+/** npm writes the lockfile as two-space JSON with a trailing newline, and so does this. */
+function replacePackageLockVersions(content, version) {
+  const lock = JSON.parse(content);
+  for (const workspace of LOCK_WORKSPACES) {
+    const entry = lock.packages?.[workspace];
+    if (!entry) throw new Error(`no "${workspace}" workspace entry found in ${PACKAGE_LOCK}`);
+    entry.version = version;
+  }
+  const cliDeps = lock.packages[path.posix.dirname(CLI_PACKAGE_JSON)].dependencies;
+  if (!cliDeps?.['@whiphand/core']) throw new Error(`"@whiphand/core" dependency not found in ${PACKAGE_LOCK}`);
+  cliDeps['@whiphand/core'] = version;
+  return `${JSON.stringify(lock, null, 2)}\n`;
+}
+
 function writeVersion(version) {
   for (const relPath of PACKAGE_JSON_FILES) {
     write(relPath, replaceJsonVersion(read(relPath), version, relPath));
@@ -115,6 +140,7 @@ function writeVersion(version) {
   write(CARGO_LOCK, replaceCargoLockVersion(read(CARGO_LOCK), version));
   write(TAURI_CONF, replaceJsonVersion(read(TAURI_CONF), version, TAURI_CONF));
   write(CORE_INDEX, replaceCoreVersion(read(CORE_INDEX), version));
+  write(PACKAGE_LOCK, replacePackageLockVersions(read(PACKAGE_LOCK), version));
 }
 
 function collectVersions() {
@@ -136,6 +162,13 @@ function collectVersions() {
 
   const coreIndex = read(CORE_INDEX);
   found.push([CORE_INDEX, coreIndex.match(/CORE_VERSION = '(\d+\.\d+\.\d+)'/)?.[1] ?? '(missing)']);
+
+  const lock = JSON.parse(read(PACKAGE_LOCK));
+  for (const workspace of LOCK_WORKSPACES) {
+    found.push([`${PACKAGE_LOCK} (${workspace})`, lock.packages?.[workspace]?.version ?? '(missing)']);
+  }
+  const lockCliDep = lock.packages?.[path.posix.dirname(CLI_PACKAGE_JSON)]?.dependencies?.['@whiphand/core'];
+  found.push([`${PACKAGE_LOCK} (${CLI_PACKAGE_JSON} @whiphand/core dependency)`, lockCliDep ?? '(missing)']);
 
   return found;
 }
@@ -196,7 +229,7 @@ function main() {
   }
 
   writeVersion(version);
-  process.stdout.write(`version set to ${version} in ${PACKAGE_JSON_FILES.length + 5} places\n`);
+  process.stdout.write(`version set to ${version} in ${collectVersions().length} places\n`);
 }
 
 if (import.meta.filename === process.argv[1]) main();

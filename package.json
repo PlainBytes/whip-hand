@@ -18,7 +18,8 @@
     "package:cli": "node scripts/package/cli.mjs",
     "package:agent": "node scripts/package/agent.mjs",
     "package:desktop": "node scripts/package/desktop.mjs",
-    "reinstall": "node scripts/package/reinstall.mjs"
+    "reinstall": "node scripts/package/reinstall.mjs",
+    "bump": "node scripts/version.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

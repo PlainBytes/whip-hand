@@ -762,40 +762,42 @@ POSIX, `cmd.exe /d /s /c` on Windows by default); `shell:` names a different one
 
 ## Release rollback (R6)
 
-Every rollback below assumes the updater is actually configured. The signing key and the
-GitHub owner are operator steps, done once on an operator's machine — README's "Releases and
-auto-update" has the procedure, and `node scripts/version.mjs --check-release` (run by
-`release.yml`'s `guard` job) is what stops a tag from shipping before they are. That gate
-matters here specifically: a release built with the placeholder `pubkey` installs perfectly
-well and *then* cannot update, so the failure surfaces only when the next release fails to
-reach anyone — at which point none of the rollback below can help, because the broken copies
-are no longer listening.
+Every rollback below assumes the updater is actually configured. The signing key is a
+one-time operator step — README's "Releases and auto-update" has the procedure, and
+`node scripts/version.mjs --check-release` confirms the committed `pubkey` is no longer a
+placeholder. That matters here specifically: a release built with the placeholder installs
+perfectly well and *then* cannot update, so the failure surfaces only when the next release
+fails to reach anyone — at which point none of the rollback below can help, because the
+broken copies are no longer listening.
 
-`.github/workflows/release.yml` publishes one GitHub Release per `vX.Y.Z` tag, carrying the
-CLI binaries, the Linux/Windows bundles, and `latest.json` — the file every installed
-copy's Tauri updater polls via `releases/latest/download/latest.json`. That URL always
-resolves to whatever GitHub currently considers the repository's *latest* release, so
-un-shipping a bad one is a release-metadata operation, not a rebuild:
+Releases are published by hand from the GitHub UI, and publishing one runs
+`.github/workflows/release.yml`, which uploads the CLI binaries, the Linux/Windows bundles,
+and `latest.json` into it — the file every installed copy's Tauri updater polls via
+`releases/latest/download/latest.json`. That URL always resolves to whatever GitHub
+currently considers the repository's *latest* release, so un-shipping a bad one is a
+release-metadata operation, not a rebuild:
 
-- **Mark the bad release a prerelease** (`gh release edit vX.Y.Z --prerelease`), or
-  **delete it** (`gh release delete vX.Y.Z --yes`). Either way GitHub stops considering it
-  "latest", and the URL falls back to the most recent release before it — whose own
-  `latest.json`, uploaded when *it* was current, still points at itself, so already-updated
-  clients see no further prompt.
+- On the bad release's page, **Edit** it and tick **Set as a pre-release**, or **Delete** it.
+  Either way GitHub stops considering it "latest", and the URL falls back to the most recent
+  full release before it — whose own `latest.json`, uploaded when *it* was current, still
+  points at itself, so already-updated clients see no further prompt.
 - This does not un-install the bad version from a machine that already updated — it only
   stops the version from reaching anyone else. Whether a given install already has it has to
   be answered separately (`whiphand --version`, or the app's own version string).
 - Do this **before** debugging the underlying break. Every minute the bad release stays
-  "latest" is another running copy's updater offering it.
+  "latest" is another running copy's updater offering it. The fix then ships as a new patch
+  version, not as a re-publish of the bad one.
 
-Two matrix legs (`ubuntu-24.04`, `windows-latest`) both write to the same release — the one
-draft `release.yml`'s `create-release` job makes before either starts, which tauri-action
-reaches by `releaseId` rather than by tag, because GitHub allows several drafts per tag and a
-per-leg `gh release create --draft` would quietly make a second. Both also write that
-release's `latest.json` — see the `build` job's `max-parallel: 1`, which exists
-specifically so the second leg's read of the current manifest happens after the first leg's
-write, not concurrently with it (confirmed by reading `tauri-action`'s
-`upload-version-json.ts`: it downloads any existing `latest.json` asset, seeds its
-`platforms` map from that, and only overwrites the keys for its own artifacts before
-re-uploading — a merge on read, not a blind overwrite, but still a race if two legs read
-before either writes).
+A published release is "latest" from the moment it is published, while the build is still
+running. Until the first leg uploads `latest.json`, the updater URL 404s and installed
+copies are simply offered nothing. A build that fails partway leaves a release with some of
+its assets, which is exactly the case the rollback above is for.
+
+Two matrix legs (`ubuntu-24.04`, `windows-latest`) both upload into that release, addressed
+by its id (`github.event.release.id`) rather than by tag. Both also write its `latest.json`
+— see the `build` job's `max-parallel: 1`, which exists specifically so the second leg's
+read of the current manifest happens after the first leg's write, not concurrently with it
+(confirmed by reading `tauri-action`'s `upload-version-json.ts`: it downloads any existing
+`latest.json` asset, seeds its `platforms` map from that, and only overwrites the keys for
+its own artifacts before re-uploading — a merge on read, not a blind overwrite, but still a
+race if two legs read before either writes).

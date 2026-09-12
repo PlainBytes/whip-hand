@@ -1,92 +1,20 @@
 name: Release
 
-# Draft-then-publish is load-bearing, not caution: both matrix legs below
-# write to the same GitHub Release, and its `latest.json` is exactly what
-# every installed copy's updater reads. Publishing only after *both* legs
-# succeed means nobody ever sees a manifest promising a Windows build that
-# turned out not to be there — see docs/design.md ("R6") for how to roll a
-# bad release back if one publishes anyway.
-#
-# "The same GitHub Release" is only true because `create-release` makes the
-# draft exactly once, up front, and everything after addresses it by id.
-# GitHub allows any number of drafts per tag, `gh release create --draft`
-# only refuses when a *published* release has the tag, and both tauri-action
-# and gh pick "the first draft with this tag" when looking one up — so each
-# leg creating its own draft would split the assets, and the two halves of
-# `latest.json`, across two releases, of which `publish` would ship one.
-#
-# tauri-action's upload-version-json.ts reads any existing `latest.json`
-# asset first and only overwrites the platform keys for its own artifacts —
-# confirmed by reading its source, not assumed — so it merges rather than
-# blindly overwriting. That merge is still a read-then-write with no locking,
-# so two matrix legs racing on it could still clobber each other if both read
-# before either writes. `build`'s `max-parallel: 1` below removes the race
-# outright by making the second leg's read strictly follow the first leg's
-# write, which is cheaper than teaching this file to assemble the manifest
-# itself.
+# Runs when a release is published from the GitHub UI, and uploads the CLI
+# binaries, desktop bundles and the updater's latest.json into that release.
 on:
-  push:
-    tags: ['v*']
+  release:
+    types: [published]
 
 permissions:
   contents: write
 
 jobs:
-  # Fails before any build minutes are spent on a tag that would ship broken:
-  # a version that does not actually agree across the six-plus-Cargo.lock
-  # places scripts/version.mjs tracks, or an updater still carrying its
-  # placeholder pubkey/endpoints. Both are invisible at build time and only
-  # surface once real installs cannot update — which is a release too late.
-  guard:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      # Not the runner's preinstalled Node: version.mjs only runs main() when
-      # `import.meta.filename` matches argv[1], and before Node 20.11 that is
-      # undefined — the script would exit 0 having checked nothing.
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-      - name: The tag and the tree agree on the version
-        env:
-          TAG: ${{ github.ref_name }}
-        run: node scripts/version.mjs --check "${TAG#v}"
-      - name: The updater is actually configured
-        run: node scripts/version.mjs --check-release
-
-  # The one draft every later job writes to — see the comment on `on:` above.
-  # Reuses this tag's draft when there already is one, so re-running the whole
-  # workflow after a failed leg does not start a second draft beside it.
-  create-release:
-    needs: guard
-    runs-on: ubuntu-latest
-    outputs:
-      id: ${{ steps.draft.outputs.id }}
-    steps:
-      - id: draft
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
-        # An explicit `shell: bash` is what adds pipefail, so a failed listing
-        # fails the step instead of looking like "no draft yet". awk, not head:
-        # head exiting early can SIGPIPE gh, which pipefail would also trip on.
-        shell: bash
-        run: |
-          id=$(gh api "repos/$GH_REPO/releases" --paginate \
-                --jq '.[] | select(.draft and .tag_name == env.TAG) | .id' | awk 'NR==1')
-          if [ -z "$id" ]; then
-            id=$(gh api "repos/$GH_REPO/releases" -f tag_name="$TAG" -f name="$TAG" \
-                  -F draft=true -F generate_release_notes=true --jq .id)
-          fi
-          echo "id=$id" >> "$GITHUB_OUTPUT"
-
   build:
-    needs: create-release
     strategy:
       fail-fast: false
-      # See the comment on `on:` above — this serializes the two legs so the
-      # second one's latest.json read strictly follows the first one's write.
+      # Both legs merge their platform into the same latest.json; one at a time
+      # so neither overwrites the other's half.
       max-parallel: 1
       matrix:
         include:
@@ -96,9 +24,9 @@ jobs:
             cli-name: whiphand-windows-x86_64.exe
     runs-on: ${{ matrix.os }}
     env:
-      # Makes vite.config.ts compile TauriTransport to spawn the bundled
-      # sidecar rather than a repo-relative `node` invocation — the same flag
-      # `npm run package:desktop` sets locally.
+      TAG: ${{ github.event.release.tag_name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Makes the desktop build spawn the bundled sidecar instead of repo-relative node.
       WHIPHAND_PACKAGE: '1'
     steps:
       - uses: actions/checkout@v7
@@ -106,6 +34,12 @@ jobs:
         with:
           node-version: 24
           cache: npm
+
+      # Catches a release tagged before the version bump was merged.
+      - name: The tag matches the version in the code
+        shell: bash
+        run: node scripts/version.mjs --check "${TAG#v}"
+
       - name: Install Tauri Linux deps
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
@@ -115,16 +49,11 @@ jobs:
           workspaces: apps/desktop/src-tauri
       - run: npm ci
 
-      - name: Build the CLI (SEA)
+      - name: Build the CLI
         run: npm run package:cli
-
-      # By tag rather than id, because `gh release upload` takes nothing else —
-      # unambiguous here, since create-release left exactly one draft for it.
       - name: Upload the CLI binary
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
           CLI_NAME: ${{ matrix.cli-name }}
         run: |
           set -euo pipefail
@@ -138,17 +67,9 @@ jobs:
         shell: bash
         run: node scripts/package/prepare-release.mjs | tee /tmp/prepare.out && grep '^bundles=' /tmp/prepare.out >> "$GITHUB_OUTPUT"
 
-      # Builds the Tauri bundle (deb+appimage on Linux, nsis on Windows),
-      # signs updater artifacts with TAURI_SIGNING_PRIVATE_KEY, and uploads
-      # everything — including this leg's contribution to latest.json — to
-      # the same draft release the CLI binary just went to.
-      #
-      # `createUpdaterArtifacts` is turned on here via `--config`, not in
-      # tauri.conf.json itself: set globally, it makes *every* `tauri build`
-      # demand TAURI_SIGNING_PRIVATE_KEY, including local `npm run package`
-      # and ci.yml's own `package` job — neither of which has, or should
-      # need, the release signing key just to prove the bundle still builds.
-      - name: Build and upload the desktop bundle
+      # createUpdaterArtifacts is set here rather than in tauri.conf.json so
+      # local and CI builds don't need the signing key.
+      - name: Build, sign and upload the desktop bundle
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -156,28 +77,22 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: apps/desktop
-          releaseId: ${{ needs.create-release.outputs.id }}
+          releaseId: ${{ github.event.release.id }}
           uploadUpdaterJson: true
           updaterJsonPreferNsis: true
           args: '--config {"bundle":{"createUpdaterArtifacts":true}} --bundles ${{ steps.prepare.outputs.bundles }}'
 
-  # See the comment on `on:` above for why this waits on both legs.
-  publish:
-    needs: [create-release, build]
+  checksums:
+    needs: build
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
-      TAG: ${{ github.ref_name }}
-      ID: ${{ needs.create-release.outputs.id }}
+      TAG: ${{ github.event.release.tag_name }}
     steps:
-      # Last before publishing, so it covers every asset both legs uploaded.
-      # A re-run downloads the previous SHA256SUMS too; it must not hash itself.
       - name: Attach SHA256SUMS
         run: |
           gh release download "$TAG" -D assets
           rm -f assets/SHA256SUMS
           (cd assets && sha256sum -- * > ../SHA256SUMS)
           gh release upload "$TAG" SHA256SUMS --clobber
-      - name: Publish the draft
-        run: gh api -X PATCH "repos/$GH_REPO/releases/$ID" -F draft=false --silent

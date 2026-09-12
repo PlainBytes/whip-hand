@@ -19,6 +19,8 @@ export type { Templated, TemplateScope } from './template.ts';
 export {
   AdapterRegistry, validateWorkflowRunners, validateWorkflowFrontend, defaultRegistry,
 } from './registry.ts';
+export { ModelCatalog } from './model-catalog.ts';
+export type { ModelCatalogGetOptions } from './model-catalog.ts';
 export {
   BUILTIN_TOOLS, TOOL_GROUPS, TOOL_GROUP_LABELS, VERSION_RE, PROBE_TIMEOUT_MS,
   detectTools, probeTool, resolveToolTable, parseToolVersion,
@@ -27,7 +29,8 @@ export type { ToolProbe, ToolStatus, DoctorToolsConfig } from './tools.ts';
 export type { ToolGroup } from './tool-groups.ts';
 export { loadDoctorConfig, globalDoctorConfigPath, doctorConfigSchema } from './doctor-config.ts';
 export { claudeAdapter, CLAUDE_WRITE_TOOLS, CLAUDE_QUIT_SEQUENCE } from './adapters/claude.ts';
-export { copilotAdapter, transcriptPath, COPILOT_QUIT_SEQUENCE } from './adapters/copilot.ts';
+export { probeClaudeModels, parseInitializeReply, mergeWithAliases } from './adapters/claude-models.ts';
+export { copilotAdapter, transcriptPath, COPILOT_QUIT_SEQUENCE, parseCopilotModels } from './adapters/copilot.ts';
 export {
   loadWorkspaceConfig, loadConfigLayer, loadGlobalConfig, mergeConfig, diffConfigLayer,
   DEFAULT_CONFIG, workspaceConfigSchema, partialConfigSchema, CONFIG_KEYS, configKeySchema,

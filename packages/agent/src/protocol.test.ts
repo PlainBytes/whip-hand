@@ -145,6 +145,28 @@ test('methods: doctor rejects a group outside the two we render', () => {
   }]).success, false);
 });
 
+test('methods: listModels params default to no refresh', () => {
+  assert.deepEqual(methods.listModels.params.parse(undefined), {});
+  assert.deepEqual(methods.listModels.params.parse({ refresh: true }), { refresh: true });
+});
+
+test('methods: listModels result is keyed by runner id, one ModelList per adapter that offers one', () => {
+  const result = {
+    claude: {
+      source: 'live',
+      models: [{ id: 'sonnet', label: 'Sonnet', resolves: 'claude-sonnet-5' }, { id: 'opus' }],
+    },
+    copilot: { source: 'unavailable', models: [] },
+  };
+  assert.deepEqual(methods.listModels.result.parse(result), result);
+});
+
+test('methods: listModels rejects a source outside the three the editor knows', () => {
+  assert.equal(
+    methods.listModels.result.safeParse({ claude: { source: 'cached', models: [] } }).success, false,
+  );
+});
+
 test('methods: configGet params allow omitting workdir (PreferencesPage, no workspace open)', () => {
   assert.equal(methods.configGet.params.safeParse({}).success, true);
   assert.equal(methods.configGet.params.safeParse({ workdir: '/w' }).success, true);

@@ -1,13 +1,18 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Dropdown, Field, Input, Option, Switch, Text, Tooltip,
+  Combobox, Dropdown, Field, Input, Link, Option, Switch, Text, Tooltip,
 } from '@fluentui/react-components';
 import type {
   AgentStep, CommandStep, EffortLevel, ManualStep, Step, StepKind, StepMode,
 } from '../../../../packages/core/src/types.ts';
 import { isAgentStep, isManualStep } from '../../../../packages/core/src/steps.ts';
 import { ATTACHMENTS_REF } from '../../../../packages/core/src/attachments.ts';
+import { useAgentClient } from '../agent/agent-context.tsx';
+import { useAppStore } from '../state/store.ts';
 import { useStepLayoutStyles } from './step-layout.ts';
+import { refreshModelCatalog } from './use-harness-catalog.ts';
+
+const SUBTLE = { color: 'var(--colorNeutralForeground3)' };
 
 const STEP_MODE_OPTIONS: StepMode[] = ['interactive', 'headless'];
 const EFFORT_OPTIONS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -48,6 +53,51 @@ export function StepRail({ step, earlierStepIds, guardedByLoopId, onUpdate, fiel
   function patch(fields: Partial<Step>): void {
     onUpdate({ ...step, ...fields } as Step);
   }
+
+  // Read from the store rather than via props: step cards nest inside loops,
+  // and threading doctor/catalog through StepCard and the loop body just to
+  // reach the one rail that needs them would be a lot of plumbing for two
+  // values that are already prefetched once, workspace-wide, by
+  // use-harness-catalog.ts.
+  const client = useAgentClient();
+  const doctorResult = useAppStore(state => state.doctorResult);
+  const modelCatalog = useAppStore(state => state.modelCatalog);
+  const setModelCatalog = useAppStore(state => state.setModelCatalog);
+
+  function refreshModels(): void {
+    refreshModelCatalog(client, setModelCatalog);
+  }
+
+  const runnerId = isAgentStep(step) ? step.runner : undefined;
+
+  // `.runner` only: doctor also reports support tools and harnesses whiphand
+  // has no adapter for — offering `git` here would build a workflow that
+  // fails validateWorkflowRunners at run time. Before doctor answers,
+  // doctorResult is null and this is just the step's own current value, so
+  // nothing already chosen is ever lost off the list.
+  const runnerOptions = useMemo(() => {
+    const ids = new Set((doctorResult ?? []).filter(r => r.runner).map(r => r.id));
+    if (runnerId !== undefined) ids.add(runnerId);
+    return Array.from(ids);
+  }, [doctorResult, runnerId]);
+  // Only once doctor has actually answered — before that, "unknown" cannot be
+  // told apart from "not asked yet", and warning would be a false positive.
+  const runnerWarning = runnerId !== undefined && doctorResult !== null
+    && !doctorResult.some(r => r.runner && r.id === runnerId)
+    ? `'${runnerId}' isn't a runner whiphand can drive`
+    : undefined;
+
+  const modelList = runnerId === undefined ? undefined : modelCatalog?.[runnerId];
+  const modelOptions = modelList?.models ?? [];
+  // A missing list (loading, no modelCatalog yet, or a runner with no
+  // listModels at all) must never look like a typo — only 'live' and
+  // 'fallback' lists are complete enough to call an unmatched value wrong.
+  const modelValue = isAgentStep(step) ? (step.model ?? '').trim() : '';
+  const modelWarning = modelValue !== ''
+    && modelList !== undefined && modelList.source !== 'unavailable'
+    && !modelOptions.some(m => m.id === modelValue || m.resolves === modelValue)
+    ? `'${modelValue}' isn't in ${runnerId}'s model list`
+    : undefined;
 
   // Allowed paths and Successful exit codes are both re-derived from the
   // parsed array on the original render, which drops the comma or the
@@ -117,16 +167,45 @@ export function StepRail({ step, earlierStepIds, guardedByLoopId, onUpdate, fiel
           <Field
             label="Runner"
             required
-            validationState={fieldErrors?.runner ? 'error' : 'none'}
-            validationMessage={fieldErrors?.runner}
+            validationState={fieldErrors?.runner ? 'error' : runnerWarning ? 'warning' : 'none'}
+            validationMessage={fieldErrors?.runner ?? runnerWarning}
           >
-            <Input value={step.runner} onChange={(_e, data) => patch({ runner: data.value } as Partial<Step>)} />
+            <Dropdown
+              value={step.runner}
+              selectedOptions={[step.runner]}
+              onOptionSelect={(_e, data) => data.optionValue && patch({ runner: data.optionValue } as Partial<Step>)}
+            >
+              {runnerOptions.map(id => <Option key={id} value={id}>{id}</Option>)}
+            </Dropdown>
           </Field>
-          <Field label="Model">
-            <Input
+          <Field
+            label="Model"
+            validationState={modelWarning ? 'warning' : 'none'}
+            validationMessage={modelWarning}
+            hint={
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                {modelList?.source === 'fallback' && modelList.note && <Text size={200} style={SUBTLE}>{modelList.note}</Text>}
+                <Link as="button" type="button" onClick={refreshModels}>Refresh list</Link>
+              </span>
+            }
+          >
+            <Combobox
+              freeform
               value={step.model ?? ''}
-              onChange={(_e, data) => patch({ model: data.value || undefined } as Partial<Step>)}
-            />
+              selectedOptions={step.model ? [step.model] : []}
+              onChange={e => patch({ model: e.target.value || undefined } as Partial<Step>)}
+              onOptionSelect={(_e, data) => patch({ model: data.optionValue || undefined } as Partial<Step>)}
+            >
+              <Option value="">Default</Option>
+              {modelOptions.map(m => (
+                <Option key={m.id} value={m.id} text={m.label ?? m.id}>
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <Text>{m.label ?? m.id}</Text>
+                    {m.description && <Text size={200} style={SUBTLE}>{m.description}</Text>}
+                  </div>
+                </Option>
+              ))}
+            </Combobox>
           </Field>
           <Field label="Mode">
             <Dropdown

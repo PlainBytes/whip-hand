@@ -8,7 +8,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import {
   CORE_VERSION, createWorkflow as coreCreateWorkflow, defaultRegistry, detectTools,
-  deleteWorkflow as coreDeleteWorkflow,
+  deleteWorkflow as coreDeleteWorkflow, ModelCatalog,
   deleteRun as coreDeleteRun, diffConfigLayer, getRun as coreGetRun, loadDoctorConfig,
   workingDiffFiles,
   globalConfigPath, initWorkspace as coreInitWorkspace, listWorkflows as coreListWorkflows,
@@ -24,6 +24,7 @@ import type {
   DeleteWorkflowParams, DeleteWorkflowResult,
   DoctorResult,
   EndSessionParams, EndSessionResult, GetWorkflowParams,
+  ListModelsParams, ListModelsResult,
   ResolveManualParams, ResolveManualResult,
   GetWorkflowResult, GetRunParams, GetWorkingDiffParams, HelloResult, InitWorkspaceParams, InitWorkspaceResult,
   ListWorkflowsResult, ListRunsParams, PruneRunsParams, PruneRunsResult,
@@ -245,6 +246,13 @@ async function resumeJobInBackground(
 export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
   const { jobs } = deps;
 
+  // One catalog for the agent's whole process lifetime — that is what makes
+  // the desktop's prefetch-on-mount cheap after the first editor open. Built
+  // against the same adapter singletons every defaultRegistry() call
+  // registers, so `doctor`'s invalidate() below and this handler are always
+  // talking about the same probes.
+  const modelCatalog = new ModelCatalog(defaultRegistry());
+
   const hello: Handler = async (): Promise<HelloResult> => ({ version: CORE_VERSION, protocolVersion: 1 });
 
   const listWorkflows: Handler = async (params): Promise<ListWorkflowsResult> => {
@@ -288,8 +296,19 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
    * file — the right outcome: a table that is silently half-applied is worse
    * than one that says it is broken.
    */
-  const doctor: Handler = async (): Promise<DoctorResult> =>
-    detectTools(defaultRegistry(), await loadDoctorConfig());
+  const doctor: Handler = async (): Promise<DoctorResult> => {
+    // Doctor is where a user lands after upgrading a harness or logging into
+    // one — invalidating here (rather than only via the Model field's own
+    // Refresh action) means the account-aware model list is never stuck
+    // behind a stale probe from before that.
+    modelCatalog.invalidate();
+    return detectTools(defaultRegistry(), await loadDoctorConfig());
+  };
+
+  const listModels: Handler = async (params): Promise<ListModelsResult> => {
+    const { refresh } = params as ListModelsParams;
+    return modelCatalog.get({ refresh });
+  };
 
   const configGet: Handler = async (params): Promise<ConfigGetResult> => {
     const { workdir } = params as ConfigGetParams;
@@ -668,6 +687,7 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
 
   return {
     hello, listWorkflows, getWorkflow, createWorkflow, updateWorkflow, deleteWorkflow, initWorkspace, doctor,
+    listModels,
     configGet, configSet,
     startRun, resumeRun, cancelRun, deleteRun, setRunLocked, renameRun, pruneRuns, endSession, resolveManual,
     listRuns, getRun, getWorkingDiff, readArtifact, writeArtifact, statArtifact,

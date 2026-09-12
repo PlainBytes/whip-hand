@@ -11,7 +11,7 @@ import {
   WORKFLOW_NAME_RE, workflowSchema, whiphandEventSchema, manualChoiceSchema, manualRequestSchema,
   fileCommentSchema,
 } from '@whiphand/core';
-import type { ConfigKey, PartialConfig, Scope, ToolStatus, Workflow, WorkspaceConfig } from '@whiphand/core';
+import type { ConfigKey, ModelList, PartialConfig, Scope, ToolStatus, Workflow, WorkspaceConfig } from '@whiphand/core';
 import {
   appStateSchema, recentWorkspaceSchema, runsRetentionSchema, themePreferenceSchema, windowStateSchema,
 } from './app-state.ts';
@@ -153,6 +153,32 @@ export const doctorResult = z.array(z.object({
   notes: z.array(z.string()).optional(),
   url: z.string().optional(),
 }));
+
+const modelInfoSchema = z.object({
+  id: z.string(),
+  label: z.string().optional(),
+  description: z.string().optional(),
+  resolves: z.string().optional(),
+});
+
+const modelListSchema = z.object({
+  source: z.enum(['live', 'fallback', 'unavailable']),
+  models: z.array(modelInfoSchema),
+  note: z.string().optional(),
+});
+
+/**
+ * No `workdir`, for the same reason as `doctorParams` above: this asks "what
+ * can each installed harness run right now", a machine/account fact rather
+ * than a workspace one, and the desktop store caches it beside `doctorResult`
+ * for the same reason. `refresh: true` forces a re-probe past the agent's own
+ * process-lifetime cache (see @whiphand/core's ModelCatalog) — the Model
+ * field's "Refresh list" action.
+ */
+export const listModelsParams = z.object({ refresh: z.boolean().optional() }).default({});
+
+/** One entry per registry adapter that implements `listModels`, keyed by runner id. */
+export const listModelsResult = z.record(z.string(), modelListSchema);
 
 /**
  * One config layer as it stands on disk: the raw (unmerged) partial layer,
@@ -574,6 +600,7 @@ export const methods = {
   deleteWorkflow: { params: deleteWorkflowParams, result: deleteWorkflowResult },
   initWorkspace: { params: initWorkspaceParams, result: initWorkspaceResult },
   doctor: { params: doctorParams, result: doctorResult },
+  listModels: { params: listModelsParams, result: listModelsResult },
   configGet: { params: configGetParams, result: configGetResult },
   configSet: { params: configSetParams, result: configSetResult },
   startRun: { params: startRunParams, result: startRunResult },
@@ -633,6 +660,12 @@ export type DoctorRow = DoctorResult[number];
 type AssertExtends<A extends B, B> = A;
 type _DoctorRowIsToolStatus = AssertExtends<DoctorRow, ToolStatus>;
 type _ToolStatusIsDoctorRow = AssertExtends<ToolStatus, DoctorRow>;
+export type ListModelsParams = z.infer<typeof listModelsParams>;
+export type ListModelsResult = z.infer<typeof listModelsResult>;
+/** The value type, named — same reason DoctorRow is. */
+export type ModelListRow = ListModelsResult[string];
+type _ModelListRowIsModelList = AssertExtends<ModelListRow, ModelList>;
+type _ModelListIsModelListRow = AssertExtends<ModelList, ModelListRow>;
 export type ConfigGetParams = z.infer<typeof configGetParams>;
 export interface ConfigLayerInfo { config: PartialConfig; path: string; exists: boolean }
 export interface ConfigGetResult { config: WorkspaceConfig; global: ConfigLayerInfo; project?: ConfigLayerInfo }

@@ -29,6 +29,8 @@ import type {
   GetJobScrollbackResult,
   ListJobsParams,
   ListJobsResult,
+  ListModelsParams,
+  ListModelsResult,
   AppStateChangedParams,
   RemoteAccessChangedParams,
   RemoteAccessGetParams,
@@ -119,6 +121,7 @@ interface MethodMap {
   deleteWorkflow: { params: DeleteWorkflowParams; result: DeleteWorkflowResult };
   initWorkspace: { params: InitWorkspaceParams; result: InitWorkspaceResult };
   doctor: { params: DoctorParams; result: DoctorResult };
+  listModels: { params: ListModelsParams; result: ListModelsResult };
   configGet: { params: ConfigGetParams; result: ConfigGetResult };
   configSet: { params: ConfigSetParams; result: ConfigSetResult };
   startRun: { params: StartRunParams; result: StartRunResult };

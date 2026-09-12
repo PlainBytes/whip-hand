@@ -16,6 +16,7 @@ import { readerNotes } from '../lib/disabled-copy.ts';
 import { referenceableIds } from '../lib/step-tree.ts';
 import { normalizeDraft } from '../lib/draft-normalize.ts';
 import { useWorkflowDraft } from './use-workflow-draft.ts';
+import { useHarnessCatalog } from './use-harness-catalog.ts';
 import { WorkflowSettingsCard } from './WorkflowSettingsCard.tsx';
 import { StepCard } from './StepCard.tsx';
 import type { EditorRow } from '../lib/editor-model.ts';
@@ -62,6 +63,10 @@ export function WorkflowEditor({
   const client = useAgentClient();
   const draftApi = useWorkflowDraft(workflow);
   const { draft, rows } = draftApi;
+  // Prefetches doctor + listModels so the Runner dropdown and Model combobox
+  // are normally ready before a card is even expanded; StepRail reads both
+  // straight from the store.
+  useHarnessCatalog();
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);

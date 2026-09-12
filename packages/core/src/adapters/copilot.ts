@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { AgentStep, DetectResult, RunCtx, RunnerAdapter, SpawnSpec } from '../types.ts';
+import type { AgentStep, DetectResult, ModelInfo, ModelList, RunCtx, RunnerAdapter, SpawnSpec } from '../types.ts';
 import { buildPrompt } from '../template.ts';
 import { interactiveGuidance } from '../engine/interactive-guidance.ts';
 import { endMarkerPath, shellPath } from '../engine/session-end.ts';
@@ -41,6 +41,38 @@ async function beepNote(): Promise<string[]> {
     // no config yet, or unreadable: the default is off either way
   }
   return [`copilot will not signal when it needs you; set "beep": true in ${join(home, 'config.json')}`];
+}
+
+/** The heading line `copilot help config` prints ahead of its model id list. */
+const MODEL_HEADING_RE = /`model`:/;
+/** One indented `- "id"` line under that heading. */
+const MODEL_LINE_RE = /^\s*-\s*"([^"]+)"/;
+
+/**
+ * Pure text parser, kept apart from the spawn so a captured fixture can
+ * exercise it with no process involved. Reads only the lines between the
+ * `` `model`: `` heading and the next blank line — copilot has no structured
+ * flag for this, so `help config`'s prose *is* the interface, and a changed
+ * format must degrade to no suggestions rather than misreading noise as ids.
+ *
+ * `auto` is appended because it is real and selectable but not in this list
+ * (it means "let copilot pick"), and BYOK provider ids never appear here
+ * either — both are why this always merges into a `ModelList`, never claims
+ * completeness.
+ */
+export function parseCopilotModels(helpOutput: string): ModelInfo[] {
+  const lines = helpOutput.split('\n');
+  const heading = lines.findIndex(line => MODEL_HEADING_RE.test(line));
+  if (heading === -1) return [];
+  const ids: string[] = [];
+  for (let i = heading + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === '') break;
+    const match = MODEL_LINE_RE.exec(line);
+    if (match) ids.push(match[1]);
+  }
+  if (ids.length === 0) return [];
+  return [...ids.map(id => ({ id })), { id: 'auto' }];
 }
 
 export const copilotAdapter: RunnerAdapter = {
@@ -106,5 +138,23 @@ export const copilotAdapter: RunnerAdapter = {
       `'${step.output}' artifact that was agreed in it to ${ctx.runDir}/${step.output}. ` +
       `Write only the artifact content to that file, then reply with just: done`;
     return spec(ctx, ['copilot', '-p', prompt, '--allow-all-tools', '--no-color'], false);
+  },
+
+  /**
+   * copilot has no `--list-models` flag; `help config`'s prose is the only
+   * source. `source: 'unavailable'` (not 'fallback') on any failure — copilot
+   * has no static aliases of its own to fall back to, and 'unavailable' is
+   * what tells the editor to show plain free text with no warnings, exactly
+   * as it did before this existed.
+   */
+  async listModels(): Promise<ModelList> {
+    try {
+      const { stdout } = await execRunner(['copilot', 'help', 'config'], { timeout: PROBE_TIMEOUT_MS });
+      const models = parseCopilotModels(stdout);
+      if (models.length === 0) return { source: 'unavailable', models: [] };
+      return { source: 'live', models };
+    } catch {
+      return { source: 'unavailable', models: [] };
+    }
   },
 };

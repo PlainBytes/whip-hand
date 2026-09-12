@@ -259,6 +259,38 @@ export interface DetectResult {
   notes?: string[];
 }
 
+/** One model a harness says it can run, as reported by `RunnerAdapter.listModels`. */
+export interface ModelInfo {
+  /** What a step's `model:` field takes. */
+  id: string;
+  /** Short human name, e.g. "Sonnet". Falls back to `id` when absent. */
+  label?: string;
+  description?: string;
+  /** What `id` resolves to, when the harness names it (e.g. `sonnet` -> `claude-sonnet-5`). */
+  resolves?: string;
+}
+
+/**
+ * What `RunnerAdapter.listModels` answers: the models it currently knows about,
+ * and how confident that list is.
+ *
+ * - `live` — asked the harness itself just now (or a merge of that with static
+ *   aliases; live entries still win the merge).
+ * - `fallback` — the harness could not be asked (not installed, logged out,
+ *   timed out, malformed reply); these are static aliases only, but they are
+ *   the harness's own well-known ids, so the editor still warns when a value
+ *   matches none of them.
+ * - `unavailable` — no list at all (a runner with no `listModels`, or one whose
+ *   own probe found nothing usable); the editor behaves exactly as it did
+ *   before this feature existed: free text, no warnings.
+ */
+export interface ModelList {
+  source: 'live' | 'fallback' | 'unavailable';
+  models: ModelInfo[];
+  /** Shown beside the field, e.g. "couldn't query claude; showing built-in aliases". */
+  note?: string;
+}
+
 export interface RunnerAdapter {
   id: string;
   capabilities: {
@@ -282,6 +314,15 @@ export interface RunnerAdapter {
    * a step — there is no step here, and no artifact to write.
    */
   suggestName?(prompt: string, ctx: RunCtx, capturePath: string): SpawnSpec;
+  /**
+   * What models this harness currently offers, for the workflow editor's
+   * Model field. Optional, and its absence *is* the capability check — same
+   * precedent as `suggestName?` — so a runner with no way to ask simply never
+   * gets a picker; the field stays free text with no warnings. Must never
+   * reject: any failure is a `ModelList` with `source: 'fallback'` or
+   * `'unavailable'`, not a thrown error.
+   */
+  listModels?(): Promise<ModelList>;
 }
 
 export interface WorkspaceConfig {

@@ -911,3 +911,83 @@ test('statArtifact: the same containment as readArtifact, symlink escape include
     async () => { await statArtifact({ workdir, runId, name: 'escape.txt' }, { notify: () => {} }); },
     /resolves outside its run directory/);
 });
+
+// --- listModels ------------------------------------------------------------
+
+/**
+ * A stub `copilot` on PATH, standing in for the real binary so the test
+ * controls exactly what one probe answers — and, by rewriting the script
+ * between calls, whether a later call re-probed at all. `claude` is left off
+ * PATH entirely: its probe fails fast (ENOENT) and always falls back, which
+ * is fine here since these tests are about caching and invalidation, not
+ * claude's own wire format (that's claude-models.test.ts).
+ */
+async function stubCopilotPath(modelId: string): Promise<{ dir: string; rewrite: (nextModelId: string) => Promise<void> }> {
+  const dir = await mkdtemp(join(tmpdir(), 'whiphand-handlers-copilot-'));
+  const script = (id: string) => [
+    '#!/usr/bin/env bash',
+    'if [ "$1" = "--version" ]; then echo "9.9.9"; exit 0; fi',
+    'if [ "$1" = "help" ] && [ "$2" = "config" ]; then',
+    '  echo "  \\`model\\`: AI model to use."',
+    `  echo '    - "${id}"'`,
+    '  echo',
+    '  exit 0',
+    'fi',
+    'exit 1',
+    '',
+  ].join('\n');
+  const file = join(dir, 'copilot');
+  await writeFile(file, script(modelId));
+  await promisify(execFile)('chmod', ['+x', file]);
+  return {
+    dir,
+    rewrite: async (nextModelId: string) => writeFile(file, script(nextModelId)),
+  };
+}
+
+test('listModels: returns one ModelList per adapter that offers listModels, keyed by runner id', async () => {
+  const { listModels } = await setup();
+  const result = await listModels({}, { notify: () => {} }) as Record<string, { source: string; models: unknown[] }>;
+  assert.deepEqual(Object.keys(result).sort(), ['claude', 'copilot']);
+  for (const row of Object.values(result)) {
+    assert.ok(['live', 'fallback', 'unavailable'].includes(row.source));
+  }
+});
+
+test('listModels caches within the agent process; doctor invalidates it so the next call re-probes', async t => {
+  const { dir, rewrite } = await stubCopilotPath('model-a');
+  const previousPath = process.env.PATH;
+  // Prepended, not replaced: the stub script's own `#!/usr/bin/env bash`
+  // shebang needs `env` and `bash` still reachable on PATH.
+  process.env.PATH = `${dir}:${previousPath ?? ''}`;
+  t.after(async () => { process.env.PATH = previousPath; });
+
+  const { listModels, doctor } = await setup();
+
+  const first = await listModels({}, { notify: () => {} }) as Record<string, { models: { id: string }[] }>;
+  assert.ok(first.copilot.models.some(m => m.id === 'model-a'));
+
+  await rewrite('model-b');
+
+  const second = await listModels({}, { notify: () => {} }) as Record<string, { models: { id: string }[] }>;
+  assert.ok(second.copilot.models.some(m => m.id === 'model-a'), 'no refresh: still the cached first probe');
+
+  await doctor({}, { notify: () => {} });
+
+  const third = await listModels({}, { notify: () => {} }) as Record<string, { models: { id: string }[] }>;
+  assert.ok(third.copilot.models.some(m => m.id === 'model-b'), 'doctor invalidated the catalog: this call re-probed');
+});
+
+test('listModels: refresh: true re-probes even without a doctor call', async t => {
+  const { dir, rewrite } = await stubCopilotPath('model-a');
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${dir}:${previousPath ?? ''}`;
+  t.after(async () => { process.env.PATH = previousPath; });
+
+  const { listModels } = await setup();
+  await listModels({}, { notify: () => {} });
+  await rewrite('model-b');
+
+  const refreshed = await listModels({ refresh: true }, { notify: () => {} }) as Record<string, { models: { id: string }[] }>;
+  assert.ok(refreshed.copilot.models.some(m => m.id === 'model-b'));
+});

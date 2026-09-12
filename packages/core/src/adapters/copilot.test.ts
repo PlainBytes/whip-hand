@@ -1,12 +1,15 @@
 import { test } from 'node:test';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
-import { copilotAdapter, transcriptPath, COPILOT_QUIT_SEQUENCE } from './copilot.ts';
+import { copilotAdapter, parseCopilotModels, transcriptPath, COPILOT_QUIT_SEQUENCE } from './copilot.ts';
 import { interactiveGuidance } from '../engine/interactive-guidance.ts';
 import { endMarkerPath, shellPath } from '../engine/session-end.ts';
 import type { AgentStep, RunCtx } from '../types.ts';
+
+const fixtureDir = fileURLToPath(new URL('../../../../parity/fixtures/models/', import.meta.url));
 
 const ctx: RunCtx = {
   workdir: '/w', runId: 'r1', runDir: '/w/.whiphand/runs/r1', runSlug: 'r1',
@@ -138,6 +141,38 @@ test('headless asks for streaming jsonl so a running step can report progress', 
 test('interactive and harvest ask for no progress: nobody is watching a feed', () => {
   assert.equal(copilotAdapter.interactive(planStep, ctx).progress, undefined);
   assert.equal(copilotAdapter.harvest(planStep, ctx).progress, undefined);
+});
+
+// --- listModels -------------------------------------------------------
+
+test('parseCopilotModels: extracts every id under the `model` heading, appends auto', async () => {
+  const helpOutput = await readFile(join(fixtureDir, 'copilot-help-config.txt'), 'utf8');
+  const models = parseCopilotModels(helpOutput);
+  assert.deepEqual(models.map(m => m.id).slice(0, 3), ['claude-sonnet-5', 'claude-fable-5.1', 'claude-fable-5']);
+  assert.ok(models.some(m => m.id === 'gpt-5-mini'), 'a gpt id from the list is present');
+  // Stops at the first blank line, so contextTier's own bullets never leak in.
+  assert.equal(models.length, 27, 'exactly the fixture\'s 26 model ids plus auto');
+  assert.deepEqual(models.at(-2), { id: 'kimi-k2.7-code' }, 'last real id before auto');
+  assert.equal(models.at(-1)?.id, 'auto', 'auto is appended last');
+});
+
+test('parseCopilotModels: no `model` heading means no suggestions', () => {
+  assert.deepEqual(parseCopilotModels('Configuration Settings:\n\n  `logLevel`: ...\n'), []);
+});
+
+test('parseCopilotModels: a heading with no bullet lines under it means no suggestions', () => {
+  assert.deepEqual(parseCopilotModels('  `model`: AI model to use.\n\n  `contextTier`: ...\n'), []);
+});
+
+test('listModels: copilot not found on PATH reports unavailable, not a throw', async () => {
+  const previousPath = process.env.PATH;
+  process.env.PATH = '';
+  try {
+    const result = await copilotAdapter.listModels!();
+    assert.deepEqual(result, { source: 'unavailable', models: [] });
+  } finally {
+    process.env.PATH = previousPath;
+  }
 });
 
 test('copilot ignores resumedStepIds, having no session id of its own to resume', () => {

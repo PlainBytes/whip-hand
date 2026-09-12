@@ -111,8 +111,14 @@ interface RunnerAdapter {
   interactive(step: Step, ctx: RunCtx): SpawnSpec;
   headless(step: Step, ctx: RunCtx): SpawnSpec;
   harvest(step: Step, ctx: RunCtx): SpawnSpec;
+  listModels?(): Promise<ModelList>;  // { source: 'live'|'fallback'|'unavailable'; models: ModelInfo[]; note?: string }
 }
 ```
+
+`listModels` feeds the workflow editor's Model field with suggestions and typo warnings.
+Optional, and its absence *is* the capability check, same precedent as `suggestName?` (below):
+a runner with no way to ask simply gets no picker, and the field stays free text with no
+warnings.
 
 The registry is a plain map keyed by adapter `id`, so adding `codex` or `gemini` later is
 additive, not a change to the engine. A step that requests a capability its adapter

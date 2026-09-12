@@ -109,6 +109,7 @@ export function DoctorPage() {
   const agentStatus = useAppStore(state => state.agentStatus);
   const tools = useAppStore(state => state.doctorResult);
   const setDoctorResult = useAppStore(state => state.setDoctorResult);
+  const setModelCatalog = useAppStore(state => state.setModelCatalog);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -117,10 +118,20 @@ export function DoctorPage() {
     setError(null);
     client
       .request('doctor', {})
-      .then(result => setDoctorResult(result))
+      .then(result => {
+        setDoctorResult(result);
+        // The agent's `doctor` handler invalidates its own model-catalog
+        // cache on every call (see handlers.ts), but that invalidation has no
+        // effect here unless the desktop also drops its copy — otherwise the
+        // editor keeps showing a stale fallback list forever after a Doctor
+        // re-run picks up a login. Not folded into setDoctorResult itself:
+        // use-harness-catalog fires `doctor` and `listModels` in parallel, so
+        // a doctor reply landing after listModels's would wipe a fresh catalog.
+        setModelCatalog(null);
+      })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setLoading(false));
-  }, [client, setDoctorResult]);
+  }, [client, setDoctorResult, setModelCatalog]);
 
   useEffect(() => {
     if (agentStatus !== 'connected') return;

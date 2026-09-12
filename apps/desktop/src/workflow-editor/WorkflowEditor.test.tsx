@@ -1,11 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { WorkflowEditor } from './WorkflowEditor.tsx';
 import { convertStep } from './StepRail.tsx';
 import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
 import { AgentClientProvider } from '../agent/agent-context.tsx';
+import { useAppStore } from '../state/store.ts';
 import type { AgentStep, Step, Workflow } from '../../../../packages/core/src/types.ts';
+import type { DoctorResult, ListModelsResult } from '../../../../packages/agent/src/protocol.ts';
 
 function flattenSteps(steps: Step[]): Step[] {
   return steps.flatMap(s => ('steps' in s ? [s, ...flattenSteps(s.steps)] : [s]));
@@ -90,7 +92,7 @@ describe('WorkflowEditor: density and collapse', () => {
     // Required fields carry Fluent's own "*" marker on the label text —
     // matched with a prefix regex rather than the bare word.
     expect(screen.getByLabelText(/^Prompt/)).toHaveValue('implement');
-    expect(screen.getByLabelText(/^Runner/)).toHaveValue('claude');
+    expect(screen.getByLabelText(/^Runner/)).toHaveTextContent('claude');
 
     fireEvent.click(screen.getByTestId('step-collapse-execute'));
     expect(screen.queryByLabelText(/^Prompt/)).not.toBeInTheDocument();
@@ -589,5 +591,186 @@ describe('WorkflowEditor: save-time validation', () => {
     const output = within(screen.getByTestId('step-card-m')).getByLabelText(/^Output filename/);
     expect(output).toHaveAttribute('aria-invalid', 'true');
     expect(within(screen.getByTestId('step-summary-m')).getByText(/1 problem/)).toBeInTheDocument();
+  });
+});
+
+// --- the harness catalog: Runner dropdown, Model combobox -----------------
+
+function sentMethods(transport: MockTransport): string[] {
+  return transport.sent.map(l => (JSON.parse(l) as { method: string }).method);
+}
+
+const runnerRow = (id: string): DoctorResult[number] => (
+  { id, label: id, group: 'harness', runner: true, optional: false, installed: true }
+);
+
+const oneStepWorkflow = (step: Partial<AgentStep> & { id: string }): Workflow => ({
+  name: 'w',
+  steps: [{
+    kind: 'agent', mode: 'headless', writes: false, prompt: 'p', output: `${step.id}.md`,
+    runner: 'claude', ...step,
+  } as AgentStep],
+});
+
+describe('WorkflowEditor: harness catalog prefetch', () => {
+  afterEach(() => {
+    useAppStore.setState({ doctorResult: null, modelCatalog: null });
+  });
+
+  it('a pre-filled store sends neither a doctor nor a listModels request', () => {
+    useAppStore.setState({
+      doctorResult: [runnerRow('claude')],
+      modelCatalog: { claude: { source: 'live', models: [{ id: 'sonnet' }] } },
+    });
+    const { transport } = renderEditor(NESTED_WORKFLOW);
+    expect(sentMethods(transport)).not.toContain('doctor');
+    expect(sentMethods(transport)).not.toContain('listModels');
+  });
+
+  it('an empty store sends exactly one doctor and one listModels request on mount', async () => {
+    const { transport } = renderEditor(NESTED_WORKFLOW);
+    await waitFor(() => {
+      const methods = sentMethods(transport);
+      expect(methods.filter(m => m === 'doctor')).toHaveLength(1);
+      expect(methods.filter(m => m === 'listModels')).toHaveLength(1);
+    });
+  });
+});
+
+describe('WorkflowEditor: the Runner dropdown', () => {
+  afterEach(() => {
+    useAppStore.setState({ doctorResult: null, modelCatalog: null });
+  });
+
+  it('offers doctor\'s runner rows, keeps an unknown current value, and warns about it', async () => {
+    useAppStore.setState({
+      doctorResult: [runnerRow('claude'), runnerRow('copilot')],
+      modelCatalog: {},
+    });
+    renderEditor(oneStepWorkflow({ id: 'a', runner: 'claud' }));
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+
+    const runnerField = screen.getByRole('combobox', { name: /^Runner/ });
+    expect(runnerField).toHaveTextContent('claud');
+    expect(screen.getByText(/'claud' isn't a runner whiphand can drive/)).toBeInTheDocument();
+
+    fireEvent.click(runnerField);
+    const options = (await screen.findAllByRole('option')).map(o => o.textContent);
+    expect(options).toEqual(expect.arrayContaining(['claude', 'copilot', 'claud']));
+  });
+
+  it('before doctor answers, only the step\'s own current runner is offered — nothing is lost, no warning', () => {
+    renderEditor(oneStepWorkflow({ id: 'a', runner: 'claud' }));
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+    expect(screen.queryByText(/isn't a runner whiphand can drive/)).not.toBeInTheDocument();
+  });
+});
+
+describe('WorkflowEditor: the Model combobox', () => {
+  afterEach(() => {
+    useAppStore.setState({ doctorResult: null, modelCatalog: null });
+  });
+
+  it('warns for a value not in a live list, but not for a value matching a `resolves`', () => {
+    useAppStore.setState({
+      doctorResult: [runnerRow('claude')],
+      modelCatalog: {
+        claude: { source: 'live', models: [{ id: 'sonnet', label: 'Sonnet', resolves: 'claude-sonnet-5' }] },
+      } satisfies ListModelsResult,
+    });
+    renderEditor(oneStepWorkflow({ id: 'a', model: 'opsu' }));
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+    expect(screen.getByText(/'opsu' isn't in claude's model list/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/^Model/), { target: { value: 'claude-sonnet-5' } });
+    expect(screen.queryByText(/isn't in claude's model list/)).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/^Model/), { target: { value: 'sonnet' } });
+    expect(screen.queryByText(/isn't in claude's model list/)).not.toBeInTheDocument();
+  });
+
+  it('never warns while the catalog has not answered yet, or once it reports unavailable', () => {
+    renderEditor(oneStepWorkflow({ id: 'a', model: 'opsu' }));
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+    expect(screen.queryByText(/isn't in claude's model list/)).not.toBeInTheDocument();
+
+    act(() => {
+      useAppStore.setState({ modelCatalog: { claude: { source: 'unavailable', models: [] } } });
+    });
+    expect(screen.queryByText(/isn't in claude's model list/)).not.toBeInTheDocument();
+  });
+
+  it('never warns for a runner absent from the catalog (no listModels capability)', () => {
+    useAppStore.setState({ modelCatalog: {} });
+    renderEditor(oneStepWorkflow({ id: 'a', model: 'anything-at-all' }));
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+    expect(screen.queryByText(/isn't in claude's model list/)).not.toBeInTheDocument();
+  });
+
+  it('a fallback list still warns, and shows its note', () => {
+    useAppStore.setState({
+      modelCatalog: {
+        claude: { source: 'fallback', models: [{ id: 'sonnet' }], note: "couldn't query claude; showing built-in aliases" },
+      },
+    });
+    renderEditor(oneStepWorkflow({ id: 'a', model: 'opsu' }));
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+    expect(screen.getByText(/'opsu' isn't in claude's model list/)).toBeInTheDocument();
+    expect(screen.getByText(/couldn't query claude; showing built-in aliases/)).toBeInTheDocument();
+  });
+
+  it('picking "Default" blanks the field, and the blank is what gets saved', async () => {
+    const { transport } = renderEditor(oneStepWorkflow({ id: 'a', model: 'sonnet' }));
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+    const modelField = screen.getByRole('combobox', { name: /^Model/ });
+    fireEvent.click(modelField);
+    fireEvent.click(await screen.findByRole('option', { name: 'Default' }));
+    expect(modelField).toHaveValue('');
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    const req = await lastRequest(transport, 'updateWorkflow');
+    const wf = (req.params as { workflow: Workflow }).workflow;
+    expect((wf.steps[0] as AgentStep).model).toBeUndefined();
+  });
+
+  it('typed free text is committed as-is and survives a save round-trip', async () => {
+    const { transport } = renderEditor(oneStepWorkflow({ id: 'a' }));
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+    fireEvent.change(screen.getByLabelText(/^Model/), { target: { value: 'my-custom-model' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    const req = await lastRequest(transport, 'updateWorkflow');
+    const wf = (req.params as { workflow: Workflow }).workflow;
+    expect((wf.steps[0] as AgentStep).model).toBe('my-custom-model');
+  });
+
+  it('switching runner keeps the model value; only the warning changes', async () => {
+    useAppStore.setState({
+      doctorResult: [runnerRow('claude'), runnerRow('copilot')],
+      modelCatalog: {
+        claude: { source: 'live', models: [{ id: 'sonnet' }] },
+        copilot: { source: 'live', models: [{ id: 'gpt-5-mini' }] },
+      },
+    });
+    renderEditor(oneStepWorkflow({ id: 'a', runner: 'claude', model: 'gpt-5-mini' }));
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+    expect(screen.getByText(/'gpt-5-mini' isn't in claude's model list/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('combobox', { name: /^Runner/ }));
+    fireEvent.click(await screen.findByRole('option', { name: 'copilot' }));
+
+    expect(screen.getByRole('combobox', { name: /^Model/ })).toHaveValue('gpt-5-mini');
+    expect(screen.queryByText(/isn't in claude's model list/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/isn't in copilot's model list/)).not.toBeInTheDocument();
+  });
+
+  it('a "Refresh list" action re-requests listModels with refresh: true', async () => {
+    useAppStore.setState({ modelCatalog: { claude: { source: 'live', models: [] } } });
+    const { transport } = renderEditor(oneStepWorkflow({ id: 'a' }));
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh list' }));
+
+    const req = await lastRequest(transport, 'listModels');
+    expect(req.params).toEqual({ refresh: true });
   });
 });

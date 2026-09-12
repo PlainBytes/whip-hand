@@ -4,6 +4,7 @@ import type {
   ConfigGetResult,
   DoctorResult,
   JobStatus,
+  ListModelsResult,
   ListWorkflowsResult,
   WhiphandEventNotificationParams,
   PtyDataParams,
@@ -401,6 +402,16 @@ export interface AppState {
   doctorResult: DoctorResult | null;
   setDoctorResult: (result: DoctorResult | null) => void;
 
+  /**
+   * Beside `doctorResult`, and for the same reason: `listModels` takes no
+   * workdir either (see the RPC's doc comment), so this is a machine/account
+   * fact, not a workspace one, and it survives a workspace switch exactly as
+   * `doctorResult` does. Fetched once by use-harness-catalog.ts on the
+   * workflow editor's first mount.
+   */
+  modelCatalog: ListModelsResult | null;
+  setModelCatalog: (result: ListModelsResult | null) => void;
+
   config: ConfigGetResult | null;
   setConfig: (config: ConfigGetResult | null) => void;
 
@@ -490,10 +501,10 @@ export const useAppStore = create<AppState>((set) => ({
     // Clear rather than key by workspace: every consumer already refetches on
     // a workspacePath change, so keying would only retain every visited
     // workspace's data forever while keeping stale-but-plausible rows on
-    // screen — the exact failure this is fixing. `doctorResult` survives (the
-    // doctor RPC takes no workdir), and so do `jobs` (cross-workspace
-    // awareness needs them) and `filesDirty` (the guard has to run *before*
-    // the switch; clearing it here would silently bypass it).
+    // screen — the exact failure this is fixing. `doctorResult` and
+    // `modelCatalog` survive (neither RPC takes a workdir), and so do `jobs`
+    // (cross-workspace awareness needs them) and `filesDirty` (the guard has
+    // to run *before* the switch; clearing it here would silently bypass it).
     return {
       workspacePath: path,
       runs: [],
@@ -514,6 +525,9 @@ export const useAppStore = create<AppState>((set) => ({
 
   doctorResult: null,
   setDoctorResult: doctorResult => set({ doctorResult }),
+
+  modelCatalog: null,
+  setModelCatalog: modelCatalog => set({ modelCatalog }),
 
   config: null,
   setConfig: config => set({ config }),

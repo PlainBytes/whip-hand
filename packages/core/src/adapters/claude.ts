@@ -1,10 +1,11 @@
-import type { AgentStep, DetectResult, RunCtx, RunnerAdapter, SpawnSpec } from '../types.ts';
+import type { AgentStep, DetectResult, ModelList, RunCtx, RunnerAdapter, SpawnSpec } from '../types.ts';
 import { buildPrompt } from '../template.ts';
 import { interactiveGuidance } from '../engine/interactive-guidance.ts';
 import { endMarkerPath, shellPath } from '../engine/session-end.ts';
 import { awaitStatePath } from '../engine/await-state.ts';
 import { execRunner } from '../exec.ts';
 import { parseToolVersion, PROBE_TIMEOUT_MS } from '../tools.ts';
+import { probeClaudeModels } from './claude-models.ts';
 
 export const CLAUDE_WRITE_TOOLS = 'Write,Edit,NotebookEdit';
 const READONLY_ALLOWED = 'Read,Grep,Glob,Bash';
@@ -167,5 +168,10 @@ export const claudeAdapter: RunnerAdapter = {
       ...modelArgs(step), '--allowedTools=Write', harvestPrompt(step, ctx),
     ];
     return spec(ctx, argv, false);
+  },
+
+  /** See claude-models.ts for the probe itself — live-only vs. static aliases lives there, not here. */
+  listModels(): Promise<ModelList> {
+    return probeClaudeModels();
   },
 };

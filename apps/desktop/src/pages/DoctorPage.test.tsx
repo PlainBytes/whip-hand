@@ -45,8 +45,8 @@ const CLAUDE = row({ id: 'claude', label: 'Claude Code', installed: true, versio
 const GIT = row({ id: 'git', label: 'Git', group: 'support', runner: false, installed: true, version: '2.53.0' });
 
 describe('DoctorPage', () => {
-  beforeEach(() => useAppStore.setState({ agentStatus: 'connected', doctorResult: null }));
-  afterEach(() => useAppStore.setState({ agentStatus: 'down', doctorResult: null }));
+  beforeEach(() => useAppStore.setState({ agentStatus: 'connected', doctorResult: null, modelCatalog: null }));
+  afterEach(() => useAppStore.setState({ agentStatus: 'down', doctorResult: null, modelCatalog: null }));
 
   it('waits for the agent rather than reporting an empty machine', () => {
     useAppStore.setState({ agentStatus: 'connecting' });
@@ -163,6 +163,20 @@ describe('DoctorPage', () => {
 
     await waitFor(() =>
       expect(screen.getByTestId('doctor-card-fd')).toHaveTextContent('Installed — 10.2.0'));
+  });
+
+  it('clears the desktop model catalog on every doctor run, so a stale fallback list gets refetched', async () => {
+    // The agent's own `doctor` handler invalidates its model-catalog cache on
+    // every call (handlers.ts), but that invalidation only matters if the
+    // desktop's copy is dropped too — otherwise the workflow editor keeps
+    // showing the fallback aliases it cached before a mid-session login,
+    // forever, no matter how many times Doctor re-runs.
+    useAppStore.setState({
+      modelCatalog: { claude: { source: 'fallback', models: [{ id: 'sonnet' }], note: 'stale' } },
+    });
+    const { transport } = renderDoctor();
+    await respond(transport, 'doctor', [CLAUDE]);
+    await waitFor(() => expect(useAppStore.getState().modelCatalog).toBeNull());
   });
 
   it('surfaces the agent’s message when the check fails', async () => {

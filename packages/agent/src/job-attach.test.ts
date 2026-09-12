@@ -50,6 +50,23 @@ test('listJobs reports the live pty, with the step id only the transcript knows'
   assert.deepEqual(result[0]!.pty, { stepId: 'implement', cols: 120, rows: 40 });
 });
 
+test('listJobs carries the run name the frontend recorded on the job', async () => {
+  const { jobs, handlers } = await harness();
+  const job = jobs.create('/ws');
+  job.runName = 'OAuth support';
+
+  const result = await handlers.listJobs!({}, ctx) as JobSummary[];
+  assert.equal(result[0]!.name, 'OAuth support');
+});
+
+test('listJobs omits the name for a run that never got one', async () => {
+  const { jobs, handlers } = await harness();
+  jobs.create('/ws');
+
+  const result = await handlers.listJobs!({}, ctx) as JobSummary[];
+  assert.equal(result[0]!.name, undefined);
+});
+
 test('listJobs surfaces a job parked on a human, which is the one a client must not miss', async () => {
   const { jobs, handlers } = await harness();
   const job = jobs.create('/ws');

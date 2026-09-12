@@ -1,6 +1,7 @@
 import { Button, Spinner, Tooltip } from '@fluentui/react-components';
 import { DismissCircleFilled, PauseCircleFilled } from '@fluentui/react-icons';
 import { WorkspaceDot } from './WorkspaceDot.tsx';
+import { RowGlyph, RowTrailing, SIDEBAR_ROW_GAP, SIDEBAR_ROW_STYLE } from './sidebar-row.tsx';
 import { isWaitingJob, type JobState } from '../state/store.ts';
 import { AWAIT_LABEL, manualLabel } from '../lib/await-copy.ts';
 import { basename } from '../lib/workspace-identity.ts';
@@ -50,8 +51,12 @@ export interface OngoingRunsProps {
   onShowMore: () => void;
 }
 
-/** Shared by every row in this list, so the "+N more" row lines up under them exactly. */
-const ROW_STYLE = { justifyContent: 'flex-start', borderRadius: 4, width: '100%', minWidth: 0, minHeight: 28, padding: '2px 8px' };
+/**
+ * Shared by every row in this list. `+N more` gets an empty `<RowGlyph>` of
+ * its own, so it's the row's *content*, not just this button style, that
+ * lines up with the run names above it.
+ */
+const ROW_STYLE = { ...SIDEBAR_ROW_STYLE, minWidth: 0 };
 
 /**
  * Clickable rows for live jobs — running or blocked on the human — above the
@@ -69,7 +74,7 @@ export function OngoingRuns({ jobs, onOpenRun, onShowMore }: OngoingRunsProps) {
     <div
       role="group"
       aria-label="Ongoing runs"
-      style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}
+      style={{ display: 'flex', flexDirection: 'column', gap: SIDEBAR_ROW_GAP }}
     >
       {shown.map(job => {
         const waiting = isWaitingJob(job);
@@ -85,16 +90,16 @@ export function OngoingRuns({ jobs, onOpenRun, onShowMore }: OngoingRunsProps) {
               onClick={() => onOpenRun(job)}
               style={ROW_STYLE}
             >
-              <span style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', minWidth: 0 }}>
-                {job.workdir
-                  ? <WorkspaceDot path={job.workdir} size={8} />
-                  : <span aria-hidden style={{ width: 8, height: 8, flexShrink: 0 }} />}
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left', flex: 1, minWidth: 0 }}>
+              <span style={{ display: 'flex', alignItems: 'center', width: '100%', minWidth: 0 }}>
+                <RowGlyph>
+                  {job.workdir && <WorkspaceDot path={job.workdir} />}
+                </RowGlyph>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
                   {name}
                 </span>
-                <span aria-hidden style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+                <RowTrailing>
                   <RunStatusIcon status={waiting ? 'waiting' : 'running'} />
-                </span>
+                </RowTrailing>
               </span>
             </Button>
           </Tooltip>
@@ -106,7 +111,12 @@ export function OngoingRuns({ jobs, onOpenRun, onShowMore }: OngoingRunsProps) {
           onClick={onShowMore}
           style={ROW_STYLE}
         >
-          +{overflow} more
+          <span style={{ display: 'flex', alignItems: 'center', width: '100%', minWidth: 0 }}>
+            <RowGlyph />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
+              +{overflow} more
+            </span>
+          </span>
         </Button>
       )}
     </div>

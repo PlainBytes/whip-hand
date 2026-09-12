@@ -10,6 +10,7 @@ export interface Job {
   jobId: string;
   workdir: string;
   runId?: string;
+  runName?: string;
   status: JobStatus;
   controller: AbortController;
   promise: Promise<unknown>;

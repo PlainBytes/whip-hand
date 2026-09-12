@@ -50,8 +50,13 @@ export function createFrontend(
     onEvent(event: WhiphandEvent, seq?: number): void {
       // A resumed run emits run:resume in place of run:start. Without it here
       // every notification for a resumed run goes out with runId undefined and
-      // the desktop cannot tell which run they belong to.
-      if (event.type === 'run:start' || event.type === 'run:resume') runIdBox.current = event.runId;
+      // the desktop cannot tell which run they belong to. The same branch
+      // records the run's name on the job, so a client that attaches after
+      // run:start can still learn it (see listJobs/jobSummarySchema).
+      if (event.type === 'run:start' || event.type === 'run:resume') {
+        runIdBox.current = event.runId;
+        job.runName = event.name;
+      }
       if (event.type === 'step:start') lastStepId = event.stepId;
       notify('whiphandEvent', {
         jobId, workdir: job.workdir, runId: runIdBox.current, event, ts: new Date().toISOString(),

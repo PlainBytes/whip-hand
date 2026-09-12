@@ -514,6 +514,7 @@ export const jobSummarySchema = z.object({
   jobId: z.string(),
   workdir: z.string(),
   runId: z.string().optional(),
+  name: z.string().optional(),
   status: jobStatusSchema,
   /** The job's live interactive session, if a step is currently running one. */
   pty: z.object({

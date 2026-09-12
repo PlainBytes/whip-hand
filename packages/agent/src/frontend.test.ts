@@ -44,6 +44,18 @@ test('onEvent tags whiphandEvent and runStateChanged with the job workdir', () =
   assert.equal(state?.params.workdir, '/ws/acme');
 });
 
+test('onEvent records the run name on the job, so a late attach can label it', () => {
+  const job = fakeJob();
+  const { notify } = collectNotify();
+  const frontend = createFrontend(job, notify, {});
+
+  frontend.onEvent({ type: 'run:start', runId: 'run-1', workflow: 'demo', name: 'OAuth support' });
+  assert.equal(job.runName, 'OAuth support');
+
+  frontend.onEvent({ type: 'run:resume', runId: 'run-2', workflow: 'demo', name: 'Resumed' });
+  assert.equal(job.runName, 'Resumed', 'a resumed run relabels the job');
+});
+
 test('runInteractive spawns a PTY, emits ptyStarted with default 80x24, and resolves with the exit code', async () => {
   const job = fakeJob();
   const { calls, notify } = collectNotify();

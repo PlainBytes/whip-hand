@@ -155,6 +155,22 @@ describe('Sidebar', () => {
       expect(section.compareDocumentPosition(activity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
+    it('renders the name of a job known only from a listJobs summary', () => {
+      // Regression: a client that attaches mid-run learns the job only
+      // through applyJobSummaries, which used to carry no name at all.
+      useAppStore.setState({
+        workspacePath: '/ws',
+        jobs: { j1: job('j1', { runName: undefined, runId: 'run-1' }) },
+      });
+      useAppStore.getState().applyJobSummaries([{
+        jobId: 'j1', workdir: '/repos/whip-hand', runId: 'run-1', name: 'OAuth support',
+        status: 'running', pty: null,
+      }]);
+      renderSidebar();
+      const section = screen.getByLabelText('Ongoing runs');
+      expect(within(section).getByRole('button', { name: 'OAuth support — running · whip-hand' })).toBeInTheDocument();
+    });
+
     it('sorts a waiting job first and shows the waiting icon', () => {
       useAppStore.setState({
         workspacePath: '/ws',
@@ -173,7 +189,7 @@ describe('Sidebar', () => {
       expect(buttons[1]).toHaveAccessibleName('Refactor — running · whip-hand');
     });
 
-    it('shows a per-path colour dot, or an equal-size spacer when the job has no workdir', () => {
+    it('shows a per-path colour dot, or an equal-size empty slot when the job has no workdir', () => {
       useAppStore.setState({
         workspacePath: '/ws',
         jobs: {
@@ -185,17 +201,21 @@ describe('Sidebar', () => {
       renderSidebar();
       const section = screen.getByLabelText('Ongoing runs');
       const buttons = within(section).getAllByRole('button');
-      // The dot is the first aria-hidden span in the row, ahead of the trailing status icon.
-      const dotOf = (i: number) => buttons[i].querySelector('span[aria-hidden]') as HTMLElement;
+      // The leading glyph slot is the first aria-hidden span in the row, ahead
+      // of the trailing status icon; the colour dot, when there is one, is
+      // the circular span nested inside it.
+      const glyphOf = (i: number) => buttons[i].querySelector('span[aria-hidden]') as HTMLElement;
+      const dotOf = (i: number) => glyphOf(i).querySelector('span');
 
-      expect(dotOf(0).style.background).toBe(`var(${workspaceColorVar('/repos/alpha')})`);
-      expect(dotOf(1).style.background).toBe(`var(${workspaceColorVar('/repos/beta')})`);
-      expect(dotOf(0).style.background).not.toBe(dotOf(1).style.background);
+      expect(dotOf(0)!.style.background).toBe(`var(${workspaceColorVar('/repos/alpha')})`);
+      expect(dotOf(1)!.style.background).toBe(`var(${workspaceColorVar('/repos/beta')})`);
+      expect(dotOf(0)!.style.background).not.toBe(dotOf(1)!.style.background);
 
-      // No workdir: same footprint, so the names below still line up, but no colour.
-      expect(dotOf(2).style.width).toBe('8px');
-      expect(dotOf(2).style.height).toBe('8px');
-      expect(dotOf(2).style.background).toBe('');
+      // No workdir: no dot, but the slot itself is still the same 20×20
+      // footprint, so the name below still lines up on the label column.
+      expect(dotOf(2)).toBeNull();
+      expect(glyphOf(2).style.width).toBe('20px');
+      expect(glyphOf(2).style.height).toBe('20px');
     });
 
     it('collapses more than 5 jobs into a "+N more" row', () => {
@@ -236,6 +256,40 @@ describe('Sidebar', () => {
       const { onOpenRun } = renderSidebar();
       fireEvent.click(screen.getByRole('button', { name: 'OAuth support — running · whip-hand' }));
       expect(onOpenRun).toHaveBeenCalledWith(target);
+    });
+
+    // The regression guard for the sidebar rail: every row built on
+    // `SIDEBAR_ROW_STYLE` reports the same leading-glyph width and
+    // `paddingLeft`, so a future change to any one of them can't drift
+    // without this test catching it. `NavItem` is out of scope here — its
+    // geometry comes from Fluent's own compiled CSS, not inline `style`,
+    // which jsdom does not resolve.
+    it('keeps every SIDEBAR_ROW_STYLE row on the same rail', () => {
+      useAppStore.setState({
+        workspacePath: '/ws',
+        jobs: Object.fromEntries(
+          Array.from({ length: 6 }, (_, i) => [`j${i}`, job(`j${i}`, { runName: `Run ${i}` })]),
+        ),
+        remoteAccess: {
+          enabled: true, port: 61338, listening: true, error: null,
+          clientCount: 1, addresses: ['192.168.1.20'], webRootPresent: true,
+        },
+      });
+      renderSidebar();
+      const nav = screen.getByRole('navigation', { name: 'Main' });
+      const runsSection = within(nav).getByLabelText('Ongoing runs');
+
+      const workspaceButton = within(nav).getAllByRole('button')[0];
+      const runRowButton = within(runsSection).getByRole('button', { name: /Run 0/ });
+      const moreRowButton = within(runsSection).getByRole('button', { name: '+1 more' });
+      const remoteRow = within(nav).getByText(/remote access on/i).closest('div') as HTMLElement;
+
+      const rows = [workspaceButton, runRowButton, moreRowButton, remoteRow];
+      const glyphWidths = rows.map(r => (r.querySelector('span[aria-hidden]') as HTMLElement).style.width);
+      const paddingLefts = rows.map(r => r.style.paddingLeft);
+
+      expect(glyphWidths).toEqual(['20px', '20px', '20px', '20px']);
+      expect(paddingLefts).toEqual(['12px', '12px', '12px', '12px']);
     });
   });
 

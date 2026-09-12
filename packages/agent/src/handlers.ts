@@ -678,6 +678,7 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
         jobId: job.jobId,
         workdir: job.workdir,
         ...(job.runId === undefined ? {} : { runId: job.runId }),
+        ...(job.runName === undefined ? {} : { name: job.runName }),
         status: job.status,
         pty: job.pty
           ? { stepId: recorded?.stepId ?? '', cols: job.ptyCols, rows: job.ptyRows }

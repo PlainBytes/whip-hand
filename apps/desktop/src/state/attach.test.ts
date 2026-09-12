@@ -156,4 +156,15 @@ describe('applyJobSummaries', () => {
     expect(job.ptyStepId).toBe('live-step');
     expect(job.ptyCols).toBe(120);
   });
+
+  it('seeds runName from the summary for a client attaching mid-run', () => {
+    store().applyJobSummaries([{ ...summary, name: 'OAuth support' }]);
+    expect(store().jobs.j1!.runName).toBe('OAuth support');
+  });
+
+  it('does not overwrite a runName the store already holds', () => {
+    store().setJobRunName('j1', 'Renamed locally');
+    store().applyJobSummaries([{ ...summary, name: 'OAuth support' }]);
+    expect(store().jobs.j1!.runName).toBe('Renamed locally');
+  });
 });

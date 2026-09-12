@@ -2,6 +2,7 @@ import { Button, CounterBadge, Tooltip } from '@fluentui/react-components';
 import { pagesInGroup, type NavGroup, type PageDef, type PageId } from '../nav.ts';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher.tsx';
 import { OngoingRuns } from './OngoingRuns.tsx';
+import { RowGlyph, RowTrailing, SIDEBAR_GROUP_GAP, SIDEBAR_ROW_GAP, SIDEBAR_ROW_STYLE } from './sidebar-row.tsx';
 import { useAppStore, ongoingJobs, waitingJobs, type JobState } from '../state/store.ts';
 import { useCapabilities } from '../capabilities.tsx';
 
@@ -28,17 +29,20 @@ function RemoteAccessIndicator() {
     >
       <div
         style={{
-          display: 'flex', alignItems: 'center', gap: 8,
-          padding: '4px 10px', fontSize: 12, color: 'var(--colorNeutralForeground3)',
+          ...SIDEBAR_ROW_STYLE,
+          display: 'flex', alignItems: 'center',
+          fontSize: 14, color: 'var(--colorNeutralForeground3)',
         }}
       >
-        <span
-          aria-hidden
-          style={{
-            width: 8, height: 8, borderRadius: '50%',
-            background: 'var(--colorPaletteGreenForeground1)', flexShrink: 0,
-          }}
-        />
+        <RowGlyph>
+          <span
+            aria-hidden
+            style={{
+              width: 8, height: 8, borderRadius: '50%',
+              background: 'var(--colorPaletteGreenForeground1)', flexShrink: 0,
+            }}
+          />
+        </RowGlyph>
         Remote access on
       </div>
     </Tooltip>
@@ -64,32 +68,48 @@ function NavItem({ def, selected, disabled, badge, badgeUrgent, onSelect }: {
   onSelect: () => void;
 }) {
   return (
-    <Button
-      appearance="subtle"
-      icon={<def.icon />}
-      disabled={disabled}
-      aria-current={selected ? 'page' : undefined}
-      // The badge is aria-hidden, so the count has to reach the name here.
-      aria-label={badge > 0 ? `${def.label} (${badge} running)` : undefined}
-      onClick={onSelect}
-      style={{
-        justifyContent: 'flex-start',
-        background: selected ? 'var(--colorNeutralBackground2)' : undefined,
-        borderLeft: `2px solid ${selected ? 'var(--colorBrandForeground1)' : 'transparent'}`,
-        borderRadius: 4,
-      }}
-    >
-      {def.label}
-      {badge > 0 && (
-        <CounterBadge
+    <div style={{ position: 'relative' }}>
+      {selected && (
+        // An overlay, not `borderLeft`: a border widens the button's box by
+        // 2px, pushing its content 1px right of every other sidebar row —
+        // the exact drift this rail is meant to remove. An overlay also
+        // can't collide with Fluent's own focus-visible inset shadow the way
+        // an `inset` box-shadow would.
+        <span
           aria-hidden
-          count={badge}
-          appearance="filled"
-          color={badgeUrgent ? 'danger' : 'informative'}
-          style={{ marginLeft: 'auto' }}
+          style={{
+            position: 'absolute', left: 0, top: 4, bottom: 4, width: 2,
+            borderRadius: 1, background: 'var(--colorBrandForeground1)',
+          }}
         />
       )}
-    </Button>
+      <Button
+        appearance="subtle"
+        icon={<def.icon />}
+        disabled={disabled}
+        aria-current={selected ? 'page' : undefined}
+        // The badge is aria-hidden, so the count has to reach the name here.
+        aria-label={badge > 0 ? `${def.label} (${badge} running)` : undefined}
+        onClick={onSelect}
+        style={{
+          justifyContent: 'flex-start',
+          width: '100%',
+          background: selected ? 'var(--colorNeutralBackground2)' : undefined,
+        }}
+      >
+        {def.label}
+        {badge > 0 && (
+          <RowTrailing>
+            <CounterBadge
+              aria-hidden
+              count={badge}
+              appearance="filled"
+              color={badgeUrgent ? 'danger' : 'informative'}
+            />
+          </RowTrailing>
+        )}
+      </Button>
+    </div>
   );
 }
 
@@ -104,10 +124,12 @@ export function Sidebar({ page, onSelectPage, onOpenRun }: SidebarProps) {
   const running = Object.values(jobs).filter(j => !j.finished).length;
   const urgent = waitingJobs(jobs).length > 0;
   const ongoing = ongoingJobs(jobs);
+  const remoteListening = useAppStore(state => state.remoteAccess?.listening ?? false);
+  const hasOngoingRuns = showOngoingRuns && ongoing.length > 0;
 
   function group(name: NavGroup) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: SIDEBAR_ROW_GAP }}>
         {pagesInGroup(name, capabilities).map(def => {
           const gated = def.requiresWorkspace && !workspacePath;
           return (
@@ -135,7 +157,9 @@ export function Sidebar({ page, onSelectPage, onOpenRun }: SidebarProps) {
       style={{
         display: 'flex',
         flexDirection: 'column',
-        gap: 2,
+        // Block separation is stated once via the named spacers below, not
+        // silently summed from this gap plus each spacer's own size.
+        gap: 0,
         borderRight: '1px solid var(--colorNeutralStroke2)',
         padding: 8,
         width: 220,
@@ -144,14 +168,22 @@ export function Sidebar({ page, onSelectPage, onOpenRun }: SidebarProps) {
       }}
     >
       <WorkspaceSwitcher />
-      <div style={{ height: 8 }} />
+      <div style={{ height: SIDEBAR_GROUP_GAP }} />
       {group('workspace')}
       {/* Everything below the spacer is app-scoped: it outlives any one workspace. */}
-      <div style={{ flex: 1, minHeight: 16 }} />
-      {showOngoingRuns && (
-        <OngoingRuns jobs={ongoing} onOpenRun={onOpenRun} onShowMore={() => onSelectPage('activity')} />
+      <div style={{ flex: 1, minHeight: SIDEBAR_GROUP_GAP }} />
+      {hasOngoingRuns && (
+        <>
+          <OngoingRuns jobs={ongoing} onOpenRun={onOpenRun} onShowMore={() => onSelectPage('activity')} />
+          <div style={{ height: SIDEBAR_GROUP_GAP }} />
+        </>
       )}
-      <RemoteAccessIndicator />
+      {remoteListening && (
+        <>
+          <RemoteAccessIndicator />
+          <div style={{ height: SIDEBAR_GROUP_GAP }} />
+        </>
+      )}
       {group('app')}
     </nav>
   );

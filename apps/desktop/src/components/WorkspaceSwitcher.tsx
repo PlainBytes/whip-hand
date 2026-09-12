@@ -12,6 +12,7 @@ import { OpenPathField } from './OpenPathField.tsx';
 import { openWorkspace } from '../lib/workspace-switch.ts';
 import { basename, sortWorkspaces } from '../lib/workspace-identity.ts';
 import { WorkspaceDot } from './WorkspaceDot.tsx';
+import { RowGlyph, RowTrailing, SIDEBAR_ROW_STYLE } from './sidebar-row.tsx';
 import type { RecentWorkspace } from '../../../../packages/agent/src/app-state.ts';
 
 // Stable reference so the zustand selector doesn't produce a fresh array on
@@ -68,10 +69,15 @@ export function WorkspaceSwitcher() {
         <MenuTrigger disableButtonEnhancement>
           <Button
             appearance="subtle"
-            style={{ justifyContent: 'flex-start', textAlign: 'left', padding: '6px 8px' }}
+            style={SIDEBAR_ROW_STYLE}
           >
-            <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-              {workspacePath && <WorkspaceDot path={workspacePath} size={10} />}
+            {/* flex-start, not center: with the two-line name+path block, that
+                puts the dot on the name's optical centre instead of floating
+                between the two lines. */}
+            <span style={{ display: 'flex', alignItems: 'flex-start', minWidth: 0, width: '100%' }}>
+              <RowGlyph>
+                {workspacePath && <WorkspaceDot path={workspacePath} />}
+              </RowGlyph>
               <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                 <Text weight="semibold" truncate wrap={false}>
                   {workspacePath ? basename(workspacePath) : 'Open workspace…'}
@@ -82,7 +88,9 @@ export function WorkspaceSwitcher() {
                   </Text>
                 )}
               </span>
-              <ChevronUpDownRegular style={{ marginLeft: 'auto', flexShrink: 0 }} />
+              <RowTrailing>
+                <ChevronUpDownRegular />
+              </RowTrailing>
             </span>
           </Button>
         </MenuTrigger>
@@ -91,7 +99,7 @@ export function WorkspaceSwitcher() {
             {sorted.map(r => (
               <MenuItem
                 key={r.path}
-                icon={<WorkspaceDot path={r.path} size={10} />}
+                icon={<WorkspaceDot path={r.path} />}
                 secondaryContent={r.pinned ? 'Pinned' : undefined}
                 onClick={() => void switchTo(r.path)}
               >
@@ -118,7 +126,7 @@ export function WorkspaceSwitcher() {
         </MenuPopover>
       </Menu>
       {promptingPath && (
-        <div style={{ padding: '4px 8px' }}>
+        <div style={{ padding: '4px 12px' }}>
           <OpenPathField
             onOpen={async path => {
               setPromptingPath(false);
@@ -128,7 +136,7 @@ export function WorkspaceSwitcher() {
         </div>
       )}
       {error && (
-        <Text size={100} style={{ color: 'var(--colorPaletteRedForeground1)', padding: '0 8px' }}>
+        <Text size={100} style={{ color: 'var(--colorPaletteRedForeground1)', padding: '0 12px' }}>
           {error}
         </Text>
       )}

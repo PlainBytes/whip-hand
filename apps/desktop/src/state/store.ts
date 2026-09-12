@@ -886,6 +886,7 @@ export const useAppStore = create<AppState>((set) => ({
         ...job,
         finished: summary.status !== 'running',
         runId: job.runId ?? summary.runId,
+        runName: job.runName ?? summary.name,
         ptyActive: job.ptyActive || summary.pty !== null,
         ptyStepId: job.ptyStepId ?? summary.pty?.stepId,
         ptyCols: job.ptyCols ?? summary.pty?.cols,

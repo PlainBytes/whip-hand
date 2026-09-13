@@ -502,5 +502,10 @@ export interface Frontend {
   runManual?(request: ManualRequest, signal?: AbortSignal): Promise<ManualResponse>;
   // `seq` is the ordinal core's journal assigned this event — optional so an
   // existing onEvent implementation that ignores it stays assignment-compatible.
-  onEvent(event: WhiphandEvent, seq?: number): void;
+  // `ts` is the same ISO timestamp RunJournal.record stamped on this event's
+  // run.log line, threaded through rather than left for the frontend to take
+  // its own `new Date()` reading — the two used to disagree by however long
+  // fell between the two calls, which is what a resumed run's Logs tab
+  // de-duplication (seq + ts + kind + text) depends on lining up exactly.
+  onEvent(event: WhiphandEvent, seq?: number, ts?: string): void;
 }

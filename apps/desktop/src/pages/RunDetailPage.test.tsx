@@ -1481,6 +1481,173 @@ describe('RunDetailPage: cycles and manual steps', () => {
     expect(screen.queryByTestId('terminal-panel-mock')).not.toBeInTheDocument();
   });
 
+  it('a client attaching mid-step keeps the disk\'s running status once a live event lands (F1/F2)', async () => {
+    // No step:start ever seen for 'execute' here — this simulates a browser
+    // opened after the step had already started: only `runId` is known up
+    // front (as it would be, opened from the Runs list), with no live job at
+    // all until the first event arrives. The manifest already says the step
+    // is running; that first live event must not downgrade it to the guessed
+    // row's default 'pending'.
+    const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-attach');
+    await respondGetRun(transport, {
+      runId: 'run-attach', runDir: '/ws/.whiphand/runs/run-attach', status: 'running', artifacts: [],
+      // A second, still-pending step: if the bug degrades 'execute' from
+      // 'running' to 'pending', findCurrentStepIndex still lands on it (the
+      // first non-terminal step either way), so the pill's *own* reported
+      // status — not just which one gets the focus ring — is what actually
+      // pins the regression.
+      steps: [
+        { id: 'execute', status: 'running', startedAt: '2026-01-01T00:00:00Z' },
+        { id: 'review', status: 'pending' },
+      ],
+    });
+    expect(await screen.findByTestId('step-card-execute')).toHaveAttribute('aria-label', expect.stringContaining('running'));
+
+    emitWhiphandEvent(transport, 'job-attach-late', 'run-attach',
+      { type: 'step:progress', stepId: 'execute', progress: { kind: 'usage', turns: 2 } }, 't1');
+
+    // Still running — the guessed row's default 'pending' status must not
+    // have won the merge — and still the focus.
+    await waitFor(() => expect(screen.getByTestId('step-spend-execute')).toHaveTextContent('2 turns'));
+    expect(screen.getByTestId('step-card-execute')).toHaveAttribute('aria-label', expect.stringContaining('running'));
+    expect(screen.getByTestId('step-card-execute')).toHaveAttribute('data-current', 'true');
+  });
+
+  it('the running body step gets the highlight, not the loop around it (F7)', async () => {
+    const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-f7');
+    await respondGetRun(transport, {
+      runId: 'run-f7', runDir: '/ws/.whiphand/runs/run-f7', status: 'running', artifacts: [],
+      steps: [
+        { id: 'fix', kind: 'loop', status: 'running', iterations: 1, maxIterations: 3 },
+        { id: 'execute', status: 'running', loopId: 'fix', iteration: 1 },
+      ],
+    });
+
+    expect(await screen.findByTestId('step-card-execute')).toHaveAttribute('data-current', 'true');
+    expect(screen.getByTestId('step-card-fix')).not.toHaveAttribute('data-current', 'true');
+  });
+
+  it('a finished job\'s stale live "running" never beats a terminal disk status (merge guard)', async () => {
+    // The agent no longer tracks this job (evicted from its own per-job
+    // history — MAX_TRACKED_JOBS — or simply a stale reload): its live
+    // 'running' is left over from a session that is long gone, but the disk
+    // row already reached a terminal state. Built directly, the way the
+    // sibling "ignores a finished job" test does, because reaching this
+    // through real events would require constructing the very eviction this
+    // guards against.
+    useAppStore.setState({
+      jobs: {
+        'job-evicted': {
+          jobId: 'job-evicted', runId: 'r-evicted', finished: true, workdir: '/ws',
+          stepOrder: ['execute'],
+          steps: { execute: { key: 'execute', id: 'execute', status: 'running', startedAt: 't0' } },
+          currentExecution: {}, events: [], logTail: [], activityTail: [], hasNarrated: false,
+          ptyActive: false, ptyDataBuffer: [], ptyDataBaseIndex: 0, ptyDataTrimmed: false, ptyExited: false,
+        } as never,
+      },
+    });
+    const { transport } = renderRunDetail('job-evicted');
+    // Deliberately NOT 'running': that would trip the page-level staleJob
+    // guard instead (see "ignores a finished job..."), which nulls the job
+    // out entirely rather than exercising mergeSteps' own guard.
+    await respondGetRun(transport, {
+      runId: 'r-evicted', runDir: '/ws/.whiphand/runs/r-evicted', status: 'succeeded', artifacts: [],
+      steps: [{ id: 'execute', status: 'done', startedAt: 't0', endedAt: 't1' }],
+    });
+
+    expect(await screen.findByTestId('step-card-execute')).toHaveAttribute('aria-label', expect.stringContaining('done'));
+  });
+
+  it('a guessed loop row from loop:iteration without loop:start keeps the disk status (merge guard, F2 loop)', async () => {
+    const { transport } = renderRunDetail('job-loopguess', vi.fn(), vi.fn(), 'run-loopguess');
+    await respondGetRun(transport, {
+      runId: 'run-loopguess', runDir: '/ws/.whiphand/runs/run-loopguess', status: 'running', artifacts: [],
+      steps: [{ id: 'fix', kind: 'loop', status: 'running', iterations: 2, maxIterations: 3 }],
+    });
+    expect(await screen.findByTestId('step-card-fix')).toHaveAttribute('aria-label', expect.stringContaining('running'));
+
+    // No loop:start ever seen for 'fix' — patchCurrent's fallback has nothing
+    // to route to, so it guesses a fresh row defaulted to 'pending' and marks
+    // it inferred. The disk row, not this guess, must win the merge.
+    emitWhiphandEvent(transport, 'job-loopguess', 'run-loopguess',
+      { type: 'loop:iteration', loopId: 'fix', iteration: 2, maxIterations: 3 }, 't1');
+
+    // Wait on the store update itself first, not just the DOM: the pill
+    // already reads 'running' from the untouched disk row before this event
+    // is even processed, so a waitFor that only re-checks the same aria-label
+    // text would pass on its very first, stale synchronous check and never
+    // actually observe a re-render — a false pass that would not catch a
+    // regression in the merge guard below.
+    await waitFor(() => {
+      expect(useAppStore.getState().jobs['job-loopguess']?.steps.fix).toMatchObject({ inferred: true });
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('step-card-fix')).toHaveAttribute('aria-label', expect.stringContaining('running'));
+    });
+  });
+
+  it('replaying at loop iteration 2 on attach never resurrects iteration 1\'s row (should-fix 3)', async () => {
+    // Disk at iteration 2, no store rows before this test starts — exactly a
+    // browser opened fresh mid-iteration-2.
+    const { transport } = renderRunDetail('job-loopattach', vi.fn(), vi.fn(), 'run-loopattach');
+    await respondGetRun(transport, {
+      runId: 'run-loopattach', runDir: '/ws/.whiphand/runs/run-loopattach', status: 'running', artifacts: [],
+      steps: [
+        { id: 'fix', kind: 'loop', status: 'running', iterations: 2, maxIterations: 3 },
+        { id: 'execute', status: 'done', loopId: 'fix', iteration: 1, startedAt: 't0', endedAt: 't1' },
+        { id: 'execute', status: 'running', loopId: 'fix', iteration: 2, startedAt: 't2' },
+      ],
+    });
+
+    // No-replay path: before the agent's buffered stream ever lands, disk
+    // alone already shows iteration 2 running and in focus.
+    expect(await screen.findByTestId('step-card-execute')).toHaveAttribute('data-current', 'true');
+
+    // The agent's buffer has exactly what this client missed by attaching
+    // mid-iteration-2: the loop starting, moving to iteration 2, and
+    // iteration 2's own step:start.
+    useAppStore.getState().applyEventReplay('job-loopattach', [
+      { jobId: 'job-loopattach', runId: 'run-loopattach', ts: 't0', seq: 0, event: { type: 'loop:start', loopId: 'fix', maxIterations: 3 } },
+      { jobId: 'job-loopattach', runId: 'run-loopattach', ts: 't1', seq: 1, event: { type: 'loop:iteration', loopId: 'fix', iteration: 2, maxIterations: 3 } },
+      {
+        jobId: 'job-loopattach', runId: 'run-loopattach', ts: 't2', seq: 2,
+        event: { type: 'step:start', stepId: 'execute', kind: 'agent', runner: 'claude', mode: 'headless', loopId: 'fix', iteration: 2 },
+      },
+    ]);
+
+    // A bare later event carries no iteration of its own — it must route
+    // through currentExecution to execute#2, the row step:start just set, not
+    // guess iteration 1 back into existence (F1).
+    emitWhiphandEvent(transport, 'job-loopattach', 'run-loopattach',
+      { type: 'step:progress', stepId: 'execute', progress: { kind: 'tool', tool: 'Edit', target: 'runner.ts' } }, 't3');
+
+    const job = useAppStore.getState().jobs['job-loopattach']!;
+    expect(job.steps.execute).toBeUndefined();
+    expect(job.steps['execute#2']).toMatchObject({ status: 'running', iteration: 2 });
+    expect(screen.getByTestId('step-card-execute')).toHaveAttribute('data-current', 'true');
+  });
+
+  it('attaching after the pty already exited, with no live step:start/done for it, collapses the terminal (F4)', async () => {
+    // The manifest already recorded 'plan' as done — from before this client
+    // connected, or from a process it never watched — but no step:start or
+    // step:done for it ever arrived live, so job.steps (and currentExecution)
+    // have nothing under that key. Only ptyStarted/ptyExit did.
+    const { transport } = renderRunDetail('job-deadterm', vi.fn(), vi.fn(), 'run-deadterm');
+    await respondGetRun(transport, {
+      runId: 'run-deadterm', runDir: '/ws/.whiphand/runs/run-deadterm', status: 'succeeded', artifacts: [],
+      steps: [{ id: 'plan', status: 'done', mode: 'interactive' }],
+    });
+    transport.emitLine({ method: 'ptyStarted', params: { jobId: 'job-deadterm', stepId: 'plan', cols: 80, rows: 24 } });
+    await screen.findByTestId('terminal-panel-mock');
+    transport.emitLine({ method: 'ptyExit', params: { jobId: 'job-deadterm', exitCode: 0 } });
+
+    // Looking `job.steps['plan']` up directly found nothing (no live step
+    // event ever named it) and kept the terminal open forever; falling back
+    // to the merged (disk + live) steps finds the manifest's own 'done'.
+    expect(await screen.findByTestId('pty-session-ended-note')).toBeInTheDocument();
+    expect(screen.queryByTestId('terminal-panel-mock')).not.toBeInTheDocument();
+  });
+
   it('clears the feed when the next step starts, without bouncing back to Logs', async () => {
     const { transport } = renderRunDetail('job-feedreset');
     emitWhiphandEvent(transport, 'job-feedreset', 'run-feedreset', { type: 'step:start', stepId: 'execute', kind: 'agent', runner: 'claude', mode: 'headless' }, 't1');

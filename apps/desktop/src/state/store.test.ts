@@ -795,6 +795,91 @@ describe('resumed runs', () => {
   });
 });
 
+describe('a client attaching mid-step (F1/F2)', () => {
+  beforeEach(() => resetStore());
+
+  it('marks a wholly-guessed row inferred, so a merge downstream knows its status is not authoritative', () => {
+    // No step:start ever seen for 'execute' — this client connected mid-step
+    // and has no record of this stepId at all. The row it has to invent gets
+    // the usual 'pending' default, but flagged as a guess: mergeSteps in
+    // RunDetailPage.tsx is what actually keeps the disk's 'running' status
+    // instead of this default (see RunDetailPage.test.tsx for that half).
+    const { applyWhiphandEvent } = useAppStore.getState();
+    applyWhiphandEvent({
+      jobId: 'j1',
+      event: { type: 'step:progress', stepId: 'execute', progress: { kind: 'usage', turns: 1 } },
+      ts: 't1',
+    });
+
+    const step = useAppStore.getState().jobs.j1.steps.execute;
+    expect(step.status).toBe('pending');
+    expect(step.inferred).toBe(true);
+  });
+
+  it('routes a guessed event to the latest known execution of that id, not a fresh iteration-1 row', () => {
+    const { applyWhiphandEvent } = useAppStore.getState();
+    useAppStore.setState(state => ({
+      jobs: {
+        ...state.jobs,
+        j1: {
+          ...baseJob('j1'),
+          stepOrder: ['fix', 'execute', 'execute#2'],
+          steps: {
+            fix: { id: 'fix', key: 'fix', kind: 'loop', status: 'running', iterations: 2 },
+            execute: { id: 'execute', key: 'execute', status: 'done', loopId: 'fix', iteration: 1 },
+            'execute#2': {
+              id: 'execute', key: 'execute#2', status: 'running', loopId: 'fix', iteration: 2, startedAt: 't0',
+            },
+          },
+          // No currentExecution mapping: this client never saw iteration 2's step:start.
+        },
+      },
+    }));
+
+    applyWhiphandEvent({
+      jobId: 'j1',
+      event: { type: 'step:progress', stepId: 'execute', progress: { kind: 'usage', turns: 1 } },
+      ts: 't1',
+    });
+
+    const job = useAppStore.getState().jobs.j1;
+    // Iteration 1's row is untouched...
+    expect(job.steps.execute.status).toBe('done');
+    expect(job.steps.execute.progress).toBeUndefined();
+    // ...and the update landed on the currently-running iteration instead.
+    expect(job.steps['execute#2'].progress).toEqual({ turns: 1 });
+    expect(job.steps['execute#2'].status).toBe('running');
+  });
+
+  it('an authoritative step:done clears a previously-inferred row\'s guessed flag', () => {
+    const { applyWhiphandEvent } = useAppStore.getState();
+    applyWhiphandEvent({
+      jobId: 'j1',
+      event: { type: 'step:progress', stepId: 'execute', progress: { kind: 'usage', turns: 1 } },
+      ts: 't0',
+    });
+    expect(useAppStore.getState().jobs.j1.steps.execute.inferred).toBe(true);
+
+    applyWhiphandEvent({ jobId: 'j1', event: { type: 'step:done', stepId: 'execute', exitCode: 0 }, ts: 't1' });
+
+    expect(useAppStore.getState().jobs.j1.steps.execute.inferred).toBeUndefined();
+    expect(useAppStore.getState().jobs.j1.steps.execute.status).toBe('done');
+  });
+
+  it('a loop:iteration with no loop:start seen creates an inferred loop row rather than crashing', () => {
+    const { applyWhiphandEvent } = useAppStore.getState();
+    applyWhiphandEvent({
+      jobId: 'j1',
+      event: { type: 'loop:iteration', loopId: 'fix', iteration: 2, maxIterations: 3 },
+      ts: 't0',
+    });
+
+    const loop = useAppStore.getState().jobs.j1.steps.fix;
+    expect(loop.inferred).toBe(true);
+    expect(loop.iterations).toBe(2);
+  });
+});
+
 describe('loop iteration budget', () => {
   it('remembers how many iterations a loop is allowed, not just how many it has run', () => {
     const { applyWhiphandEvent } = useAppStore.getState();

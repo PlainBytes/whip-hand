@@ -1,8 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  LOG_SCROLLBACK_CAP_LINES, MAX_TRACKED_JOBS, PTY_SCROLLBACK_CAP_CHARS, createScrollback,
+  LOG_SCROLLBACK_CAP_LINES, MAX_TRACKED_JOBS, PROGRESS_SCROLLBACK_CAP, PTY_SCROLLBACK_CAP_CHARS, createScrollback,
 } from './scrollback.ts';
+
+/** A whiphandEvent notification, seq assigned the way frontend.ts/RunJournal really assign it. */
+function whiphandEvent(jobId: string, seq: number, event: Record<string, unknown>) {
+  return { jobId, runId: 'r1', ts: `t${seq}`, seq, event };
+}
 
 function started(jobId = 'j1') {
   return { jobId, stepId: 's1', cols: 80, rows: 24 };
@@ -130,6 +135,73 @@ test('notifications that are not transcript traffic pass through untouched', () 
   // No jobId at all: nothing to key on.
   const orphan = { addresses: [] };
   assert.equal(sb.record('remoteAccessChanged', orphan), orphan);
+});
+
+test('whiphandEvent: step:log is excluded, the logs half above already covers it', () => {
+  const sb = createScrollback();
+  sb.record('whiphandEvent', whiphandEvent('j1', 0, { type: 'step:start', stepId: 's', kind: 'agent' }));
+  sb.record('whiphandEvent', whiphandEvent('j1', 1, { type: 'step:log', stepId: 's', stream: 'stdout', line: 'x' }));
+  assert.deepEqual(sb.snapshot('j1')!.events.map(e => e.event.type), ['step:start']);
+});
+
+test('whiphandEvent: everything but step:progress is kept in full', () => {
+  const sb = createScrollback();
+  sb.record('whiphandEvent', whiphandEvent('j1', 0, { type: 'step:start', stepId: 's', kind: 'agent' }));
+  sb.record('whiphandEvent', whiphandEvent('j1', 1, { type: 'step:done', stepId: 's', exitCode: 0 }));
+  const events = sb.snapshot('j1')!.events;
+  assert.deepEqual(events.map(e => e.event.type), ['step:start', 'step:done']);
+});
+
+test('whiphandEvent: step:progress is capped, dropping the oldest first', () => {
+  const sb = createScrollback();
+  sb.record('whiphandEvent', whiphandEvent('j1', 0, { type: 'step:start', stepId: 's', kind: 'agent' }));
+  for (let i = 0; i < PROGRESS_SCROLLBACK_CAP + 10; i++) {
+    sb.record('whiphandEvent',
+      whiphandEvent('j1', i + 1, { type: 'step:progress', stepId: 's', progress: { kind: 'usage', turns: i } }));
+  }
+  const events = sb.snapshot('j1')!.events;
+  const progress = events.filter(e => e.event.type === 'step:progress');
+  assert.equal(progress.length, PROGRESS_SCROLLBACK_CAP);
+  // The oldest were dropped, not the newest.
+  assert.equal((progress.at(-1)!.event as { progress: { turns: number } }).progress.turns, PROGRESS_SCROLLBACK_CAP + 9);
+});
+
+test('whiphandEvent: a fresh step:start drops the previous step\'s progress backlog', () => {
+  const sb = createScrollback();
+  sb.record('whiphandEvent', whiphandEvent('j1', 0, { type: 'step:start', stepId: 'a', kind: 'agent' }));
+  sb.record('whiphandEvent',
+    whiphandEvent('j1', 1, { type: 'step:progress', stepId: 'a', progress: { kind: 'usage', turns: 1 } }));
+  sb.record('whiphandEvent', whiphandEvent('j1', 2, { type: 'step:done', stepId: 'a', exitCode: 0 }));
+  sb.record('whiphandEvent', whiphandEvent('j1', 3, { type: 'step:start', stepId: 'b', kind: 'agent' }));
+
+  const progress = sb.snapshot('j1')!.events.filter(e => e.event.type === 'step:progress');
+  assert.deepEqual(progress, [], 'step a\'s backlog does not linger once step b has started');
+});
+
+test('whiphandEvent: the snapshot replays in seq order, regardless of which internal bucket held each event', () => {
+  const sb = createScrollback();
+  sb.record('whiphandEvent', whiphandEvent('j1', 0, { type: 'step:start', stepId: 's', kind: 'agent' }));
+  sb.record('whiphandEvent',
+    whiphandEvent('j1', 1, { type: 'step:progress', stepId: 's', progress: { kind: 'usage', turns: 1 } }));
+  sb.record('whiphandEvent', whiphandEvent('j1', 2, { type: 'step:done', stepId: 's', exitCode: 0 }));
+
+  const events = sb.snapshot('j1')!.events;
+  assert.deepEqual(events.map(e => e.seq), [0, 1, 2]);
+  assert.deepEqual(events.map(e => e.event.type), ['step:start', 'step:progress', 'step:done']);
+});
+
+test('whiphandEvent: a seq-less event (a handler-direct run:error) keeps its arrival position, not sorted to the front', () => {
+  const sb = createScrollback();
+  sb.record('whiphandEvent', whiphandEvent('j1', 0, { type: 'step:start', stepId: 's', kind: 'agent' }));
+  sb.record('whiphandEvent',
+    whiphandEvent('j1', 1, { type: 'step:progress', stepId: 's', progress: { kind: 'usage', turns: 1 } }));
+  // handlers.ts's catch-block run:error carries no `seq` at all — it never
+  // went through RunJournal.record. A full sort keyed on `seq ?? 0` would put
+  // this ahead of the step:start above.
+  sb.record('whiphandEvent', { jobId: 'j1', runId: 'r1', ts: 't2', event: { type: 'run:error', message: 'boom' } });
+
+  const events = sb.snapshot('j1')!.events;
+  assert.deepEqual(events.map(e => e.event.type), ['step:start', 'step:progress', 'run:error']);
 });
 
 test('an unknown job has no snapshot', () => {

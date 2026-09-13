@@ -10,6 +10,7 @@ import { isAwaitStateName } from './await-state.ts';
 import { LOCK_MARKER_NAME, isRunLocked } from './run-lock.ts';
 import { NAME_MARKER_NAME, SUGGEST_CAPTURE_NAME, readRunName, setRunName } from './run-name.ts';
 import { RUN_LOG_NAME, DEFAULT_RUN_LOG_CAP_BYTES, summarizeEvent, formatLogLine } from './run-log.ts';
+import { executionKey } from '../execution-key.ts';
 
 const manifestStepSchema = z.object({
   id: z.string().min(1),
@@ -87,15 +88,9 @@ export const MANIFEST_VERSION = 3;
  */
 export const WORKFLOW_SNAPSHOT_NAME = 'workflow.yaml';
 
-/**
- * Identifies one *execution*. A loop runs the same step id many times, so an
- * id alone no longer addresses a row — this is the same `iteration ?? 1`
- * defaulting `beginStep` matches entries by, spelled once so that resume and
- * the desktop cannot drift apart on it.
- */
-export function executionKey(stepId: string, iteration?: number): string {
-  return iteration === undefined || iteration === 1 ? stepId : `${stepId}#${iteration}`;
-}
+// executionKey moved to ../execution-key.ts (dependency-free, so the desktop
+// bundle can import it at runtime) and re-exported here for existing importers.
+export { executionKey };
 
 const runManifestSchema = z.object({
   version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
@@ -480,14 +475,16 @@ export class RunJournal {
   }
 
   /**
-   * Returns the ordinal this event was assigned, so the caller (runner.ts's
-   * `emit`) can hand the same number to `frontend.onEvent` — live and on-disk
-   * readers then agree on order down to the same integer, not just the same
-   * millisecond. Monotonic per process attempt; a resume's journal starts its
-   * own instance and its own count, same as events.ndjson already restarting
-   * mid-file across a resume.
+   * Returns the ordinal this event was assigned and the timestamp it was
+   * stamped with, so the caller (runner.ts's `emit`) can hand both to
+   * `frontend.onEvent` — live and on-disk readers then agree on order down to
+   * the same integer, and on `ts` down to the same reading, rather than each
+   * taking its own `new Date()` a few instructions apart. `seq` is monotonic
+   * per process attempt; a resume's journal starts its own instance and its
+   * own count, same as events.ndjson already restarting mid-file across a
+   * resume.
    */
-  record(event: WhiphandEvent): number {
+  record(event: WhiphandEvent): { seq: number; ts: string } {
     const now = new Date().toISOString();
     const seq = (this.seq += 1);
     this.manifest.updatedAt = now;
@@ -606,7 +603,7 @@ export class RunJournal {
     }
     if (TERMINAL_EVENTS.has(event.type)) this.close();
     this.schedule(event, now, seq);
-    return seq;
+    return { seq, ts: now };
   }
 
   private async writeManifest(): Promise<void> {

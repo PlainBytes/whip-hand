@@ -44,6 +44,34 @@ test('onEvent tags whiphandEvent and runStateChanged with the job workdir', () =
   assert.equal(state?.params.workdir, '/ws/acme');
 });
 
+test('onEvent stamps the notification with the ts core supplied, rather than reading its own clock (F9)', () => {
+  const job = fakeJob();
+  const { calls, notify } = collectNotify();
+  const frontend = createFrontend(job, notify, {});
+
+  frontend.onEvent({ type: 'step:done', stepId: 'plan', exitCode: 0 }, 7, '2026-01-01T00:00:00.000Z');
+
+  const event = calls.find(c => c.method === 'whiphandEvent');
+  // Exactly this string, not merely a valid-looking timestamp: a second,
+  // independent `new Date()` reading would drift from it and, alongside
+  // run.log's own row for the same event, could show as a duplicate in the
+  // Logs tab after a resume (logRowKey keys on seq+ts+kind+text).
+  assert.equal(event?.params.ts, '2026-01-01T00:00:00.000Z');
+  assert.equal(event?.params.seq, 7);
+});
+
+test('onEvent falls back to its own clock when no ts is supplied (an older core, or a test double)', () => {
+  const job = fakeJob();
+  const { calls, notify } = collectNotify();
+  const frontend = createFrontend(job, notify, {});
+
+  frontend.onEvent({ type: 'step:done', stepId: 'plan', exitCode: 0 });
+
+  const event = calls.find(c => c.method === 'whiphandEvent');
+  assert.equal(typeof event?.params.ts, 'string');
+  assert.ok(!Number.isNaN(Date.parse(event!.params.ts)));
+});
+
 test('onEvent records the run name on the job, so a late attach can label it', () => {
   const job = fakeJob();
   const { notify } = collectNotify();

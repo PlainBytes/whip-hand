@@ -21,7 +21,7 @@
  * already arriving. If the two were assigned in different places they could
  * disagree, and the symptom would be a silently corrupted terminal.
  */
-import type { AwaitReason } from './protocol.ts';
+import type { AwaitReason, WhiphandEventNotificationParams } from './protocol.ts';
 
 /**
  * Same budget the desktop store already used (PTY_DATA_BUFFER_CAP_CHARS),
@@ -31,9 +31,17 @@ export const PTY_SCROLLBACK_CAP_CHARS = 2_000_000;
 /** Matches the desktop store's LOG_TAIL_CAP. */
 export const LOG_SCROLLBACK_CAP_LINES = 2_000;
 /**
+ * Matches the desktop store's ACTIVITY_TAIL_CAP. Bounds `progressTail` below,
+ * not `events` — a chatty step:progress stream is the one whiphandEvent kind
+ * frequent enough to need a cap at all.
+ */
+export const PROGRESS_SCROLLBACK_CAP = 2_000;
+/**
  * How many jobs keep a transcript. Worst case is roughly
- * MAX_TRACKED_JOBS × (2MB of base64 + 2000 lines) — call it 20MB in an agent
- * that has been up all day, and typically far less.
+ * MAX_TRACKED_JOBS × (2MB of base64 + 2000 lines + 2000 progress events) —
+ * call it 20-something MB in an agent that has been up all day, and typically
+ * far less. `events` (everything but step:progress) is deliberately
+ * uncapped: that stream is small.
  */
 export const MAX_TRACKED_JOBS = 8;
 
@@ -63,6 +71,15 @@ export interface JobScrollback {
   /** null when this job has never opened an interactive session. */
   pty: PtyScrollback | null;
   logs: LogScrollback;
+  /**
+   * Buffered whiphandEvent notifications since this job began (`step:log`
+   * excluded — the logs half above already covers it), seq-ordered, for a
+   * client that attaches or reconnects mid-run to fold into its own state —
+   * see the desktop store's `applyEventReplay`. This is what fixes a client
+   * that never saw a step's `step:start`: without it, the first later event
+   * it does see has no `currentExecution` mapping to route by.
+   */
+  events: WhiphandEventNotificationParams[];
 }
 
 export interface Scrollback {
@@ -78,11 +95,25 @@ export interface Scrollback {
 }
 
 interface Entry extends JobScrollback {
+  /**
+   * `step:progress` events since the most recent `step:start` (any step —
+   * they run one at a time), separately capped: a chatty step could otherwise
+   * grow `events` without bound. Kept apart from `events` rather than
+   * interleaved in one bounded array so trimming this never has to touch the
+   * (small, always-kept) rest of the stream; `snapshot()` merges the two back
+   * into one seq-ordered array, which `seq` — assigned once, by RunJournal —
+   * makes safe regardless of which of the two arrays either side of a gap
+   * ends up in.
+   */
+  progressTail: WhiphandEventNotificationParams[];
   lastActivity: number;
 }
 
 function emptyEntry(now: number): Entry {
-  return { pty: null, logs: { baseIndex: 0, trimmed: false, lines: [] }, lastActivity: now };
+  return {
+    pty: null, logs: { baseIndex: 0, trimmed: false, lines: [] }, events: [], progressTail: [],
+    lastActivity: now,
+  };
 }
 
 /**
@@ -104,6 +135,56 @@ function capChunks(pty: PtyScrollback): void {
   pty.chunks = pty.chunks.slice(start);
   pty.baseIndex += start;
   pty.trimmed = true;
+}
+
+/**
+ * Merges `progressTail` into `events` by `seq`, without disturbing the
+ * relative order of `events` itself. `events` is already arrival-ordered —
+ * pushed synchronously as each notification is recorded — and almost every
+ * entry carries the `seq` RunJournal assigned it, EXCEPT a `run:error` sent
+ * directly from a handler's catch block, or `resumeJobInBackground`'s
+ * `guard:warning`, both of which bypass the journal and so have none.
+ * `(a.seq ?? 0) - (b.seq ?? 0)` on a full sort of the combined array would
+ * sort a seq-less event to the very front, ahead of the run it actually
+ * happened during or after — a `run:error` that fires once steps have
+ * already started would jump ahead of them, and the fold (from a blank
+ * slate) would run `finalizeRunningSteps` before any step existed.
+ * `progressTail` itself is always fully seq'd: every step:progress goes
+ * through runner.ts's `emit`, which calls `journal.record` before
+ * `frontend.onEvent`.
+ */
+function mergeBySeq(
+  events: WhiphandEventNotificationParams[], progressTail: WhiphandEventNotificationParams[],
+): WhiphandEventNotificationParams[] {
+  const merged: WhiphandEventNotificationParams[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < events.length) {
+    const e = events[i]!;
+    if (e.seq === undefined) {
+      // No ordering info against progressTail directly. The next SEQ'D entry
+      // in `events` (if any) is a valid upper bound — nothing chronologically
+      // after that could have arrived before this seq-less event did — so
+      // drain every progressTail entry up to it first. With no such bound
+      // (this is the last, or the last seq'd, entry — e.g. a run:error from a
+      // handler's catch block, which fires once nothing else is left to
+      // report), drain the rest of progressTail first: a seq-less event never
+      // arrives before output that already happened.
+      let upperBound = Infinity;
+      for (let k = i + 1; k < events.length; k++) {
+        if (events[k]!.seq !== undefined) { upperBound = events[k]!.seq!; break; }
+      }
+      while (j < progressTail.length && progressTail[j]!.seq! <= upperBound) merged.push(progressTail[j++]!);
+      merged.push(e);
+      i += 1;
+      continue;
+    }
+    while (j < progressTail.length && progressTail[j]!.seq! <= e.seq) merged.push(progressTail[j++]!);
+    merged.push(e);
+    i += 1;
+  }
+  while (j < progressTail.length) merged.push(progressTail[j++]!);
+  return merged;
 }
 
 export function createScrollback(now: () => number = Date.now): Scrollback {
@@ -210,6 +291,22 @@ export function createScrollback(now: () => number = Date.now): Scrollback {
         }
         return { ...p, seq };
       }
+      case 'whiphandEvent': {
+        const event = p.event as { type?: string } | undefined;
+        if (event?.type === 'step:log') return params; // covered by the logs half above
+        const entry = touch(jobId);
+        const notification = params as WhiphandEventNotificationParams;
+        if (event?.type === 'step:progress') {
+          entry.progressTail.push(notification);
+          const overflow = entry.progressTail.length - PROGRESS_SCROLLBACK_CAP;
+          if (overflow > 0) entry.progressTail.splice(0, overflow);
+        } else {
+          entry.events.push(notification);
+          // A fresh step's backlog supersedes whatever the last one was doing.
+          if (event?.type === 'step:start') entry.progressTail = [];
+        }
+        return params;
+      }
       default:
         return params;
     }
@@ -221,10 +318,14 @@ export function createScrollback(now: () => number = Date.now): Scrollback {
       const entry = entries.get(jobId);
       if (!entry) return null;
       // Structured-cloned so a caller cannot mutate the live record, and so
-      // serializing it cannot race an append.
+      // serializing it cannot race an append. `seq` — assigned once, by
+      // RunJournal, and carried on every whiphandEvent notification — is what
+      // makes merging these two arrays back into one ordered stream safe.
+      const events = mergeBySeq(entry.events, entry.progressTail);
       return {
         pty: entry.pty ? { ...entry.pty, chunks: [...entry.pty.chunks] } : null,
         logs: { ...entry.logs, lines: [...entry.logs.lines] },
+        events,
       };
     },
     trackedJobs() {

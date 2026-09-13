@@ -144,6 +144,9 @@ const TERMINAL_STEP_STATUSES: ReadonlySet<StepState['status']> = new Set([
  * The two used to be either/or, so a just-started run showed only the steps
  * that had already reported and a manifest-only run got no live updates at all.
  */
+/** Statuses `mergeSteps`' finished-job guard treats as final on disk — never beaten by a stale live 'running'. */
+const DISK_TERMINAL_STATUSES: ReadonlySet<StepState['status']> = new Set(['done', 'failed', 'interrupted']);
+
 function mergeSteps(manifest: RunDetailResult | null, job: JobState | undefined): StepState[] {
   const raw = manifest?.steps;
   const base: Array<Omit<StepState, 'key'> & { iteration?: number }> =
@@ -152,7 +155,23 @@ function mergeSteps(manifest: RunDetailResult | null, job: JobState | undefined)
   const merged: StepState[] = base.map(step => {
     const key = executionKey(step.id, step.iteration);
     const live = job?.steps[key];
-    return live ? { ...step, ...live, key } : { ...step, key };
+    if (!live) return { ...step, key };
+    // A row the store had to guess into existence (see StepState.inferred) is
+    // not to be trusted for status: it either landed at the wrong execution's
+    // key entirely, or is a freshly-invented row defaulted to 'pending' — both
+    // would otherwise beat the disk's own, authoritative status. Every other
+    // live field (progress, phase, artifact, ...) still overlays, so a
+    // headless step's live activity keeps showing.
+    //
+    // Separately: a job the agent no longer tracks (evicted from its own
+    // per-job history, or simply a stale reload) can carry a live 'running'
+    // left over from a session that is long gone. Once the job itself is
+    // finished, a disk row that already reached a terminal state is final —
+    // the run cannot still be running that step.
+    const staleFinished = job?.finished === true && DISK_TERMINAL_STATUSES.has(step.status)
+      && live.status === 'running';
+    const status = live.inferred === true || staleFinished ? step.status : live.status;
+    return { ...step, ...live, key, status };
   });
   const seen = new Set(merged.map(step => step.key));
   for (const key of job?.stepOrder ?? []) {
@@ -165,8 +184,16 @@ function mergeSteps(manifest: RunDetailResult | null, job: JobState | undefined)
  * The step the run is on — or, for a run that is over, the one it stopped on.
  * Returns -1 when every step reached a terminal state, which is the ordinary
  * successful case and needs no "current step" call-out.
+ *
+ * A running body step is preferred over its own running loop: the loop's row
+ * always comes first in `steps` (it starts before its body does), so a plain
+ * first-running-match would give the loop container the focus for the whole
+ * time its body is actually doing the work. The loop only gets the focus
+ * itself between iterations, when it is running but nothing inside it is yet.
  */
 function findCurrentStepIndex(steps: StepState[]): number {
+  const runningBody = steps.findIndex(step => step.status === 'running' && step.kind !== 'loop');
+  if (runningBody !== -1) return runningBody;
   const running = steps.findIndex(step => step.status === 'running');
   if (running !== -1) return running;
   const stopped = steps.findIndex(step => step.status === 'interrupted' || step.status === 'failed');
@@ -439,10 +466,20 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
   // interactive step re-run inside a loop is 'plan#2' from iteration 2 on.
   // currentExecution is the mapping that exists to answer exactly this;
   // without it the lookup missed and a dead terminal stayed pinned open.
+  //
+  // Looked up from the MERGED `steps` (disk + live), not `job.steps` alone
+  // (F4): attaching after the pty already exited, before any live step:done
+  // for it, leaves `job.steps` with nothing but a guessed/absent row, while
+  // the manifest on disk already knows the step finished. Falls back to the
+  // latest execution of the pty's step id when even the merged view has
+  // nothing at the resolved key.
   const ptyStepKey = job?.ptyStepId === undefined
     ? undefined
     : job.currentExecution[job.ptyStepId] ?? job.ptyStepId;
-  const ptyStep = ptyStepKey === undefined ? undefined : job?.steps[ptyStepKey];
+  const ptyStep = ptyStepKey === undefined
+    ? undefined
+    : steps.find(s => s.key === ptyStepKey)
+      ?? [...steps].reverse().find(s => s.id === job?.ptyStepId);
   const ptyStepDone = ptyStep?.status === 'done' || ptyStep?.status === 'failed';
   const showTerminal = !!job && !!effectiveJobId && (job.ptyActive || (job.ptyExited && !ptyStepDone));
   const showSessionEndedNote = !!job && job.ptyExited && ptyStepDone;

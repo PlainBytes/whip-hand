@@ -244,8 +244,8 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
   let runEnded = false;
   const emit = (e: WhiphandEvent) => {
     if (e.type === 'run:done') runEnded = true;
-    const seq = journal.record(e);
-    frontend.onEvent(e, seq);
+    const { seq, ts } = journal.record(e);
+    frontend.onEvent(e, seq, ts);
   };
   // `run:env`'s runner probe is fire-and-forget (see runSteps) so it can never
   // delay step one; this is what lets the `finally` below wait for it to have

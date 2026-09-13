@@ -21,6 +21,7 @@ import type {
   JobSummary,
 } from '../../../../packages/agent/src/protocol.ts';
 import type { ManualRequest, StepKind, StepMode, StepProgress } from '../../../../packages/core/src/types.ts';
+import { executionKey } from '../../../../packages/core/src/execution-key.ts';
 import type { AppState as AppStateData } from '../../../../packages/agent/src/app-state.ts';
 import type { LogRow } from '../lib/log-rows.ts';
 import { summarizeEvent } from '../lib/log-rows.ts';
@@ -73,6 +74,17 @@ export interface StepState {
    * because a finished step is on no phase at all.
    */
   phase?: 'main' | 'harvest';
+  /**
+   * Set on a row the store had to guess into existence: an event for this
+   * step/loop id arrived with no `currentExecution` mapping (or, failing
+   * that, no prior execution of this id at all), so the row's `status` here
+   * is not to be trusted — see `mergeSteps` in RunDetailPage.tsx, which
+   * overlays every other live field but keeps the disk status for a row
+   * marked `inferred`. Cleared by the next authoritative status event for the
+   * same row (step:start, step:done, step:verdict, step:skipped, loop:start,
+   * loop:done, or finalizeRunningSteps).
+   */
+  inferred?: boolean;
 }
 
 /** One line of a running headless step's transcript. */
@@ -81,14 +93,10 @@ export interface ActivityLine {
   text: string;
 }
 
-/**
- * A loop runs the same step id many times, so a step id no longer identifies a
- * row. Executions are keyed by id+iteration — the same split core's RunJournal
- * makes in packages/core/src/engine/manifest.ts, and for the same reason.
- */
-export function executionKey(stepId: string, iteration?: number): string {
-  return iteration === undefined || iteration === 1 ? stepId : `${stepId}#${iteration}`;
-}
+// executionKey is imported from packages/core/src/execution-key.ts
+// (dependency-free, unlike engine/manifest.ts) and re-exported here so
+// existing importers of this module (e.g. RunDetailPage.tsx) are unaffected.
+export { executionKey };
 
 export interface LogLine {
   stream: 'stdout' | 'stderr';
@@ -115,6 +123,16 @@ export interface JobState {
   runName?: string;
   /** Status as reported by the last runStateChanged notification seen, if any. */
   status?: JobStatus;
+  /**
+   * True when `status` was last set from a job summary snapshot
+   * (applyJobSummaries) rather than a live runStateChanged notification. A
+   * summary-sourced status can still be replaced by a fresher summary — the
+   * whole point of re-fetching listJobs on reconnect is to learn a status
+   * this client missed the live notification for — and so can a live
+   * 'running', once a fresher summary reports the run actually ended: a job
+   * never goes from terminal back to running. See applyJobSummaries.
+   */
+  statusFromSummary?: boolean;
   /** True once a run:done / run:error / run:cancelled whiphandEvent has been seen for this job. */
   finished: boolean;
   errorMessage?: string;
@@ -321,6 +339,21 @@ function upsertStep(
 }
 
 /**
+ * The execution `stepId`'s events should land on when `currentExecution` has
+ * no mapping for it — the last matching key in `stepOrder`, mirroring core's
+ * RunJournal.findStep ("the execution in flight, else the latest with that
+ * id"). `undefined` when this id has no execution in the store at all yet, in
+ * which case the caller has no choice but to guess a new one.
+ */
+function findLatestExecutionKey(job: JobState, stepId: string): string | undefined {
+  for (let i = job.stepOrder.length - 1; i >= 0; i--) {
+    const key = job.stepOrder[i];
+    if (job.steps[key]?.id === stepId) return key;
+  }
+  return undefined;
+}
+
+/**
  * Patches whichever execution of `stepId` is currently in flight. Events after
  * step:start carry no iteration, so the mapping step:start recorded is the
  * only thing that knows which row they belong to.
@@ -357,10 +390,26 @@ function applyProgress(job: JobState, stepId: string, progress: StepProgress): J
   return patchCurrent(withFeed, stepId, { progress: { ...current, lastAction: text } });
 }
 
+/**
+ * A step/loop id with no `currentExecution` mapping — this client never saw
+ * (or has forgotten) that execution's own start event, most often because it
+ * connected mid-step. Routes to the latest execution the store already knows
+ * about instead of always guessing iteration 1 (F1), and marks whichever row
+ * it lands on `inferred` (F2) so a merge downstream knows not to trust its
+ * status over the disk's.
+ */
 function patchCurrent(job: JobState, stepId: string, patch: Partial<StepState>): JobState {
   const key = job.currentExecution[stepId];
-  if (key === undefined || job.steps[key] === undefined) return upsertStep(job, stepId, patch);
-  return { ...job, steps: { ...job.steps, [key]: { ...job.steps[key], ...patch } } };
+  if (key !== undefined && job.steps[key] !== undefined) {
+    return { ...job, steps: { ...job.steps, [key]: { ...job.steps[key], ...patch } } };
+  }
+  const fallbackKey = findLatestExecutionKey(job, stepId);
+  if (fallbackKey === undefined) return upsertStep(job, stepId, { ...patch, inferred: true });
+  return {
+    ...job,
+    steps: { ...job.steps, [fallbackKey]: { ...job.steps[fallbackKey], ...patch, inferred: true } },
+    currentExecution: { ...job.currentExecution, [stepId]: fallbackKey },
+  };
 }
 
 /**
@@ -387,14 +436,172 @@ function finalizeRunningSteps(job: JobState, ts: string, failedStepId?: string):
         ...steps[blamedKey],
         status: 'failed',
         endedAt: steps[blamedKey].endedAt ?? ts,
+        inferred: undefined,
       },
     };
   }
   const stuck = job.stepOrder.filter(key => steps[key]?.status === 'running' && key !== blamedKey);
   if (stuck.length === 0) return steps === job.steps ? job : { ...job, steps };
   const next = { ...steps };
-  for (const key of stuck) next[key] = { ...next[key], status: 'interrupted', endedAt: ts };
+  for (const key of stuck) next[key] = { ...next[key], status: 'interrupted', endedAt: ts, inferred: undefined };
   return { ...job, steps: next };
+}
+
+/**
+ * Reduces one whiphandEvent notification into the next JobState. Pure and
+ * exported so applyEventReplay (see applyScrollbackSnapshot) can fold a whole
+ * buffered stream through it without going through zustand's `set` once per
+ * event — `applyWhiphandEvent` below is a thin wrapper over the same function.
+ */
+export function reduceJobEvent(job: JobState, params: WhiphandEventNotificationParams): JobState {
+  const { event } = params;
+
+  // The real agent includes runId on every whiphandEvent notification once the
+  // run has one (not only on run:start) — pick it up from wherever it
+  // first appears rather than requiring a run:start event specifically.
+  // A resumed run emits run:resume instead of run:start, and carries the id
+  // it is continuing — so it is just as good a place to learn the runId from.
+  const runId = params.runId
+    ?? (event.type === 'run:start' || event.type === 'run:resume' ? event.runId : undefined);
+  if (runId && job.runId !== runId) job = { ...job, runId };
+  // Only run:start/run:resume carry it, and a run is named before its first
+  // step — so this lands before anything a notification could report on.
+  if ((event.type === 'run:start' || event.type === 'run:resume')
+    && event.name !== undefined && job.runName !== event.name) {
+    job = { ...job, runName: event.name };
+  }
+  if (params.workdir && job.workdir !== params.workdir) job = { ...job, workdir: params.workdir };
+
+  switch (event.type) {
+    case 'run:start':
+    case 'run:resume':
+      break;
+    case 'step:skipped':
+      // Reused from an earlier attempt: it *is* done, it just did not run
+      // again. Leaving it pending would misreport the run as further behind
+      // than it is.
+      job = upsertStep(job, event.stepId, {
+        loopId: event.loopId,
+        iteration: event.iteration,
+        status: 'done',
+        inferred: undefined,
+      }, event.iteration);
+      break;
+    case 'step:start':
+      // A new step gets a clean feed: the tab narrates the step running now,
+      // so lines from the step that just ended must not linger under it.
+      // hasNarrated deliberately survives — see its declaration.
+      job = { ...job, activityTail: [] };
+      job = upsertStep(job, event.stepId, {
+        kind: event.kind,
+        loopId: event.loopId,
+        iteration: event.iteration,
+        runner: event.runner,
+        model: event.model,
+        mode: event.mode,
+        status: 'running',
+        startedAt: params.ts,
+        endedAt: undefined,
+        exitCode: undefined,
+        artifact: undefined,
+        verdict: undefined,
+        phase: undefined,
+        inferred: undefined,
+      }, event.iteration);
+      break;
+    case 'step:spawn':
+      job = patchCurrent(job, event.stepId, { phase: event.phase });
+      break;
+    case 'step:artifact':
+      job = patchCurrent(job, event.stepId, { artifact: event.path });
+      break;
+    case 'step:progress':
+      job = applyProgress(job, event.stepId, event.progress);
+      break;
+    case 'step:verdict':
+      // Kept in lockstep with RunJournal.record: a verdict only reaches here
+      // from a step that completed, so a `verdict: true` command exiting
+      // non-zero reads as done-with-a-FAIL rather than as a broken step.
+      job = patchCurrent(job, event.stepId, { verdict: event.verdict, status: 'done', inferred: undefined });
+      break;
+    case 'step:done':
+      job = patchCurrent(job, event.stepId, {
+        status: event.exitCode === 0 ? 'done' : 'failed',
+        exitCode: event.exitCode,
+        endedAt: params.ts,
+        phase: undefined,
+        inferred: undefined,
+      });
+      break;
+    case 'step:manual':
+    case 'step:manual-resolved':
+      // Informational here: the answerable channel is the manualRequest /
+      // manualResolved notification pair, which also reports a question torn
+      // down by cancellation — something no whiphandEvent ever describes.
+      break;
+    case 'loop:start':
+      job = upsertStep(job, event.loopId, {
+        kind: 'loop', status: 'running', startedAt: params.ts, iterations: 0,
+        maxIterations: event.maxIterations, endedAt: undefined, verdict: undefined,
+        inferred: undefined,
+      });
+      break;
+    case 'loop:iteration':
+      job = patchCurrent(job, event.loopId, {
+        iterations: event.iteration, maxIterations: event.maxIterations,
+      });
+      break;
+    case 'loop:done':
+      job = patchCurrent(job, event.loopId, {
+        status: event.passed ? 'done' : 'failed',
+        iterations: event.iterations,
+        verdict: event.passed ? 'pass' : 'fail',
+        endedAt: params.ts,
+        inferred: undefined,
+      });
+      break;
+    case 'guard:warning':
+      break;
+    case 'step:log': {
+      const rows = [...job.logRows, {
+        seq: params.seq ?? 0, ts: params.ts, ...summarizeEvent(event),
+      }];
+      if (rows.length > LOG_ROWS_CAP) rows.splice(0, rows.length - LOG_ROWS_CAP);
+      job = { ...job, logRows: rows };
+      break;
+    }
+    case 'step:artifact-missing':
+    case 'step:timeout':
+    case 'step:retry':
+    case 'session:await':
+    case 'session:ended':
+    case 'step:pty-exit':
+    case 'run:env':
+    case 'step:tree-delta':
+      break; // no per-field state to fold; the Logs tab reads these straight out of `events`
+    // A run that is over is not waiting on anybody — drop the card in each
+    // terminal case rather than inside finalizeRunningSteps, which returns
+    // early when no step is in flight. Mirrors RunJournal.record in core.
+    case 'run:done':
+      job = finalizeRunningSteps({ ...job, finished: true, pendingManual: undefined }, params.ts);
+      break;
+    case 'run:error':
+      // The blamed step failed outright; anything else still in flight was
+      // merely cut short.
+      job = finalizeRunningSteps(
+        { ...job, finished: true, pendingManual: undefined, errorMessage: event.message },
+        params.ts, event.stepId);
+      break;
+    case 'run:cancelled':
+      job = finalizeRunningSteps({ ...job, finished: true, pendingManual: undefined }, params.ts);
+      break;
+  }
+
+  // step:log already landed in logRows above; keeping it out of this
+  // unbounded array is what keeps a chatty step's output from growing it
+  // forever — see JobState.events.
+  if (event.type !== 'step:log') job = { ...job, events: [...job.events, params] };
+  return job;
 }
 
 export interface AppState {
@@ -464,6 +671,15 @@ export interface AppState {
    * webview reload, or a browser opened mid-run.
    */
   applyScrollbackSnapshot: (jobId: string, snapshot: JobScrollbackResult) => void;
+  /**
+   * Replays the agent's buffered whiphandEvent stream for a job (from
+   * getJobScrollback's `events`, when the agent is new enough to send them)
+   * into this client's own step/loop state. Fixes a client that attached
+   * mid-step: without this, the first live event it sees for a step has no
+   * `currentExecution` mapping to route by, because it never saw that step's
+   * own step:start — see patchCurrent's fallback for what happens then.
+   */
+  applyEventReplay: (jobId: string, events: WhiphandEventNotificationParams[]) => void;
   /** Seeds jobs a client could not otherwise know about (see listJobs). */
   applyJobSummaries: (summaries: JobSummary[]) => void;
 
@@ -568,150 +784,8 @@ export const useAppStore = create<AppState>((set) => ({
   }),
 
   applyWhiphandEvent: params => set(state => {
-    const { jobId, event } = params;
-    let job = state.jobs[jobId] ?? emptyJob(jobId);
-
-    // The real agent includes runId on every whiphandEvent notification once the
-    // run has one (not only on run:start) — pick it up from wherever it
-    // first appears rather than requiring a run:start event specifically.
-    // A resumed run emits run:resume instead of run:start, and carries the id
-    // it is continuing — so it is just as good a place to learn the runId from.
-    const runId = params.runId
-      ?? (event.type === 'run:start' || event.type === 'run:resume' ? event.runId : undefined);
-    if (runId && job.runId !== runId) job = { ...job, runId };
-    // Only run:start/run:resume carry it, and a run is named before its first
-    // step — so this lands before anything a notification could report on.
-    if ((event.type === 'run:start' || event.type === 'run:resume')
-      && event.name !== undefined && job.runName !== event.name) {
-      job = { ...job, runName: event.name };
-    }
-    if (params.workdir && job.workdir !== params.workdir) job = { ...job, workdir: params.workdir };
-
-    switch (event.type) {
-      case 'run:start':
-      case 'run:resume':
-        break;
-      case 'step:skipped':
-        // Reused from an earlier attempt: it *is* done, it just did not run
-        // again. Leaving it pending would misreport the run as further behind
-        // than it is.
-        job = upsertStep(job, event.stepId, {
-          loopId: event.loopId,
-          iteration: event.iteration,
-          status: 'done',
-        }, event.iteration);
-        break;
-      case 'step:start':
-        // A new step gets a clean feed: the tab narrates the step running now,
-        // so lines from the step that just ended must not linger under it.
-        // hasNarrated deliberately survives — see its declaration.
-        job = { ...job, activityTail: [] };
-        job = upsertStep(job, event.stepId, {
-          kind: event.kind,
-          loopId: event.loopId,
-          iteration: event.iteration,
-          runner: event.runner,
-          model: event.model,
-          mode: event.mode,
-          status: 'running',
-          startedAt: params.ts,
-          endedAt: undefined,
-          exitCode: undefined,
-          artifact: undefined,
-          verdict: undefined,
-          phase: undefined,
-        }, event.iteration);
-        break;
-      case 'step:spawn':
-        job = patchCurrent(job, event.stepId, { phase: event.phase });
-        break;
-      case 'step:artifact':
-        job = patchCurrent(job, event.stepId, { artifact: event.path });
-        break;
-      case 'step:progress':
-        job = applyProgress(job, event.stepId, event.progress);
-        break;
-      case 'step:verdict':
-        // Kept in lockstep with RunJournal.record: a verdict only reaches here
-        // from a step that completed, so a `verdict: true` command exiting
-        // non-zero reads as done-with-a-FAIL rather than as a broken step.
-        job = patchCurrent(job, event.stepId, { verdict: event.verdict, status: 'done' });
-        break;
-      case 'step:done':
-        job = patchCurrent(job, event.stepId, {
-          status: event.exitCode === 0 ? 'done' : 'failed',
-          exitCode: event.exitCode,
-          endedAt: params.ts,
-          phase: undefined,
-        });
-        break;
-      case 'step:manual':
-      case 'step:manual-resolved':
-        // Informational here: the answerable channel is the manualRequest /
-        // manualResolved notification pair, which also reports a question torn
-        // down by cancellation — something no whiphandEvent ever describes.
-        break;
-      case 'loop:start':
-        job = upsertStep(job, event.loopId, {
-          kind: 'loop', status: 'running', startedAt: params.ts, iterations: 0,
-          maxIterations: event.maxIterations, endedAt: undefined, verdict: undefined,
-        });
-        break;
-      case 'loop:iteration':
-        job = patchCurrent(job, event.loopId, {
-          iterations: event.iteration, maxIterations: event.maxIterations,
-        });
-        break;
-      case 'loop:done':
-        job = patchCurrent(job, event.loopId, {
-          status: event.passed ? 'done' : 'failed',
-          iterations: event.iterations,
-          verdict: event.passed ? 'pass' : 'fail',
-          endedAt: params.ts,
-        });
-        break;
-      case 'guard:warning':
-        break;
-      case 'step:log': {
-        const rows = [...job.logRows, {
-          seq: params.seq ?? 0, ts: params.ts, ...summarizeEvent(event),
-        }];
-        if (rows.length > LOG_ROWS_CAP) rows.splice(0, rows.length - LOG_ROWS_CAP);
-        job = { ...job, logRows: rows };
-        break;
-      }
-      case 'step:artifact-missing':
-      case 'step:timeout':
-      case 'step:retry':
-      case 'session:await':
-      case 'session:ended':
-      case 'step:pty-exit':
-      case 'run:env':
-      case 'step:tree-delta':
-        break; // no per-field state to fold; the Logs tab reads these straight out of `events`
-      // A run that is over is not waiting on anybody — drop the card in each
-      // terminal case rather than inside finalizeRunningSteps, which returns
-      // early when no step is in flight. Mirrors RunJournal.record in core.
-      case 'run:done':
-        job = finalizeRunningSteps({ ...job, finished: true, pendingManual: undefined }, params.ts);
-        break;
-      case 'run:error':
-        // The blamed step failed outright; anything else still in flight was
-        // merely cut short.
-        job = finalizeRunningSteps(
-          { ...job, finished: true, pendingManual: undefined, errorMessage: event.message },
-          params.ts, event.stepId);
-        break;
-      case 'run:cancelled':
-        job = finalizeRunningSteps({ ...job, finished: true, pendingManual: undefined }, params.ts);
-        break;
-    }
-
-    // step:log already landed in logRows above; keeping it out of this
-    // unbounded array is what keeps a chatty step's output from growing it
-    // forever — see JobState.events.
-    if (event.type !== 'step:log') job = { ...job, events: [...job.events, params] };
-    return { jobs: { ...state.jobs, [jobId]: job } };
+    const job = state.jobs[params.jobId] ?? emptyJob(params.jobId);
+    return { jobs: { ...state.jobs, [params.jobId]: reduceJobEvent(job, params) } };
   }),
 
   applyRunStateChanged: params => set(state => {
@@ -719,6 +793,7 @@ export const useAppStore = create<AppState>((set) => ({
     const updatedJob: JobState = {
       ...job,
       status: params.status,
+      statusFromSummary: false,
       runId: params.runId ?? job.runId,
       workdir: params.workdir ?? job.workdir,
     };
@@ -878,13 +953,98 @@ export const useAppStore = create<AppState>((set) => ({
     return { jobs: { ...state.jobs, [jobId]: next } };
   }),
 
+  applyEventReplay: (jobId, events) => set(state => {
+    const current = state.jobs[jobId] ?? emptyJob(jobId);
+
+    // Fold from a blank slate that keeps identity and every pty/log/events/
+    // logRows field as they are — reduceJobEvent reads some of these
+    // (activityTail, currentExecution) but the fold's own copies of
+    // `events`/`logRows` are discarded below (F8), never written back.
+    let fold: JobState = {
+      ...emptyJob(jobId),
+      workdir: current.workdir, runId: current.runId, runName: current.runName,
+      events: current.events, logTail: current.logTail, logRows: current.logRows,
+      ptyActive: current.ptyActive, ptyStepId: current.ptyStepId,
+      ptyCols: current.ptyCols, ptyRows: current.ptyRows,
+      ptyDataBuffer: current.ptyDataBuffer, ptyDataBaseIndex: current.ptyDataBaseIndex,
+      ptyDataTrimmed: current.ptyDataTrimmed, ptyExited: current.ptyExited,
+      ptyExitCode: current.ptyExitCode, ptyExitReason: current.ptyExitReason,
+      awaiting: current.awaiting,
+    };
+    for (const event of events) fold = reduceJobEvent(fold, event);
+
+    // Idempotent on repeated reconnects: a live event this job already
+    // processed with a seq past the end of what was just replayed (the same
+    // attempt raced ahead of the getJobScrollback round trip) would otherwise
+    // be lost — the fold above started from a blank slate and knows nothing
+    // about it. Re-running it on top of the fold brings the result current
+    // again without ever touching `current.events` itself.
+    //
+    // The bound must come from the last *seq'd* replayed event, not simply
+    // `events.at(-1)`: a handler-direct run:error (see scrollback.ts's
+    // mergeBySeq) has no seq and can legitimately be the last thing replayed
+    // (runJobInBackground's catch sends it after the journal's own, seq'd
+    // run:error/run:done). Using `events.at(-1)?.seq` there reads as
+    // "nothing was replayed" and re-applies every live event this job ever
+    // held — including the step:start the replay itself just finalized past —
+    // right back on top of the fold.
+    const lastReplayedSeq = events.findLast(e => e.seq !== undefined)?.seq;
+    // A seq-less live event (a handler-direct run:error or guard:warning) can
+    // never be proven to fall after lastReplayedSeq numerically, so it is
+    // kept unless the replay already contains an equivalent one (same event
+    // type and ts) — that would mean this exact event is what the replay
+    // itself just folded in, and re-applying it a second time is what caused
+    // the bug above for a run:error specifically.
+    const replayedSeqless = new Set(
+      events.filter(e => e.seq === undefined).map(e => `${e.event.type}:${e.ts}`),
+    );
+    const racedAhead = current.events.filter(e => (
+      e.seq !== undefined
+        ? lastReplayedSeq === undefined || e.seq > lastReplayedSeq
+        : !replayedSeqless.has(`${e.event.type}:${e.ts}`)
+    ));
+    for (const event of racedAhead) fold = reduceJobEvent(fold, event);
+
+    const next: JobState = {
+      ...current,
+      steps: fold.steps,
+      stepOrder: fold.stepOrder,
+      currentExecution: fold.currentExecution,
+      finished: fold.finished,
+      errorMessage: fold.errorMessage,
+      activityTail: fold.activityTail,
+      hasNarrated: current.hasNarrated || fold.hasNarrated,
+      // Only cleared when the fold says the run actually ended — reduceJobEvent
+      // never sets pendingManual itself either way, so this is the one field
+      // the fold can only ever clear, never (re)populate.
+      pendingManual: fold.finished ? undefined : current.pendingManual,
+    };
+    return { jobs: { ...state.jobs, [jobId]: next } };
+  }),
+
   applyJobSummaries: summaries => set(state => {
     const jobs = { ...state.jobs };
     for (const summary of summaries) {
       const job = jobs[summary.jobId] ?? emptyJob(summary.jobId);
+      // A live status is normally never overwritten: applyRunStateChanged (a
+      // live runStateChanged notification) already knows more than this
+      // snapshot can — see JobState.status. But a live 'running' is exactly
+      // as stale as a summary-set one once a disconnect gap crosses the run's
+      // actual end: frontend.ts only ever sends a live runStateChanged with
+      // status 'running' (at run:start), so a client that watched the run
+      // start live and then went dark for the rest of it is stuck exactly
+      // like one that only ever saw 'running' from a summary. A job never
+      // goes from a terminal status back to 'running' — a resume is a new
+      // job — so once a fresher summary reports the run actually ended, it
+      // must be able to replace a stale live 'running' too, not only one an
+      // earlier summary itself set.
+      const staleLiveRunning = job.status === 'running' && summary.status !== 'running';
+      const statusIsLive = job.status !== undefined && !job.statusFromSummary && !staleLiveRunning;
       jobs[summary.jobId] = {
         ...job,
         finished: summary.status !== 'running',
+        status: statusIsLive ? job.status : summary.status,
+        statusFromSummary: statusIsLive ? job.statusFromSummary : true,
         runId: job.runId ?? summary.runId,
         runName: job.runName ?? summary.name,
         ptyActive: job.ptyActive || summary.pty !== null,

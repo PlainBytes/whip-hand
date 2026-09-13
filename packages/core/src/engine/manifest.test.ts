@@ -8,6 +8,7 @@ import type { RunManifest } from './manifest.ts';
 import { DEFAULT_CONFIG } from '../config.ts';
 import { setRunLocked } from './run-lock.ts';
 import { NAME_MARKER_NAME, setRunName } from './run-name.ts';
+import { RUN_LOG_NAME, parseLogLine } from './run-log.ts';
 import type { WhiphandEvent } from '../types.ts';
 
 async function tmpRunDir(): Promise<string> {
@@ -1293,14 +1294,20 @@ test('run.log gets one formatted line per event, in seq order, and step:log is e
   assert.deepEqual(eventsRaw.map(line => JSON.parse(line).seq), [1, 2, 4, 5]);
 });
 
-test('record() returns the seq it assigned, for the caller to hand to a live notification', async () => {
+test('record() returns the seq and ts it assigned, for the caller to hand to a live notification', async () => {
   const runDir = await tmpRunDir();
   const journal = new RunJournal(baseInit(runDir, 'run-log-2'));
   const first = journal.record({ type: 'run:start', runId: 'run-log-2', workflow: 'r' });
   const second = journal.record({ type: 'step:start', stepId: 'a', kind: 'agent', runner: 'fake', mode: 'headless' });
-  assert.equal(first, 1);
-  assert.equal(second, 2);
+  assert.equal(first.seq, 1);
+  assert.equal(second.seq, 2);
+  // Exactly the reading run.log's own line for this event was stamped with —
+  // not a fresh one the caller takes on its own (F9).
+  assert.equal(typeof first.ts, 'string');
   await journal.flush();
+  const logged = (await readFile(join(runDir, RUN_LOG_NAME), 'utf8')).trim().split('\n').map(parseLogLine);
+  assert.equal(logged[0]?.ts, first.ts);
+  assert.equal(logged[1]?.ts, second.ts);
 });
 
 test('a dry run writes no run.log at all', async () => {

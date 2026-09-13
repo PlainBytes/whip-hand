@@ -47,7 +47,7 @@ export function createFrontend(
   let lastStepId: string | undefined;
 
   return {
-    onEvent(event: WhiphandEvent, seq?: number): void {
+    onEvent(event: WhiphandEvent, seq?: number, ts?: string): void {
       // A resumed run emits run:resume in place of run:start. Without it here
       // every notification for a resumed run goes out with runId undefined and
       // the desktop cannot tell which run they belong to. The same branch
@@ -59,7 +59,11 @@ export function createFrontend(
       }
       if (event.type === 'step:start') lastStepId = event.stepId;
       notify('whiphandEvent', {
-        jobId, workdir: job.workdir, runId: runIdBox.current, event, ts: new Date().toISOString(),
+        // `ts`, when core supplies it, is the exact reading RunJournal.record
+        // stamped on this event's run.log line (F9) — falling back to a fresh
+        // one only for a caller that predates that plumbing (a test double,
+        // or a future Frontend implementation that ignores the param).
+        jobId, workdir: job.workdir, runId: runIdBox.current, event, ts: ts ?? new Date().toISOString(),
         ...(seq === undefined ? {} : { seq }),
       });
       if (event.type === 'run:start' || event.type === 'run:resume') {

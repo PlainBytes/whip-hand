@@ -1,9 +1,10 @@
 /**
- * The desktop's own copy of core's `packages/core/src/engine/run-log.ts` —
- * same reason `executionKey` is duplicated in state/store.ts rather than
- * imported: the desktop bundles no runtime dependency on @whiphand/core, only
- * its types. Keep this in lockstep with run-log.ts's `summarizeEvent` and
- * `parseLogLine` by hand; there is no build-time check that can do it for us.
+ * The desktop's own copy of core's `packages/core/src/engine/run-log.ts`: that
+ * module imports `node:fs` and cannot be pulled into the web bundle, unlike
+ * `executionKey` (packages/core/src/execution-key.ts), which is
+ * dependency-free and so the desktop imports it directly. Keep this in
+ * lockstep with run-log.ts's `summarizeEvent` and `parseLogLine` by hand;
+ * there is no build-time check that can do it for us.
  *
  * `summarizeEvent` turns a live WhiphandEvent into the same row shape a
  * finished run's `run.log` parses back into (via `parseLogLine`), which is

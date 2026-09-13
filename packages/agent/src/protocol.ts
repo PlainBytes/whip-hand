@@ -505,6 +505,25 @@ export type ListRecentRunsParams = z.infer<typeof listRecentRunsParams>;
 export const awaitReasonSchema = z.enum(['turn', 'permission', 'away', 'attention']);
 export type AwaitReason = z.infer<typeof awaitReasonSchema>;
 
+/**
+ * `workdir` is the workspace the job was started in. Optional so a replayed
+ * log or an older recorded stream still parses (same posture as
+ * ptyExitParams.reason) — the desktop treats an untagged job as belonging to
+ * no workspace rather than to the current one.
+ *
+ * Declared up here, ahead of the "Notifications" section below where the live
+ * whiphandEvent notification itself is wired up, because jobScrollbackSchema
+ * (right below) reuses this same shape for its buffered `events` — a replayed
+ * event and a live one are wire-identical.
+ */
+export const whiphandEventNotificationParams = z.object({
+  jobId: z.string(), workdir: z.string().optional(),
+  runId: z.string().optional(), event: whiphandEventSchema, ts: z.string(),
+  /** The ordinal core's journal assigned this event — see engine/manifest.ts. Optional so an older agent's replayed stream still parses. */
+  seq: z.number().int().nonnegative().optional(),
+});
+export type WhiphandEventNotificationParams = z.infer<typeof whiphandEventNotificationParams>;
+
 // ---------------------------------------------------------------------------
 // Live jobs and their transcripts
 // ---------------------------------------------------------------------------
@@ -556,6 +575,13 @@ export const jobScrollbackSchema = z.object({
     trimmed: z.boolean(),
     lines: z.array(z.object({ stream: z.enum(['stdout', 'stderr']), line: z.string() })),
   }),
+  /**
+   * Buffered whiphandEvent notifications since this job began (`step:log`
+   * excluded), seq-ordered, for a client that attaches or reconnects mid-run
+   * to fold into its own state — see the desktop store's `applyEventReplay`.
+   * Optional so an older agent's response still parses.
+   */
+  events: z.array(whiphandEventNotificationParams).optional(),
 });
 export type JobScrollbackResult = z.infer<typeof jobScrollbackSchema>;
 
@@ -751,20 +777,6 @@ export { CORE_VERSION };
 // ---------------------------------------------------------------------------
 // Notifications
 // ---------------------------------------------------------------------------
-
-/**
- * `workdir` is the workspace the job was started in. Optional so a replayed
- * log or an older recorded stream still parses (same posture as
- * ptyExitParams.reason) — the desktop treats an untagged job as belonging to
- * no workspace rather than to the current one.
- */
-export const whiphandEventNotificationParams = z.object({
-  jobId: z.string(), workdir: z.string().optional(),
-  runId: z.string().optional(), event: whiphandEventSchema, ts: z.string(),
-  /** The ordinal core's journal assigned this event — see engine/manifest.ts. Optional so an older agent's replayed stream still parses. */
-  seq: z.number().int().nonnegative().optional(),
-});
-export type WhiphandEventNotificationParams = z.infer<typeof whiphandEventNotificationParams>;
 
 export const runStateChangedParams = z.object({
   jobId: z.string(), workdir: z.string().optional(),

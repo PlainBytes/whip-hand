@@ -403,7 +403,6 @@ function PdfDocumentView({ path, bytes }: PdfViewProps) {
             // and so the page height — and could flip back and forth forever.
             overflowY: 'scroll',
             padding: PANE_PADDING,
-            background: tokens.colorNeutralBackground3,
           }}
         >
           {doc ? (

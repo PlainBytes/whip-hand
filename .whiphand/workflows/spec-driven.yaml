@@ -73,46 +73,66 @@ steps:
       which writes code without stopping to ask.
     inputs: [functional-grill, technical-grill]
 
-  - id: build-cycle
+  # Repeats until 'sign-off' is approved. Requesting changes there attaches
+  # fresh feedback ('sign-off' as a forward reference) and sends build-cycle
+  # round again.
+  - id: human-review
     kind: loop
-    until: review
-    max_iterations: 3
+    until: sign-off
+    max_iterations: 5
     steps:
-      - id: execute
-        runner: claude
-        model: sonnet     # the specs did the thinking; this half is cheap
-        mode: headless
-        writes: true
-        # 'review' is later in this body, so it means the PREVIOUS iteration's
-        # findings — absent, and simply skipped, on the first pass.
-        inputs: [functional-grill, technical-grill, review]
-        output: execute-report.md
-        prompt: Implement the attached technical spec. It serves the functional spec; where they disagree, say so rather than guessing.
+      - id: build-cycle
+        kind: loop
+        until: review
+        max_iterations: 3
+        steps:
+          - id: execute
+            runner: claude
+            model: sonnet     # the specs did the thinking; this half is cheap
+            mode: headless
+            writes: true
+            # 'review' is later in this body, so it means the PREVIOUS
+            # iteration's findings; 'sign-off' is a later sibling of the OUTER
+            # loop, so it means the previous ROUND's feedback — both are simply
+            # skipped, on the first pass of each, when there is nothing yet to read.
+            inputs: [functional-grill, technical-grill, review, sign-off]
+            output: execute-report.md
+            prompt: |
+              Implement the attached technical spec. It serves the functional
+              spec; where they disagree, say so rather than guessing. If
+              sign-off feedback is attached, address every requested change.
 
-      # Uncomment to make verification part of the cycle: with 'verdict: true'
-      # a non-zero exit sends the loop round again instead of failing the run.
-      # - id: tests
-      #   kind: command
-      #   run: npm test
-      #   verdict: true
-      #   output: tests.log
+          # Uncomment to make verification part of the cycle: with 'verdict: true'
+          # a non-zero exit sends the loop round again instead of failing the run.
+          # - id: tests
+          #   kind: command
+          #   run: npm test
+          #   verdict: true
+          #   output: tests.log
 
-      - id: review
-        runner: claude
-        model: opus
-        mode: headless
-        writes: false
+          - id: review
+            runner: claude
+            model: opus
+            mode: headless
+            writes: false
+            verdict: true
+            inputs: [functional-grill, technical-grill, execute, sign-off]
+            output: review.md
+            prompt: |
+              Review the implementation against both specs — the functional one
+              for whether it does the right thing, the technical one for whether
+              it was built the agreed way. If sign-off feedback is attached, FAIL
+              unless every requested change is addressed.
+              End with VERDICT: PASS or VERDICT: FAIL.
+
+      # A human gate. Its answer becomes the 'sign-off' both steps above read:
+      # approving exits both loops, requesting changes sends build-cycle round again.
+      - id: sign-off
+        kind: approval
         verdict: true
-        inputs: [functional-grill, technical-grill, execute]
-        output: review.md
-        prompt: |
-          Review the implementation against both specs — the functional one
-          for whether it does the right thing, the technical one for whether
-          it was built the agreed way. End with VERDICT: PASS or VERDICT: FAIL.
-
-  - id: sign-off
-    kind: approval
-    title: Ship it?
-    instructions: Review the diff and the findings before this goes any further.
-    show_diff: true
-    inputs: [review]
+        title: Ship it?
+        instructions: Approve, or request changes with comments on the whole change or on individual files.
+        show_diff: true
+        capture: review
+        inputs: [review]
+        output: feedback.md

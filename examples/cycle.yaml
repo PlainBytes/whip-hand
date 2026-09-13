@@ -56,7 +56,7 @@ steps:
         mode: headless
         writes: false
         verdict: true       # recorded, but sign-off — the `until` step — is what drives the loop
-        inputs: [plan, execute, tests]
+        inputs: [plan, execute, tests, sign-off]
         output: findings.md
         prompt: Review the diff against the plan and the test output.
 

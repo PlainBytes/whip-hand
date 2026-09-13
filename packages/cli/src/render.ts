@@ -11,7 +11,18 @@
  */
 import { join } from 'node:path';
 import { ATTACHMENTS_DIR, formatBytes } from '@whiphand/core';
-import type { WhiphandEvent } from '@whiphand/core';
+import type { LoopRef, WhiphandEvent } from '@whiphand/core';
+
+/**
+ * `<id>` prefixed with every loop enclosing it, outermost first — e.g.
+ * `human-review 2 › fix-cycle`. Empty for a top-level loop, which is what
+ * keeps its own rendering byte-identical to what it always was.
+ */
+function nestedPrefix(id: string, parentLoopId?: string, parentIteration?: number, outerLoops?: LoopRef[]): string {
+  const ancestors = [...(outerLoops ?? [])];
+  if (parentLoopId !== undefined) ancestors.push({ id: parentLoopId, iteration: parentIteration ?? 1 });
+  return ancestors.length === 0 ? id : `${ancestors.map(l => `${l.id} ${l.iteration}`).join(' › ')} › ${id}`;
+}
 
 export interface RenderSinks {
   out: (line: string) => void;
@@ -134,13 +145,18 @@ export function createRenderer(
       }
       case 'step:manual': return; // the prompt itself is the rendering, on stderr
       case 'step:manual-resolved': return out(`  ↳ ${event.choice}`);
-      case 'loop:start': return out(`↻ loop ${event.loopId} (up to ${event.maxIterations} iterations)`);
+      case 'loop:start':
+        return out(`↻ loop ${nestedPrefix(event.loopId, event.parentLoopId, event.parentIteration, event.outerLoops)}`
+          + ` (up to ${event.maxIterations} iterations)`);
       case 'loop:iteration':
-        return out(`↻ ${event.loopId} — iteration ${event.iteration}/${event.maxIterations}`);
-      case 'loop:done':
+        return out(`↻ ${nestedPrefix(event.loopId, event.parentLoopId, event.parentIteration, event.outerLoops)}`
+          + ` — iteration ${event.iteration}/${event.maxIterations}`);
+      case 'loop:done': {
+        const label = nestedPrefix(event.loopId, event.parentLoopId, event.parentIteration, event.outerLoops);
         return out(event.passed
-          ? `↻ ${event.loopId} passed after ${event.iterations} iteration(s)`
-          : `↻ ${event.loopId} exhausted after ${event.iterations} iteration(s)`);
+          ? `↻ ${label} passed after ${event.iterations} iteration(s)`
+          : `↻ ${label} exhausted after ${event.iterations} iteration(s)`);
+      }
       case 'guard:warning': return err(`  ⚠ ${event.message}`);
       case 'run:error': return err(`✘ ${event.message}`);
       case 'run:cancelled': return out('✖ run cancelled');

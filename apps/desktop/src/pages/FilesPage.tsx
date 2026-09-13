@@ -17,6 +17,7 @@ import { DocumentAdd16Regular, FolderAdd16Regular } from '@fluentui/react-icons'
 import { FileTree } from '../components/FileTree.tsx';
 import { FilePreview } from '../components/FilePreview.tsx';
 import { PageHeader } from '../components/PageHeader.tsx';
+import { RECESSED_SURFACE } from '../components/recessed-surface.ts';
 import { basename } from '../lib/workspace-identity.ts';
 import { FileOpsDialog, type FileOpsMode } from '../components/FileOpsDialog.tsx';
 import { UnsavedChangesDialog } from '../components/UnsavedChangesDialog.tsx';
@@ -292,12 +293,11 @@ export function FilesPage() {
         </div>
       </PageHeader>
 
-      <div style={{ display: 'flex', flex: 1, minHeight: 0, paddingTop: 8 }}>
+      <div style={{ display: 'flex', flex: 1, minHeight: 0, paddingTop: 8, gap: 8 }}>
         <div
           style={{
             width: 320,
             flexShrink: 0,
-            borderRight: '1px solid var(--colorNeutralStroke2)',
             minHeight: 0,
             display: 'flex',
             overflow: 'hidden',
@@ -318,12 +318,11 @@ export function FilesPage() {
         </div>
         <div
           style={{
+            // The recessed surface the run page reads its output on — the
+            // only boundary; the tree sits on the page background with an
+            // 8px gap before it.
+            ...RECESSED_SURFACE,
             flex: 1, minWidth: 0, minHeight: 0, display: 'flex', overflow: 'hidden',
-            // The recessed surface the run page reads its output on. No gap
-            // to the tree: this background is the boundary.
-            background: 'var(--colorNeutralBackground3)',
-            padding: 8,
-            borderRadius: 4,
           }}
         >
           <FilePreview

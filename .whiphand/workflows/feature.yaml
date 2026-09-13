@@ -1,5 +1,6 @@
 # feature — plan interactively, then implement and review in a cycle
-# until the review passes. Reference: docs/design.md
+# until the review passes, then a human sign-off that can send it back for
+# another cycle. Reference: docs/design.md
 name: feature
 description: Plan with a human, then implement and review in a cycle until the review passes.
 inputs:
@@ -19,44 +20,61 @@ steps:
 
       Before getting started, always ask for initial files that will allow you to improve your discovery.
 
-  - id: fix-cycle # repeats its body until 'review' returns VERDICT: PASS
+  # Repeats until 'sign-off' is approved. Requesting changes there attaches
+  # fresh feedback ('sign-off' as a forward reference) and sends fix-cycle
+  # round again — delete this whole loop, keeping fix-cycle at the top level,
+  # to let the workflow run unattended instead.
+  - id: human-review
     kind: loop
-    until: review
-    max_iterations: 3
+    until: sign-off
+    max_iterations: 5
     steps:
-      - id: execute # headless; may write
-        runner: claude
-        mode: headless
-        writes: true
-        # 'review' comes later in this body, so it means the PREVIOUS
-        # iteration's findings — absent, and simply skipped, on the first pass.
-        inputs: [plan, review]
-        output: execute-report.md
-        prompt: Implement the attached plan.
-        model: sonnet
+      - id: fix-cycle # repeats its body until 'review' returns VERDICT: PASS
+        kind: loop
+        until: review
+        max_iterations: 3
+        steps:
+          - id: execute # headless; may write
+            runner: claude
+            mode: headless
+            writes: true
+            # 'review' comes later in this body, so it means the PREVIOUS
+            # iteration's findings; 'sign-off' is a later sibling of the OUTER
+            # loop, so it means the previous ROUND's feedback — both are simply
+            # skipped, on the first pass of each, when there is nothing yet to read.
+            inputs: [plan, review, sign-off]
+            output: execute-report.md
+            prompt: Implement the attached plan. If sign-off feedback is attached, address every requested change.
+            model: sonnet
 
-      # A shell step: no tokens, no runner. Uncomment to make the tests part of
-      # the cycle — with 'verdict: true' a non-zero exit sends the loop round
-      # again instead of failing the run.
-      # - id: tests
-      #   kind: command
-      #   run: npm test
-      #   verdict: true
-      #   output: tests.log
+          # A shell step: no tokens, no runner. Uncomment to make the tests part of
+          # the cycle — with 'verdict: true' a non-zero exit sends the loop round
+          # again instead of failing the run.
+          # - id: tests
+          #   kind: command
+          #   run: npm test
+          #   verdict: true
+          #   output: tests.log
 
-      - id: review # headless, read-only, must end with VERDICT: PASS|FAIL
-        runner: claude
-        mode: headless
-        writes: false
+          - id: review # headless, read-only, must end with VERDICT: PASS|FAIL
+            runner: claude
+            mode: headless
+            writes: false
+            verdict: true
+            inputs: [plan, execute, sign-off]
+            output: review.md
+            prompt: |
+              Review the implementation against the attached plan. If sign-off
+              feedback is attached, FAIL unless every requested change is addressed.
+
+      # A human gate. Its answer becomes the 'sign-off' both steps above read:
+      # approving exits both loops, requesting changes sends fix-cycle round again.
+      - id: sign-off
+        kind: approval
         verdict: true
-        inputs: [plan, execute]
-        output: review.md
-        prompt: Review the implementation against the attached plan.
-
-  # A human gate. Delete it to let the workflow run unattended.
-  - id: sign-off
-    kind: approval
-    title: Ship it?
-    instructions: Review the diff and the findings before this goes any further.
-    show_diff: true
-    inputs: [review]
+        title: Ship it?
+        instructions: Approve, or request changes with comments on the whole change or on individual files.
+        show_diff: true
+        capture: review
+        inputs: [review]
+        output: feedback.md

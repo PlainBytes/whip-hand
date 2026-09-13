@@ -4,7 +4,7 @@ import { executionKey, type StepState } from '../state/store.ts';
 
 function step(partial: Partial<StepState> & { id: string }): StepState {
   return {
-    key: executionKey(partial.id, partial.iteration),
+    key: executionKey(partial.id, partial.iteration, partial.outerLoops),
     status: 'pending',
     ...partial,
   } as StepState;
@@ -83,10 +83,14 @@ describe('buildRunTree', () => {
   });
 
   it('nests a loop inside a loop', () => {
+    // 'inner's own row is identified by its round of 'outer' (iteration 1,
+    // here 'outer's only one so far); 'deep', running directly inside
+    // 'inner', carries that same round as its outerLoops — exactly what
+    // runner.ts's ancestorLoops computes for a real nested execution.
     const tree = buildRunTree([
       step({ id: 'outer', kind: 'loop', status: 'running' }),
-      step({ id: 'inner', kind: 'loop', loopId: 'outer', status: 'running' }),
-      step({ id: 'deep', loopId: 'inner', status: 'running' }),
+      step({ id: 'inner', kind: 'loop', loopId: 'outer', iteration: 1, status: 'running' }),
+      step({ id: 'deep', loopId: 'inner', outerLoops: [{ id: 'outer', iteration: 1 }], status: 'running' }),
     ]);
     const outer = tree[0] as LoopNode;
     const inner = outer.children[0] as LoopNode;
@@ -94,6 +98,33 @@ describe('buildRunTree', () => {
     expect(ids(inner.children)).toEqual(['deep']);
     expect(inner.ordinal).toBe(2);
     expect(inner.children[0].ordinal).toBe(3);
+  });
+
+  it('gives round 2 of an outer loop its own inner-loop node, not round 1\'s rows', () => {
+    // The shape every shipped workflow now uses: an outer human-review loop
+    // wraps an inner fix-cycle. Round 2 must not inherit round 1's execute.
+    const tree = buildRunTree([
+      step({ id: 'human-review', kind: 'loop', status: 'running', iterations: 2 }),
+      step({ id: 'fix-cycle', kind: 'loop', loopId: 'human-review', iteration: 1, status: 'done' }),
+      step({
+        id: 'execute', loopId: 'fix-cycle', iteration: 1,
+        outerLoops: [{ id: 'human-review', iteration: 1 }], status: 'done',
+      }),
+      step({ id: 'sign-off', loopId: 'human-review', iteration: 1, status: 'done', verdict: 'fail' }),
+      step({ id: 'fix-cycle', kind: 'loop', loopId: 'human-review', iteration: 2, status: 'running' }),
+      step({
+        id: 'execute', loopId: 'fix-cycle', iteration: 1,
+        outerLoops: [{ id: 'human-review', iteration: 2 }], status: 'running',
+      }),
+      step({ id: 'sign-off', loopId: 'human-review', iteration: 2, status: 'pending' }),
+    ]);
+    const humanReview = tree[0] as LoopNode;
+    expect(ids(humanReview.children)).toEqual(['fix-cycle', 'sign-off', 'fix-cycle']);
+    const [round1, , round2] = humanReview.children as [LoopNode, StepNode, LoopNode];
+    expect(round1.children).toHaveLength(1);
+    expect(round1.children[0].kind === 'step' && round1.children[0].latest.status).toBe('done');
+    expect(round2.children).toHaveLength(1);
+    expect(round2.children[0].kind === 'step' && round2.children[0].latest.status).toBe('running');
   });
 
   it('shows a step whose loop is missing rather than dropping it', () => {

@@ -30,7 +30,8 @@ export function assertValidWorkflowName(name: string): void {
 
 export function workflowTemplate(name: string): string {
   return `# ${name} — plan interactively, then implement and review in a cycle
-# until the review passes. Reference: docs/design.md
+# until the review passes, then a human sign-off that can send it back for
+# another cycle. Reference: docs/design.md
 name: ${name}
 description: Plan with a human, then implement and review in a cycle until the review passes.
 inputs:
@@ -46,46 +47,63 @@ steps:
     prompt: |
       We are planning: {{ inputs.feature }}. Work with me on a plan. Do not modify files.
 
-  - id: fix-cycle     # repeats its body until 'review' returns VERDICT: PASS
+  # Repeats until 'sign-off' is approved. Requesting changes there attaches
+  # fresh feedback ('sign-off' as a forward reference) and sends fix-cycle
+  # round again — delete this whole loop, keeping fix-cycle at the top level,
+  # to let the workflow run unattended instead.
+  - id: human-review
     kind: loop
-    until: review
-    max_iterations: 3
+    until: sign-off
+    max_iterations: 5
     steps:
-      - id: execute   # headless; may write
-        runner: claude
-        mode: headless
-        writes: true
-        # 'review' comes later in this body, so it means the PREVIOUS
-        # iteration's findings — absent, and simply skipped, on the first pass.
-        inputs: [plan, review]
-        output: execute-report.md
-        prompt: Implement the attached plan.
+      - id: fix-cycle   # repeats its body until 'review' returns VERDICT: PASS
+        kind: loop
+        until: review
+        max_iterations: 3
+        steps:
+          - id: execute   # headless; may write
+            runner: claude
+            mode: headless
+            writes: true
+            # 'review' comes later in this body, so it means the PREVIOUS
+            # iteration's findings; 'sign-off' is a later sibling of the OUTER
+            # loop, so it means the previous ROUND's feedback — both are simply
+            # skipped, on the first pass of each, when there is nothing yet to read.
+            inputs: [plan, review, sign-off]
+            output: execute-report.md
+            prompt: Implement the attached plan. If sign-off feedback is attached, address every requested change.
 
-      # A shell step: no tokens, no runner. Uncomment to make the tests part of
-      # the cycle — with 'verdict: true' a non-zero exit sends the loop round
-      # again instead of failing the run.
-      # - id: tests
-      #   kind: command
-      #   run: npm test
-      #   verdict: true
-      #   output: tests.log
+          # A shell step: no tokens, no runner. Uncomment to make the tests part of
+          # the cycle — with 'verdict: true' a non-zero exit sends the loop round
+          # again instead of failing the run.
+          # - id: tests
+          #   kind: command
+          #   run: npm test
+          #   verdict: true
+          #   output: tests.log
 
-      - id: review    # headless, read-only, must end with VERDICT: PASS|FAIL
-        runner: claude
-        mode: headless
-        writes: false
+          - id: review    # headless, read-only, must end with VERDICT: PASS|FAIL
+            runner: claude
+            mode: headless
+            writes: false
+            verdict: true
+            inputs: [plan, execute, sign-off]
+            output: review.md
+            prompt: |
+              Review the implementation against the attached plan. If sign-off
+              feedback is attached, FAIL unless every requested change is addressed.
+
+      # A human gate. Its answer becomes the 'sign-off' both steps above read:
+      # approving exits both loops, requesting changes sends fix-cycle round again.
+      - id: sign-off
+        kind: approval
         verdict: true
-        inputs: [plan, execute]
-        output: review.md
-        prompt: Review the implementation against the attached plan.
-
-  # A human gate. Delete it to let the workflow run unattended.
-  - id: sign-off
-    kind: approval
-    title: Ship it?
-    instructions: Review the diff and the findings before this goes any further.
-    show_diff: true
-    inputs: [review]
+        title: Ship it?
+        instructions: Approve, or request changes with comments on the whole change or on individual files.
+        show_diff: true
+        capture: review
+        inputs: [review]
+        output: feedback.md
 `;
 }
 
@@ -172,49 +190,69 @@ steps:
       which writes code without stopping to ask.
     inputs: [functional-grill, technical-grill]
 
-  - id: build-cycle
+  # Repeats until 'sign-off' is approved. Requesting changes there attaches
+  # fresh feedback ('sign-off' as a forward reference) and sends build-cycle
+  # round again.
+  - id: human-review
     kind: loop
-    until: review
-    max_iterations: 3
+    until: sign-off
+    max_iterations: 5
     steps:
-      - id: execute
-        runner: claude
-        model: sonnet     # the specs did the thinking; this half is cheap
-        mode: headless
-        writes: true
-        # 'review' is later in this body, so it means the PREVIOUS iteration's
-        # findings — absent, and simply skipped, on the first pass.
-        inputs: [functional-grill, technical-grill, review]
-        output: execute-report.md
-        prompt: Implement the attached technical spec. It serves the functional spec; where they disagree, say so rather than guessing.
+      - id: build-cycle
+        kind: loop
+        until: review
+        max_iterations: 3
+        steps:
+          - id: execute
+            runner: claude
+            model: sonnet     # the specs did the thinking; this half is cheap
+            mode: headless
+            writes: true
+            # 'review' is later in this body, so it means the PREVIOUS
+            # iteration's findings; 'sign-off' is a later sibling of the OUTER
+            # loop, so it means the previous ROUND's feedback — both are simply
+            # skipped, on the first pass of each, when there is nothing yet to read.
+            inputs: [functional-grill, technical-grill, review, sign-off]
+            output: execute-report.md
+            prompt: |
+              Implement the attached technical spec. It serves the functional
+              spec; where they disagree, say so rather than guessing. If
+              sign-off feedback is attached, address every requested change.
 
-      # Uncomment to make verification part of the cycle: with 'verdict: true'
-      # a non-zero exit sends the loop round again instead of failing the run.
-      # - id: tests
-      #   kind: command
-      #   run: npm test
-      #   verdict: true
-      #   output: tests.log
+          # Uncomment to make verification part of the cycle: with 'verdict: true'
+          # a non-zero exit sends the loop round again instead of failing the run.
+          # - id: tests
+          #   kind: command
+          #   run: npm test
+          #   verdict: true
+          #   output: tests.log
 
-      - id: review
-        runner: claude
-        model: opus
-        mode: headless
-        writes: false
+          - id: review
+            runner: claude
+            model: opus
+            mode: headless
+            writes: false
+            verdict: true
+            inputs: [functional-grill, technical-grill, execute, sign-off]
+            output: review.md
+            prompt: |
+              Review the implementation against both specs — the functional one
+              for whether it does the right thing, the technical one for whether
+              it was built the agreed way. If sign-off feedback is attached, FAIL
+              unless every requested change is addressed.
+              End with VERDICT: PASS or VERDICT: FAIL.
+
+      # A human gate. Its answer becomes the 'sign-off' both steps above read:
+      # approving exits both loops, requesting changes sends build-cycle round again.
+      - id: sign-off
+        kind: approval
         verdict: true
-        inputs: [functional-grill, technical-grill, execute]
-        output: review.md
-        prompt: |
-          Review the implementation against both specs — the functional one
-          for whether it does the right thing, the technical one for whether
-          it was built the agreed way. End with VERDICT: PASS or VERDICT: FAIL.
-
-  - id: sign-off
-    kind: approval
-    title: Ship it?
-    instructions: Review the diff and the findings before this goes any further.
-    show_diff: true
-    inputs: [review]
+        title: Ship it?
+        instructions: Approve, or request changes with comments on the whole change or on individual files.
+        show_diff: true
+        capture: review
+        inputs: [review]
+        output: feedback.md
 `;
 }
 
@@ -282,17 +320,19 @@ steps:
             model: sonnet
             mode: headless
             writes: true
-            prompt: Implement the attached plan.
+            prompt: Implement the attached plan. If sign-off feedback is attached, address every requested change.
             output: execute-report.md
           - id: review
-            inputs: [plan, execute]
+            inputs: [plan, execute, sign-off]
             verdict: true
             kind: agent
             runner: claude
             model: opus
             mode: headless
             writes: false
-            prompt: Review the implementation against the attached plan.
+            prompt: |
+              Review the implementation against the attached plan. If sign-off
+              feedback is attached, FAIL unless every requested change is addressed.
             output: review.md
       - id: sign-off
         inputs: [review]

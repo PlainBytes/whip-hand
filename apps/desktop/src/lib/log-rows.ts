@@ -10,7 +10,7 @@
  * finished run's `run.log` parses back into (via `parseLogLine`), which is
  * what lets the Logs tab render "live" and "read from disk" rows identically.
  */
-import type { WhiphandEvent } from '../../../../packages/core/src/types.ts';
+import type { LoopRef, WhiphandEvent } from '../../../../packages/core/src/types.ts';
 
 export interface LogRow {
   seq: number;
@@ -19,6 +19,18 @@ export interface LogRow {
   stepId?: string;
   text: string;
   stream?: 'stdout' | 'stderr';
+}
+
+/**
+ * `<id>` prefixed with every loop enclosing it, outermost first — e.g.
+ * `human-review 2 › fix-cycle`. Empty for a top-level loop, which is what
+ * keeps its own rendering byte-identical to what it always was. Mirrors
+ * core's run-log.ts `nestedPrefix` — see that file for the canonical version.
+ */
+function nestedPrefix(id: string, parentLoopId?: string, parentIteration?: number, outerLoops?: LoopRef[]): string {
+  const ancestors = [...(outerLoops ?? [])];
+  if (parentLoopId !== undefined) ancestors.push({ id: parentLoopId, iteration: parentIteration ?? 1 });
+  return ancestors.length === 0 ? id : `${ancestors.map(l => `${l.id} ${l.iteration}`).join(' › ')} › ${id}`;
 }
 
 function bytesLabel(n: number): string {
@@ -127,13 +139,22 @@ export function summarizeEvent(event: WhiphandEvent): Omit<LogRow, 'seq' | 'ts'>
     case 'step:manual-resolved':
       return { kind: event.type, stepId: event.stepId, text: `human answered: ${event.choice}` };
     case 'loop:start':
-      return { kind: event.type, text: `loop '${event.loopId}' started, up to ${event.maxIterations} iteration(s)` };
+      return {
+        kind: event.type,
+        text: `loop '${nestedPrefix(event.loopId, event.parentLoopId, event.parentIteration, event.outerLoops)}' `
+          + `started, up to ${event.maxIterations} iteration(s)`,
+      };
     case 'loop:iteration':
-      return { kind: event.type, text: `loop '${event.loopId}' iteration ${event.iteration}/${event.maxIterations}` };
+      return {
+        kind: event.type,
+        text: `loop '${nestedPrefix(event.loopId, event.parentLoopId, event.parentIteration, event.outerLoops)}' `
+          + `iteration ${event.iteration}/${event.maxIterations}`,
+      };
     case 'loop:done':
       return {
         kind: event.type,
-        text: `loop '${event.loopId}' ${event.passed ? 'passed' : 'did not pass'} after ${event.iterations} iteration(s)`,
+        text: `loop '${nestedPrefix(event.loopId, event.parentLoopId, event.parentIteration, event.outerLoops)}' `
+          + `${event.passed ? 'passed' : 'did not pass'} after ${event.iterations} iteration(s)`,
       };
     case 'guard:warning':
       return { kind: event.type, stepId: event.stepId, text: event.message };

@@ -3,7 +3,7 @@ import { basename, join, relative, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import type {
-  RunAttachment, WhiphandEvent, Scope, StepKind, StepMode, StepProgress, WorkspaceConfig,
+  RunAttachment, WhiphandEvent, LoopRef, Scope, StepKind, StepMode, StepProgress, WorkspaceConfig,
 } from '../types.ts';
 import { isEndMarkerName } from './session-end.ts';
 import { isAwaitStateName } from './await-state.ts';
@@ -24,6 +24,12 @@ const manifestStepSchema = z.object({
   loopId: z.string().min(1).optional(),
   /** 1-based iteration this execution belongs to; absent outside a loop. */
   iteration: z.number().int().positive().optional(),
+  /**
+   * Loops enclosing `loopId` itself, outermost first — absent or empty
+   * outside nested loops, which is what keeps a single-level row identical to
+   * what it always was. Added in v4; see MANIFEST_VERSION.
+   */
+  outerLoops: z.array(z.object({ id: z.string(), iteration: z.number().int().positive() })).optional(),
   /** On a loop's own entry: how many iterations it ended up running. */
   iterations: z.number().int().nonnegative().optional(),
   /**
@@ -75,11 +81,14 @@ const manifestStepSchema = z.object({
  * v2 added step kinds, loops, and one entry per *execution* rather than per
  * declared step. v3 added `sessionStarted`, which is the first field whose
  * *absence* carries meaning — so it needs a version to be read against, or an
- * older run would look like one whose sessions never opened. Earlier manifests
+ * older run would look like one whose sessions never opened. v4 added
+ * `outerLoops`, so a row's identity survives a loop nested inside another
+ * loop — a run recorded before it existed cannot be resumed if its workflow
+ * turns out to have nested loops (see resume.ts's refusal). Earlier manifests
  * still parse: the union is what keeps `listRuns` from going blind on runs
  * recorded before cycles existed.
  */
-export const MANIFEST_VERSION = 3;
+export const MANIFEST_VERSION = 4;
 
 /**
  * The run's own copy of the workflow it executed. A resume reads this rather
@@ -93,7 +102,7 @@ export const WORKFLOW_SNAPSHOT_NAME = 'workflow.yaml';
 export { executionKey };
 
 const runManifestSchema = z.object({
-  version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
   runId: z.string().min(1),
   workflow: z.string().min(1),
   workdir: z.string().min(1),
@@ -185,6 +194,13 @@ export interface RunJournalInit {
 }
 
 const TERMINAL_EVENTS = new Set<WhiphandEvent['type']>(['run:done', 'run:error', 'run:cancelled']);
+
+/** Order-sensitive equality for a row's `outerLoops`, treating absent as empty. */
+function sameLoopRefs(a: readonly LoopRef[] | undefined, b: readonly LoopRef[]): boolean {
+  const aa = a ?? [];
+  if (aa.length !== b.length) return false;
+  return aa.every((r, i) => r.id === b[i].id && r.iteration === b[i].iteration);
+}
 
 /**
  * Reduces the run's WhiphandEvent stream into an on-disk RunManifest (run.json,
@@ -376,16 +392,42 @@ export class RunJournal {
 
   /**
    * With loops a step id no longer identifies one execution, so `step:start`
-   * resolves (and if need be appends) the entry this execution belongs to, and
-   * every later event for that step patches whatever start last selected.
-   * Iteration 1 reuses the seeded plan entry, so `steps[]` still reads as the
-   * declared plan with the extra iterations appended after each step.
+   * (and, for a loop's own row, `loop:start`) resolves — and if need be
+   * appends — the entry this execution belongs to, and every later event for
+   * that id patches whatever start last selected. Iteration 1 reuses the
+   * seeded plan entry, so `steps[]` still reads as the declared plan with the
+   * extra iterations appended after each step.
    */
   private readonly current = new Map<string, ManifestStep>();
 
-  private beginStep(stepId: string, iteration: number | undefined, patch: Partial<ManifestStep>): void {
+  /**
+   * A round of an *outer* loop reruns an inner loop (and its body) from
+   * iteration 1 again, so `(id, iteration)` alone no longer picks out one row
+   * once loops nest — `outerLoops` (the chain of loops beyond the immediate
+   * one) has to agree too, or round 2 would find and overwrite round 1's
+   * already-`done` row instead of appending its own.
+   *
+   * The one exception is the seeded plan entry: it is written before the run
+   * starts, so it cannot know a nested body step's first execution will carry
+   * a non-empty `outerLoops` (that depends on runtime iteration numbers the
+   * plan doesn't have yet). A virgin entry — iteration 1, no `outerLoops` of
+   * its own, never started — is still eligible to become *that* execution,
+   * whatever `outerLoops` it turns out to want, provided this is genuinely the
+   * first execution of this id (no other row for it exists yet).
+   */
+  private beginStep(
+    stepId: string, iteration: number | undefined, outerLoops: readonly LoopRef[] | undefined,
+    patch: Partial<ManifestStep>,
+  ): void {
     const wanted = iteration ?? 1;
-    let entry = this.manifest.steps.find(s => s.id === stepId && (s.iteration ?? 1) === wanted);
+    const wantedOuter = outerLoops ?? [];
+    let entry = this.manifest.steps.find(s =>
+      s.id === stepId && (s.iteration ?? 1) === wanted && sameLoopRefs(s.outerLoops, wantedOuter));
+    if (entry === undefined && wanted === 1) {
+      entry = this.manifest.steps.find(s =>
+        s.id === stepId && (s.iteration ?? 1) === 1 && s.outerLoops === undefined
+        && s.status === 'pending' && s.attempted !== true);
+    }
     if (entry === undefined) {
       entry = { id: stepId, kind: 'agent', status: 'pending' };
       // findLastIndex is newer than the desktop app's compile target, and this
@@ -498,9 +540,9 @@ export class RunJournal {
         // fact that this execution was reused rather than re-run.
         break;
       case 'step:start':
-        this.beginStep(event.stepId, event.iteration, {
+        this.beginStep(event.stepId, event.iteration, event.outerLoops, {
           kind: event.kind, runner: event.runner, model: event.model, mode: event.mode,
-          loopId: event.loopId, iteration: event.iteration,
+          loopId: event.loopId, iteration: event.iteration, outerLoops: event.outerLoops,
           status: 'running', startedAt: now, endedAt: undefined, exitCode: undefined,
           artifact: undefined, verdict: undefined,
         });
@@ -556,9 +598,14 @@ export class RunJournal {
         this.manifest.manualPending = undefined;
         break;
       case 'loop:start':
-        this.upsertStep(event.loopId, {
+        // A loop's own row is identified the same way a leaf step's is: by its
+        // id plus which round of *its* enclosing loop this is — so a round of
+        // an outer loop gets a fresh row for the inner loop rather than
+        // overwriting the previous round's, once it's already 'done'.
+        this.beginStep(event.loopId, event.parentIteration, event.outerLoops, {
           kind: 'loop', status: 'running', startedAt: now, iterations: 0,
           maxIterations: event.maxIterations, endedAt: undefined, verdict: undefined,
+          loopId: event.parentLoopId, iteration: event.parentIteration, outerLoops: event.outerLoops,
         });
         break;
       case 'loop:iteration':

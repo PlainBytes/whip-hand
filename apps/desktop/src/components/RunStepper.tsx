@@ -178,7 +178,7 @@ export function StepDetails({ step }: { step: StepState }) {
 function IterationHistory({ node, clock }: { node: LeafNode; clock: number }) {
   return (
     <ol
-      data-testid={`step-history-${node.id}`}
+      data-testid={`step-history-${node.key}`}
       style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 2 }}
     >
       {node.executions.map((execution, index) => {
@@ -199,6 +199,13 @@ function IterationHistory({ node, clock }: { node: LeafNode; clock: number }) {
 
 interface PillProps {
   id: string;
+  /**
+   * The node's execution identity — see run-tree.ts's `StepNode.key`. Once
+   * loops nest, two rounds can share `id`; every testid, ref lookup and
+   * focus/awaiting comparison keys off this instead, so `id` is left free to
+   * do nothing but label the pill.
+   */
+  nodeKey: string;
   ordinal: number;
   step: StepState;
   /** Second line under the id: what the step will use, or what it is. */
@@ -212,8 +219,17 @@ interface PillProps {
   /** A loop's place in its budget — 'iteration 2 of 3'. Loops only. */
   iteration?: string | null;
   isFocus: boolean;
+  /** Set only on the one node — of possibly several sharing `id` — that is actually awaiting. */
   awaiting?: StepAwaiting;
-  nodeRef?: (id: string, el: HTMLElement | null) => void;
+  nodeRef?: (key: string, el: HTMLElement | null) => void;
+  /**
+   * Additional execution keys that resolve to this same pill — every folded
+   * execution's own key, for a LeafNode whose `nodeKey` only names the first
+   * one. A caller scrolling to "the currently running execution" (its own
+   * key, e.g. `execute#2`) has to find this element the same way a caller
+   * scrolling to "the step" (the bare id, via `resolveKey`) does.
+   */
+  extraKeys?: readonly string[];
   children: React.ReactNode;
 }
 
@@ -223,7 +239,8 @@ interface PillProps {
  * still answers "which tool, which model" without a click.
  */
 function StepPill({
-  id, ordinal, step, meta, duration, spend, runCount, iteration, isFocus, awaiting, nodeRef, children,
+  id, nodeKey, ordinal, step, meta, duration, spend, runCount, iteration, isFocus, awaiting, nodeRef, extraKeys,
+  children,
 }: PillProps) {
   const color = stepStatusColor(step.status);
   const isDisabled = step.status === 'disabled';
@@ -232,7 +249,7 @@ function StepPill({
       <PopoverTrigger disableButtonEnhancement>
         <Button
           appearance="subtle"
-          data-testid={`step-card-${id}`}
+          data-testid={`step-card-${nodeKey}`}
           data-current={isFocus ? 'true' : undefined}
           // An aria-label replaces the pill's text outright, so it has to
           // carry everything the two lines say: the status, which is only a
@@ -249,7 +266,10 @@ function StepPill({
             ...(duration === null ? [] : [duration]),
             ...(spend ? [spend] : []),
           ].join(', ')}
-          ref={(el: HTMLButtonElement | null) => nodeRef?.(id, el)}
+          ref={(el: HTMLButtonElement | null) => {
+            nodeRef?.(nodeKey, el);
+            extraKeys?.forEach(key => nodeRef?.(key, el));
+          }}
           style={{
             borderRadius: 12,
             // The ring always carries the *status* colour — a focused failed
@@ -272,7 +292,7 @@ function StepPill({
             <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <Text
                 size={200}
-                data-testid={`step-ordinal-${id}`}
+                data-testid={`step-ordinal-${nodeKey}`}
                 style={{ color: 'var(--colorNeutralForeground3)' }}
               >
                 {ordinal}
@@ -280,7 +300,7 @@ function StepPill({
               <StepStatusIcon status={step.status} />
               <span>{id}</span>
               {isDisabled && (
-                <Badge appearance="tint" color="subtle" size="small" data-testid={`step-disabled-${id}`}>
+                <Badge appearance="tint" color="subtle" size="small" data-testid={`step-disabled-${nodeKey}`}>
                   disabled
                 </Badge>
               )}
@@ -289,7 +309,7 @@ function StepPill({
                   appearance="tint"
                   color="informative"
                   size="small"
-                  data-testid={`step-iterations-${id}`}
+                  data-testid={`step-iterations-${nodeKey}`}
                 >
                   ×{runCount}
                 </Badge>
@@ -299,7 +319,7 @@ function StepPill({
                   appearance="tint"
                   color="informative"
                   size="small"
-                  data-testid={`loop-progress-${id}`}
+                  data-testid={`loop-progress-${nodeKey}`}
                 >
                   {iteration}
                 </Badge>
@@ -309,19 +329,19 @@ function StepPill({
                   appearance="tint"
                   color="informative"
                   size="small"
-                  data-testid={`step-phase-${id}`}
+                  data-testid={`step-phase-${nodeKey}`}
                 >
                   {GENERATING_ARTIFACT_LABEL}
                 </Badge>
               )}
-              {awaiting?.stepId === id && (
-                <AttentionBadge label={awaiting.label} data-testid={`step-awaiting-${id}`} />
+              {awaiting !== undefined && (
+                <AttentionBadge label={awaiting.label} data-testid={`step-awaiting-${nodeKey}`} />
               )}
             </span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <Text
                 size={100}
-                data-testid={`step-meta-${id}`}
+                data-testid={`step-meta-${nodeKey}`}
                 style={{ color: 'var(--colorNeutralForeground3)' }}
               >
                 {meta}
@@ -329,7 +349,7 @@ function StepPill({
               {duration !== null && (
                 <Text
                   size={100}
-                  data-testid={`step-duration-${id}`}
+                  data-testid={`step-duration-${nodeKey}`}
                   style={{ color: 'var(--colorNeutralForeground3)' }}
                 >
                   {duration}
@@ -340,7 +360,7 @@ function StepPill({
               {spend && (
                 <Text
                   size={100}
-                  data-testid={`step-spend-${id}`}
+                  data-testid={`step-spend-${nodeKey}`}
                   style={{ color: 'var(--colorNeutralForeground3)' }}
                 >
                   {spend}
@@ -350,7 +370,7 @@ function StepPill({
           </span>
         </Button>
       </PopoverTrigger>
-      <PopoverSurface data-testid={`step-popover-${id}`}>
+      <PopoverSurface data-testid={`step-popover-${nodeKey}`}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 200 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <StepStatusIcon status={step.status} />
@@ -372,25 +392,30 @@ function StepPill({
 
 interface NodeProps {
   node: StepNode;
-  focusStepId?: string;
+  /** The resolved execution identity a bare `focusStepId` names — see `resolveKey`. */
+  focusKey?: string;
+  /** The resolved execution identity a bare `awaiting.stepId` names — see `resolveKey`. */
+  awaitingKey?: string;
   awaiting?: StepAwaiting;
   clock: number;
-  nodeRef?: (id: string, el: HTMLElement | null) => void;
+  nodeRef?: (key: string, el: HTMLElement | null) => void;
 }
 
-function LeafView({ node, focusStepId, awaiting, clock, nodeRef }: NodeProps & { node: LeafNode }) {
+function LeafView({ node, focusKey, awaitingKey, awaiting, clock, nodeRef }: NodeProps & { node: LeafNode }) {
   return (
     <StepPill
       id={node.id}
+      nodeKey={node.key}
       ordinal={node.ordinal}
       step={node.latest}
       meta={metaLine(node.latest)}
       duration={stepDuration(node.latest, clock)}
       spend={node.latest.progress ? spendSummary(node.latest.progress) : null}
       runCount={node.executions.length > 1 ? node.executions.length : undefined}
-      isFocus={node.id === focusStepId}
-      awaiting={awaiting}
+      isFocus={node.key === focusKey}
+      awaiting={node.key === awaitingKey ? awaiting : undefined}
       nodeRef={nodeRef}
+      extraKeys={node.executions.length > 1 ? node.executions.map(execution => execution.key) : undefined}
     >
       <StepDetails step={node.latest} />
       {node.executions.length > 1 && <IterationHistory node={node} clock={clock} />}
@@ -403,7 +428,7 @@ function LeafView({ node, focusStepId, awaiting, clock, nodeRef }: NodeProps & {
  * inside the cycle that owns it, and — because repeat executions are folded
  * into their step — the group stays the same size however long the loop runs.
  */
-function LoopView({ node, focusStepId, awaiting, clock, nodeRef }: NodeProps & { node: LoopNode }) {
+function LoopView({ node, focusKey, awaitingKey, awaiting, clock, nodeRef }: NodeProps & { node: LoopNode }) {
   if (node.loop.status === 'disabled') {
     // The whole subtree is disabled too (disabling a loop takes its whole
     // body with it), so there is nothing to hang body rows on — a count is
@@ -414,12 +439,13 @@ function LoopView({ node, focusStepId, awaiting, clock, nodeRef }: NodeProps & {
     return (
       <StepPill
         id={node.id}
+        nodeKey={node.key}
         ordinal={node.ordinal}
         step={node.loop}
         meta={`loop disabled — ${descendantCount} step${descendantCount === 1 ? '' : 's'} not run`}
         duration={null}
-        isFocus={node.id === focusStepId}
-        awaiting={awaiting}
+        isFocus={node.key === focusKey}
+        awaiting={node.key === awaitingKey ? awaiting : undefined}
         nodeRef={nodeRef}
       >
         <StepDetails step={node.loop} />
@@ -428,7 +454,7 @@ function LoopView({ node, focusStepId, awaiting, clock, nodeRef }: NodeProps & {
   }
   return (
     <div
-      data-testid={`step-loop-${node.id}`}
+      data-testid={`step-loop-${node.key}`}
       style={{
         display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
         border: `1px dashed ${stepStatusColor(node.loop.status)}`,
@@ -437,6 +463,7 @@ function LoopView({ node, focusStepId, awaiting, clock, nodeRef }: NodeProps & {
     >
       <StepPill
         id={node.id}
+        nodeKey={node.key}
         ordinal={node.ordinal}
         step={node.loop}
         meta={metaLine(node.loop)}
@@ -445,17 +472,18 @@ function LoopView({ node, focusStepId, awaiting, clock, nodeRef }: NodeProps & {
         // a fact about the loop, and a bare line of text floating next to the
         // pill that owns it is the shape this screen no longer uses.
         iteration={loopProgress(node.loop)}
-        isFocus={node.id === focusStepId}
-        awaiting={awaiting}
+        isFocus={node.key === focusKey}
+        awaiting={node.key === awaitingKey ? awaiting : undefined}
         nodeRef={nodeRef}
       >
         <StepDetails step={node.loop} />
       </StepPill>
       {node.children.map(child => (
         <NodeView
-          key={child.id}
+          key={child.key}
           node={child}
-          focusStepId={focusStepId}
+          focusKey={focusKey}
+          awaitingKey={awaitingKey}
           awaiting={awaiting}
           clock={clock}
           nodeRef={nodeRef}
@@ -471,6 +499,21 @@ function NodeView(props: NodeProps) {
     : <LeafView {...props} node={props.node} />;
 }
 
+/**
+ * `focusStepId`/`awaiting.stepId` are bare declared ids — the caller only
+ * ever tracks one live step, so it has no reason to know about rounds. Once
+ * an outer loop reruns an inner one, several nodes in `flat` can share that
+ * id; the last one (rounds are appended in the order they ran) is the live
+ * one, so its `key` is what focus/ref/awaiting have to resolve to.
+ */
+function resolveKey(flat: readonly StepNode[], id: string | undefined): string | undefined {
+  if (id === undefined) return undefined;
+  for (let i = flat.length - 1; i >= 0; i--) {
+    if (flat[i].id === id) return flat[i].key;
+  }
+  return undefined;
+}
+
 export interface RunStepperProps {
   steps: StepState[];
   /** The step the run is on — marked with a heavier ring. */
@@ -480,8 +523,14 @@ export interface RunStepperProps {
   collapsed?: boolean;
   /** Renders the collapse chevron when provided; the page owns the state. */
   onToggleCollapse?: () => void;
-  /** Lets the page scroll the focus node into view. */
-  nodeRef?: (id: string, el: HTMLElement | null) => void;
+  /**
+   * Lets the page scroll the focus node into view, keyed by execution
+   * identity — see run-tree.ts's `StepNode.key`. Called once per key a pill
+   * answers to: its node key, plus (for a folded leaf) every execution's own
+   * key, so a caller holding the *running* execution's key finds the same
+   * element as one holding the node's key.
+   */
+  nodeRef?: (key: string, el: HTMLElement | null) => void;
   /**
    * The clock live durations are measured against. The page owns the single
    * interval that advances it, so the row does not carry one timer per pill —
@@ -503,7 +552,12 @@ export function RunStepper({
   const tree = useMemo(() => buildRunTree(steps), [steps]);
   const flat = useMemo(() => flattenNodes(tree), [tree]);
   const clock = now ?? Date.now();
-  const focusIndex = flat.findIndex(node => node.id === focusStepId);
+  // Resolved once here rather than per-pill: several nodes can share a bare
+  // id once loops nest, and only the latest round is the one actually in
+  // focus or awaiting — see resolveKey.
+  const focusKey = useMemo(() => resolveKey(flat, focusStepId), [flat, focusStepId]);
+  const awaitingKey = useMemo(() => resolveKey(flat, awaiting?.stepId), [flat, awaiting?.stepId]);
+  const focusIndex = flat.findIndex(node => node.key === focusKey);
 
   // The "N of M" progress count is a position over a total, not a count of
   // completed steps — so it excludes disabled nodes from both halves, the
@@ -513,7 +567,7 @@ export function RunStepper({
   const isDisabledNode = (node: StepNode): boolean =>
     (node.kind === 'loop' ? node.loop.status : node.latest.status) === 'disabled';
   const countedFlat = useMemo(() => flat.filter(node => !isDisabledNode(node)), [flat]);
-  const countedIndex = countedFlat.findIndex(node => node.id === focusStepId);
+  const countedIndex = countedFlat.findIndex(node => node.key === focusKey);
 
   // Collapsed shows the step the run is actually on, on its own — a loop body
   // step included, without the group around it. With no focus step (an empty
@@ -543,7 +597,7 @@ export function RunStepper({
       {visible.map((node, position) => (
         // Fragment, not a wrapper element: the connector has to be a direct
         // flex child of the row or it can't wrap with the pills.
-        <div key={node.id} style={{ display: 'contents' }}>
+        <div key={node.key} style={{ display: 'contents' }}>
           {position > 0 && (
             // Grows to fill the row rather than sitting at a fixed width: on a
             // row that wraps early there is no trailing connector to leave
@@ -558,12 +612,13 @@ export function RunStepper({
             // Collapsed means one pill, so a loop shows itself and not its body.
             <StepPill
               id={node.id}
+              nodeKey={node.key}
               ordinal={node.ordinal}
               step={node.loop}
               meta={metaLine(node.loop)}
               duration={stepDuration(node.loop, clock)}
               isFocus
-              awaiting={awaiting}
+              awaiting={node.key === awaitingKey ? awaiting : undefined}
               nodeRef={nodeRef}
             >
               <StepDetails step={node.loop} />
@@ -571,7 +626,8 @@ export function RunStepper({
           ) : (
             <NodeView
               node={node}
-              focusStepId={focusStepId}
+              focusKey={focusKey}
+              awaitingKey={awaitingKey}
               awaiting={awaiting}
               clock={clock}
               nodeRef={nodeRef}

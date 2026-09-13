@@ -11,7 +11,7 @@
 import { open, readFile } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { WhiphandEvent } from '../types.ts';
+import type { LoopRef, WhiphandEvent } from '../types.ts';
 
 export const RUN_LOG_NAME = 'run.log';
 /** One line's budget, after which it is truncated with a marker — one giant blob must not own the file. */
@@ -32,6 +32,17 @@ export interface LogRow {
 const WHIPHAND_ENV_KEYS = new Set([
   'WHIPHAND_RUN_DIR', 'WHIPHAND_RUN_ID', 'WHIPHAND_RUN_SLUG', 'WHIPHAND_RUN_NAME', 'WHIPHAND_STEP_ID',
 ]);
+
+/**
+ * `<id>` prefixed with every loop enclosing it, outermost first — e.g.
+ * `human-review 2 › fix-cycle`. Empty for a top-level loop, which is what
+ * keeps its own rendering byte-identical to what it always was.
+ */
+function nestedPrefix(id: string, parentLoopId?: string, parentIteration?: number, outerLoops?: LoopRef[]): string {
+  const ancestors = [...(outerLoops ?? [])];
+  if (parentLoopId !== undefined) ancestors.push({ id: parentLoopId, iteration: parentIteration ?? 1 });
+  return ancestors.length === 0 ? id : `${ancestors.map(l => `${l.id} ${l.iteration}`).join(' › ')} › ${id}`;
+}
 
 function bytesLabel(n: number): string {
   if (n < 1024) return `${n}B`;
@@ -147,13 +158,22 @@ export function summarizeEvent(event: WhiphandEvent): Omit<LogRow, 'seq' | 'ts'>
     case 'step:manual-resolved':
       return { kind: event.type, stepId: event.stepId, text: `human answered: ${event.choice}` };
     case 'loop:start':
-      return { kind: event.type, text: `loop '${event.loopId}' started, up to ${event.maxIterations} iteration(s)` };
+      return {
+        kind: event.type,
+        text: `loop '${nestedPrefix(event.loopId, event.parentLoopId, event.parentIteration, event.outerLoops)}' `
+          + `started, up to ${event.maxIterations} iteration(s)`,
+      };
     case 'loop:iteration':
-      return { kind: event.type, text: `loop '${event.loopId}' iteration ${event.iteration}/${event.maxIterations}` };
+      return {
+        kind: event.type,
+        text: `loop '${nestedPrefix(event.loopId, event.parentLoopId, event.parentIteration, event.outerLoops)}' `
+          + `iteration ${event.iteration}/${event.maxIterations}`,
+      };
     case 'loop:done':
       return {
         kind: event.type,
-        text: `loop '${event.loopId}' ${event.passed ? 'passed' : 'did not pass'} after ${event.iterations} iteration(s)`,
+        text: `loop '${nestedPrefix(event.loopId, event.parentLoopId, event.parentIteration, event.outerLoops)}' `
+          + `${event.passed ? 'passed' : 'did not pass'} after ${event.iterations} iteration(s)`,
       };
     case 'guard:warning':
       return { kind: event.type, stepId: event.stepId, text: event.message };

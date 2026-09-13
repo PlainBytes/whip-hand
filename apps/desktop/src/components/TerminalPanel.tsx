@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
 import { decodeBase64ToBytes, encodeToBase64 } from '../lib/base64.ts';
-import { createTerminal, type TerminalHandle } from './xterm-runtime.ts';
+import { createTerminal, TERMINAL_BACKGROUND, type TerminalHandle } from './xterm-runtime.ts';
 
 export interface TerminalPanelProps {
   /** The job whose interactive PTY this panel mounts for. */
@@ -137,18 +137,17 @@ export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProp
   }, [ptyExited, ptyExitCode, endedDeliberately]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, height: '100%', minHeight: 0 }}>
-      <div
-        ref={containerRef}
-        data-testid="terminal-container"
-        style={{
-          border: '1px solid var(--colorNeutralStroke2)',
-          borderRadius: 4,
-          padding: 4,
-          flex: 1,
-          minHeight: 0,
-        }}
-      />
-    </div>
+    <div
+      ref={containerRef}
+      data-testid="terminal-container"
+      style={{
+        borderRadius: 4,
+        padding: 8,
+        background: TERMINAL_BACKGROUND,
+        flex: 1,
+        minHeight: 0,
+        height: '100%',
+      }}
+    />
   );
 }

@@ -42,6 +42,7 @@ import { DiffFileList } from '../diff/DiffFileList.tsx';
 import { DiffFileView } from '../diff/DiffFileView.tsx';
 import type { WorkingDiff } from '../diff/types.ts';
 import { DIFF_SOURCE_ID, type ReviewRequest } from './model.ts';
+import { RECESSED_SURFACE } from '../components/recessed-surface.ts';
 import type { FileComment, ManualChoice } from '../../../../packages/core/src/types.ts';
 
 /** The rail width the Files browser and the Artifacts tab both use. */
@@ -117,7 +118,7 @@ export function ReviewOverlay({
       <div
         style={{
           flexShrink: 0, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-          paddingBottom: 8, borderBottom: '1px solid var(--colorNeutralStroke2)',
+          paddingBottom: 8,
         }}
       >
         <Button
@@ -149,11 +150,10 @@ export function ReviewOverlay({
         <Text weight="semibold" size={400}>{request.title}</Text>
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 8 }}>
         <div
           style={{
             width: RAIL_WIDTH, flexShrink: 0, minHeight: 0, overflow: 'auto',
-            borderRight: '1px solid var(--colorNeutralStroke2)',
           }}
         >
           <Text
@@ -193,7 +193,14 @@ export function ReviewOverlay({
           ))}
 
           {source?.kind === 'diff' && diff !== null && (
-            <div style={{ borderTop: '1px solid var(--colorNeutralStroke2)', marginTop: 8 }}>
+            <div>
+              <Text
+                size={200}
+                weight="semibold"
+                style={{ display: 'block', padding: '8px 8px 4px', color: 'var(--colorNeutralForeground3)' }}
+              >
+                FILES
+              </Text>
               <DiffFileList
                 files={files}
                 selectedPath={activeFile?.path ?? null}
@@ -207,8 +214,8 @@ export function ReviewOverlay({
 
         <div
           style={{
-            flex: 1, minWidth: 0, minHeight: 0, display: 'flex',
-            background: 'var(--colorNeutralBackground3)', borderRadius: 4, overflow: 'hidden',
+            ...RECESSED_SURFACE,
+            flex: 1, minWidth: 0, minHeight: 0, display: 'flex', overflow: 'hidden',
           }}
         >
           {source === undefined ? (
@@ -225,8 +232,8 @@ export function ReviewOverlay({
               you want, and burying the button in the success case put it
               everywhere except where it was needed.
             */
-            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', padding: 4, flexShrink: 0 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, gap: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>
                 <Button
                   appearance="subtle"
                   size="small"
@@ -242,11 +249,9 @@ export function ReviewOverlay({
               {diffLoading ? (
                 <EmptyState><Spinner size="tiny" /> Reading the working tree…</EmptyState>
               ) : diffError !== null ? (
-                <div style={{ padding: 8 }}>
-                  <MessageBar intent="error" data-testid="review-diff-error">
-                    <MessageBarBody>Could not read the changes: {diffError}</MessageBarBody>
-                  </MessageBar>
-                </div>
+                <MessageBar intent="error" data-testid="review-diff-error">
+                  <MessageBarBody>Could not read the changes: {diffError}</MessageBarBody>
+                </MessageBar>
               ) : diff === null ? (
                 // null means "not a git repo" — and only that. An empty list is
                 // a different sentence, below.
@@ -322,7 +327,7 @@ function DecisionBar({
       data-testid="review-decision-bar"
       style={{
         flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8,
-        paddingTop: 8, borderTop: '1px solid var(--colorNeutralStroke2)',
+        paddingTop: 8,
       }}
     >
       {error && (
@@ -388,7 +393,7 @@ function FileCommentBox({
   const [expanded, setExpanded] = useState(() => value.trim().length > 0);
 
   return (
-    <div style={{ flexShrink: 0, borderTop: '1px solid var(--colorNeutralStroke2)' }}>
+    <div style={{ flexShrink: 0 }}>
       <Button
         appearance="subtle"
         size="small"

@@ -435,6 +435,155 @@ test('a hard failure inside a loop body stops the run rather than iterating', as
 });
 
 // ---------------------------------------------------------------------------
+// Nested loops
+// ---------------------------------------------------------------------------
+
+test('a loop nested inside another gets its own artifacts and manifest row per outer round', async () => {
+  const dir = await tmpWorkdir();
+  const answers: ManualResponse[] = [
+    { choice: 'retry', note: 'please fix X' },
+    { choice: 'continue' },
+  ];
+  const h = harness(answers);
+  const sawSignOff: Record<string, boolean[]> = { execute: [], review: [] };
+
+  const workflow: Workflow = {
+    name: 'nested',
+    steps: [{
+      kind: 'loop', id: 'human-review', until: 'sign-off', max_iterations: 3,
+      steps: [
+        {
+          kind: 'loop', id: 'fix-cycle', until: 'review', max_iterations: 3,
+          steps: [
+            agent({ id: 'execute', writes: true, inputs: ['review', 'sign-off'] }),
+            agent({ id: 'review', verdict: true, inputs: ['execute', 'sign-off'] }),
+          ],
+        },
+        {
+          kind: 'approval', id: 'sign-off', verdict: true, title: 'Ship it?',
+          instructions: 'Look at it.', capture: 'review', inputs: ['review'], output: 'feedback.md',
+        },
+      ],
+    }],
+  };
+
+  const result = await runWorkflow({
+    workflow, workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: registry(), frontend: h.frontend,
+    spawnHeadless: async spec => {
+      const stepId = spec.argv[2];
+      const prompt = spec.argv[4];
+      if (stepId === 'execute') {
+        sawSignOff.execute.push(prompt.includes('- sign-off:'));
+        await writeFile(spec.argv[3], 'implemented\n');
+      } else {
+        sawSignOff.review.push(prompt.includes('- sign-off:'));
+        await writeFile(spec.argv[3], 'VERDICT: PASS\n');
+      }
+      return 0;
+    },
+  });
+
+  assert.equal(result.ok, true, 'round 2 approves sign-off, which exits both loops');
+  assert.deepEqual(sawSignOff.execute, [false, true],
+    'round 1 has no sign-off feedback yet; round 2 sees round 1\'s');
+  assert.deepEqual(sawSignOff.review, [false, true]);
+
+  const round1Execute = join(result.runDir, 'human-review', 'iter-1', 'fix-cycle', 'iter-1', 'execute.md');
+  const round2Execute = join(result.runDir, 'human-review', 'iter-2', 'fix-cycle', 'iter-1', 'execute.md');
+  assert.ok(existsSync(round1Execute), 'round 1 kept its own artifact rather than being overwritten');
+  assert.ok(existsSync(round2Execute), 'round 2 wrote to its own nested directory');
+
+  const round1Feedback = join(result.runDir, 'human-review', 'iter-1', 'feedback.md');
+  assert.ok((await readFile(round1Feedback, 'utf8')).includes('please fix X'));
+
+  const manifest: RunManifest = JSON.parse(await readFile(join(result.runDir, 'run.json'), 'utf8'));
+  const executeRows = manifest.steps.filter(s => s.id === 'execute');
+  assert.equal(executeRows.length, 2, 'each round gets its own execute row, not one overwritten in place');
+  assert.ok(executeRows.every(r => r.status === 'done'));
+  assert.deepEqual(executeRows.map(r => r.outerLoops), [
+    [{ id: 'human-review', iteration: 1 }],
+    [{ id: 'human-review', iteration: 2 }],
+  ], 'each execute row remembers which human-review round its fix-cycle ran under');
+
+  const fixCycleRows = manifest.steps.filter(s => s.id === 'fix-cycle');
+  assert.equal(fixCycleRows.length, 2, 'each round gets its own fix-cycle row, not the previous round\'s');
+  assert.deepEqual(fixCycleRows.map(r => r.iteration), [1, 2], 'a fix-cycle row is identified by its human-review round');
+  assert.ok(fixCycleRows.every(r => r.outerLoops === undefined),
+    'fix-cycle has nothing beyond human-review, which is itself top-level');
+
+  const humanReviewRows = manifest.steps.filter(s => s.id === 'human-review');
+  assert.equal(humanReviewRows.length, 1, 'the outer loop itself is a single row, same as any top-level loop');
+});
+
+test('resuming mid round 2 of a nested loop skips round 1 and only replays round 2\'s unfinished work', async () => {
+  const dir = await tmpWorkdir();
+  let executeAttempts = 0;
+  const workflow: Workflow = {
+    name: 'nested',
+    steps: [{
+      kind: 'loop', id: 'human-review', until: 'sign-off', max_iterations: 3,
+      steps: [
+        {
+          kind: 'loop', id: 'fix-cycle', until: 'review', max_iterations: 3,
+          steps: [
+            agent({ id: 'execute', writes: true, inputs: ['review', 'sign-off'] }),
+            agent({ id: 'review', verdict: true, inputs: ['execute', 'sign-off'] }),
+          ],
+        },
+        {
+          kind: 'approval', id: 'sign-off', verdict: true, title: 'Ship it?',
+          instructions: 'Look at it.', capture: 'review', inputs: ['review'], output: 'feedback.md',
+        },
+      ],
+    }],
+  };
+  const spawnHeadless = async (spec: SpawnSpec): Promise<number> => {
+    const stepId = spec.argv[2];
+    if (stepId === 'execute') {
+      executeAttempts += 1;
+      await writeFile(spec.argv[3], `attempt ${executeAttempts}\n`);
+    } else {
+      await writeFile(spec.argv[3], 'VERDICT: PASS\n');
+    }
+    return 0;
+  };
+
+  // Round 1 approves nothing — it requests changes — then round 2's review
+  // is the one left broken (the frontend crashes before it can decide), so
+  // the run is interrupted mid round 2 rather than finishing cleanly.
+  let calls = 0;
+  const broken = await runWorkflow({
+    workflow, workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: registry(), frontend: {
+      runInteractive: async () => 0,
+      runManual: async () => {
+        calls += 1;
+        if (calls === 1) return { choice: 'retry', note: 'please fix X' };
+        throw new Error('the human went away');
+      },
+      onEvent: () => {},
+    }, spawnHeadless,
+  });
+  assert.equal(broken.ok, false);
+  assert.equal(executeAttempts, 2, 'round 1 and round 2 each ran fix-cycle once before the crash');
+
+  const plan = await planResume(dir, DEFAULT_CONFIG, broken.runId);
+  const resumed = harness([{ choice: 'continue' }]);
+  const result = await runWorkflow({
+    workflow, workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: registry(), frontend: resumed.frontend,
+    resume: plan, spawnHeadless,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(executeAttempts, 2, 'round 2\'s already-passed fix-cycle is skipped, not re-run');
+  const skipped = resumed.events.filter(e => e.type === 'step:skipped');
+  // Round 1's execute+review+sign-off, plus round 2's own execute+review: five
+  // skips, none of them round 1's work mistaken for round 2's or vice versa —
+  // only round 2's sign-off (the one that never got an answer) is asked again.
+  assert.equal(skipped.length, 5);
+  assert.ok(resumed.events.some(e => e.type === 'step:manual'), 'round 2\'s sign-off is what actually resumes');
+});
+
+// ---------------------------------------------------------------------------
 // Disabling a step
 // ---------------------------------------------------------------------------
 
@@ -692,6 +841,23 @@ test('dry-run resolves manual steps to their default without asking anyone', asy
   assert.equal(result.ok, true);
   assert.equal(h.asked.length, 0);
   assert.ok(h.events.some(e => e.type === 'step:manual'));
+});
+
+test('dry-run still registers a manual step\'s output path, so a later step referencing it does not crash', async () => {
+  const h = harness();
+  const result = await runWorkflow({
+    workflow: {
+      name: 'm',
+      steps: [
+        manualWorkflow({ default: 'continue', capture: 'review', output: 'feedback.md' }).steps[0],
+        agent({ id: 'after', inputs: ['check'] }),
+      ],
+    },
+    workdir: await tmpWorkdir(), inputs: {}, config: DEFAULT_CONFIG, registry: registry(), frontend: h.frontend,
+    dryRun: true,
+  });
+  assert.equal(result.ok, true);
+  assert.ok(result.artifacts['check']?.endsWith('feedback.md'));
 });
 
 test('the manual request carries the referenced artifacts, resolved to paths', async () => {

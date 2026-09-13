@@ -27,7 +27,7 @@ function baseJob(jobId: string, overrides: Partial<JobState> = {}): JobState {
   };
 }
 
-vi.mock('./xterm-runtime.ts', () => ({ createTerminal: vi.fn() }));
+vi.mock('./xterm-runtime.ts', () => ({ createTerminal: vi.fn(), TERMINAL_BACKGROUND: '#1e1e1e' }));
 
 /**
  * Fake xterm Terminal/FitAddon: TerminalPanel talks to xterm-runtime.ts only

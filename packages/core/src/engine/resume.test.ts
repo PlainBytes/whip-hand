@@ -54,7 +54,7 @@ const RUN_ID = '20260101-000000-aaaa';
 async function fixture(
   steps: RunManifest['steps'],
   overrides: Partial<RunManifest> = {},
-  opts: { snapshot?: boolean } = {},
+  opts: { snapshot?: boolean; snapshotText?: string } = {},
 ): Promise<string> {
   const workdir = await mkdtemp(join(tmpdir(), 'whiphand-resume-'));
   const runDir = join(workdir, DEFAULT_CONFIG.artifacts_dir, RUN_ID);
@@ -66,9 +66,45 @@ async function fixture(
     inputs: { feature: 'x' }, sessionIds: {}, steps, ...overrides,
   };
   await writeFile(join(runDir, 'run.json'), JSON.stringify(manifest), 'utf8');
-  if (opts.snapshot !== false) await writeFile(join(runDir, WORKFLOW_SNAPSHOT_NAME), WORKFLOW, 'utf8');
+  if (opts.snapshot !== false) {
+    await writeFile(join(runDir, WORKFLOW_SNAPSHOT_NAME), opts.snapshotText ?? WORKFLOW, 'utf8');
+  }
   return workdir;
 }
+
+const NESTED_WORKFLOW = `name: cycle
+steps:
+  - kind: loop
+    id: human-review
+    until: sign-off
+    steps:
+      - kind: loop
+        id: fix-cycle
+        until: review
+        steps:
+          - id: execute
+            kind: agent
+            runner: fake
+            mode: headless
+            writes: true
+            prompt: edit
+            output: edit.md
+          - id: review
+            kind: agent
+            runner: fake
+            mode: headless
+            writes: false
+            verdict: true
+            prompt: review it
+            output: review.md
+      - id: sign-off
+        kind: approval
+        title: Ship it?
+        instructions: Look at it.
+        verdict: true
+        capture: review
+        output: feedback.md
+`;
 
 test('planResume marks completed steps done and names the restart point', async () => {
   const workdir = await fixture([
@@ -611,6 +647,88 @@ test('nested loops: an inner loop\'s grant applies to the inner id only', async 
 
   assert.deepEqual(plan.loopBudgets.inner, { budget: 3, completed: 2 }, 'the inner loop exhausted, so it is bumped');
   assert.deepEqual(plan.loopBudgets.outer, { budget: 2, completed: 1 }, 'the outer loop is merely interrupted');
+});
+
+test('an inner-loop extra-iterations grant applies only to the round where the loop ran out', async () => {
+  // Round 1 of fix-cycle passed; round 2 exhausted. Only round 2's row is
+  // eligible for a budget at all — round 1 is 'done' — and the two rounds'
+  // rowKeys must not collide, or round 2's grant would look like round 1's.
+  const workdir = await fixture(
+    [
+      { id: 'human-review', kind: 'loop', status: 'interrupted', iterations: 2, maxIterations: 5 },
+      { id: 'fix-cycle', kind: 'loop', loopId: 'human-review', iteration: 1, status: 'done', iterations: 1, maxIterations: 3 },
+      {
+        id: 'execute', kind: 'agent', loopId: 'fix-cycle', iteration: 1,
+        outerLoops: [{ id: 'human-review', iteration: 1 }], status: 'done', artifact: '/r/e1.md',
+      },
+      {
+        id: 'review', kind: 'agent', loopId: 'fix-cycle', iteration: 1,
+        outerLoops: [{ id: 'human-review', iteration: 1 }], status: 'done', verdict: 'pass', artifact: '/r/rv1.md',
+      },
+      {
+        id: 'sign-off', kind: 'approval', loopId: 'human-review', iteration: 1,
+        status: 'done', verdict: 'fail', artifact: '/r/fb1.md',
+      },
+      {
+        id: 'fix-cycle', kind: 'loop', loopId: 'human-review', iteration: 2,
+        status: 'failed', iterations: 3, maxIterations: 3,
+      },
+      {
+        id: 'execute', kind: 'agent', loopId: 'fix-cycle', iteration: 1,
+        outerLoops: [{ id: 'human-review', iteration: 2 }], status: 'done', artifact: '/r/e2.md',
+      },
+      {
+        id: 'review', kind: 'agent', loopId: 'fix-cycle', iteration: 1,
+        outerLoops: [{ id: 'human-review', iteration: 2 }], status: 'done', verdict: 'fail', artifact: '/r/rv2.md',
+      },
+    ],
+    { version: 4 },
+    { snapshotText: NESTED_WORKFLOW },
+  );
+
+  const plan = await planResume(workdir, DEFAULT_CONFIG, RUN_ID);
+
+  assert.deepEqual(plan.loopBudgets['fix-cycle#2'], { budget: 4, completed: 3 },
+    'round 2 exhausted, so it gets the default +1');
+  assert.equal(plan.loopBudgets['fix-cycle'], undefined,
+    'round 1 already passed (its row is done), so it gets no budget entry at all');
+  assert.deepEqual(plan.loopBudgets['human-review'], { budget: 5, completed: 2 },
+    'the outer loop is merely interrupted, not exhausted, so no bump');
+});
+
+test('a pre-v4 manifest whose workflow now has a loop nested inside another is refused, not resumed', async () => {
+  const workdir = await fixture(
+    [
+      { id: 'human-review', kind: 'loop', status: 'interrupted', iterations: 1, maxIterations: 5 },
+      { id: 'fix-cycle', kind: 'loop', loopId: 'human-review', status: 'done', iterations: 1, maxIterations: 3 },
+      { id: 'execute', kind: 'agent', loopId: 'fix-cycle', status: 'done', artifact: '/r/execute.md' },
+      { id: 'review', kind: 'agent', loopId: 'fix-cycle', status: 'done', artifact: '/r/review.md', verdict: 'pass' },
+    ],
+    { version: 3 },
+    { snapshotText: NESTED_WORKFLOW },
+  );
+
+  await assert.rejects(
+    planResume(workdir, DEFAULT_CONFIG, RUN_ID),
+    (e: unknown) => e instanceof ResumeError && e.message.includes('start a fresh run'),
+  );
+});
+
+test('a pre-v4 manifest whose workflow has no nested loops still resumes normally', async () => {
+  // Single-level loops never needed outerLoops to disambiguate rounds, so a
+  // run recorded before it existed is still perfectly resumable.
+  const workdir = await fixture(
+    [
+      { id: 'plan', kind: 'agent', status: 'done', artifact: '/r/plan.md' },
+      { id: 'fix', kind: 'loop', status: 'interrupted', iterations: 1, maxIterations: 3 },
+      { id: 'edit', kind: 'agent', loopId: 'fix', iteration: 1, status: 'done', artifact: '/r/fix/iter-1/edit.md' },
+      { id: 'check', kind: 'command', loopId: 'fix', iteration: 1, status: 'interrupted' },
+    ],
+    { version: 3 },
+  );
+
+  const plan = await planResume(workdir, DEFAULT_CONFIG, RUN_ID);
+  assert.deepEqual(plan.restartAt, { stepId: 'check', iteration: 1 });
 });
 
 test('restartAt still prefers a loop interrupted mid-iteration over its next-iteration refinement', async () => {

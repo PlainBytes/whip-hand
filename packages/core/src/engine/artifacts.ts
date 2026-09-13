@@ -32,12 +32,22 @@ export async function createRunDir(
  * `<runDir>/<output>`; a step running inside a loop gets its own directory per
  * iteration, so iteration 2 can no longer silently overwrite what iteration 1
  * produced — the history is what makes a cycle reviewable afterwards.
+ *
+ * Nested loops nest one `<id>/iter-<n>` pair per enclosing frame, outermost
+ * first — e.g. `human-review/iter-2/fix-cycle/iter-1/execute-report.md` — so a
+ * round of the outer loop gets its own directory for the whole inner cycle it
+ * ran, rather than the inner cycle's own iterations overwriting each other
+ * across rounds. A single-level frame (no `parent`) produces exactly the path
+ * it always did.
  */
 export function artifactPath(
   runDir: string, step: { output: string }, frame?: LoopFrame,
 ): string {
   if (frame === undefined) return join(runDir, step.output);
-  return join(runDir, frame.id, `iter-${frame.iteration}`, step.output);
+  const chain: LoopFrame[] = [];
+  for (let f: LoopFrame | undefined = frame; f !== undefined; f = f.parent) chain.unshift(f);
+  const segments = chain.flatMap(f => [f.id, `iter-${f.iteration}`]);
+  return join(runDir, ...segments, step.output);
 }
 
 /** Creates the directory an artifact is about to be written into. */

@@ -20,8 +20,10 @@ export interface TerminalHandle {
 // conventional choice (matches VS Code's integrated terminal, which stays
 // dark in a light IDE theme too) and it avoids needing two xterm themes kept
 // in sync with Fluent's design tokens.
+export const TERMINAL_BACKGROUND = '#1e1e1e';
+
 const TERMINAL_THEME = {
-  background: '#1e1e1e',
+  background: TERMINAL_BACKGROUND,
   foreground: '#d4d4d4',
   cursor: '#d4d4d4',
   selectionBackground: '#264f78',

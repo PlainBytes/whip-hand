@@ -8,14 +8,52 @@
  */
 import { readFile, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import type { Scope, Workflow, WorkspaceConfig } from '../types.ts';
+import type { LoopFrame, LoopRef, Scope, Workflow, WorkspaceConfig } from '../types.ts';
 import { parseWorkflow, WorkflowError } from '../schema.ts';
 import { collectLoops, findStep, isLeafStep, isLoopStep } from '../steps.ts';
 import { resolveWorkflowPath } from '../workspace.ts';
 import { artifactPath, assertArtifact } from './artifacts.ts';
+import { executionKey } from '../execution-key.ts';
 import { diffSnapshots, snapshotTree } from './git-guard.ts';
-import { executionKey, getRun, isSafeRunId, WORKFLOW_SNAPSHOT_NAME } from './manifest.ts';
+import { getRun, isSafeRunId, MANIFEST_VERSION, WORKFLOW_SNAPSHOT_NAME } from './manifest.ts';
 import type { RunManifest } from './manifest.ts';
+
+type ManifestStepLoopFields = { loopId?: string; iteration?: number; outerLoops?: LoopRef[] };
+
+/**
+ * A row's own identity string — the same one runner.ts computes for the
+ * matching execution via `executionKey(id, frame?.iteration, ancestorLoops(frame))`.
+ */
+function rowKey(id: string, row: ManifestStepLoopFields): string {
+  return executionKey(id, row.iteration, row.outerLoops);
+}
+
+/**
+ * The `outerLoops` a body of *this* loop row would itself carry — its own
+ * `(loopId, iteration)` prepended onto whatever is beyond that. Lets a body
+ * row (`loopId`/`outerLoops`) be matched back to the loop incarnation
+ * (`id`/`iteration`/`outerLoops`) it belongs to.
+ */
+function loopContext(row: { id: string } & ManifestStepLoopFields): LoopRef[] {
+  return row.loopId === undefined ? [] : [...(row.outerLoops ?? []), { id: row.loopId, iteration: row.iteration ?? 1 }];
+}
+
+function incarnationKey(loopId: string, outerLoops: LoopRef[]): string {
+  return `${loopId}::${JSON.stringify(outerLoops)}`;
+}
+
+/** Rebuilds the `LoopFrame` chain a row's `loopId`/`iteration`/`outerLoops` describe, for `artifactPath`. */
+function frameOfRow(row: ManifestStepLoopFields & { maxIterations?: number }): LoopFrame | undefined {
+  if (row.loopId === undefined) return undefined;
+  let parent: LoopFrame | undefined;
+  for (const l of row.outerLoops ?? []) parent = { id: l.id, iteration: l.iteration, maxIterations: 1, parent };
+  return { id: row.loopId, iteration: row.iteration ?? 1, maxIterations: row.maxIterations ?? 1, parent };
+}
+
+/** True when any loop in the tree has another loop among its own body steps. */
+function hasNestedLoops(steps: Workflow['steps']): boolean {
+  return collectLoops(steps).some(loop => loop.steps.some(isLoopStep));
+}
 
 type ManifestStep = RunManifest['steps'][number];
 
@@ -99,7 +137,7 @@ function computeLoopBudgets(
     // exhausted or merely interrupted mid-run.
     const bump = step.status === 'failed' || explicit ? extra : 0;
     const budget = base + bump;
-    budgets[step.id] = { budget, completed };
+    budgets[rowKey(step.id, step)] = { budget, completed };
     if (bump > 0) {
       warnings.push(`loop '${step.id}' ran out of iterations at ${completed}; this resume allows ${budget}`);
     }
@@ -131,6 +169,14 @@ export async function planResume(
 
   const warnings: string[] = [];
   const workflow = await loadWorkflow(detail, workdir, warnings);
+
+  if (detail.version < MANIFEST_VERSION && hasNestedLoops(workflow.steps)) {
+    throw new ResumeError(
+      `run '${runId}' was recorded before whiphand tracked nested-loop rounds separately (manifest `
+      + `v${detail.version}), and workflow '${workflow.name}' now has a loop nested inside another loop; `
+      + 'resuming it could not tell one round\'s work from another\'s — start a fresh run instead');
+  }
+
   await healOrphanedDone(detail, workflow, warnings);
   const loopBudgets = computeLoopBudgets(detail, workflow, config, opts, warnings);
 
@@ -146,12 +192,16 @@ export async function planResume(
   // jumping ahead to "the next one" would skip re-running what it left undone.
   // Only once every recorded body execution is done is there truly nothing
   // for the plain scan to find, which is what the refinement exists for.
+  // Keyed by incarnation (loop id + the round it's running under), not bare
+  // id, so an outer round's own unfinished body never masks a sibling round
+  // of the very same inner loop that already finished.
   const loopsWithUnfinishedBody = new Set(
-    detail.steps.filter(s => s.loopId !== undefined && s.status !== 'done').map(s => s.loopId!));
+    detail.steps.filter(s => s.loopId !== undefined && s.status !== 'done')
+      .map(s => incarnationKey(s.loopId!, s.outerLoops ?? [])));
 
   for (const step of detail.steps) {
     if (step.status === 'done') {
-      done.set(executionKey(step.id, step.iteration), {
+      done.set(rowKey(step.id, step), {
         ...(step.artifact === undefined ? {} : { artifact: step.artifact }),
         ...(step.verdict === undefined ? {} : { verdict: step.verdict }),
       });
@@ -169,8 +219,9 @@ export async function planResume(
     // falling through to whatever pending step follows it.
     if (restartAt === undefined) {
       if (step.kind === 'loop') {
-        const grant = loopBudgets[step.id];
-        if (grant !== undefined && grant.budget > grant.completed && !loopsWithUnfinishedBody.has(step.id)) {
+        const grant = loopBudgets[rowKey(step.id, step)];
+        if (grant !== undefined && grant.budget > grant.completed
+          && !loopsWithUnfinishedBody.has(incarnationKey(step.id, loopContext(step)))) {
           const declaredLoop = findStep(workflow.steps, step.id);
           const firstBody = declaredLoop !== undefined && isLoopStep(declaredLoop)
             ? declaredLoop.steps[0] : undefined;
@@ -286,10 +337,7 @@ async function healOrphanedDone(
     const output = declared.output;
     if (output === undefined) continue;
 
-    const frame = step.loopId === undefined
-      ? undefined
-      : { id: step.loopId, iteration: step.iteration ?? 1, maxIterations: step.maxIterations ?? 1 };
-    const expected = artifactPath(detail.runDir, { output }, frame);
+    const expected = artifactPath(detail.runDir, { output }, frameOfRow(step));
 
     if (await adoptable(expected, step.startedAt)) {
       step.artifact = expected;

@@ -20,7 +20,7 @@ import type {
   JobScrollbackResult,
   JobSummary,
 } from '../../../../packages/agent/src/protocol.ts';
-import type { ManualRequest, StepKind, StepMode, StepProgress } from '../../../../packages/core/src/types.ts';
+import type { LoopRef, ManualRequest, StepKind, StepMode, StepProgress } from '../../../../packages/core/src/types.ts';
 import { executionKey } from '../../../../packages/core/src/execution-key.ts';
 import type { AppState as AppStateData } from '../../../../packages/agent/src/app-state.ts';
 import type { LogRow } from '../lib/log-rows.ts';
@@ -43,6 +43,13 @@ export interface StepState {
   loopId?: string;
   /** 1-based iteration this execution belongs to; absent outside a loop. */
   iteration?: number;
+  /**
+   * Loops enclosing `loopId` itself, outermost first — absent or empty
+   * outside nested loops. Mirrors the manifest row's own field (see
+   * packages/core/src/engine/manifest.ts); a loop's own row carries it too,
+   * identified by *its* enclosing loop exactly as a leaf step's row is.
+   */
+  outerLoops?: LoopRef[];
   /** On a loop's own row: how many iterations it has run so far. */
   iterations?: number;
   /**
@@ -322,9 +329,9 @@ function emptyJob(jobId: string): JobState {
  * entry rather than throwing or being dropped.
  */
 function upsertStep(
-  job: JobState, stepId: string, patch: Partial<StepState>, iteration?: number,
+  job: JobState, stepId: string, patch: Partial<StepState>, iteration?: number, outerLoops?: LoopRef[],
 ): JobState {
-  const key = executionKey(stepId, iteration);
+  const key = executionKey(stepId, iteration, outerLoops);
   const existing = job.steps[key];
   const step: StepState = existing
     ? { ...existing, ...patch }
@@ -483,9 +490,10 @@ export function reduceJobEvent(job: JobState, params: WhiphandEventNotificationP
       job = upsertStep(job, event.stepId, {
         loopId: event.loopId,
         iteration: event.iteration,
+        outerLoops: event.outerLoops,
         status: 'done',
         inferred: undefined,
-      }, event.iteration);
+      }, event.iteration, event.outerLoops);
       break;
     case 'step:start':
       // A new step gets a clean feed: the tab narrates the step running now,
@@ -496,6 +504,7 @@ export function reduceJobEvent(job: JobState, params: WhiphandEventNotificationP
         kind: event.kind,
         loopId: event.loopId,
         iteration: event.iteration,
+        outerLoops: event.outerLoops,
         runner: event.runner,
         model: event.model,
         mode: event.mode,
@@ -507,7 +516,7 @@ export function reduceJobEvent(job: JobState, params: WhiphandEventNotificationP
         verdict: undefined,
         phase: undefined,
         inferred: undefined,
-      }, event.iteration);
+      }, event.iteration, event.outerLoops);
       break;
     case 'step:spawn':
       job = patchCurrent(job, event.stepId, { phase: event.phase });
@@ -540,11 +549,16 @@ export function reduceJobEvent(job: JobState, params: WhiphandEventNotificationP
       // down by cancellation — something no whiphandEvent ever describes.
       break;
     case 'loop:start':
+      // Identified the same way a leaf step's row is: by its id plus which
+      // round of *its* enclosing loop this is — so a round of an outer loop
+      // gets a fresh row for the inner loop rather than reusing the previous
+      // round's, once that one is already 'done'. See core's manifest.ts.
       job = upsertStep(job, event.loopId, {
         kind: 'loop', status: 'running', startedAt: params.ts, iterations: 0,
         maxIterations: event.maxIterations, endedAt: undefined, verdict: undefined,
+        loopId: event.parentLoopId, iteration: event.parentIteration, outerLoops: event.outerLoops,
         inferred: undefined,
-      });
+      }, event.parentIteration, event.outerLoops);
       break;
     case 'loop:iteration':
       job = patchCurrent(job, event.loopId, {

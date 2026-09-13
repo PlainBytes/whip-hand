@@ -6,6 +6,7 @@
  * here; the panel downstream only ever sees a ReviewRequest.
  */
 import type { CaptureSpec, ManualChoice, ManualRequest } from '../../../../packages/core/src/types.ts';
+import { ancestorLoops, executionKey } from '../../../../packages/core/src/execution-key.ts';
 import { manualLabel } from '../lib/await-copy.ts';
 import { DIFF_SOURCE_ID, type ReviewChoice, type ReviewRequest, type ReviewSource } from './model.ts';
 
@@ -68,8 +69,9 @@ export function fromManualRequest(request: ManualRequest): ReviewRequest {
   const loop = request.loop;
   return {
     // The iteration is part of the identity: the same step id comes round
-    // again inside a loop, and its second asking is a different question.
-    key: loop === undefined ? request.stepId : `${request.stepId}#${loop.iteration}`,
+    // again inside a loop, and its second asking is a different question —
+    // and once loops nest, so is which round of any *enclosing* loop it's in.
+    key: executionKey(request.stepId, loop?.iteration, ancestorLoops(loop)),
     badge: manualLabel(request.kind),
     title: request.title,
     instructions: request.instructions,

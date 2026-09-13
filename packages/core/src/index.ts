@@ -12,7 +12,7 @@ export {
 export type { FlatStep } from './steps.ts';
 export {
   spawnSpecSchema, whiphandEventSchema, manualRequestSchema,
-  manualChoiceSchema, loopFrameSchema, captureSpecSchema, fileCommentSchema,
+  manualChoiceSchema, loopFrameSchema, loopRefSchema, captureSpecSchema, fileCommentSchema,
 } from './events.ts';
 export { renderTemplate, buildPrompt, inputArtifacts, TemplateError } from './template.ts';
 export type { Templated, TemplateScope } from './template.ts';
@@ -92,6 +92,7 @@ export { deleteRun, pruneRuns } from './engine/retention.ts';
 export type { DeleteRunReason, DeleteRunResult, PruneRunsResult } from './engine/retention.ts';
 // isSafeRunId is already re-exported above, alongside the journal.
 export { executionKey, WORKFLOW_SNAPSHOT_NAME } from './engine/manifest.ts';
+export { ancestorLoops } from './execution-key.ts';
 export { planResume, ResumeError } from './engine/resume.ts';
 export type { ResumePlan, DoneExecution, LoopBudget, ResumeOptions } from './engine/resume.ts';
 export {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { RunStepper, StepDetails } from './RunStepper.tsx';
-import type { StepState } from '../state/store.ts';
+import { executionKey, type StepState } from '../state/store.ts';
 
 function steps(): StepState[] {
   return [
@@ -208,6 +208,117 @@ describe('cycles', () => {
     fireEvent.click(screen.getByTestId('step-card-execute'));
     const history = screen.getByTestId('step-history-execute');
     expect(within(history).getAllByRole('listitem')).toHaveLength(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Nested rounds — the shape every shipped workflow now uses: an outer
+// human-review loop wraps an inner fix-cycle, and Request changes reruns the
+// whole inner loop as a fresh round sitting beside the last one.
+// ---------------------------------------------------------------------------
+
+/** One round of `human-review`'s body: a `fix-cycle` loop holding one `execute`. */
+function fixCycleRound(round: number, executeStatus: StepState['status']): StepState[] {
+  const outerLoops = [{ id: 'human-review', iteration: round }];
+  return [
+    {
+      key: executionKey('fix-cycle', round), id: 'fix-cycle', kind: 'loop',
+      loopId: 'human-review', iteration: round, status: round === 2 ? 'running' : 'done',
+    } as StepState,
+    {
+      key: executionKey('execute', 1, outerLoops), id: 'execute', kind: 'agent',
+      loopId: 'fix-cycle', iteration: 1, outerLoops,
+      runner: 'claude', model: 'sonnet', mode: 'headless', status: executeStatus,
+    } as StepState,
+  ];
+}
+
+/** Round 1 finished and was sent back; round 2 is still running. */
+function twoOuterRounds(): StepState[] {
+  return [
+    { key: executionKey('human-review'), id: 'human-review', kind: 'loop', status: 'running', iterations: 2 } as StepState,
+    ...fixCycleRound(1, 'done'),
+    {
+      key: executionKey('sign-off', 1), id: 'sign-off', kind: 'approval', loopId: 'human-review',
+      iteration: 1, status: 'done', verdict: 'fail',
+    } as StepState,
+    ...fixCycleRound(2, 'running'),
+    {
+      key: executionKey('sign-off', 2), id: 'sign-off', kind: 'approval', loopId: 'human-review',
+      iteration: 2, status: 'pending',
+    } as StepState,
+  ];
+}
+
+describe('nested rounds', () => {
+  it('gives each round its own group and pill, with no duplicate-key warning', () => {
+    // Before nodes were keyed by execution identity, both fix-cycle rounds
+    // and both execute pills shared a bare id, and React logged "Encountered
+    // two children with the same key" for the sibling loop nodes.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(<RunStepper steps={twoOuterRounds()} focusStepId="execute" />);
+    const duplicateKeyWarning = errorSpy.mock.calls.some(call => String(call[0]).includes('same key'));
+    errorSpy.mockRestore();
+    expect(duplicateKeyWarning).toBe(false);
+
+    const round1Group = screen.getByTestId('step-loop-fix-cycle');
+    const round2Group = screen.getByTestId('step-loop-fix-cycle#2');
+    expect(within(round1Group).getByTestId('step-card-human-review#1/execute#1')).toBeInTheDocument();
+    expect(within(round2Group).getByTestId('step-card-human-review#2/execute#1')).toBeInTheDocument();
+  });
+
+  it('shows the running round\'s pill when collapsed, not a finished earlier round', () => {
+    render(
+      <RunStepper steps={twoOuterRounds()} focusStepId="execute" collapsed onToggleCollapse={vi.fn()} />,
+    );
+    expect(screen.getByTestId('step-card-human-review#2/execute#1')).toHaveAccessibleName(/running/);
+    expect(screen.queryByTestId('step-card-human-review#1/execute#1')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// nodeRef — the page scrolls to the *running execution's own* key
+// (e.g. `execute#2`), which is not always the folded node's key (the
+// *first* folded execution's key). A pill has to answer to both.
+// ---------------------------------------------------------------------------
+
+/** Round 2 of `human-review`, whose `fix-cycle` body has run `execute` twice. */
+function nestedRoundWithTwoExecutions(): StepState[] {
+  const outerLoops = [{ id: 'human-review', iteration: 2 }];
+  return [
+    { key: executionKey('human-review', 2), id: 'human-review', kind: 'loop', status: 'running', iterations: 2 } as StepState,
+    {
+      key: executionKey('fix-cycle', 2), id: 'fix-cycle', kind: 'loop', loopId: 'human-review',
+      iteration: 2, status: 'running',
+    } as StepState,
+    {
+      key: executionKey('execute', 1, outerLoops), id: 'execute', kind: 'agent',
+      loopId: 'fix-cycle', iteration: 1, outerLoops, status: 'done',
+    } as StepState,
+    {
+      key: executionKey('execute', 2, outerLoops), id: 'execute', kind: 'agent',
+      loopId: 'fix-cycle', iteration: 2, outerLoops, status: 'running',
+    } as StepState,
+  ];
+}
+
+describe('nodeRef', () => {
+  it('resolves the running execution\'s own key to the same element as the node key, single-level', () => {
+    // loopRun(2): folded node key is 'execute' (iteration 1's key); iteration
+    // 2 — the one actually running — has its own key, 'execute#2'.
+    const refs: Record<string, HTMLElement | null> = {};
+    render(<RunStepper steps={loopRun(2)} nodeRef={(key, el) => { refs[key] = el; }} />);
+    expect(refs['execute#2']).not.toBeNull();
+    expect(refs['execute#2']).toBe(refs.execute);
+  });
+
+  it('resolves the running execution\'s own key to the same element as the node key, nested', () => {
+    // Folded node key is 'human-review#2/execute#1'; the running execution's
+    // own key is 'human-review#2/execute#2'.
+    const refs: Record<string, HTMLElement | null> = {};
+    render(<RunStepper steps={nestedRoundWithTwoExecutions()} nodeRef={(key, el) => { refs[key] = el; }} />);
+    expect(refs['human-review#2/execute#2']).not.toBeNull();
+    expect(refs['human-review#2/execute#2']).toBe(refs['human-review#2/execute#1']);
   });
 });
 

@@ -53,17 +53,19 @@ steps:
             model: sonnet
             mode: headless
             writes: true
-            prompt: Implement the attached plan.
+            prompt: Implement the attached plan. If sign-off feedback is attached, address every requested change.
             output: execute-report.md
           - id: review
-            inputs: [plan, execute]
+            inputs: [plan, execute, sign-off]
             verdict: true
             kind: agent
             runner: claude
             model: opus
             mode: headless
             writes: false
-            prompt: Review the implementation against the attached plan.
+            prompt: |
+              Review the implementation against the attached plan. If sign-off
+              feedback is attached, FAIL unless every requested change is addressed.
             output: review.md
       - id: sign-off
         inputs: [review]

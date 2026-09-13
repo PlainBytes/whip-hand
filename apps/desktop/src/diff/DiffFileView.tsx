@@ -154,11 +154,11 @@ export function DiffFileView({ file }: DiffFileViewProps) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, gap: 8 }}>
       <div
         style={{
           display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0,
-          padding: '4px 8px', borderBottom: '1px solid var(--colorNeutralStroke2)',
+          padding: '4px 0',
         }}
       >
         <Text
@@ -186,7 +186,7 @@ export function DiffFileView({ file }: DiffFileViewProps) {
         <Text
           data-testid="diff-line-endings-only"
           size={200}
-          style={{ flexShrink: 0, padding: '4px 8px', color: 'var(--colorNeutralForeground3)' }}
+          style={{ flexShrink: 0, padding: '4px 0', color: 'var(--colorNeutralForeground3)' }}
         >
           Line endings only — the text is unchanged.
         </Text>

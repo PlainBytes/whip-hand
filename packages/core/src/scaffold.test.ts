@@ -7,7 +7,7 @@ import {
   createWorkflow, deleteWorkflow, initWorkspace, workflowTemplate, specDrivenTemplate, featureDevelopmentTemplate,
   updateWorkflow,
 } from './scaffold.ts';
-import { parseWorkflow, WorkflowError } from './schema.ts';
+import { parseWorkflow, validateWorkflowWarnings, WorkflowError } from './schema.ts';
 import { loadWorkspaceConfig } from './config.ts';
 import type { Workflow } from './types.ts';
 
@@ -23,26 +23,70 @@ async function withConfigHome<T>(fn: (configHome: string) => Promise<T>): Promis
   }
 }
 
+/**
+ * Every shipped template gives the human sign-off the same shape:
+ * `human-review` loops until an approval that can send fresh feedback back to
+ * both `execute` and `review` in the inner cycle it wraps.
+ */
+function assertHumanReviewShape(workflow: Workflow, innerLoopId: string): void {
+  const humanReview = workflow.steps.find(s => s.id === 'human-review');
+  assert.ok(humanReview !== undefined, 'human-review loop is present');
+  if (humanReview === undefined || humanReview.kind !== 'loop') return assert.fail('human-review is a loop');
+  assert.equal(humanReview.until, 'sign-off');
+
+  const signOff = humanReview.steps.find(s => s.id === 'sign-off');
+  assert.ok(signOff !== undefined && signOff.kind === 'approval');
+  if (signOff === undefined || signOff.kind !== 'approval') return;
+  assert.equal(signOff.verdict, true);
+  assert.equal(signOff.capture, 'review');
+  assert.equal(signOff.show_diff, true);
+  assert.ok(signOff.output !== undefined, 'sign-off writes an artifact execute/review can read back');
+
+  const inner = humanReview.steps.find(s => s.id === innerLoopId);
+  assert.ok(inner !== undefined && inner.kind === 'loop');
+  if (inner === undefined || inner.kind !== 'loop') return;
+  const review = inner.steps.find(s => s.id === 'review');
+  assert.ok(review !== undefined && review.kind === 'agent' && review.verdict === true);
+  const execute = inner.steps.find(s => s.id === 'execute');
+  assert.ok(execute !== undefined && execute.kind === 'agent');
+  if (execute === undefined || execute.kind !== 'agent' || review === undefined || review.kind !== 'agent') return;
+  assert.ok(execute.inputs?.includes('sign-off'), 'execute reads the sign-off feedback');
+  assert.ok(review.inputs?.includes('sign-off'), 'review reads the sign-off feedback too, to enforce it');
+}
+
+test('every shipped template gives the human sign-off the same send-it-back shape', () => {
+  for (const [workflow, innerLoopId] of [
+    [parseWorkflow(workflowTemplate('my-flow')), 'fix-cycle'],
+    [parseWorkflow(specDrivenTemplate()), 'build-cycle'],
+    [parseWorkflow(featureDevelopmentTemplate()), 'do-review'],
+  ] as const) {
+    assertHumanReviewShape(workflow, innerLoopId);
+    assert.deepEqual(validateWorkflowWarnings(workflow), []);
+  }
+});
+
 test('workflowTemplate produces a parseable canonical workflow', () => {
   const workflow = parseWorkflow(workflowTemplate('my-flow'));
   assert.equal(workflow.name, 'my-flow');
   assert.equal(workflow.description, 'Plan with a human, then implement and review in a cycle until the review passes.');
-  assert.deepEqual(workflow.steps.map(s => s.id), ['plan', 'fix-cycle', 'sign-off']);
+  assert.deepEqual(workflow.steps.map(s => s.id), ['plan', 'human-review']);
 
   const plan = workflow.steps[0];
   assert.equal(plan.kind === 'agent' && plan.mode, 'interactive');
 
   // The canonical shape is now a cycle: implement and review repeat until the
-  // review passes, which is the loop the whole tool exists to run.
-  const loop = workflow.steps[1];
-  assert.equal(loop.kind, 'loop');
-  if (loop.kind !== 'loop') return;
-  assert.equal(loop.until, 'review');
-  assert.deepEqual(loop.steps.map(s => s.id), ['execute', 'review']);
-  const review = loop.steps[1];
+  // review passes, wrapped in a human sign-off that can send it round again.
+  const humanReview = workflow.steps[1];
+  assert.equal(humanReview.kind, 'loop');
+  if (humanReview.kind !== 'loop') return;
+  assert.deepEqual(humanReview.steps.map(s => s.id), ['fix-cycle', 'sign-off']);
+  const fixCycle = humanReview.steps[0];
+  assert.equal(fixCycle.kind, 'loop');
+  if (fixCycle.kind !== 'loop') return;
+  assert.equal(fixCycle.until, 'review');
+  assert.deepEqual(fixCycle.steps.map(s => s.id), ['execute', 'review']);
+  const review = fixCycle.steps[1];
   assert.equal(review.kind === 'agent' && review.verdict, true);
-
-  assert.equal(workflow.steps[2].kind, 'approval');
 });
 
 test('specDrivenTemplate produces a parseable spec-driven workflow', () => {
@@ -50,7 +94,7 @@ test('specDrivenTemplate produces a parseable spec-driven workflow', () => {
   assert.equal(workflow.name, 'spec-driven');
   assert.deepEqual(workflow.steps.map(s => s.id), [
     'functional-plan', 'functional-grill', 'technical-plan', 'technical-grill',
-    'build-it', 'build-cycle', 'sign-off',
+    'build-it', 'human-review',
   ]);
 
   const functionalGrill = workflow.steps[1];
@@ -61,17 +105,21 @@ test('specDrivenTemplate produces a parseable spec-driven workflow', () => {
   assert.equal(technicalGrill.kind === 'agent' && technicalGrill.mode, 'interactive');
   assert.equal(technicalGrill.kind === 'agent' && technicalGrill.output, 'technical-spec.md');
 
+  // 'build-it' is the unchanged brake before implementation ever starts; only
+  // the sign-off *after* it gained the send-it-back shape.
   assert.equal(workflow.steps[4].kind, 'approval');
 
-  const loop = workflow.steps[5];
-  assert.equal(loop.kind, 'loop');
-  if (loop.kind !== 'loop') return;
-  assert.equal(loop.until, 'review');
-  assert.deepEqual(loop.steps.map(s => s.id), ['execute', 'review']);
-  const review = loop.steps[1];
+  const humanReview = workflow.steps[5];
+  assert.equal(humanReview.kind, 'loop');
+  if (humanReview.kind !== 'loop') return;
+  assert.deepEqual(humanReview.steps.map(s => s.id), ['build-cycle', 'sign-off']);
+  const buildCycle = humanReview.steps[0];
+  assert.equal(buildCycle.kind, 'loop');
+  if (buildCycle.kind !== 'loop') return;
+  assert.equal(buildCycle.until, 'review');
+  assert.deepEqual(buildCycle.steps.map(s => s.id), ['execute', 'review']);
+  const review = buildCycle.steps[1];
   assert.equal(review.kind === 'agent' && review.verdict, true);
-
-  assert.equal(workflow.steps[6].kind, 'approval');
 });
 
 test('featureDevelopmentTemplate produces a parseable workflow, including the backward reference into the loop', () => {

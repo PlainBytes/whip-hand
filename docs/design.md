@@ -474,6 +474,36 @@ absolute `--max-iterations` still overrides everything, including a grant; setti
 below what the loop already ran emits a `guard:warning` explaining the otherwise-baffling
 instant re-failure, rather than failing silently.
 
+### Nested loops
+
+A loop can contain another loop in its own `steps:` — every shipped workflow does this now,
+wrapping an implement/review cycle in an outer loop that repeats until a human sign-off
+approves it (see "Sending work back" below). That means the *same* `(stepId, iteration)` pair
+recurs once per round of the outer loop, so identity needs a second axis:
+
+- **An execution's identity is its full loop chain**, not just the innermost `(loopId,
+  iteration)`. `LoopFrame` carries a `parent` link to the frame it is nested inside — absent
+  for a top-level loop, which is what keeps a single-level frame identical to what it always
+  was. `ancestorLoops` (`execution-key.ts`) walks that chain into `LoopRef[]` (`{ id,
+  iteration }`, outermost first) for whatever is beyond the immediate loop.
+- **Artifacts nest one directory per frame**, outermost first: a body step inside `fix-cycle`
+  inside `human-review` writes to `<runDir>/human-review/iter-2/fix-cycle/iter-1/<output>`
+  during round 2, not to the same `fix-cycle/iter-1/<output>` round 1 already used. A
+  single-level loop's path is unchanged.
+- **`executionKey`** folds the outer chain into the string key resume and the manifest match
+  executions by: `human-review#2/execute#1`. With no outer loops the key is byte-identical to
+  before nesting existed.
+- **The manifest row schema** (`MANIFEST_VERSION` 4) adds `outerLoops` to a step's row —
+  everything beyond the `loopId`/`iteration` pair it already carried, absent outside nested
+  loops. A loop's own row carries the same three fields, identified by *its* enclosing loop
+  exactly as a leaf step's row is: round 2 of an outer loop gets its own row for the inner
+  loop, rather than overwriting round 1's already-`done` one.
+- **A run recorded before version 4 is refused on resume if its workflow now has a loop
+  nested inside another** — there is no way to tell one round's rows from another's without
+  `outerLoops`, so `planResume` throws a `ResumeError` telling the operator to start a fresh
+  run rather than best-effort resuming into a state it cannot verify. A single-level pre-v4
+  run resumes exactly as it always did: nothing about its identity changed.
+
 ### Relationship to `on_findings`
 
 `on_findings` (below) predates loops and still governs a `verdict` step that is **not**
@@ -558,6 +588,46 @@ but only uselessly: outside a loop, where `retry` is never offered and it degrad
 approve-with-notes; and without `show_diff: true`, where there are no files to comment on
 and it degrades to an overall comment only. `whiphand run` prints them to stderr with the
 same `⚠` prefix a resumed run's own warnings use.
+
+**The pattern every shipped workflow uses.** An outer loop, `until: sign-off`, wraps the
+inner implement/review cycle and the sign-off step itself:
+
+```yaml
+- id: human-review
+  kind: loop
+  until: sign-off
+  max_iterations: 5
+  steps:
+    - id: fix-cycle
+      kind: loop
+      until: review
+      steps:
+        - id: execute
+          inputs: [plan, review, sign-off]   # sign-off: the previous ROUND's feedback
+          # ...
+        - id: review
+          verdict: true
+          inputs: [plan, execute, sign-off]  # FAIL unless every request was addressed
+          # ...
+    - id: sign-off
+      kind: approval
+      verdict: true
+      capture: review
+      show_diff: true
+      inputs: [review]
+      output: feedback.md
+```
+
+Both `execute` and `review` read `sign-off` as a forward reference to a *later sibling of the
+outer loop* — dropped on the run's very first pass, when there is nothing yet to read, exactly
+like a forward reference to a later sibling of their own inner loop. Requesting changes sends
+`fix-cycle` round again with that feedback attached to both steps; `review` reading it too is
+what makes the FAIL-unless-addressed instruction more than a suggestion — an attempt that
+ignored the human's request fails the inner loop's own exit check, not just the outer one's.
+Only the newest round's feedback carries forward: round 3 sees round 2's, not round 1's,
+though round 1's stays on disk under its own round directory (see "Nested loops" above).
+`human-review` can itself run out of rounds after enough `retry`s, the same as any other
+loop — it stays resumable, and a resume grants one more round by default.
 
 ### The desktop's review screen
 

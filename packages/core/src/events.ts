@@ -7,9 +7,14 @@
  * next to the types they validate and the agent imports them.
  */
 import { z } from 'zod';
-import type { ManualRequest, WhiphandEvent, Scope, SpawnSpec, StepProgress } from './types.ts';
+import type { LoopRef, ManualRequest, WhiphandEvent, Scope, SpawnSpec, StepProgress } from './types.ts';
 
 export const scopeSchema: z.ZodType<Scope> = z.enum(['project', 'global']);
+
+export const loopRefSchema: z.ZodType<LoopRef> = z.object({
+  id: z.string(),
+  iteration: z.number().int().positive(),
+});
 
 export const stepProgressSchema: z.ZodType<StepProgress> = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('text'), text: z.string() }),
@@ -83,6 +88,7 @@ export const whiphandEventSchema: z.ZodType<WhiphandEvent> = z.discriminatedUnio
   z.object({
     type: z.literal('step:skipped'), stepId: z.string(),
     loopId: z.string().optional(), iteration: z.number().int().positive().optional(),
+    outerLoops: z.array(loopRefSchema).optional(),
   }),
   z.object({
     type: z.literal('step:start'), stepId: z.string(),
@@ -90,6 +96,7 @@ export const whiphandEventSchema: z.ZodType<WhiphandEvent> = z.discriminatedUnio
     runner: z.string().optional(), model: z.string().optional(),
     mode: z.enum(['interactive', 'headless']).optional(),
     loopId: z.string().optional(), iteration: z.number().int().positive().optional(),
+    outerLoops: z.array(loopRefSchema).optional(),
   }),
   z.object({
     type: z.literal('step:spawn'), stepId: z.string(), spec: spawnSpecSchema,
@@ -140,14 +147,20 @@ export const whiphandEventSchema: z.ZodType<WhiphandEvent> = z.discriminatedUnio
   }),
   z.object({
     type: z.literal('loop:start'), loopId: z.string(), maxIterations: z.number().int(),
+    parentLoopId: z.string().optional(), parentIteration: z.number().int().positive().optional(),
+    outerLoops: z.array(loopRefSchema).optional(),
   }),
   z.object({
     type: z.literal('loop:iteration'), loopId: z.string(),
     iteration: z.number().int(), maxIterations: z.number().int(),
+    parentLoopId: z.string().optional(), parentIteration: z.number().int().positive().optional(),
+    outerLoops: z.array(loopRefSchema).optional(),
   }),
   z.object({
     type: z.literal('loop:done'), loopId: z.string(),
     iterations: z.number().int(), passed: z.boolean(),
+    parentLoopId: z.string().optional(), parentIteration: z.number().int().positive().optional(),
+    outerLoops: z.array(loopRefSchema).optional(),
   }),
   z.object({ type: z.literal('guard:warning'), message: z.string(), stepId: z.string().optional() }),
   z.object({ type: z.literal('run:done'), runId: z.string(), ok: z.boolean() }),

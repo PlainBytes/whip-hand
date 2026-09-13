@@ -52,6 +52,7 @@ import { ArtifactFileSystem } from '../files/artifact-fs.ts';
 import { joinPath, makeRootNode, type TreeNodes } from '../files/tree-model.ts';
 import { FileTree } from '../components/FileTree.tsx';
 import { FilePreview } from '../components/FilePreview.tsx';
+import { RECESSED_SURFACE } from '../components/recessed-surface.ts';
 import { resolveInArtifacts } from '../markdown/resolve.ts';
 import { elapsedMs, formatElapsed } from '../lib/duration.ts';
 import { useOpenExternal } from '../lib/open-external.tsx';
@@ -151,9 +152,10 @@ function mergeSteps(manifest: RunDetailResult | null, job: JobState | undefined)
   const raw = manifest?.steps;
   const base: Array<Omit<StepState, 'key'> & { iteration?: number }> =
     Array.isArray(raw) ? (raw as Array<Omit<StepState, 'key'> & { iteration?: number }>) : [];
-  // A loop runs the same step id many times, so both sides key by execution.
+  // A loop runs the same step id many times, so both sides key by execution —
+  // including which round of any *enclosing* loop it ran under, once loops nest.
   const merged: StepState[] = base.map(step => {
-    const key = executionKey(step.id, step.iteration);
+    const key = executionKey(step.id, step.iteration, step.outerLoops);
     const live = job?.steps[key];
     if (!live) return { ...step, key };
     // A row the store had to guess into existence (see StepState.inferred) is
@@ -212,20 +214,6 @@ function findFocusStepIndex(steps: StepState[]): number {
   if (current !== -1) return current;
   return steps.length - 1;
 }
-
-/**
- * The recessed panel this run's output sits on — the log tail, the activity
- * feed, the artifact preview, and the Terminal tab's placeholders. One
- * constant rather than four copies of the same three properties, because the
- * point of it is that they match: the tab is the same panel whether or not
- * anything is running in it, so an empty one reads as "nothing here yet"
- * rather than as a tab that failed to render.
- */
-const RECESSED_SURFACE = {
-  background: 'var(--colorNeutralBackground3)',
-  padding: 8,
-  borderRadius: 4,
-} as const;
 
 type RunTab = 'terminal' | 'artifacts' | 'logs';
 
@@ -453,10 +441,10 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
 
   useEffect(() => {
     // jsdom (vitest) doesn't implement scrollIntoView; this is a real-browser nicety.
-    const el = currentStep ? stepRefs.current[currentStep.id] : null;
+    const el = currentStep ? stepRefs.current[currentStep.key] : null;
     if (!el || typeof el.scrollIntoView !== 'function') return;
     el.scrollIntoView({ block: 'nearest' });
-  }, [currentStep?.id]);
+  }, [currentStep?.key]);
 
   // Keep the terminal mounted (read-only once ptyExit lands) until the
   // step it belongs to actually completes — a step:done can lag behind
@@ -1326,7 +1314,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
               ? { stepId: job.awaiting.stepId, label: AWAIT_LABEL[job.awaiting.reason] }
               : undefined
           }
-          nodeRef={(id, el) => { stepRefs.current[id] = el; }}
+          nodeRef={(key, el) => { stepRefs.current[key] = el; }}
           now={now}
         />
       </div>
@@ -1472,7 +1460,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
               data-testid="activity-feed"
               style={{
                 ...RECESSED_SURFACE,
-                flex: 1, minHeight: 0, overflow: 'auto', fontFamily: 'monospace', fontSize: 12,
+                flex: 1, minHeight: 0, overflow: 'auto', fontFamily: 'var(--fontFamilyMonospace)', fontSize: 12,
                 // Only while empty: the placeholder centres itself in the pane,
                 // which it can only do if the pane is a flex container. Lines
                 // want the ordinary block flow back the moment there are any.
@@ -1497,8 +1485,8 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
           ) : (
             // Nothing live to show — but still the same panel, rather than a
             // lone sentence floating in a blank tab. Both placeholders are the
-            // pane's own state, so they get the pane's own surface and read
-            // like the Artifacts tab's empty state.
+            // pane's own state, so they get the pane's own surface: the same
+            // one the Artifacts tab's empty state sits on.
             <div
               data-testid={showSessionEndedNote ? 'pty-session-ended-note' : 'terminal-empty'}
               style={{ ...RECESSED_SURFACE, flex: 1, minHeight: 0, display: 'flex' }}
@@ -1519,20 +1507,21 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
           style={{ display: activeTab === 'artifacts' ? 'flex' : 'none', height: '100%', minHeight: 0 }}
         >
           {artifacts.length === 0 ? (
-            <EmptyState icon={<DocumentFolder48Regular />}>
-              No artifacts yet. Steps write theirs as they finish.
-            </EmptyState>
+            <div style={{ ...RECESSED_SURFACE, flex: 1, minHeight: 0, display: 'flex' }}>
+              <EmptyState icon={<DocumentFolder48Regular />}>
+                No artifacts yet. Steps write theirs as they finish.
+              </EmptyState>
+            </div>
           ) : (
             <FileSystemProvider fs={artifactFs}>
-              {/* Laid out like FilesPage's browser — same widths, same divider
+              {/* Laid out like FilesPage's browser — same widths, same 8px gap
                   — so a tree of files behaves the same wherever you meet it.
-                  No gap: the preview's own background is the boundary. */}
-              <div style={{ display: 'flex', width: '100%', minHeight: 0 }}>
+                  The preview's own surface is the only boundary. */}
+              <div style={{ display: 'flex', width: '100%', minHeight: 0, gap: 8 }}>
                 <div
                   style={{
                     width: 320,
                     flexShrink: 0,
-                    borderRight: '1px solid var(--colorNeutralStroke2)',
                     minHeight: 0,
                     display: 'flex',
                     overflow: 'hidden',
@@ -1678,7 +1667,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
                 flex: 1,
                 minHeight: 0,
                 overflow: 'auto',
-                fontFamily: 'monospace',
+                fontFamily: 'var(--fontFamilyMonospace)',
                 fontSize: 12,
                 ...(logRows.length === 0 ? { display: 'flex' } : {}),
               }}

@@ -21,7 +21,8 @@ import { commandSpec, captureHeader, captureFooter } from './command.ts';
 import { buildManualRequest, noteArtifact, reviewArtifact } from './manual.ts';
 import { clearEndMarker } from './session-end.ts';
 import { clearAwaitState } from './await-state.ts';
-import { RunJournal, WORKFLOW_SNAPSHOT_NAME, executionKey } from './manifest.ts';
+import { RunJournal, WORKFLOW_SNAPSHOT_NAME } from './manifest.ts';
+import { ancestorLoops, executionKey } from '../execution-key.ts';
 import { pruneRuns } from './retention.ts';
 import { readRunName, runSlugFor, setRunName } from './run-name.ts';
 import { autoNameRun } from './auto-name.ts';
@@ -632,6 +633,10 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         emit({ type: 'step:manual', stepId: step.id, request });
         emit({ type: 'step:manual-resolved', stepId: step.id, choice: request.defaultChoice });
         emit({ type: 'step:done', stepId: step.id, exitCode: 0 });
+        // A dry run spawns nothing and asks no one, but a later step may still
+        // reference this one's output — same as executeAgent registering a
+        // path with nothing behind it yet, not a file this step actually wrote.
+        if (step.output !== undefined) recordArtifact(step.id, artifactPath(runDir, { output: step.output }, frame));
         return null;
       }
 
@@ -706,7 +711,8 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         // spawns because each body step is skipped in turn.
         if (isLoopStep(step)) return await executeLoop(step);
 
-        const key = executionKey(step.id, frame?.iteration);
+        const outerLoops = ancestorLoops(frame);
+        const key = executionKey(step.id, frame?.iteration, outerLoops);
         const alreadyDone = skippable.get(key);
         if (alreadyDone !== undefined) {
           skippable.delete(key);
@@ -714,6 +720,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
           emit({
             type: 'step:skipped', stepId: step.id,
             ...(frame === undefined ? {} : { loopId: frame.id, iteration: frame.iteration }),
+            ...(outerLoops.length === 0 ? {} : { outerLoops }),
           });
           if (!step.verdict) return null;
           // Restoring the verdict is not optional: it drives a loop's exit
@@ -727,6 +734,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
           type: 'step:start', stepId: step.id, kind: step.kind,
           ...(isAgentStep(step) ? { runner: step.runner, model: step.model, mode: step.mode } : {}),
           ...(frame === undefined ? {} : { loopId: frame.id, iteration: frame.iteration }),
+          ...(outerLoops.length === 0 ? {} : { outerLoops }),
         });
         if (isAgentStep(step)) return await executeAgent(step, frame);
         if (isCommandStep(step)) return await executeCommand(step, frame);
@@ -741,8 +749,16 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     // -----------------------------------------------------------------------
 
     async function executeLoop(loop: LoopStep): Promise<StepOutcome> {
+      // The frame this loop invocation runs under — set by executeStep just
+      // before it dispatched here — is also this loop's own row identity:
+      // which round of *its* enclosing loop is this, if any.
       const outer = ctx.loop;
-      const grant = opts.resume?.loopBudgets[loop.id];
+      const outerLoops = ancestorLoops(outer);
+      const loopEvent = {
+        ...(outer === undefined ? {} : { parentLoopId: outer.id, parentIteration: outer.iteration }),
+        ...(outerLoops.length === 0 ? {} : { outerLoops }),
+      };
+      const grant = opts.resume?.loopBudgets[executionKey(loop.id, outer?.iteration, outerLoops)];
       const maxIterations =
         opts.maxIterations ?? grant?.budget ?? loop.max_iterations ?? config.loop.max_iterations;
       // opts.maxIterations is absolute, so it can be set below what this loop
@@ -755,15 +771,15 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
             + `allows only ${maxIterations}, so it cannot pass`,
         });
       }
-      emit({ type: 'loop:start', loopId: loop.id, maxIterations });
+      emit({ type: 'loop:start', loopId: loop.id, maxIterations, ...loopEvent });
 
       let passed = false;
       let iteration = 0;
 
       for (iteration = 1; iteration <= maxIterations && !passed; iteration++) {
         if (opts.signal?.aborted) return cancelled();
-        emit({ type: 'loop:iteration', loopId: loop.id, iteration, maxIterations });
-        const frame: LoopFrame = { id: loop.id, iteration, maxIterations };
+        emit({ type: 'loop:iteration', loopId: loop.id, iteration, maxIterations, ...loopEvent });
+        const frame: LoopFrame = { id: loop.id, iteration, maxIterations, parent: outer };
 
         for (const body of loop.steps) {
           if (opts.signal?.aborted) return cancelled();
@@ -779,7 +795,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       }
 
       const iterations = passed ? iteration - 1 : maxIterations;
-      emit({ type: 'loop:done', loopId: loop.id, iterations, passed });
+      emit({ type: 'loop:done', loopId: loop.id, iterations, passed, ...loopEvent });
       ctx.loop = outer;
       if (passed) return null;
 

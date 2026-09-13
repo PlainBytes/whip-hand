@@ -37,12 +37,14 @@ Workflows live in `.whiphand/workflows/<name>.yaml` (so `whiphand run feature` w
 path. Artifacts land in `.whiphand/runs/<run-id>/` as plain markdown. Workspace defaults live in
 `.whiphand/config.yaml`.
 
-`whiphand init` ships three starter workflows: `feature` plans once, interactively, then
-implements and reviews in a cycle — pick it when the shape of the change is already clear.
-`spec-driven` adds a second planning phase and grills you on both, then stops at an approval
-gate before any code is written. `feature-development` does the same as `feature` but on its
-own branch — it syncs your trunk, cuts `feature/<run slug>`, and commits the signed-off work
-with a message it writes from the diff.
+`whiphand init` ships three starter workflows, and every one of them ends the same way: a human
+sign-off that can send the work back with comments for another cycle, not just ship it or kill
+it. `feature` plans once, interactively, then implements and reviews in a cycle until the sign-off
+approves it — pick it when the shape of the change is already clear. `spec-driven` adds a second
+planning phase and grills you on both, then stops at an approval gate before any code is written,
+before its own implement/review/sign-off cycle. `feature-development` does the same as `feature`
+but on its own branch — it syncs your trunk, cuts `feature/<run slug>`, and commits the signed-off
+work with a message it writes from the diff.
 
 A run can carry a **name** (`--name`, the desktop's New run dialog, or later with
 `whiphand rename-run`, where `''` clears it), shown in place of its id in the UI and
@@ -130,43 +132,59 @@ steps:
     prompt: |
       We are planning: {{ inputs.feature }}. Work with me on a plan. Do not modify files.
 
-  - id: fix-cycle     # repeat the body until `review` returns VERDICT: PASS
+  - id: human-review  # repeats fix-cycle until `sign-off` approves
     kind: loop
-    until: review
-    max_iterations: 3
+    until: sign-off
+    max_iterations: 5
     steps:
-      - id: execute   # headless; may write
-        runner: copilot
-        model: gpt-5.5
-        mode: headless
-        writes: true
-        inputs: [plan, review]   # `review` is later in the body => previous iteration
-        output: execute-report.md
-        prompt: Implement the attached plan.
+      - id: fix-cycle   # repeat the body until `review` returns VERDICT: PASS
+        kind: loop
+        until: review
+        max_iterations: 3
+        steps:
+          - id: execute   # headless; may write
+            runner: copilot
+            model: gpt-5.5
+            mode: headless
+            writes: true
+            # `review` and `sign-off` are forward references: the previous
+            # iteration's/round's findings and feedback, dropped when absent.
+            inputs: [plan, review, sign-off]
+            output: execute-report.md
+            prompt: Implement the attached plan. If sign-off feedback is attached, address every requested change.
 
-      - id: tests     # a shell command: no runner, no tokens
-        kind: command
-        run: npm test
-        verdict: true            # non-zero exit sends the loop round again
-        output: tests.log
+          - id: tests     # a shell command: no runner, no tokens
+            kind: command
+            run: npm test
+            verdict: true            # non-zero exit sends the loop round again
+            output: tests.log
 
-      - id: review    # headless, read-only, must emit VERDICT: PASS|FAIL
-        runner: claude
-        model: haiku
-        mode: headless
-        writes: false
-        verdict: true
-        inputs: [plan, execute, tests]
-        output: findings.md
-        prompt: Review the diff against the plan.
+          - id: review    # headless, read-only, must emit VERDICT: PASS|FAIL
+            runner: claude
+            model: haiku
+            mode: headless
+            writes: false
+            verdict: true
+            inputs: [plan, execute, tests, sign-off]
+            output: findings.md
+            prompt: |
+              Review the diff against the plan. If sign-off feedback is
+              attached, FAIL unless every requested change is addressed.
 
-  - id: sign-off      # stops and asks you, showing the diff
-    kind: approval
-    title: Ship it?
-    instructions: Check the diff and the findings before this goes out.
-    show_diff: true
-    inputs: [review]
+      - id: sign-off      # stops and asks you, showing the diff
+        kind: approval
+        verdict: true             # required: this is what the outer loop's `until` reads
+        title: Ship it?
+        instructions: Approve, or request changes with comments on the whole change or on individual files.
+        show_diff: true
+        capture: review           # per-file comments; required to answer "request changes"
+        inputs: [review]
+        output: feedback.md
 ```
+
+`execute` and `review` both read `sign-off` as a forward reference, so a round that requests
+changes sends fresh feedback back into the next one. That's the shape every starter workflow
+ships with — see `docs/design.md`'s "Sending work back" section for the nested-loop details.
 
 **Step kinds.** `agent` (the default), `command`, `manual`, `approval`, and `loop` — a cycle
 over its own `steps` that repeats until its `until` step passes, bounded by

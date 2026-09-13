@@ -184,11 +184,29 @@ export type StepProgress =
    */
   | { kind: 'usage'; turns?: number; costUsd?: number; premiumRequests?: number };
 
-/** Where we are inside a loop, when we are inside one. */
+/**
+ * Where we are inside a loop, when we are inside one. `parent` is the frame
+ * of the loop enclosing this one, when this loop is itself nested inside
+ * another loop's body — absent for a top-level loop, which is what keeps a
+ * single-level frame identical to what it always was.
+ */
 export interface LoopFrame {
   id: string;
   iteration: number;      // 1-based
   maxIterations: number;
+  parent?: LoopFrame;
+}
+
+/**
+ * One loop enclosing an execution, named and at the iteration it was on.
+ * `WhiphandEvent`'s `outerLoops` and manifest rows use this to record every
+ * loop *beyond* the immediate one a `loopId`/`iteration` pair already names —
+ * see execution-key.ts's `ancestorLoops`, which derives it from a `LoopFrame`
+ * chain.
+ */
+export interface LoopRef {
+  id: string;
+  iteration: number;
 }
 
 export interface RunCtx {
@@ -406,12 +424,14 @@ export type WhiphandEvent =
   | {
       type: 'step:start'; stepId: string; kind: StepKind; runner?: string;
       model?: string; mode?: StepMode; loopId?: string; iteration?: number;
+      /** Loops enclosing `loopId` itself, outermost first — empty/absent outside nested loops. */
+      outerLoops?: LoopRef[];
     }
   /**
    * This execution completed in an earlier attempt, so a resumed run did not
    * run it again. Its artifact is restored; nothing was spawned.
    */
-  | { type: 'step:skipped'; stepId: string; loopId?: string; iteration?: number }
+  | { type: 'step:skipped'; stepId: string; loopId?: string; iteration?: number; outerLoops?: LoopRef[] }
   | { type: 'step:spawn'; stepId: string; spec: SpawnSpec; phase: 'main' | 'harvest' }
   /** `bytes` is the artifact's size once written — the cheapest signal that a step silently stubbed it out. */
   | { type: 'step:artifact'; stepId: string; path: string; bytes?: number }
@@ -452,9 +472,24 @@ export type WhiphandEvent =
   | { type: 'step:done'; stepId: string; exitCode: number }
   | { type: 'step:manual'; stepId: string; request: ManualRequest }
   | { type: 'step:manual-resolved'; stepId: string; choice: ManualChoice }
-  | { type: 'loop:start'; loopId: string; maxIterations: number }
-  | { type: 'loop:iteration'; loopId: string; iteration: number; maxIterations: number }
-  | { type: 'loop:done'; loopId: string; iterations: number; passed: boolean }
+  /**
+   * `parentLoopId`/`parentIteration` name the loop this one is nested inside,
+   * when it is nested — a second `loopId` field would clash with this loop's
+   * own, which is why the enclosing one gets a different name. `outerLoops`
+   * carries anything nested deeper still, beyond the immediate parent.
+   */
+  | {
+      type: 'loop:start'; loopId: string; maxIterations: number;
+      parentLoopId?: string; parentIteration?: number; outerLoops?: LoopRef[];
+    }
+  | {
+      type: 'loop:iteration'; loopId: string; iteration: number; maxIterations: number;
+      parentLoopId?: string; parentIteration?: number; outerLoops?: LoopRef[];
+    }
+  | {
+      type: 'loop:done'; loopId: string; iterations: number; passed: boolean;
+      parentLoopId?: string; parentIteration?: number; outerLoops?: LoopRef[];
+    }
   /** `stepId` is absent for a workflow-level warning (a dropped ref, an exhausted loop) — present when one step's own guard tripped. */
   | { type: 'guard:warning'; message: string; stepId?: string }
   /**

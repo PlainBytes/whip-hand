@@ -192,16 +192,20 @@ test('attaching to a workflow that reads no attachments is refused with the fix'
 test('SIGINT aborts an in-flight run instead of leaving its spawned child an orphan', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'whiphand-cli-'));
   await mkdir(join(cwd, '.whiphand', 'workflows'), { recursive: true });
+  await writeFile(join(cwd, 'wait.js'), 'setTimeout(() => {}, 5000);\n');
   await writeFile(join(cwd, '.whiphand', 'workflows', 'slow.yaml'), `
 name: slow
 steps:
   - id: wait
     kind: command
-    run: node -e "setTimeout(() => {}, 5000)"
+    run: node wait.js
 `);
   // Not \`sleep 5\`: this runs through a resolved shell (sh -c on POSIX,
   // cmd.exe on Windows, where npm test also runs), and node is guaranteed to
-  // be on PATH — sleep/timeout are not, on every platform.
+  // be on PATH — sleep/timeout are not, on every platform. A script file
+  // rather than \`node -e "..."\`: a quoted script containing ( ) cannot pass
+  // through cmd.exe, and exec.ts refuses that shape outright. Command steps
+  // run in the workspace, so the relative path resolves on both shells.
 
   const started = Date.now();
   const promise = withStderr(() => runCommand('slow', { dryRun: false, input: [], cwd }));

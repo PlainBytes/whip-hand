@@ -75,7 +75,7 @@ describe('WorkflowsPage', () => {
     await respond(transport, 'initWorkspace', { created: ['.whiphand/config.yaml', '.whiphand/workflows/feature.yaml'] });
     // page refreshes the list afterwards — answer the SECOND listWorkflows request
     await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
-    expect(await screen.findByText('feature', { exact: false })).toBeInTheDocument();
+    expect(await screen.findByText('feature')).toBeInTheDocument();
   });
 
   it('creates a workflow through the New workflow dialog', async () => {
@@ -238,6 +238,12 @@ describe('WorkflowsPage - delegating to the editor', () => {
   });
 });
 
+/** Opens a lane's ⋯ menu and clicks Delete — that's where the lane now puts it. */
+async function openLaneDeleteMenu(name: string): Promise<void> {
+  fireEvent.click(await screen.findByRole('button', { name: new RegExp(`more actions for ${name}`, 'i') }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: /delete/i }));
+}
+
 function sentMethods(transport: MockTransport): string[] {
   return transport.sent.map(line => (JSON.parse(line) as { method: string }).method);
 }
@@ -261,7 +267,7 @@ describe('WorkflowsPage - deleting a workflow', () => {
     const respond = respondFactory();
     const { transport } = renderWorkflowsPage();
     await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
-    fireEvent.click(await screen.findByRole('button', { name: 'Delete feature' }));
+    await openLaneDeleteMenu('feature');
 
     expect(await screen.findByText("Delete workflow 'feature'?")).toBeInTheDocument();
     expect(screen.getByText(/this deletes its file\. this cannot be undone\. past runs keep their own copy\./i))
@@ -275,14 +281,14 @@ describe('WorkflowsPage - deleting a workflow', () => {
     await respond(transport, 'deleteWorkflow', { deleted: true });
     await respond(transport, 'listWorkflows', []);
     await waitFor(() => expect(screen.queryByText("Delete workflow 'feature'?")).not.toBeInTheDocument());
-    expect(screen.queryByRole('button', { name: 'Delete feature' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /more actions for feature/i })).not.toBeInTheDocument();
   });
 
   it('a global workflow gets the every-workspace wording and sends scope: global', async () => {
     const respond = respondFactory();
     const { transport } = renderWorkflowsPage();
     await respond(transport, 'listWorkflows', [GLOBAL_FEATURE]);
-    fireEvent.click(await screen.findByRole('button', { name: 'Delete feature' }));
+    await openLaneDeleteMenu('feature');
 
     expect(await screen.findByText(/every workspace on this machine loses it/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
@@ -294,15 +300,17 @@ describe('WorkflowsPage - deleting a workflow', () => {
     const respond = respondFactory();
     const { transport } = renderWorkflowsPage();
     await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW, { ...GLOBAL_FEATURE, shadowed: true as const }]);
-    const [projectDelete, globalDelete] = await screen.findAllByRole('button', { name: 'Delete feature' });
+    const [projectMenu, globalMenu] = await screen.findAllByRole('button', { name: /more actions for feature/i });
 
-    fireEvent.click(projectDelete);
+    fireEvent.click(projectMenu);
+    fireEvent.click(await screen.findByRole('menuitem', { name: /delete/i }));
     expect(await screen.findByText("The global 'feature' workflow will be used in this workspace instead."))
       .toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
     await waitFor(() => expect(screen.queryByText("Delete workflow 'feature'?")).not.toBeInTheDocument());
 
-    fireEvent.click(globalDelete);
+    fireEvent.click(globalMenu);
+    fireEvent.click(await screen.findByRole('menuitem', { name: /delete/i }));
     expect(await screen.findByText(/every workspace on this machine loses it/i)).toBeInTheDocument();
     expect(screen.queryByText(/will be used in this workspace instead/i)).not.toBeInTheDocument();
   });
@@ -311,7 +319,7 @@ describe('WorkflowsPage - deleting a workflow', () => {
     const respond = respondFactory();
     const { transport } = renderWorkflowsPage();
     await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
-    fireEvent.click(await screen.findByRole('button', { name: 'Delete feature' }));
+    await openLaneDeleteMenu('feature');
     await screen.findByText("Delete workflow 'feature'?");
 
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
@@ -323,7 +331,7 @@ describe('WorkflowsPage - deleting a workflow', () => {
     const respond = respondFactory();
     const { transport } = renderWorkflowsPage();
     await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
-    fireEvent.click(await screen.findByRole('button', { name: 'Delete feature' }));
+    await openLaneDeleteMenu('feature');
     fireEvent.click(await screen.findByRole('button', { name: /^delete$/i }));
 
     const req = await lastRequest(transport, 'deleteWorkflow');
@@ -338,7 +346,7 @@ describe('WorkflowsPage - deleting a workflow', () => {
     const respond = respondFactory();
     const { transport } = renderWorkflowsPage();
     await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
-    fireEvent.click(await screen.findByRole('button', { name: 'Delete feature' }));
+    await openLaneDeleteMenu('feature');
     fireEvent.click(await screen.findByRole('button', { name: /^delete$/i }));
 
     await respond(transport, 'deleteWorkflow', { deleted: false });

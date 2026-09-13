@@ -20,9 +20,9 @@ import { Add20Regular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
 import { PageHeader } from '../components/PageHeader.tsx';
-import { WorkflowCard, isWorkflowFile } from '../components/WorkflowCard.tsx';
+import { WorkflowLane, isWorkflowFile } from '../components/workflow-lane/WorkflowLane.tsx';
 import { DeleteWorkflowDialog } from '../components/DeleteWorkflowDialog.tsx';
-import type { WorkflowEntry } from '../components/WorkflowCard.tsx';
+import type { WorkflowEntry } from '../components/workflow-lane/WorkflowLane.tsx';
 import type { Scope } from '../../../../packages/core/src/types.ts';
 import { WorkflowEditor } from '../workflow-editor/WorkflowEditor.tsx';
 
@@ -217,18 +217,11 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
   }
 
   const cardList = workflows.length > 0 && (
-    // A responsive grid: the summary line each card now carries sets the
-    // minimum column width, so a wide monitor gets two or three cards
-    // abreast instead of one stretched to the full window.
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))',
-        gap: 12,
-      }}
-    >
+    // A single column of full-width pipeline lanes, one per workflow — see
+    // the plan for why this replaced the narrow card grid.
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
       {workflows.map(entry => (
-        <WorkflowCard
+        <WorkflowLane
           key={`${entry.source}:${entry.name}`}
           entry={entry}
           onRun={() => onRunWorkflow(entry.name, entry.source)}

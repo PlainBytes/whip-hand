@@ -11,18 +11,12 @@ const KIND_COLOR = {
 
 export interface StepSummaryProps {
   step: Step;
-  /** Position label — a number at the top level, '↳' inside a loop body on the workflow list card. */
+  /** Position label — a number at the top level. */
   ordinal: ReactNode;
   /** This step is named by an enclosing loop's `until:`. */
   endsLoop?: boolean;
   /** This step will not run — dimmed and badged, never both silently. */
   disabled?: boolean;
-  /**
-   * The workflow list card's own extra facts, which the collapsed editor card
-   * does not repeat: `mode`, and the `writes` flag relabelled "edits files" so
-   * it cannot be misread as the summary's own `writes:` artifact chip.
-   */
-  showModeAndWrites?: boolean;
   /** Fires with the ids this step reads from, when its `reads:` chip is clicked. */
   onReadsClick?: (ids: string[]) => void;
   /** Fires with this step's own id, when its `writes:` chip is clicked. */
@@ -44,14 +38,14 @@ const HIGHLIGHT_BACKGROUND: Record<'source' | 'dependent', string> = {
 };
 
 /**
- * The one line that says what a step is: used both by the editor's collapsed
- * card and by the workflow list card's step outline. `reads:`/`writes:` are
- * chips a click can highlight the neighbours of; a `command` step shows
- * `reads: —` (or `reads: attachments`) with its templated `run:` line as the
- * summary text instead, since `inputs:` is a runtime no-op for one.
+ * The one line that says what a step is: used by the editor's collapsed
+ * card. `reads:`/`writes:` are chips a click can highlight the neighbours
+ * of; a `command` step shows `reads: —` (or `reads: attachments`) with its
+ * templated `run:` line as the summary text instead, since `inputs:` is a
+ * runtime no-op for one.
  */
 export function StepSummary({
-  step, ordinal, endsLoop, disabled, showModeAndWrites, onReadsClick, onWritesClick, highlight, problemCount,
+  step, ordinal, endsLoop, disabled, onReadsClick, onWritesClick, highlight, problemCount,
 }: StepSummaryProps) {
   const writes = isLoopStep(step) ? undefined : step.output;
   const reads = readsIds(step);
@@ -80,15 +74,6 @@ export function StepSummary({
           {problemCount} problem{problemCount === 1 ? '' : 's'}
         </Badge>
       )}
-      {showModeAndWrites && isAgentStep(step) && (
-        <Badge appearance="tint" color={step.mode === 'interactive' ? 'brand' : 'informative'} size="small">
-          {step.mode}
-        </Badge>
-      )}
-      {showModeAndWrites && isAgentStep(step) && step.writes && (
-        <Badge appearance="tint" color="warning" size="small">edits files</Badge>
-      )}
-
       {isLoopStep(step) ? (
         <Text size={200} style={{ marginLeft: 'auto', color: 'var(--colorNeutralForeground3)' }}>
           until {step.until || '—'}

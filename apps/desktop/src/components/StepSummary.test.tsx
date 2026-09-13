@@ -62,15 +62,4 @@ describe('StepSummary', () => {
     expect(screen.getByText('disabled')).toBeInTheDocument();
   });
 
-  it('showModeAndWrites adds mode and the writes flag, relabelled "edits files"', () => {
-    render(<StepSummary step={agentStep} ordinal={3} showModeAndWrites />);
-    expect(screen.getByText('headless')).toBeInTheDocument();
-    expect(screen.getByText('edits files')).toBeInTheDocument();
-  });
-
-  it('omits mode and edits files when showModeAndWrites is not set', () => {
-    render(<StepSummary step={agentStep} ordinal={3} />);
-    expect(screen.queryByText('headless')).not.toBeInTheDocument();
-    expect(screen.queryByText('edits files')).not.toBeInTheDocument();
-  });
 });

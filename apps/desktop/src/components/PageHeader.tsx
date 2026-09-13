@@ -36,14 +36,9 @@ export const SCROLLPORT_PADDING_TOP = SCROLLPORT_PADDING / 2;
  * below it. Measured rather than hardcoded because the real height depends on
  * font metrics and on whatever the caller puts in the header — a guessed
  * constant silently misaligns by a few pixels. Nothing docks against it right
- * now — the workflow editor's per-card sticky header was removed once cards
- * collapse to one line — but the mechanism stays available for the next
- * thing that needs it.
+ * now, but the mechanism stays available for the next thing that needs it.
  */
 export const PAGE_HEADER_HEIGHT_VAR = '--whiphand-page-header-height';
-
-/** Fallback used only before the first measurement lands (and in non-DOM tests). */
-export const PAGE_HEADER_HEIGHT_FALLBACK = 56;
 
 /**
  * Icon convention for buttons placed in a PageHeader or PageFooter (or in a

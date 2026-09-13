@@ -1,21 +1,7 @@
 /**
- * The working tree's change set, file by file.
- *
- * `workingDiff` in manual.ts answers "give me something to print on a tty" and
- * returns one opaque string. This answers "give me something to render" and
- * returns a list a reviewer can walk: per file a status, counts, and that
- * file's own unified patch. Hunk parsing is deliberately *not* here — core
- * stays a git wrapper, and the frontend that draws the rows is the one that
- * knows what a row is.
- *
- * Two things it fixes about the string version, beyond the shape:
- *
- * - `git diff HEAD` shows the index and the worktree against HEAD, and an
- *   untracked file is in neither — so a file a step just *created* never
- *   appeared at sign-off at all. That is the most important thing on the
- *   screen, silently missing.
- * - It is not truncated at 400 lines, so the last file is never severed
- *   mid-hunk.
+ * The working tree's change set, file by file, for a diff review screen —
+ * unlike manual.ts's string-shaped `workingDiff`, this includes untracked
+ * files and isn't truncated at 400 lines.
  */
 import { execFile } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -127,7 +113,6 @@ export function parseNumstatZ(stdout: string): NumstatEntry[] {
     const deletions = binary ? 0 : Number.parseInt(rawDel, 10) || 0;
 
     if (rest === '') {
-      // A rename: the next two fields are the old and new paths.
       const oldPath = fields[i + 1];
       const path = fields[i + 2];
       if (oldPath === undefined || path === undefined) break;

@@ -1,7 +1,6 @@
 /**
- * The app's pages, as data. Replaces the ad-hoc PAGES array that used to
- * live in App.tsx, so nav rendering, the workspace gate and startup restore
- * all read one source instead of three hand-kept lists.
+ * The app's pages, as data, so nav rendering, the workspace gate and startup
+ * restore all read one source instead of three hand-kept lists.
  */
 import {
   BookRegular, FolderRegular, OptionsRegular, PlayRegular, PulseRegular,
@@ -22,11 +21,10 @@ export interface PageDef {
   /**
    * False means the page reads no `workspacePath` and calls only
    * workspace-free RPCs (`doctor`, `getAppState`, `setUiState`,
-   * `listRecentRuns`), so it works with no workspace open. This column
-   * replaces the prose that used to justify each exemption inline in the
-   * gate. It tracks `group` today, and is kept separate because it answers a
-   * different question: `group` is where the item is drawn, this is whether
-   * the page can run at all.
+   * `listRecentRuns`), so it works with no workspace open. It tracks `group`
+   * today, and is kept separate because it answers a different question:
+   * `group` is where the item is drawn, this is whether the page can run at
+   * all.
    */
   readonly requiresWorkspace: boolean;
   /**
@@ -67,8 +65,6 @@ export const PAGES: readonly PageDef[] = [
     requiresWorkspace: false, icon: OptionsRegular,
   },
 ];
-
-export const DEFAULT_PAGE: PageId = 'runs';
 
 export function pageDef(id: string): PageDef | undefined {
   return PAGES.find(p => p.id === id);

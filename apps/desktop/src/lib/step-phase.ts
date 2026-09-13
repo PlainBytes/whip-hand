@@ -5,8 +5,7 @@
  * talks to (`main`), and then a headless pass that reads that conversation
  * back and writes the step's artifact (`harvest`, emitted as a `step:spawn`
  * in packages/core/src/engine/runner.ts). Between the two the pty is gone but
- * the step is still very much working, and that window used to be described
- * only inside the terminal's own scrollback.
+ * the step is still very much working.
  *
  * Deliberately narrow: `harvest` is the engine's *only* artifact-generating
  * phase. A headless step writes its artifact through its own Write tool while

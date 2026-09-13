@@ -34,7 +34,6 @@ export const windowStateSchema = z.object({
 export type WindowState = z.infer<typeof windowStateSchema>;
 
 export const themePreferenceSchema = z.enum(['system', 'light', 'dark']);
-export type ThemePreference = z.infer<typeof themePreferenceSchema>;
 
 /**
  * Formerly the global default retention cap, applied to any workspace whose
@@ -42,21 +41,18 @@ export type ThemePreference = z.infer<typeof themePreferenceSchema>;
  * truth now that global `config.yaml` layers over `.whiphand/config.yaml` for real
  * (see @whiphand/core's config.ts `mergeConfig`) — a retention policy that silently
  * deletes run history doesn't belong in a cache this header promises is safe
- * to delete. `config-migration.ts` copies a positive value here into global
- * config.yaml once at startup; the field stays in this schema, unread,
- * because dropping it would need a schemaVersion bump, and per this file's
- * header a version mismatch discards the whole file for no reason.
+ * to delete. The field stays in this schema, unread, because dropping it
+ * would need a schemaVersion bump, and per this file's header a version
+ * mismatch discards the whole file for no reason.
  */
 export const runsRetentionSchema = z.object({
   maxPerWorkspace: z.number().int().nonnegative(),
 });
-export type RunsRetention = z.infer<typeof runsRetentionSchema>;
 
 const workspaceMemorySchema = z.object({
   lastWorkflow: z.string().optional(),
   lastInputs: z.record(z.string(), z.record(z.string(), z.string())),
 });
-export type WorkspaceMemory = z.infer<typeof workspaceMemorySchema>;
 
 export const appStateSchema = z.object({
   schemaVersion: z.literal(1),

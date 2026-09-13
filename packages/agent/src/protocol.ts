@@ -32,34 +32,30 @@ export const requestSchema = z.object({
   method: z.string().min(1),
   params: z.unknown().optional(),
 });
-export type RpcRequest = z.infer<typeof requestSchema>;
 
 export const rpcErrorSchema = z.object({
   code: z.number(),
   message: z.string(),
   data: z.unknown().optional(),
 });
-export type RpcError = z.infer<typeof rpcErrorSchema>;
 
 export const responseSchema = z.union([
   z.object({ id: z.number().nullable(), result: z.unknown() }),
   z.object({ id: z.number().nullable(), error: rpcErrorSchema }),
 ]);
-export type RpcResponse = z.infer<typeof responseSchema>;
 
 export const notificationSchema = z.object({
   method: z.string().min(1),
   params: z.unknown(),
 });
-export type RpcNotification = z.infer<typeof notificationSchema>;
 
 // ---------------------------------------------------------------------------
 // Shared core-shaped schemas.
 //
-// These are imported from @whiphand/core rather than restated here. They used to be
-// a hand-maintained copy; step kinds and nested loops turned that copy into a
-// silent data-loss hazard, so core now owns the wire shape of everything core
-// owns the type of.
+// These are imported from @whiphand/core rather than restated here: a
+// hand-maintained copy is a silent data-loss hazard once step kinds and
+// nested loops exist, so core owns the wire shape of everything core owns
+// the type of.
 // ---------------------------------------------------------------------------
 
 /**
@@ -231,7 +227,6 @@ export const configSetResult = z.object({ ok: z.literal(true) });
 export const pathAttachmentSchema = z.object({ path: z.string().min(1) }).strict();
 export const base64AttachmentSchema = z.object({ name: z.string().min(1), base64: z.string() }).strict();
 export const attachmentSourceSchema = z.union([pathAttachmentSchema, base64AttachmentSchema]);
-export type AttachmentSourceParam = z.infer<typeof attachmentSourceSchema>;
 
 export const startRunParams = z.object({
   workdir: z.string().min(1),
@@ -684,7 +679,7 @@ export type InitWorkspaceParams = z.infer<typeof initWorkspaceParams>;
 export type InitWorkspaceResult = z.infer<typeof initWorkspaceResult>;
 export type DoctorParams = z.infer<typeof doctorParams>;
 export type DoctorResult = z.infer<typeof doctorResult>;
-/** The element type, named — consumers used to have to spell this inline. */
+/** The element type, named. */
 export type DoctorRow = DoctorResult[number];
 /**
  * The wire shape and @whiphand/core's ToolStatus are the same fact in two places

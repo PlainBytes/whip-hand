@@ -113,7 +113,7 @@ const loopStepSchema = z.object({
   enabled: z.boolean().optional(),
 });
 
-/** A step object with no `kind:` is an agent step — the only kind that used to exist. */
+/** A step object with no `kind:` defaults to an `agent` step. */
 function withDefaultKind(raw: unknown): unknown {
   if (raw !== null && typeof raw === 'object' && !Array.isArray(raw) && !('kind' in raw)) {
     return { ...(raw as Record<string, unknown>), kind: 'agent' };

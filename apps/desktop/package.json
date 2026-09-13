@@ -37,7 +37,6 @@
     "remark-gfm": "^4.0.1",
     "unist-util-visit-parents": "^6.0.2",
     "yaml": "^2.9.0",
-    "zod": "^4.0.0",
     "zustand": "^5.0.15"
   },
   "devDependencies": {

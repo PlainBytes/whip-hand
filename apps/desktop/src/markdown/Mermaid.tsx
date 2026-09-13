@@ -1,10 +1,6 @@
 /**
- * A ```mermaid fence, rendered as a diagram.
- *
- * mermaid is imported lazily: it is by far the heaviest dependency in the
- * app, and most documents contain no diagram at all. A diagram that fails to
- * parse falls back to the source — an artifact with a typo in it should still
- * show you what it says.
+ * A ```mermaid fence, rendered as a diagram. mermaid is imported lazily (it
+ * is the app's heaviest dependency); a diagram that fails to parse falls back to showing the source.
  */
 import { useEffect, useId, useState } from 'react';
 import { useDarkTheme } from '../lib/use-dark-theme.ts';

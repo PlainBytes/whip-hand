@@ -1,10 +1,10 @@
 /**
  * Wire schemas for the types core owns.
  *
- * These used to live in @whiphand/agent as a hand-maintained copy, kept in sync by
- * memory. Step kinds and nested loops made that copy actively dangerous — a
- * missed field silently drops a step's body over the RPC — so the definitions
- * live next to the types they validate and the agent imports them.
+ * Defined here rather than hand-copied into @whiphand/agent: step kinds and
+ * nested loops make a hand-maintained copy actively dangerous — a missed
+ * field silently drops a step's body over the RPC — so the definitions live
+ * next to the types they validate and the agent imports them.
  */
 import { z } from 'zod';
 import type { ManualRequest, WhiphandEvent, Scope, SpawnSpec, StepProgress } from './types.ts';
@@ -69,12 +69,6 @@ export const manualRequestSchema: z.ZodType<ManualRequest> = z.object({
 });
 
 export const fileCommentSchema = z.object({ path: z.string(), body: z.string() });
-
-export const manualResponseSchema = z.object({
-  choice: manualChoiceSchema,
-  note: z.string().optional(),
-  comments: z.array(fileCommentSchema).optional(),
-});
 
 export const whiphandEventSchema: z.ZodType<WhiphandEvent> = z.discriminatedUnion('type', [
   z.object({

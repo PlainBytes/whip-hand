@@ -12,7 +12,7 @@ class FakeSocket {
   onclose: ((e: { code: number }) => void) | null = null;
   onmessage: ((e: { data: unknown }) => void) | null = null;
 
-  constructor(readonly url: string) {}
+  constructor(readonly url: string, readonly protocols?: string[]) {}
 
   send(data: string): void { this.sent.push(data); }
   close(): void { this.closed = true; }
@@ -27,8 +27,8 @@ function makeTransport(token: string | null = 'tok') {
   let socket: FakeSocket | undefined;
   const transport = new WebSocketTransport(() => token, {
     url: 'ws://host:61338/ws',
-    socketFactory: url => {
-      socket = new FakeSocket(url);
+    socketFactory: (url, protocols) => {
+      socket = new FakeSocket(url, protocols);
       return socket as unknown as WebSocket;
     },
   });
@@ -36,20 +36,24 @@ function makeTransport(token: string | null = 'tok') {
 }
 
 describe('WebSocketTransport', () => {
-  it('carries the token in the query, because a browser cannot set headers', async () => {
+  it('carries the token as a Sec-WebSocket-Protocol offer, because a browser cannot set headers', async () => {
     const { transport, socket } = makeTransport('a b/c');
     const started = transport.start();
     socket().open();
     await started;
-    expect(socket().url).toBe('ws://host:61338/ws?t=a%20b%2Fc');
+    expect(socket().url).toBe('ws://host:61338/ws');
+    // The fixed 'whiphand' entry rides alongside the token so the server has
+    // a non-secret protocol to echo back — see auth.ts's PROTOCOL_NAME.
+    expect(socket().protocols).toEqual(['whiphand', 'whiphand.token.a b/c']);
   });
 
-  it('omits the parameter entirely when there is no token', async () => {
+  it('offers no protocol at all when there is no token', async () => {
     const { transport, socket } = makeTransport(null);
     const started = transport.start();
     socket().open();
     await started;
     expect(socket().url).toBe('ws://host:61338/ws');
+    expect(socket().protocols).toBeUndefined();
   });
 
   it('start() rejects when the handshake fails', async () => {

@@ -1,8 +1,6 @@
 /**
  * startPty: spawns an interactive PTY for a step's SpawnSpec. Data crossing
- * this boundary is base64-encoded in both directions so it can travel safely
- * as JSON over the NDJSON wire (protocol.ts's ptyData/ptyInput carry base64
- * strings) without worrying about control bytes or encoding.
+ * this boundary is base64-encoded in both directions to travel safely as JSON over the NDJSON wire.
  */
 import { createBelScanner } from './bel.ts';
 import { resolveNodePty } from './native.ts';

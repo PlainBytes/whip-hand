@@ -1,57 +1,7 @@
 /**
- * One seam for launching a runner CLI. The CLI (tty.ts), the agent (spawn.ts)
- * and the PTY (pty.ts) all come through here, so Windows' several ways of not
- * being POSIX are dealt with once.
- *
- * On POSIX this is transparent: `resolveExecutable` hands the command back
- * unchanged, no PATH walk, and `planLaunch` spawns exactly the argv it was
- * given. Everything below is the Windows branch.
- *
- * There are two shapes a runner arrives in on Windows. A native install
- * (`claude.exe`, `copilot.exe` — what both vendors' own installers produce
- * now) needs nothing: CreateProcess launches it, libuv applies the MSVCRT
- * quoting `CommandLineToArgvW` expects, and arbitrary prompts survive. An npm
- * install is a `.cmd` shim, which Node refuses to launch directly since the
- * CVE-2024-27980 fix, and which historically meant routing through cmd.exe —
- * whose parser is a different language from MSVCRT's, and a lossy one.
- *
- * So we do not route through cmd.exe if we can avoid it. A `.cmd` shim is a
- * batch file whose entire job is to run `node <entry point> %*`; `resolveShim`
- * reads that entry point back out and spawns the same thing directly. No cmd
- * parse, so newlines, `%VAR%`, quotes and metacharacters all survive, and an
- * npm-installed runner behaves exactly like a native one. That matters
- * concretely: `interactiveGuidance` is always multi-line, and a raw newline is
- * the one thing no cmd.exe command line can carry at all.
- *
- * The cmd.exe wrapper below is the fallback for shims we cannot read — pnpm
- * and yarn write different ones, and a hand-written `.cmd` could do anything.
- * It is also the only correct answer for a command step, whose argv[0] *is*
- * cmd.exe and whose run line genuinely is a cmd command.
- *
- * What that fallback does NOT use is Node's own `shell: true`. Node builds the
- * same `cmd /d /s /c "..."` wrapper, but joins `[file, ...args]` with a plain
- * space and no quoting at all (DEP0190 warns about exactly this), so every
- * multi-word prompt arrives word-split. `cmdInvocation` is Node's construction
- * with per-argument quoting put back.
- *
- * Quoting there is applied *once*, not twice. npm's shim forwards its tail
- * with `%*`, and batch percent-expansion substitutes textually without
- * rescanning, so there is exactly one `CommandLineToArgvW` parse at the far
- * end however many `.cmd` hops intervene. Caret escaping is wrong for the
- * mirrored reason: `^&` survives one cmd parse and arrives as a bare `&` at
- * the next, and the number of parses is shim-dependent.
- *
- * Two shapes no quoting can carry through cmd.exe, which `cmdInvocation`
- * refuses rather than shipping a mangled prompt to a model:
- *
- *   - A raw newline. cmd ends its command line there, in the line reader,
- *     before quote processing happens at all.
- *   - A `"` in the same argument as one of `& | < > ^ ( )`. cmd has no notion
- *     of `\"`, so it closes its quote state early and the metacharacter lands
- *     outside quotes; MSVCRT has no notion of `^`. No encoding satisfies both.
- *
- * Reaching those refusals now takes an unreadable shim as well as Windows, but
- * when it happens, failing loudly still beats corrupting silently.
+ * One seam for launching a runner CLI (tty.ts, spawn.ts, pty.ts), so Windows'
+ * several ways of not being POSIX are dealt with once. Transparent on POSIX;
+ * see the comments below for how the Windows `.cmd`-shim/cmd.exe handling works.
  */
 import { execFile, spawn as nodeSpawn, type ChildProcess, type ExecFileOptions, type SpawnOptions } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -64,6 +14,13 @@ export interface ResolvedExecutable {
   usesShell: boolean;
 }
 
+/**
+ * A native install (`claude.exe`, `copilot.exe`) needs nothing special:
+ * CreateProcess launches it and MSVCRT quoting just works. An npm install is a
+ * `.cmd` shim, which Node refuses to launch directly since the CVE-2024-27980
+ * fix — routing that through cmd.exe instead drags in a second, lossier parser,
+ * which is what the rest of this file tries to avoid where it can.
+ */
 const WINDOWS_SHELL_EXTENSIONS = new Set(['.bat', '.cmd']);
 
 export interface ResolveExecutableOpts {
@@ -164,8 +121,11 @@ function excerpt(arg: string): string {
 }
 
 /**
- * Refuses the argument shapes no quoting can carry through cmd.exe. See this
- * file's header for why each one is unfixable rather than merely unhandled.
+ * Refuses the two argument shapes no quoting can carry through cmd.exe: a raw
+ * newline (cmd ends the command line there, before quote processing happens)
+ * and a `"` sharing an argument with one of `& | < > ^ ( )` (cmd has no `\"`
+ * escape and MSVCRT has no `^`, so no encoding satisfies both parsers).
+ * Failing loudly here beats shipping a corrupted prompt to a model.
  */
 function assertCarryable(args: string[]): void {
   for (const arg of args) {
@@ -208,6 +168,15 @@ export interface CmdInvocation {
  * Both shapes of one `cmd.exe /c` invocation: the array Node's spawn wants and
  * the single string node-pty's Windows mode wants. One builder so the two
  * paths cannot drift.
+ *
+ * Reimplements Node's own `shell: true` cmd.exe wrapper rather than using it:
+ * Node joins `[file, ...args]` with a bare space and no quoting (DEP0190), so
+ * every multi-word argument arrives word-split. Quoting here is applied
+ * *once*, via `msvcrtQuote` rather than caret-escaping, because npm's `.cmd`
+ * shim forwards its tail with `%*` — a textual substitution, not a re-parse —
+ * so there is exactly one `CommandLineToArgvW` parse at the far end however
+ * many `.cmd` hops intervene; a caret would survive one cmd parse and arrive
+ * as a bare metacharacter at the next.
  *
  * `/s` is load-bearing — it makes cmd strip exactly the outer quote pair
  * instead of heuristically hunting for where the command starts. `/v:off`
@@ -358,7 +327,7 @@ export function planLaunch(argv: string[], deps: ResolveExecutableOpts = {}): La
 }
 
 /** Options that make Node hand our command line to cmd.exe unchanged. */
-function verbatim(invocation: CmdInvocation | null): Record<string, unknown> {
+export function verbatim(invocation: CmdInvocation | null): Record<string, unknown> {
   return invocation === null
     ? {}
     : { argv0: invocation.argv0, windowsVerbatimArguments: true };

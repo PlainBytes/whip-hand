@@ -1,10 +1,10 @@
 /**
  * Renders core's event stream to the terminal.
  *
- * A renderer holds state now — a headless step's progress arrives as many
- * small events and has to be summarised when the step ends — which is why
- * this is a factory rather than the bare function it used to be. The sinks
- * and clock are injectable so the output can be asserted directly.
+ * A factory, not a bare function: a headless step's progress arrives as many
+ * small events and has to be summarised when the step ends, so the renderer
+ * needs to hold state across calls. The sinks and clock are injectable so
+ * the output can be asserted directly.
  *
  * Deliberately no cursor control: `whiphand run` output is routinely piped to a
  * file or read by CI, and an in-place spinner would corrupt both.
@@ -68,12 +68,12 @@ export function createRenderer(
   sinks: Partial<RenderSinks> = {}, opts: RenderOptions = {},
 ): (event: WhiphandEvent) => void {
   const out = sinks.out ?? ((line: string) => console.log(line));
-  // Both warnings and errors went to stderr before and still do.
+  // Both warnings and errors go to stderr.
   const err = sinks.err ?? ((line: string) => console.error(line));
   const now = sinks.now ?? Date.now;
 
-  // Only headless agent steps get an entry: they are the ones that used to
-  // run silently. A command step streams its own output as it goes.
+  // Only headless agent steps get an entry: they run silently otherwise. A
+  // command step streams its own output as it goes.
   const tallies = new Map<string, StepTally>();
 
   /** The run's label, when it has one. The id stays: `--resume` takes that. */

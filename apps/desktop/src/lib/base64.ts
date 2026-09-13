@@ -1,11 +1,7 @@
 /**
  * Base64 <-> bytes helpers for the wire fields protocol.ts documents as
- * base64-encoded strings: ptyInput/ptyData, readArtifact's `encoding:
- * 'base64'`, and a pasted attachment's bytes. `btoa`/`atob` alone operate on
- * UTF-16 code units and throw (or silently mangle) on anything outside
- * Latin1 — going through TextEncoder/Uint8Array first is what makes this
- * correct for arbitrary terminal input/output (accented characters, box
- * drawing glyphs, emoji, ...) and for bytes that were never text at all.
+ * base64 strings. Goes through TextEncoder/Uint8Array because `btoa`/`atob`
+ * alone assume UTF-16/Latin1 and mangle arbitrary bytes or non-Latin1 text.
  */
 
 /**

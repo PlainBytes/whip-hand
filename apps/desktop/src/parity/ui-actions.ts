@@ -1,20 +1,7 @@
 /**
  * Maps every entry in the CLI surface (see parity/extract-cli-surface.ts) to
- * the UI element that exercises it, so parity/surface.test.ts can fail the
- * build the moment the CLI and the desktop UI drift apart.
- *
- * Deliberately pure data: no React or Tauri imports, so it stays importable
- * from a plain `node --test` run. Values are human-readable labels, not
- * literal component/prop identifiers — but they must describe something
- * real in apps/desktop/src (cross-checked against App.tsx and the page
- * components).
- *
- * Each command entry:
- *   - `_command`: the UI surface that starts this CLI command at all.
- *   - one key per arg (`<name>`) and per option (long flag, or short flag
- *     when there's no long form) — value is either the UI element that
- *     drives it, or `exempt:<reason>` for CLI-only concerns with no UI
- *     equivalent (e.g. machine-readable output modes).
+ * the UI element that exercises it, so parity/surface.test.ts fails the build
+ * when the CLI and desktop UI drift apart. Pure data — no React/Tauri imports.
  */
 export const uiActions: Record<string, Record<string, string>> = {
   doctor: {
@@ -71,12 +58,12 @@ export const uiActions: Record<string, Record<string, string>> = {
     '-C': 'sidebar:workspaceSwitcher',
   },
   init: {
-    // WorkflowsPage empty state's "Set up this workspace" button (Task 12).
+    // WorkflowsPage empty state's "Set up this workspace" button.
     _command: 'workflows:setUpWorkspaceButton',
     '-C': 'sidebar:workspaceSwitcher',
   },
   'new-workflow': {
-    // WorkflowsPage's "New workflow" dialog (Task 12).
+    // WorkflowsPage's "New workflow" dialog.
     _command: 'workflows:newWorkflowButton',
     '<name>': 'workflows:newWorkflowNameInput',
     '-C': 'sidebar:workspaceSwitcher',

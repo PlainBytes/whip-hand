@@ -1,6 +1,7 @@
 import { createWriteStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { once } from 'node:events';
+import type { ChildProcess } from 'node:child_process';
 import { spawnRunner as spawn, type SpawnSpec } from '@whiphand/core';
 
 // Sentinel exit code for an aborted spawn — mirrors the shell convention for
@@ -8,16 +9,23 @@ import { spawnRunner as spawn, type SpawnSpec } from '@whiphand/core';
 // path can treat it like any other nonzero exit.
 const ABORTED_EXIT_CODE = 130;
 
+/** The one place that actually calls spawn — every doSpawn* variant below launches through this. */
+function launchChild(
+  spec: SpawnSpec, stdio: 'inherit' | ('ignore' | 'inherit' | 'pipe')[], signal?: AbortSignal,
+): ChildProcess {
+  return spawn(spec.argv, {
+    cwd: spec.cwd,
+    env: { ...process.env, ...spec.env },
+    stdio,
+    signal,
+  });
+}
+
 function doSpawn(
   spec: SpawnSpec, stdio: 'inherit' | ('ignore' | 'inherit' | 'pipe')[], signal?: AbortSignal,
 ): Promise<number> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(spec.argv, {
-      cwd: spec.cwd,
-      env: { ...process.env, ...spec.env },
-      stdio,
-      signal,
-    });
+    const child = launchChild(spec, stdio, signal);
     child.on('error', err => {
       // Node kills the child and emits this 'error' (before 'exit') when the
       // signal aborts — verified against real spawn behavior with a `sleep`
@@ -53,12 +61,7 @@ function doSpawnCaptured(
 ): Promise<number> {
   return new Promise((resolvePromise, reject) => {
     const file = createWriteStream(capturePath, { flags: 'a' });
-    const child = spawn(spec.argv, {
-      cwd: spec.cwd,
-      env: { ...process.env, ...spec.env },
-      stdio: ['ignore', 'pipe', 'pipe'],
-      signal,
-    });
+    const child = launchChild(spec, ['ignore', 'pipe', 'pipe'], signal);
 
     // `toFile` is what `capture.streams` gates: the operator sees both streams
     // regardless, only the artifact is narrowed. See SpawnSpec.capture.
@@ -120,12 +123,7 @@ function doSpawnProgress(
   spec: SpawnSpec, onLine: (line: string, stream: 'stdout' | 'stderr') => void, signal?: AbortSignal,
 ): Promise<number> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(spec.argv, {
-      cwd: spec.cwd,
-      env: { ...process.env, ...spec.env },
-      stdio: ['ignore', 'pipe', 'pipe'],
-      signal,
-    });
+    const child = launchChild(spec, ['ignore', 'pipe', 'pipe'], signal);
     const outRl = createInterface({ input: child.stdout! });
     outRl.on('line', line => onLine(line, 'stdout'));
     child.stderr!.on('data', (chunk: Buffer) => process.stderr.write(chunk));
@@ -161,23 +159,17 @@ function doSpawnProgress(
 }
 
 /**
- * The plain headless path, now that core always wants the lines back: pipes
- * both streams, tees the raw bytes straight to the terminal (so a human
- * watching sees exactly what `inherit` used to show), and hands each line to
- * `onLine` on the side so core can fold it into `step:log`/run.log — the
- * asymmetry the design fixes, where a terminal-run headless step persisted
- * nothing of its own output anywhere.
+ * The plain headless path: pipes both streams, tees the raw bytes straight to
+ * the terminal (so a human watching sees exactly what `stdio: 'inherit'`
+ * would show), and hands each line to `onLine` on the side so core can fold
+ * it into `step:log`/run.log — otherwise a terminal-run headless step
+ * persists nothing of its own output anywhere.
  */
 function doSpawnTeeLines(
   spec: SpawnSpec, onLine: (line: string, stream: 'stdout' | 'stderr') => void, signal?: AbortSignal,
 ): Promise<number> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(spec.argv, {
-      cwd: spec.cwd,
-      env: { ...process.env, ...spec.env },
-      stdio: ['ignore', 'pipe', 'pipe'],
-      signal,
-    });
+    const child = launchChild(spec, ['ignore', 'pipe', 'pipe'], signal);
     child.stdout!.on('data', (chunk: Buffer) => process.stdout.write(chunk));
     child.stderr!.on('data', (chunk: Buffer) => process.stderr.write(chunk));
     const outRl = createInterface({ input: child.stdout! });

@@ -250,7 +250,7 @@ steps:
     run: git checkout -b "feature/{{ run.slug }}"
     output: branch.log
 
-  - id: plan            # unchanged from the current local copy
+  - id: plan
     kind: agent
     runner: claude
     model: opus
@@ -265,7 +265,7 @@ steps:
       Before you start your discovery, ask the user if there are any files that
       you should be aware of. If there are, ask the user to provide them.
 
-  - kind: loop          # unchanged from the current local copy
+  - kind: loop
     id: human-review
     until: sign-off
     max_iterations: 5

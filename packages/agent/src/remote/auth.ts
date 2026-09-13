@@ -43,6 +43,37 @@ export function tokenMatches(expected: string, provided: string | null | undefin
   return timingSafeEqual(a, b);
 }
 
+/**
+ * Sec-WebSocket-Protocol value carrying the token: `whiphand.token.<token>`.
+ * The one handshake header a browser WebSocket lets a caller set, so the
+ * token rides here instead of the URL — server logs, browser history and a
+ * Referer header can all see a URL, none of them see a handshake header.
+ *
+ * The client always offers this alongside the fixed `PROTOCOL_NAME`
+ * (`[PROTOCOL_NAME, TOKEN_PROTOCOL_PREFIX + token]`) and the server always
+ * selects `PROTOCOL_NAME` back: WebSocket's handshake requires the server to
+ * echo one of the client's offered protocols verbatim, so with only the
+ * token-bearing value on offer the response would have to repeat it. Offering
+ * a second, non-secret value gives the server something safe to echo instead
+ * — the token then appears only in the request, never in the response or in
+ * `ws.protocol`.
+ */
+export const TOKEN_PROTOCOL_PREFIX = 'whiphand.token.';
+
+/** The non-secret protocol the server echoes back, once the token (offered alongside it) checks out. */
+export const PROTOCOL_NAME = 'whiphand';
+
+/** Pulls the token out of an offered Sec-WebSocket-Protocol list, if present. */
+export function tokenFromProtocolHeader(header: string | string[] | undefined): string | null {
+  if (header === undefined) return null;
+  const offered = Array.isArray(header) ? header.join(',') : header;
+  for (const raw of offered.split(',')) {
+    const value = raw.trim();
+    if (value.startsWith(TOKEN_PROTOCOL_PREFIX)) return value.slice(TOKEN_PROTOCOL_PREFIX.length);
+  }
+  return null;
+}
+
 /** Loopback names a browser may legitimately use to reach us on this machine. */
 const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '::1'];
 
@@ -127,8 +158,8 @@ export function checkHostAndOrigin(
 
   const originHeader = headers.origin;
   // Absent Origin is allowed: a browser CANNOT omit it on a WebSocket upgrade
-  // or a cross-origin fetch, so only non-browser clients (curl, tests, the
-  // Phase-1 demo script) get here — and they are not the rebinding threat.
+  // or a cross-origin fetch, so only non-browser clients (curl, tests) get
+  // here — and they are not the rebinding threat.
   if (originHeader === undefined) return { ok: true };
   if (typeof originHeader !== 'string') return { ok: false, reason: 'malformed Origin header' };
 

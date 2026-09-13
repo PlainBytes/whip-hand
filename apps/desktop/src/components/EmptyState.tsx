@@ -1,13 +1,7 @@
 /**
  * The placeholder for a pane with nothing in it yet: an icon above a line of
- * text, centred in whatever space it is given.
- *
- * Centred rather than tucked into the top-left corner because these panes are
- * large and mostly empty — a lone sentence up in the corner reads as a stray
- * label, while the same sentence in the middle reads as the state of the
- * pane. Both greys are deliberately quiet: this is what you see *before*
- * anything interesting, so it should not compete with the content that
- * replaces it.
+ * text, centred (not top-left) so it reads as the pane's state rather than a
+ * stray label.
  */
 import type { ReactNode } from 'react';
 import { Text } from '@fluentui/react-components';

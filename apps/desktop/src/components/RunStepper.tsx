@@ -528,8 +528,7 @@ export function RunStepper({
     >
       {/*
         The stepper owns this strip, so it is the stepper's job to say when it
-        has nothing in it — the page used to render this line as a sibling, on
-        the stepper's behalf. A quiet annotation rather than a centred
+        has nothing in it. A quiet annotation rather than a centred
         EmptyState: this is a thin fixed-height row, not a pane.
       */}
       {steps.length === 0 && (

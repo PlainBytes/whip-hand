@@ -1,8 +1,6 @@
 /**
  * Decides how a file should be previewed, from its path and its first bytes.
- *
- * Pure and React-free on purpose: this is the logic worth testing, and the
- * Files page's rendering shouldn't have to be mounted to test it.
+ * Pure and React-free, so the Files page doesn't have to mount to test it.
  */
 
 /**

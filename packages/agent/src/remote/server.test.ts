@@ -49,7 +49,10 @@ async function harness(webRoot: string | null = null): Promise<Harness> {
 
 function connect(port: number, token: string, options: Record<string, unknown> = {}): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?t=${token}`, options);
+    // Matches ws-transport.ts's real client: PROTOCOL_NAME alongside the
+    // token-bearing entry, so the server has a non-secret value to echo back.
+    const protocols = token ? ['whiphand', `whiphand.token.${token}`] : [];
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, protocols, options);
     ws.once('open', () => resolve(ws));
     ws.once('unexpected-response', (_req, res) => reject(new Error(`HTTP ${res.statusCode}`)));
     ws.once('error', reject);
@@ -92,6 +95,28 @@ test('a valid token opens the channel and dispatches a request', async () => {
     const ws = await connect(h.port, TOKEN);
     const response = await call(ws, 1, 'hello');
     assert.deepEqual(response, { id: 1, result: { version: 'test', protocolVersion: 1 } });
+    ws.close();
+  } finally {
+    await h.close();
+  }
+});
+
+test('the token travels as a Sec-WebSocket-Protocol offer, never in the URL', async () => {
+  const h = await harness();
+  try {
+    const ws = await connect(h.port, TOKEN);
+    assert.equal(ws.url, `ws://127.0.0.1:${h.port}/ws`);
+    ws.close();
+  } finally {
+    await h.close();
+  }
+});
+
+test('the handshake response echoes the fixed protocol name, never the token', async () => {
+  const h = await harness();
+  try {
+    const ws = await connect(h.port, TOKEN);
+    assert.equal(ws.protocol, 'whiphand');
     ws.close();
   } finally {
     await h.close();

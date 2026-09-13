@@ -9,14 +9,11 @@ export interface DocResolution {
 /**
  * What a find query actually found in the rendered document.
  *
- * Two numbers rather than one because the renderer cannot highlight
- * everything it can see: text inside a fenced code block is off-limits to
- * the highlighter (CodeBlock renders through dangerouslySetInnerHTML, so a
- * <mark> there would be counted but never appear). Reporting only `total`
- * would make the same number mean "every occurrence" in the source view and
- * "every occurrence outside code" in the rendered one, with nothing on
- * screen to say which — so the occurrences left out are counted too, and the
- * find bar says they exist.
+ * Two numbers, not one: text inside a fenced code block can't be
+ * highlighted (CodeBlock renders via dangerouslySetInnerHTML, so a <mark>
+ * there would be counted but never appear). `unreachable` surfaces that gap
+ * instead of letting `total` silently mean different things in the source
+ * view and the rendered one.
  */
 export interface FindMatchCounts {
   /** Highlighted matches, and the range next/previous steps through. */

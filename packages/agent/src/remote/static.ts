@@ -106,6 +106,16 @@ export async function resolveStatic(root: string, urlPath: string): Promise<Stat
   return null;
 }
 
+/**
+ * The Tauri webview gets its CSP from tauri.conf.json; this build has no such
+ * config file, since it is plain HTML served over HTTP, so the header is the
+ * only place to set one. Mirrors the desktop policy minus the Tauri-only
+ * schemes (ipc:, asset:) it has no use for here.
+ */
+const SHELL_CSP =
+  "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; " +
+  "worker-src 'self' blob:; connect-src 'self'";
+
 /** Streams a resolved hit, with the headers a LAN-served shell should carry. */
 export function sendStatic(res: ServerResponse, hit: StaticHit): void {
   res.writeHead(200, {
@@ -114,6 +124,9 @@ export function sendStatic(res: ServerResponse, hit: StaticHit): void {
     // Hashed asset filenames make long caching safe; the shell must never be
     // cached, or a rotated token screen would be served from disk.
     'Cache-Control': hit.isShell ? 'no-store' : 'public, max-age=31536000, immutable',
+    // Meaningless on non-HTML responses, but harmless — sent unconditionally
+    // rather than threading isShell through as a branch two lines from here.
+    'Content-Security-Policy': SHELL_CSP,
   });
   createReadStream(hit.path).pipe(res);
 }

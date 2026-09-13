@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  FailureThrottle, checkHostAndOrigin, generateToken, localAddresses, parseAuthority, tokenMatches,
+  FailureThrottle, checkHostAndOrigin, generateToken, localAddresses, parseAuthority, tokenFromProtocolHeader,
+  tokenMatches,
 } from './auth.ts';
 
 const PORT = 61338;
@@ -23,6 +24,16 @@ test('tokenMatches accepts only the exact token', () => {
   assert.equal(tokenMatches(token, null), false);
   assert.equal(tokenMatches(token, undefined), false);
   assert.equal(tokenMatches(token, ''), false);
+});
+
+test('tokenFromProtocolHeader pulls the token out of the offered list', () => {
+  assert.equal(tokenFromProtocolHeader(undefined), null);
+  assert.equal(tokenFromProtocolHeader('other-protocol'), null);
+  assert.equal(tokenFromProtocolHeader('whiphand.token.abc123'), 'abc123');
+  assert.equal(tokenFromProtocolHeader('other-protocol, whiphand.token.abc123'), 'abc123');
+  // Node folds repeated headers into an array; ws itself only ever hands
+  // this function a single string, but the parser tolerates either.
+  assert.equal(tokenFromProtocolHeader(['other-protocol', 'whiphand.token.abc123']), 'abc123');
 });
 
 test('parseAuthority table', () => {

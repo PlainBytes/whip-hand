@@ -9,9 +9,7 @@ import { methods } from './protocol.ts';
 import { createDispatcher } from './rpc.ts';
 import { createHandlers } from './handlers.ts';
 import { JobManager } from './jobs.ts';
-import { migrateLegacyStateDirs } from '@whiphand/core';
 import { AppStateStore, resolveAppStatePath } from './app-state.ts';
-import { migrateRunsRetention } from './config-migration.ts';
 import { createNotifyHub } from './notify-hub.ts';
 import { createScrollback } from './scrollback.ts';
 import { createPtySizes } from './pty-sizes.ts';
@@ -48,18 +46,7 @@ const jobs = new JobManager();
  * stated structurally.
  */
 async function main(): Promise<void> {
-  // Strictly before anything resolves a state path: the rename has to land
-  // while the resolvers are still unread, or we would open the new location,
-  // find it empty, and write a fresh file next to the one we were about to
-  // move. Never throws — see migrateLegacyStateDirs.
-  await migrateLegacyStateDirs();
-
   const appState = new AppStateStore(resolveAppStatePath(), state => notify('appStateChanged', state));
-  // Awaited before the dispatcher exists and stdin starts being read, so a
-  // configGet/configSet racing this at startup is impossible rather than a
-  // millisecond-wide window: readline can't hand us a line to dispatch before
-  // this resolves.
-  await migrateRunsRetention(appState).catch(err => console.error('[whiphand-agent] retention migration failed:', err));
 
   // The graph here is circular by nature: handlers need the controller, the
   // remote dispatcher needs those handlers, and the server needs that

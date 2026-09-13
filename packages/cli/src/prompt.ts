@@ -135,9 +135,8 @@ export function createManualPrompt(
 }
 
 /**
- * Workflow inputs already carry a `prompt:` the desktop renders as a form; the
- * CLI used to ignore it and just fail on a missing required input. Same seam,
- * so it lives here.
+ * Prompts for any missing required workflow input, using the same `prompt:`
+ * text the desktop renders as a form field.
  */
 export async function promptMissingInputs(
   workflow: Workflow, given: Record<string, string>, opts: PromptOptions,

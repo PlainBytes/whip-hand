@@ -5,9 +5,9 @@
 
 ## Problem
 
-`mc` handles a feature that fits in one plan. The canonical workflow plans once into
+`whiphand` handles a feature that fits in one plan. The canonical workflow plans once into
 `plan.md`, then implements and reviews it in a cycle until the review passes
-(`.mc/workflows/feature-development.yaml`).
+(`.whiphand/workflows/feature-development.yaml`).
 
 That falls apart on a large feature. One `plan.md` for a fortnight of work is a document
 no implementer step can hold, no reviewer step can check against a diff, and no human can
@@ -37,7 +37,7 @@ Three requirements shaped everything below:
    conditional logic than one kind with two modes. The step kind, the prose, the UI label
    and the template namespace all say the same word — `stage` — per this codebase's rule
    that one idea gets one name across core, RPC, CLI and UI.
-2. **The plan lives in the repository, not the run directory.** `.mc/runs/` is gitignored
+2. **The plan lives in the repository, not the run directory.** `.whiphand/runs/` is gitignored
    and `pruneRuns` deletes it; a plan there is uncommitted and eventually destroyed. Stage
    files live at a path named by a workflow **input** (`plan_dir`), so the same directory
    serves a run that plans and a run that only builds.
@@ -52,7 +52,7 @@ Three requirements shaped everything below:
    run stops — and can be resumed from that stage afterwards.
 7. **Committing is a `command` step the author writes.** The engine never runs git on the
    author's behalf. What the engine adds is the missing seam: a command step's `inputs:`
-   become `$MC_ARTIFACT_<ID>` environment variables.
+   become `$WHIPHAND_ARTIFACT_<ID>` environment variables.
 8. **Frames become a stack.** The only change to existing machinery, and it is forced: a
    `loop` nested inside a `stages` must not write every stage's `iter-1/execute-report.md`
    to the same path.
@@ -84,9 +84,9 @@ steps:
 
   - id: commit-plan
     kind: command
-    run: git add -A -- "$MC_PLAN_DIR" && git commit -m "plan: $MC_RUN_NAME"
+    run: git add -A -- "$WHIPHAND_PLAN_DIR" && git commit -m "plan: $WHIPHAND_RUN_NAME"
     expect_exit: [0, 1]
-    env: { MC_PLAN_DIR: "{{ inputs.plan_dir }}" }
+    env: { WHIPHAND_PLAN_DIR: "{{ inputs.plan_dir }}" }
     output: commit-plan.log
 
   - id: build
@@ -132,7 +132,7 @@ steps:
       - id: commit
         kind: command
         inputs: [execute]
-        run: git add -A && git commit -m "$MC_STAGE_TITLE" -m "$(cat "$MC_ARTIFACT_EXECUTE")"
+        run: git add -A && git commit -m "$WHIPHAND_STAGE_TITLE" -m "$(cat "$WHIPHAND_ARTIFACT_EXECUTE")"
         expect_exit: [0, 1]              # 1 is git's "nothing to commit"
         output: commit.log
 ```
@@ -211,7 +211,7 @@ working unchanged.
 `artifactPath` joins one directory segment per frame instead of taking a single optional
 one — loop frames give `<id>/iter-<n>` exactly as today, stage frames give
 `<id>/<NN>-<stage.id>` plus `/retry-<n>` on a second attempt — so the example writes
-`.mc/runs/<run>/build/02-api/cycle/iter-1/execute-report.md`. Without the stack every
+`.whiphand/runs/<run>/build/02-api/cycle/iter-1/execute-report.md`. Without the stack every
 stage's cycle collides on `cycle/iter-1/`.
 
 `executionKey(stepId, iteration)` generalizes to `executionKey(stepId, frameKey?)` over
@@ -234,7 +234,7 @@ in practice a rejected gate, since `retry` maps to a failing verdict through
 `verdictFromChoice` — redoes the same stage from the top, up to `max_retries` (default 2,
 no config key, and **not** overridden by `--max-iterations`, which means "how hard should
 the machine try", not "how many times may I be told no"). The rejection note is injected
-through the existing `extraFindings` path (`runner.ts:334`), scoped to the stage.
+through the existing `extraFindings` path (`runner.ts:871`), scoped to the stage.
 
 **An exhausted review cycle inside a `stages` step reaches the gate** rather than ending
 the run. Today `executeLoop` calls `fail()` on exhaustion, which would kill the run before
@@ -248,14 +248,14 @@ When `max_retries` runs out, `runTriage` opens a live session seeded with the st
 the findings and the rejection note, and the run stops. `runTriage` currently requires an
 agent step as its source and warns otherwise; here the trigger is a rejected gate, so it
 builds the session from the nearest preceding `writes: true` agent step in the body, which
-`loopTargetIndex` (`runner.ts:99`) already finds. **A run that ended in triage is
+`loopTargetIndex` (`runner.ts:113`) already finds. **A run that ended in triage is
 resumable from that stage** — the human has just spent a session fixing exactly that.
 
 `abort` at a gate still fails the run immediately, unchanged.
 
 ### Manual steps carry verdicts implicitly
 
-`finishStep` returns early when `!step.verdict` (`runner.ts:304`), so a human choosing
+`finishStep` returns early when `!step.verdict` (`runner.ts:451`), so a human choosing
 `retry` at a gate that did not set `verdict: true` is silently swallowed and read as
 `continue`. A manual step's answer *is* a verdict, and `verdictFromChoice` already maps
 `retry → fail`.
@@ -275,7 +275,7 @@ the manifest and the artifacts, not in a trailing boolean.
 
 ### `--yes` must be declared, not assumed
 
-`defaultChoice` is `continue`, so `mc run --yes` would auto-accept every stage — turning a
+`defaultChoice` is `continue`, so `whiphand run --yes` would auto-accept every stage — turning a
 staged workflow into "implement all seven stages unattended", the exact thing this feature
 exists to prevent, at full token cost. A workflow with a gate inside a `stages` step is
 **refused at validation time** unless that gate writes `default: continue` explicitly. CI
@@ -283,8 +283,8 @@ and scripted runs still work; they opt in per gate.
 
 ### `allow_paths` becomes real
 
-`allow_paths` is declared in `types.ts:55`, validated in `schema.ts:42` and editable in the
-desktop's `StepCard.tsx:300` — and read by nothing. It is a field the UI invites you to
+`allow_paths` is declared in `types.ts:60`, validated in `schema.ts:71` and editable in the
+desktop's `workflow-editor/StepRail.tsx:108` — and read by nothing. It is a field the UI invites you to
 fill in that does nothing.
 
 The plan moving into the repo forces the planner to `writes: true`, losing the one thing
@@ -297,17 +297,17 @@ list, enforcement is a glob match over it and a `fail()` naming the offending fi
 
 `inputs` is already on `StepCommon` and already filtered by `scopeInputs`, but
 `commandSpec` never reads it. It now exports each one as an environment variable —
-`inputs: [execute]` → `MC_ARTIFACT_EXECUTE=<path>`, id uppercased with non-alphanumerics
-folded to `_` — beside the `MC_RUN_*` variables it already sets. Inside a stage frame it
-also sets `MC_STAGE_ID`, `MC_STAGE_TITLE`, `MC_STAGE_INDEX`, `MC_STAGE_TOTAL` and
-`MC_STAGE_PATH`.
+`inputs: [execute]` → `WHIPHAND_ARTIFACT_EXECUTE=<path>`, id uppercased with non-alphanumerics
+folded to `_` — beside the `WHIPHAND_RUN_*` variables it already sets. Inside a stage frame it
+also sets `WHIPHAND_STAGE_ID`, `WHIPHAND_STAGE_TITLE`, `WHIPHAND_STAGE_INDEX`, `WHIPHAND_STAGE_TOTAL` and
+`WHIPHAND_STAGE_PATH`.
 
 Environment rather than interpolation, for the reason `commandSpec` already gives about
 run names: a title is arbitrary human text and pasting it into a `sh -c` string is a
 quoting hazard.
 
 A command step's own `env:` values become templated too — `run:` and `cwd:` already are,
-and the `commit-plan` step above needs `MC_PLAN_DIR: "{{ inputs.plan_dir }}"` to reach a
+and the `commit-plan` step above needs `WHIPHAND_PLAN_DIR: "{{ inputs.plan_dir }}"` to reach a
 shell line safely. Two lines in `commandSpec`, and it removes the last reason to
 interpolate a path into a shell string.
 
@@ -363,7 +363,7 @@ Full UI is part of this feature, not a follow-on:
   cancellation mid-stage; per-stage artifact and findings scope.
 - `artifacts.test.ts` — the frame stack, including a loop nested in a `stages` step not
   colliding across stages.
-- `command.test.ts` — `MC_ARTIFACT_*` and `MC_STAGE_*`, including id folding.
+- `command.test.ts` — `WHIPHAND_ARTIFACT_*` and `WHIPHAND_STAGE_*`, including id folding.
 - `git-guard.test.ts` — `allow_paths` enforcement, including a violation naming the file.
 - `schema.test.ts` — reserved `stage` id; rejected nestings; `--yes` refusal.
 - `resume.test.ts` — interrupted at stage 3 resumes at stage 3; resume after triage.
@@ -382,7 +382,7 @@ Full UI is part of this feature, not a follow-on:
 8. **CLI renderer.**
 9. **Desktop** — stepper, gate copy, notifications, runs-grid progress, triage state.
 10. **Parity.**
-11. **Shipped `staged-feature` workflow, `mc init`, README, `docs/design.md`.**
+11. **Shipped `staged-feature` workflow, `whiphand init`, README, `docs/design.md`.**
 12. **One real end-to-end run** against a genuine multi-stage change.
 
 Steps 1–3 are independently mergeable and independently useful. Step 5 is the riskiest and

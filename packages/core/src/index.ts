@@ -11,7 +11,7 @@ export {
 } from './steps.ts';
 export type { FlatStep } from './steps.ts';
 export {
-  spawnSpecSchema, whiphandEventSchema, manualRequestSchema, manualResponseSchema,
+  spawnSpecSchema, whiphandEventSchema, manualRequestSchema,
   manualChoiceSchema, loopFrameSchema, captureSpecSchema, fileCommentSchema,
 } from './events.ts';
 export { renderTemplate, buildPrompt, inputArtifacts, TemplateError } from './template.ts';
@@ -37,7 +37,6 @@ export {
 } from './config.ts';
 export type { PartialConfig, ConfigKey } from './config.ts';
 export { resolveConfigHome, globalWorkflowsDir, globalConfigPath } from './config-home.ts';
-export { migrateLegacyStateDirs } from './state-migration.ts';
 export { resolveWorkflowPath, parseInputPairs, listWorkflows } from './workspace.ts';
 export type { ResolvedWorkflow, WorkflowListEntry } from './workspace.ts';
 export { scopeSchema } from './events.ts';

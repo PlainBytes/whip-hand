@@ -1,19 +1,8 @@
 /**
- * What `whiphand doctor` and the desktop's Doctor page report: a declarative table
- * of tools to probe, in two groups.
- *
- * This exists because doctor used to be *"iterate AdapterRegistry.list()"*,
- * written twice (once in the CLI, once in the agent handler). That answered
- * only "are claude and copilot installed", which is a fraction of what a
- * working install depends on: git backs the git-guard and every diff, node
- * runs the agent, and workflows shell out to rg/fd/jq. A missing one used to
- * surface as a mid-run failure with no hint that the machine was the problem.
- *
- * The registry is still the authority on *runners* — `runner: true` means a
- * RunnerAdapter can actually drive the thing, and that flag is load-bearing:
- * the desktop's `defaults.runner` dropdown filters on it, so a support tool
- * can never be offered as a workflow runner. Everything else here is
- * detect-only: worth telling the user about, not something whiphand can run.
+ * What `whiphand doctor` and the desktop's Doctor page report: a declarative
+ * table of tools to probe, in two groups. The registry stays the authority on
+ * *runners* (`runner: true`, load-bearing for the `defaults.runner` dropdown);
+ * everything else here is detect-only.
  */
 import type { AdapterRegistry } from './registry.ts';
 import type { DetectResult } from './types.ts';
@@ -74,8 +63,8 @@ export interface ToolStatus {
 export const PROBE_TIMEOUT_MS = 5_000;
 
 /**
- * Deliberately looser than the `/(\d+\.\d+\.\d+)/` the adapters used to carry
- * privately, because almost nothing prints a bare three-part semver:
+ * Deliberately looser than a strict three-part semver, because almost nothing
+ * prints a bare `X.Y.Z`:
  *
  *   git   `git version 2.53.0`          node  `v24.16.0`
  *   jq    `jq-1.8.1` (and `jq-1.6`)     rg    `ripgrep 15.1.0`

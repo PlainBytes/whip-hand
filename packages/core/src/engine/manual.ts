@@ -26,7 +26,7 @@ export const DIFF_LINE_LIMIT = 400;
  *
  * - `git diff HEAD` compares the index and the worktree *against HEAD*, and an
  *   untracked file is in neither — so a file a step just created does not
- *   appear here at all. (This comment used to claim the opposite.)
+ *   appear here at all.
  * - The truncation is a flat line slice, so it can cut a hunk in half.
  *
  * Both are fixed in `workingDiffFiles` (./diff.ts), which the desktop's review
@@ -55,10 +55,9 @@ export function manualChoices(inLoop: boolean): ManualChoice[] {
 }
 
 /**
- * The two capture kinds, spelled out once. `note` is required to `continue`
- * (unchanged from before `CaptureSpec` existed); `review` is required to
- * `retry` — a human cannot send work back without saying what to change — and
- * is the only kind that offers per-file comments.
+ * The two capture kinds, spelled out once. `note` is required to `continue`;
+ * `review` is required to `retry` — a human cannot send work back without
+ * saying what to change — and is the only kind that offers per-file comments.
  */
 function captureSpecFor(kind: 'note' | 'review'): CaptureSpec {
   return kind === 'note'

@@ -1,0 +1,18 @@
+name: budget
+# Deliberately kind: command throughout, unlike parity.yaml: this workflow
+# exists to exercise loop-budget exhaustion and --resume/--extra-iterations
+# deterministically, with no dependency on the claude/copilot stub binaries'
+# behavior. 'review' always fails, so a run always exhausts max_iterations.
+steps:
+  - id: cycle
+    kind: loop
+    until: review
+    max_iterations: 1
+    steps:
+      - id: execute
+        kind: command
+        run: "true"
+      - id: review
+        kind: command
+        verdict: true
+        run: "exit 1"

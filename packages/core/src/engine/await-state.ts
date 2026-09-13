@@ -1,14 +1,7 @@
 /**
  * The await-state file: how a live interactive session reports whether it is
- * working or blocked on the human.
- *
- * Written out-of-band by the runner's own hooks — never by the model, which is
- * deliberately not told this file exists. Read by any frontend that can watch
- * the filesystem; the CLI, which hands the child the real tty, ignores it.
- *
- * The content is JSON rather than a bare word so one of the writers can be
- * `cat` — claude's Notification hook dumps its raw payload here, and we map
- * `notification_type` ourselves rather than relying on hook matcher semantics.
+ * working or blocked on the human. Written out-of-band by the runner's own
+ * hooks; the model is deliberately never told this file exists.
  */
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';

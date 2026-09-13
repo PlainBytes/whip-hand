@@ -166,8 +166,8 @@ async function runJobInBackground(
     const result = await runWorkflow({
       workflow, workdir, config, registry, frontend, spawnHeadless, workflowSource,
       inputs: params.inputs ?? {}, dryRun: params.dryRun, signal: job.controller.signal,
-      // The merge already did the inheriting (global config, then the app-wide
-      // migrated default beneath that) — no separate app-state fallback here.
+      // loadWorkspaceConfig already merged DEFAULT_CONFIG with the global and
+      // project layers — no separate app-state fallback needed here.
       maxRetainedRuns: config.runs.max_retained,
       ...(params.maxIterations === undefined ? {} : { maxIterations: params.maxIterations }),
       ...(params.name === undefined ? {} : { name: params.name }),

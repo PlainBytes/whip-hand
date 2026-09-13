@@ -1,20 +1,8 @@
 /**
  * Where the built web SPA lives on disk, resolved the same way native.ts
- * resolves node-pty and for the same reason: the packaged agent is an esbuild
- * CJS bundle inside a single-file executable, so `import.meta.url` is not real
- * there and a path relative to this source file only works unbundled.
- *
- * The cascade, in order:
- *   1. WHIPHAND_WEB_ROOT — what tauri-transport.ts passes when it spawns us. In a
- *      packaged bundle that is <resourceDir>/resources/web; under `tauri dev`
- *      it is the repo's apps/desktop/dist-web.
- *   2. WHIPHAND_WEB_ROOT_DEFAULT — an esbuild define, for a standalone agent binary.
- *   3. A path relative to this module, for `node --test` and a plain dev run.
- *
- * Returns null when nothing resolves to a real directory. Callers must answer
- * 503 with an actionable message rather than throwing: "the remote UI has not
- * been built" is a routine state during development, and discovering it as a
- * blank page on another machine is the failure mode this avoids.
+ * resolves node-pty: the packaged agent is an esbuild CJS bundle where
+ * `import.meta.url` is not real, so a path relative to this file only works
+ * unbundled. Returns null when nothing resolves to a real directory.
  */
 import { existsSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';

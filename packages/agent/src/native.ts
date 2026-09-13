@@ -1,29 +1,7 @@
 /**
  * Resolves node-pty from a real directory on disk, rather than importing it
- * statically.
- *
- * node-pty's Windows implementation spawns a worker thread from a file path
- * (`lib/windowsConoutConnection.js`) and `fork()`s a helper script on the kill
- * path (`lib/windowsPtyAgent.js`) — both need `__dirname` to point at a real,
- * on-disk `node-pty` package. Inside a single executable neither is true:
- * `__dirname` is the directory of `process.execPath`, and a SEA ignores an
- * argv script and re-runs its own embedded main instead of the forked one.
- * `module.createRequire()` sidesteps this entirely by giving back a real,
- * disk-backed `require` — so node-pty resolves its own assets exactly as it
- * expects, on both platforms.
- *
- * Three ways to find the directory, tried in order:
- *  1. `WHIPHAND_NODE_PTY_DIR` — an explicit override. Packaging and the packaging
- *     smoke tests set this to the assembled resource tree / the repo's
- *     `node_modules/node-pty`.
- *  2. `WHIPHAND_NODE_PTY_DIR_DEFAULT` — an esbuild `define`, the same shape as the
- *     desktop build's `__AGENT_ENTRY_PATH__`, baked in at packaging time.
- *  3. Plain module resolution from this file's own location. Taken when
- *     neither of the above is set, which is every unbundled run — `node
- *     --test`, `tauri dev`'s `node <agent entry>` — where node-pty is just
- *     another dependency in `node_modules` and needs no help finding itself.
- *     This is what makes dev and the unit suite keep working exactly as
- *     before this file existed.
+ * statically: its Windows implementation needs `__dirname` to point at an
+ * on-disk package, which a single-executable build cannot give it directly.
  */
 import { createRequire } from 'node:module';
 

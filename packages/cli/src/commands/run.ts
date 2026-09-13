@@ -147,12 +147,23 @@ export async function runCommand(
       : createRenderer({}, opts.dryRun ? { runDirOf: runId => resolve(workdir, config.artifacts_dir, runId) } : {}),
   };
 
+  // Without this, a directly-invoked `whiphand run` has no cancellation path at
+  // all: Ctrl+C (SIGINT) kills the process before its spawned child, leaving
+  // an orphan, and the agent's cross-process cancelRun (a plain SIGTERM to
+  // this pid) goes unhandled the same way. Wiring both signals to the same
+  // AbortSignal runWorkflow already threads through to every spawn/PTY gives
+  // this path the same clean-shutdown behaviour the agent's job-based runs get.
+  const controller = new AbortController();
+  const onSignal = (): void => controller.abort();
+  process.on('SIGTERM', onSignal);
+  process.on('SIGINT', onSignal);
+
   let result;
   try {
     result = await runWorkflow({
       workflow, workdir, inputs, config,
       registry: defaultRegistry(), frontend,
-      dryRun: opts.dryRun, spawnHeadless, workflowSource,
+      dryRun: opts.dryRun, spawnHeadless, workflowSource, signal: controller.signal,
       ...(opts.maxIterations === undefined ? {} : { maxIterations: opts.maxIterations }),
       ...(opts.name === undefined ? {} : { name: opts.name }),
       ...(plan === undefined ? {} : { resume: plan }),
@@ -162,6 +173,9 @@ export async function runCommand(
     // A file that changed between the check above and the run's own.
     if (e instanceof AttachmentError) return attachmentRefusal(e);
     throw e;
+  } finally {
+    process.off('SIGTERM', onSignal);
+    process.off('SIGINT', onSignal);
   }
   return result.ok ? 0 : 1;
 }

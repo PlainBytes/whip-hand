@@ -56,13 +56,21 @@ function refFor(entry: WorkflowEntry): string {
   return entry.source === 'global' ? `global:${entry.name}` : entry.name;
 }
 
+/**
+ * Mirrors core's `packages/core/src/workspace.ts` — same reason `parseLogLine`
+ * is duplicated in lib/log-rows.ts rather than imported: the desktop bundles
+ * no runtime dependency on @whiphand/core, only its types, and workspace.ts
+ * reads the filesystem to resolve a workflow ref, which core's own module has
+ * no browser-safe way to do. Keep this in lockstep with workspace.ts's
+ * `EXPLICIT_SCOPE_RE` by hand; there is no build-time check that can do it
+ * for us.
+ */
 const EXPLICIT_SCOPE_RE = /^(global|project):(.+)$/;
 
 /**
  * Resolves a workflow ref (bare name, or `global:`/`project:`-prefixed) to a
- * list entry. A bare name is ambiguous across scopes, same as before scopes
- * existed — it matches the first entry in list order, which is the project
- * one when both exist.
+ * list entry. A bare name is ambiguous across scopes — it matches the first
+ * entry in list order, which is the project one when both exist.
  */
 function findEntry(workflows: WorkflowEntry[], ref: string): WorkflowEntry | undefined {
   const explicit = EXPLICIT_SCOPE_RE.exec(ref);

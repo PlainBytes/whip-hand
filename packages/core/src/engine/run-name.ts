@@ -1,16 +1,7 @@
 /**
  * The run name: an optional human label shown wherever the run id is shown.
- *
- * A marker file rather than a field in run.json, for the same reason the lock
- * marker is one — RunJournal holds the manifest in memory and rewrites the
- * whole file on every event, so renaming a *running* run would be silently
- * clobbered by the next event. A marker file is atomic, needs no manifest
- * schema change (so runs recorded before names existed still parse), and
- * survives copying the run directory. Mirrors run-lock.ts.
- *
- * The name is never part of the run id: `listRuns` sorts by that id, retention
- * prunes oldest-first by it, and it is a path segment. A label that could
- * change would break all three.
+ * A marker file (like run-lock.ts) rather than a run.json field, since
+ * RunJournal rewrites the whole manifest on every event.
  */
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';

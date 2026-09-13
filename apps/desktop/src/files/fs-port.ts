@@ -1,11 +1,7 @@
 /**
- * The filesystem seam for the Files page.
- *
- * Exists for the same reason agent/transport.ts does: production supplies a
+ * The filesystem seam for the Files page: production supplies a
  * @tauri-apps/plugin-fs implementation, tests supply an in-memory one, and no
- * component ever imports a Tauri module directly. That matters concretely —
- * apps/desktop/vitest.config.ts deliberately keeps @tauri-apps out of the
- * test graph, so a component importing the plugin would be untestable.
+ * component ever imports a Tauri module directly.
  */
 import type { DirEntry } from './tree-model.ts';
 

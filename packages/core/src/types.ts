@@ -9,10 +9,8 @@ export type OnFindings = 'report' | 'loop' | 'interactive';
 
 /**
  * Where a workflow definition or a config layer lives: this workspace's own
- * `.whiphand/`, or the user-level directory under resolveConfigHome() that every
- * workspace on the machine shares. One word, used identically across core,
- * the RPC protocol, the CLI (`--global`) and the UI (a "Global" badge) — no
- * second name for the same idea anywhere in the stack.
+ * `.whiphand/`, or the user-level directory under resolveConfigHome() that
+ * every workspace on the machine shares.
  */
 export type Scope = 'project' | 'global';
 
@@ -90,7 +88,6 @@ export interface ManualStep extends StepCommon {
   title: string;
   instructions: string;              // templated
   capture?: 'note' | 'review';
-  /** Show the working tree's `git diff` alongside the instructions. */
   show_diff?: boolean;
   /** What `whiphand run --yes` picks when there is no human to ask. */
   default?: 'continue' | 'abort';
@@ -136,7 +133,7 @@ export interface SpawnSpec {
   interactive: boolean;
   // Set only by adapters' interactive(): how this session can end itself.
   // Frontends that cannot watch for the marker (the CLI, which hands the child
-  // the real tty) may ignore it — the human quits by hand as before.
+  // the real tty) may ignore it — the human quits by hand.
   endSession?: SessionEndSpec;
   // Set only by adapters' interactive(), and only for runners that can report
   // it. Frontends that cannot watch the filesystem ignore it exactly as they
@@ -162,7 +159,7 @@ export interface SpawnSpec {
    * output, and its stdout is a progress stream rather than prose. Frontends
    * that honour it hand each stdout line to spawnHeadless's `onLine` instead
    * of forwarding it as log output; frontends that ignore it simply show no
-   * progress, exactly as before.
+   * progress.
    */
   progress?: { format: ProgressFormat };
 }
@@ -222,8 +219,7 @@ export interface RunCtx {
   loop?: LoopFrame;
   /**
    * Steps whose recorded session should be resumed rather than minted afresh.
-   * Set only on a resumed run; adapters that cannot resume a session ignore it
-   * and behave exactly as they always have.
+   * Set only on a resumed run; adapters that cannot resume a session ignore it.
    */
   resumedStepIds?: ReadonlySet<string>;
   /**
@@ -281,8 +277,8 @@ export interface ModelInfo {
  *   the harness's own well-known ids, so the editor still warns when a value
  *   matches none of them.
  * - `unavailable` — no list at all (a runner with no `listModels`, or one whose
- *   own probe found nothing usable); the editor behaves exactly as it did
- *   before this feature existed: free text, no warnings.
+ *   own probe found nothing usable); the editor falls back to free text, no
+ *   warnings.
  */
 export interface ModelList {
   source: 'live' | 'fallback' | 'unavailable';
@@ -421,9 +417,8 @@ export type WhiphandEvent =
   | { type: 'step:artifact'; stepId: string; path: string; bytes?: number }
   /**
    * `assertArtifact` refused the step's declared output: it was never written
-   * ('absent'), or it exists but is blank ('empty'). Both used to collapse
-   * into a generic `run:error` string — this keeps the two, highly
-   * diagnostic, failure modes apart from an ordinary crash.
+   * ('absent'), or it exists but is blank ('empty') — kept apart from an
+   * ordinary crash rather than folded into a generic `run:error`.
    */
   | { type: 'step:artifact-missing'; stepId: string; path: string; reason: 'absent' | 'empty' }
   /** A command step's process was killed for running past its `timeout_ms`, rather than exiting on its own. */
@@ -443,8 +438,7 @@ export type WhiphandEvent =
   /**
    * A live interactive session is (or is no longer) blocked on the human.
    * Mirrors the desktop's own ptyAwait notification, but funneled through
-   * core so it lands in the run's audit — nothing before this recorded that a
-   * run sat blocked on a permission prompt for 40 minutes.
+   * core so it lands in the run's audit.
    */
   | {
       type: 'session:await'; stepId: string; awaiting: boolean;
@@ -496,7 +490,7 @@ export interface Frontend {
   // for the same reason: it is how a live session reports the Tier 2 events
   // it alone knows about (session:await, session:ended, step:pty-exit) back
   // through core's own emit/journal path, rather than opening a second one.
-  // A frontend that ignores it simply never reports those — exactly as before.
+  // A frontend that ignores it simply never reports those.
   runInteractive(
     spec: SpawnSpec, signal?: AbortSignal, onEvent?: (event: WhiphandEvent) => void,
   ): Promise<number>;

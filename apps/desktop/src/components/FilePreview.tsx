@@ -1,7 +1,7 @@
 /**
  * The Files page's right-hand pane: reads the selected file once and renders
  * it by kind. Markdown renders rather than showing its source — that's the
- * point of the feature; the raw text is one Edit click away (Task 7).
+ * point of the feature; the raw text is one Edit click away.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -276,9 +276,9 @@ export function FilePreview({
       setLoaded(current => {
         if (!current || current.path !== path) return current;
         // Identical bytes must not re-render the document. The Tauri watcher
-        // matches loosely on the parent directory (Task 10's basename
-        // fallback), so an unrelated write in a busy folder arrives here as a
-        // change to this file — and re-rendering for it would collapse an
+        // matches loosely on the parent directory (a basename fallback), so
+        // an unrelated write in a busy folder arrives here as a change to
+        // this file — and re-rendering for it would collapse an
         // open <details>, drop the reader's selection and restart image
         // loads. The mtime still moves: the save-time write guard compares
         // against it, and letting it go stale would raise phantom conflicts.
@@ -473,7 +473,7 @@ export function FilePreview({
 
   // Auto-entry into edit mode must be one-shot per opened file, not per
   // `loaded` object identity: `loaded` is also replaced by applySave (on
-  // Save) and by the conflict dialog's Reload handler, and Task 9's new-file
+  // Save) and by the conflict dialog's Reload handler, and the new-file
   // flow keeps `startInEditMode` true across a save. Keying on the object
   // identity re-triggered this effect after every save/reload and flipped
   // straight back into the editor. Keying on path+reloadToken instead means
@@ -629,12 +629,11 @@ export function FilePreview({
   const hasEditableContent = loaded !== null
     && (loaded.kind === 'markdown' || loaded.kind === 'text');
 
-  // Both host pages now wrap this component in a `display: flex` pane (Task
-  // 9, so the preview can fill it) rather than the plain block it used to
-  // sit in. Every one of these early returns is the pane's *sole* child, so
-  // it is a flex item too — and a row-direction flex item's default
-  // `align-self: stretch` would silently stretch each of these to the
-  // pane's full height. For an <img> that also distorts its aspect ratio,
+  // Both host pages wrap this component in a `display: flex` pane so the
+  // preview can fill it. Every one of these early returns is the pane's
+  // *sole* child, so it is a flex item too — and a row-direction flex item's
+  // default `align-self: stretch` would silently stretch each of these to
+  // the pane's full height. For an <img> that also distorts its aspect ratio,
   // and since the pane is `overflow: hidden`, a tall image would lose its
   // scrollbar and simply clip. `alignSelf: 'flex-start'` opts every one of
   // these back into sizing to its own content, matching the pre-Task-9
@@ -780,16 +779,16 @@ export function FilePreview({
         data-testid="preview-scroll"
         ref={scrollRef}
         // Focusable so a keyboard user can scroll it without needing to tab
-        // into something inside first, and so Task 14 can attach a Ctrl/Cmd-F
-        // handler to it directly.
+        // into something inside first, and so a Ctrl/Cmd-F handler can
+        // attach to it directly.
         tabIndex={0}
         style={{ flex: 1, minHeight: 0, overflow: 'auto' }}
       >
         {editing ? (
           // Highlighted by the same highlight.js call, and the same language
           // map, as the Source view below — editing a file and reading it
-          // should not be two different-looking things. CodeEditor owns the
-          // layout that used to be a pile of overrides on Fluent's Textarea
+          // should not be two different-looking things. CodeEditor owns its
+          // own layout rather than a pile of overrides on Fluent's Textarea
           // (which fought this scroll container over its own max-height).
           <CodeEditor
             value={draft}

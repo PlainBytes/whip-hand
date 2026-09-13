@@ -26,10 +26,10 @@ import type { LogRow } from '../lib/log-rows.ts';
 import { summarizeEvent } from '../lib/log-rows.ts';
 
 /**
- * Task 8 scope: workflows, runs list, per-job live state, doctor results,
- * config live here too — see JobState below for the per-job shape that the
- * whiphandEvent/runStateChanged/stepLog/ptyStarted/ptyExit notifications reduce
- * into. Task 7's workspace path + agent status stay as they were.
+ * Workflows, the runs list, per-job live state, doctor results, config, the
+ * workspace path and agent status all live here — see JobState below for the
+ * per-job shape that the whiphandEvent/runStateChanged/stepLog/ptyStarted/
+ * ptyExit notifications reduce into.
  */
 
 export interface StepState {

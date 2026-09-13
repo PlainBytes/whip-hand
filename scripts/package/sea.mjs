@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { planLaunch, verbatim } from '../../packages/core/src/exec.ts';
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 export const distDir = path.join(repoRoot, 'dist');
@@ -47,15 +48,37 @@ function findSigntool() {
 }
 
 /**
+ * Resolves an argv through core's launch plan and prepares the execFileSync
+ * options that make cmd.exe (if one turns out to be needed) receive it
+ * unwrapped, instead of Node's own `shell: true` — which joins file and args
+ * with a bare space and no quoting (DEP0190) and would break on any argument
+ * containing a space. Every spawn in this file goes through this, so a
+ * resolved `.bat`/`.cmd` on Windows never sees a raw, unresolved command
+ * string. `deps` is exposed only so sea.test.mjs can exercise the Windows
+ * path (`platform: 'win32'`) without a Windows host.
+ */
+export function planExec(argv, deps = {}) {
+  const plan = planLaunch(argv, deps);
+  return { file: plan.file, args: plan.args, options: verbatim(plan.invocation) };
+}
+
+/**
  * The "design for signing later" seam: unset today, so this is a no-op on
  * every build until an operator sets it. Its installer-side twin is Tauri's
  * own `bundle.windows.signCommand`. Whatever command is set is expected to
  * sign in place and exit non-zero on failure.
+ *
+ * WHIPHAND_SIGN_COMMAND must name a single executable, not a full command
+ * line with its own arguments (see README): resolving it through planExec is
+ * what stops shell metacharacters in an operator-supplied command string from
+ * injecting arbitrary commands, and a multi-word command line has nowhere to
+ * be split back apart once it is treated as a single executable name.
  */
 function runSignCommand(binary) {
   const command = process.env.WHIPHAND_SIGN_COMMAND;
   if (!command) return;
-  execFileSync(command, [binary], { stdio: 'inherit', shell: true });
+  const { file, args, options } = planExec([command, binary]);
+  execFileSync(file, args, { stdio: 'inherit', shell: false, ...options });
   log('sign', 'WHIPHAND_SIGN_COMMAND applied');
 }
 
@@ -129,12 +152,13 @@ export async function buildSingleExecutable({ name, entry, assets = {}, plugins 
   // extensionless `postject` is a sh script that execFileSync cannot launch
   // without a shell (the same CVE-2024-27980 refusal resolveExecutable exists
   // to work around) — `postject.cmd` is the one Windows can run directly.
+  // Routed through planExec rather than `shell: isWindows`: it reads through
+  // the .cmd shim to invoke node directly when it can, falling back to a
+  // properly-quoted cmd.exe wrapper otherwise, so a repoRoot or blob path
+  // containing a space survives either way.
   const postject = path.join(repoRoot, 'node_modules/.bin', isWindows ? 'postject.cmd' : 'postject');
-  execFileSync(postject, [binary, 'NODE_SEA_BLOB', blob, '--sentinel-fuse', FUSE], {
-    stdio: ['ignore', 'ignore', 'pipe'],
-    cwd: repoRoot,
-    shell: isWindows,
-  });
+  const { file, args, options } = planExec([postject, binary, 'NODE_SEA_BLOB', blob, '--sentinel-fuse', FUSE]);
+  execFileSync(file, args, { stdio: ['ignore', 'ignore', 'pipe'], cwd: repoRoot, shell: false, ...options });
   log('inject', `${path.relative(repoRoot, binary)} (${(fs.statSync(binary).size / 1024 / 1024).toFixed(0)} MB)`);
 
   runSignCommand(binary);

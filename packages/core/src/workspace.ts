@@ -45,9 +45,8 @@ const EXPLICIT_SCOPE_RE = /^(global|project):(.+)$/;
  *   1. An explicit `global:<name>` / `project:<name>` selector — parsed
  *      first, before any path attempt, and erroring outright if the named
  *      scope doesn't have it.
- *   2. As a filesystem path relative to `workdir` — unchanged from before
- *      scopes existed, and still ahead of name lookup (so e.g.
- *      `whiphand run examples/cycle.yaml` behaves exactly as it always has).
+ *   2. As a filesystem path relative to `workdir` — still ahead of name
+ *      lookup (so e.g. `whiphand run examples/cycle.yaml` keeps working).
  *      Treated as belonging to the project scope: it's resolved against the
  *      workspace's own working directory, same as everything else here that
  *      isn't the shared global root.

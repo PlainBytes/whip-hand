@@ -1,20 +1,9 @@
 import { createContext, useContext, type ReactNode } from 'react';
 
 /**
- * What this host can do that the other cannot.
- *
- * The same React tree runs in two places: the Tauri desktop shell, and a plain
- * browser on another machine talking to the agent over a WebSocket. Almost
- * everything is identical, because the UI already talks only to the agent's
- * RPC — but a browser has no native folder picker and no access to the local
- * filesystem.
- *
- * ONE MECHANISM, NOT TWO. A capability is a function whose ABSENCE is the flag.
- * Carrying both a `pickDirectory` and a separate `canPickDirectory` boolean is
- * precisely how the two drift apart, and the drift is silent.
- *
- * The default is the DESKTOP shape rather than the restrictive one, so every
- * existing test renders unchanged; only the web entry point overrides it.
+ * What this host can do that the other cannot — the same UI runs in the Tauri
+ * desktop shell and in a browser talking to the agent over WebSocket. A
+ * capability is a function whose absence is the flag, not a separate boolean.
  */
 export interface AppCapabilities {
   readonly host: 'desktop' | 'browser';

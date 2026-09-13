@@ -1,9 +1,8 @@
 /**
- * The one way any UI code opens a workspace, so the recent list stays
- * consistent and — the reason this lives apart from useStartupRestore — the
- * unsaved-edits guard runs on every path into a switch. Switching is reachable
- * from the sidebar switcher, the welcome screen, an Activity row and Ctrl+K;
- * guarding here covers all four, where guarding in App covered none of them.
+ * The one way any UI code opens a workspace: keeps the recent list consistent
+ * and guarantees the unsaved-edits guard runs on every entry point (sidebar
+ * switcher, welcome screen, Activity row, Ctrl+K) — guarding in App instead
+ * covered none of them.
  */
 import type { AgentClient } from '../agent/client.ts';
 import { useAppStore } from '../state/store.ts';

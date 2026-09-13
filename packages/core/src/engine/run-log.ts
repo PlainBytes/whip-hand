@@ -326,8 +326,8 @@ async function tailLines(
  * - `fromEnd`: open on the tail — the last `limit` lines, via `tailLines`.
  * - `beforeByte`: page backwards from a byte offset a previous tail read
  *   reported, for a "load earlier" control.
- * - plain `offset`/`limit`: the original forward-paging contract, unchanged
- *   — reads the whole file once and slices it, same as before.
+ * - plain `offset`/`limit`: the forward-paging contract — reads the whole
+ *   file once and slices it.
  *
  * Unlike readArtifact this has no whole-file size cap of its own in the
  * offset mode; the tail modes never read the whole file except when the file

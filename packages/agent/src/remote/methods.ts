@@ -1,38 +1,25 @@
 /**
  * The security boundary for the remote channel, expressed as an exhaustive
- * PARTITION of the method table rather than a deny-list.
- *
- * Enforcement is not a check anyone has to remember to write: main.ts builds a
- * SECOND dispatcher from the filtered spec/handler maps, and rpc.ts already
- * treats a method missing from either map as not-found. So a denied method
- * returns a perfectly ordinary MethodNotFound, and rpc.ts needs no changes.
- *
- * The partition test is the load-bearing part. Because it asserts the two sets
- * are disjoint AND together cover every key of `methods`, adding a method to
- * protocol.ts FAILS THE BUILD until somebody classifies it. A deny-list cannot
- * give you that: a new method would silently default to reachable.
- *
- * Note what is NOT here. The Files page is excluded from the browser, but it
- * needs no RPC denial — it reaches disk through the frontend's FileSystemPort
- * and Tauri's fs plugin, never through this protocol. readArtifact and
- * writeArtifact stay allowed because RunDetailPage's ArtifactFileSystem is pure
- * RPC and must keep working remotely. Which is exactly why the test matters
- * more than the current contents of the list.
+ * PARTITION of the method table rather than a deny-list — a build-time test
+ * asserts the two lists below are disjoint and together cover every method.
  */
 import { z } from 'zod';
 import { base64AttachmentSchema, methods, startRunParams, type MethodName } from '../protocol.ts';
 import type { Handler, MethodSpec } from '../rpc.ts';
 
 /**
- * Reachable only from the host desktop, over stdio. These three manage the
- * remote channel itself: a remote client must not be able to read the token,
- * move the port out from under the user, or rotate itself back in after being
- * revoked.
+ * Reachable only from the host desktop, over stdio. The three remote-access
+ * ones manage the remote channel itself: a remote client must not be able to
+ * read the token, move the port out from under the user, or rotate itself
+ * back in after being revoked. getWorkflow has no browser call site — the
+ * desktop editor already holds the workflow object it's editing — so it stays
+ * off the remote surface until something actually needs it there.
  */
 export const DESKTOP_ONLY_METHODS = [
   'remoteAccessGet',
   'remoteAccessSet',
   'remoteAccessRotateToken',
+  'getWorkflow',
 ] as const satisfies readonly MethodName[];
 
 /**
@@ -45,7 +32,6 @@ export const DESKTOP_ONLY_METHODS = [
 export const REMOTE_METHOD_NAMES = [
   'hello',
   'listWorkflows',
-  'getWorkflow',
   'createWorkflow',
   'updateWorkflow',
   'deleteWorkflow',

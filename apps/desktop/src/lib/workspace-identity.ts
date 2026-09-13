@@ -1,8 +1,7 @@
 /**
  * How a workspace presents itself: its short label, its colour, and the
  * order and filtering of the switcher's list. Pure and free of React so it
- * can be unit-tested directly — a workspace's identity has to be stable
- * across sessions, and a test is the only thing that keeps it that way.
+ * can be unit-tested directly.
  */
 import type { RecentWorkspace } from '../../../../packages/agent/src/app-state.ts';
 

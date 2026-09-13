@@ -61,10 +61,11 @@ const LOCK_WORKSPACES = PACKAGE_JSON_FILES.map(file => path.posix.dirname(file))
  * the *next* release fails to reach anyone, so it is checked before a tag
  * spends any build minutes rather than discovered later.
  *
- * The endpoint URLs used to be checked here too, under an `<owner>`
- * placeholder, because the repo had no remote. It has one now and both URLs
- * are resolved, so there is nothing left to guard — a wrong owner is a typo,
- * not an unfilled blank, and updater.test.ts pins the string against that.
+ * The endpoint URLs (`tauri.conf.json`'s `plugins.updater.endpoints`,
+ * `updater.ts`'s `RELEASE_PAGE_URL`) are not guarded here: both are already
+ * resolved to the repo's real owner, so there is nothing left to guard — a
+ * wrong owner would be a typo, not an unfilled blank, and updater.test.ts
+ * pins the string against that.
  */
 const RELEASE_PLACEHOLDERS = [
   [TAURI_CONF, 'REPLACE_WITH_OPERATOR_GENERATED_PUBKEY', 'the updater signing key (plugins.updater.pubkey)'],

@@ -184,5 +184,3 @@ export function useWorkflowDraft(initial: Workflow) {
     isLoop: isLoopStep,
   };
 }
-
-export type WorkflowDraft = ReturnType<typeof useWorkflowDraft>;

@@ -27,9 +27,6 @@ export const SANITIZE_SCHEMA: SanitizeSchema = {
    * as live external links that did nothing when clicked and rejected inside
    * the plugin. Stripping the href here makes Markdown.tsx render them inert
    * instead — an affordance the app cannot honour should not look like one.
-   * (`tel:` is left out: the shell scope would take it, but nothing in a
-   * plan or a run artifact wants to dial a phone, and the narrower list is
-   * the one that cannot surprise us.)
    *
    * `srcSet` is filtered because defaultSchema.protocols covers
    * cite/href/longDesc/src but not srcSet, even though `source` (inside
@@ -81,22 +78,17 @@ export const REMARK_PLUGINS: PluggableList = [
  *   rehypeSlug     runs after sanitize; it skips any heading that already has
  *                  an id, so a raw `<h2 id="...">` written by an artifact
  *                  keeps the author's id rather than getting one of ours.
- *                  That's fine under the same rule as `clobber: []` above:
- *                  ids here are attacker-controlled, and no code in this app
- *                  may look a node up by an id it did not itself generate
- *                  unguessably.
+ *                  Safe under the same `clobber: []` rule above.
  */
 export const REHYPE_PLUGINS: PluggableList = [
   rehypeRaw,
   [rehypeSanitize, SANITIZE_SCHEMA],
   rehypeSlug,
   // Runs after slug (it needs the ids) and after sanitize (so its own markup
-  // isn't stripped). The anchor is a pointer-only affordance: aria-hidden and
-  // tabIndex: -1 take it out of the accessibility tree and the tab order, so
-  // it never pollutes the heading's own accessible name and never leaves a
-  // screen-reader user tabbing onto a control that announces nothing.
-  // Keyboard and screen-reader users navigate by the heading's id instead,
-  // via rehype-slug above.
+  // isn't stripped). aria-hidden and tabIndex: -1 keep the anchor out of the
+  // accessibility tree and tab order, so it never pollutes the heading's
+  // accessible name or leaves a screen reader on a control that announces
+  // nothing — such users navigate by the heading's id instead.
   [rehypeAutolinkHeadings, {
     behavior: 'append',
     properties: { className: 'whiphand-markdown-anchor', ariaHidden: true, tabIndex: -1 },

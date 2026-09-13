@@ -1,17 +1,7 @@
 /**
- * Stand-in for the Tauri modules in the web bundle.
- *
- * Three files — lib/notifier.ts, lib/window-state.ts and lib/updater.ts —
- * reach for `@tauri-apps/*` through a DYNAMIC import guarded at runtime by
- * `__TAURI_INTERNALS__`, so none of them ever executes in a browser. The
- * runtime guard does not help the bundler, though: rolldown still has to
- * resolve the specifier to build the chunk. This module is what it resolves
- * to, and vite.web.config.ts substitutes it only for those three importers —
- * any NEW Tauri import still fails the build.
- *
- * Every export throws rather than silently returning undefined. Nothing here
- * should ever run; if one of the runtime guards is ever weakened, a thrown
- * error naming this file is a far better outcome than a mysterious no-op.
+ * Stand-in for the Tauri modules in the web bundle, substituted by
+ * vite.web.config.ts for files that dynamic-import `@tauri-apps/*` behind a
+ * runtime guard. Every export throws, so a weakened guard fails loudly.
  */
 function unavailable(name: string): never {
   throw new Error(`${name}() is a desktop-only Tauri API and is not available in the browser`);

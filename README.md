@@ -37,6 +37,18 @@ Workflows live in `.whiphand/workflows/<name>.yaml` (so `whiphand run feature` w
 path. Artifacts land in `.whiphand/runs/<run-id>/` as plain markdown. Workspace defaults live in
 `.whiphand/config.yaml`.
 
+`whiphand init` ships three starter workflows: `feature` plans once, interactively, then
+implements and reviews in a cycle — pick it when the shape of the change is already clear.
+`spec-driven` adds a second planning phase and grills you on both, then stops at an approval
+gate before any code is written. `feature-development` does the same as `feature` but on its
+own branch — it syncs your trunk, cuts `feature/<run slug>`, and commits the signed-off work
+with a message it writes from the diff.
+
+A run can carry a **name** (`--name`, the desktop's New run dialog, or later with
+`whiphand rename-run`, where `''` clears it), shown in place of its id in the UI and
+notifications. See `docs/design.md` for how a step sees its run's name and how auto-naming
+works.
+
 ## Checking your setup (`whiphand doctor`)
 
 `whiphand doctor` reports what this machine has, in two groups — the same data the desktop's
@@ -72,13 +84,6 @@ machine, hand-write `doctor.yaml` beside your global `config.yaml`:
 
 (`WHIPHAND_CONFIG_HOME` overrides the directory.)
 
-> Upgrading from before the rename? These directories used to be called
-> `mission-control`, and briefly `whip-hand`. The first run of `whiphand` or of the
-> desktop app moves either across —
-> global workflows, `config.yaml` and the remote-access token come with them, so the
-> browser links you have already handed out keep working. Setting any of
-> `WHIPHAND_CONFIG_HOME`, `WHIPHAND_APP_STATE_FILE` or `WHIPHAND_REMOTE_CONFIG_FILE` suppresses the move.
-
 ```yaml
 tools:
   - id: bun                # a new id is appended to its group
@@ -106,38 +111,6 @@ silently doing nothing. Overriding a built-in changes its label, group, url and
 It is a **separate file from `config.yaml` on purpose**: `config.yaml` is rewritten
 wholesale whenever settings are saved, so anything unrecognized in it would be lost.
 Nothing writes `doctor.yaml`.
-
-## Run names
-
-A run is identified by its minted id (`20260907-141233-a3f1`), which never changes. On top
-of that it can carry a **name** — set with `--name`, in the desktop app's New run dialog,
-or afterwards with `whiphand rename-run` and the Rename button — shown instead of the id in the
-runs grid, the run page and OS notifications. Turn on `runs.auto_name` to have the default
-runner suggest one for runs started without it.
-
-Steps see the run's identity as `{{ run.name }}` / `{{ run.slug }}` / `{{ run.id }}` in
-prompts, manual titles, and a command step's `run:` and `cwd:` — and as `$WHIPHAND_RUN_NAME` /
-`$WHIPHAND_RUN_SLUG` / `$WHIPHAND_RUN_ID` in a command step's shell, which is the safer of the two for
-a shell line. `run.slug` is git-ref safe, which is what makes per-run worktrees a
-three-line `command` step:
-
-```yaml
-  - id: worktree
-    kind: command
-    run: git worktree add -b "whiphand/$WHIPHAND_RUN_SLUG" "../wt-$WHIPHAND_RUN_SLUG"
-    output: worktree.log
-```
-
-See `docs/design.md` for the details, including why the name is a marker file rather than a
-manifest field.
-
-`whiphand init` ships three workflows: `feature` plans once, interactively, then implements and
-reviews in a cycle — pick it when the shape of the change is already clear. `spec-driven`
-adds a second planning phase and grills you on both, then stops at an approval gate before
-any code is written — pick it for anything where getting the "what" or the "how" wrong is
-expensive to discover downstream. `feature-development` does the same as `feature` but on
-its own branch — it syncs your trunk, cuts `feature/<run slug>`, and commits the signed-off
-work with a message it writes from the diff.
 
 ## Workflow format
 
@@ -195,67 +168,25 @@ steps:
     inputs: [review]
 ```
 
-**Step kinds.** `agent` (the default, and what every step used to be — workflows written
-before kinds existed still work), `command`, `manual`, `approval`, and `loop`.
+**Step kinds.** `agent` (the default), `command`, `manual`, `approval`, and `loop` — a cycle
+over its own `steps` that repeats until its `until` step passes, bounded by
+`max_iterations`. `verdict: true` makes any step report pass/fail (an agent's `VERDICT:`
+line, a command's exit code, a human's answer) instead of failing the run outright — that is
+what a loop's `until` watches, and what `on_findings` (below) reacts to outside a loop.
 
-**Verdicts.** `verdict: true` makes a step report pass/fail instead of failing the run: an
-agent's `VERDICT:` line, a command's exit code, or a human's answer. That is what a loop's
-`until` watches.
+**Human steps.** `manual` and `approval` stop the run and ask — on a terminal `whiphand`
+prompts you; without one it fails naming the step, unless `--yes` takes the step's default.
+The desktop app gives the decision the whole page: `show_diff: true` shows the working tree
+side by side, and `capture: review` turns the screen into a place to leave per-file feedback
+that feeds back into the next loop iteration on `retry`.
 
-**Cycles.** A `kind: loop` step repeats its body until the `until` step passes, bounded by
-`max_iterations`. Each iteration keeps its own artifacts under
-`.whiphand/runs/<run-id>/<loop-id>/iter-<n>/`, so nothing overwrites the previous attempt.
-Inside a loop body, referencing a *later* step means "that step's artifact from the
-previous iteration" — which is how review findings feed back into the next attempt. A loop
-that exhausts its budget fails the run, but the run is resumable: `whiphand run --resume
-<id>` grants the exhausted loop one more iteration by default, or `--extra-iterations <n>`
-to grant more; each resume's grant is recorded, so a second resume raises the budget again
-from there.
+**Attachments.** `--attach <path>` (repeatable — or the desktop's New Run dialog: pick,
+drop, or paste an image) copies a file into the run before step one; a step reads them by
+naming the reserved ref `attachments` in its `inputs:`.
 
-**Human steps.** `manual` and `approval` stop the run and ask. On a terminal `whiphand` prompts
-you; without one it fails naming the step, unless you pass `--yes` to take the step's
-default.
-
-The desktop app gives the decision the whole page: a review screen listing what to look at
-down one side and showing it large on the other, with the choices along the bottom. With
-`show_diff: true` you get the working tree file by file, side by side — including files the
-run just created, which the terminal's `git diff HEAD` never showed. Each `inputs:` entry
-becomes its own rail entry, so `inputs: [review, plan]` puts the findings and the plan a
-click away from the button you are about to press.
-
-**Sending work back.** `capture: review` (in place of `capture: note`) turns that same screen
-into a place to leave feedback: one box for the whole change set, plus a comment under each
-file in the diff. Put the step inside a `kind: loop` with `until:` pointing at it and `retry`
-becomes available alongside `continue`/`abort` — approving ships, retrying writes the
-comments to the step's `output` and sends the run round the loop again, so the next
-`execute` (add it to that step's `inputs:`) reads exactly what needs to change. Outside a
-loop, or without `show_diff: true`, the step still runs — `whiphand run` warns on stderr,
-since each is a step that degrades rather than one that is wrong.
-
-**Attachments.** `--attach <path>` (repeatable) copies a file into the run before step
-one — a screenshot, a log, a HAR trace — and a step receives every attached file by naming
-the reserved ref in its inputs: `inputs: [attachments]`. Relative paths resolve against
-your shell's directory, not `-C`. Attaching files to a workflow where no enabled step reads
-`attachments` is refused with the fix, as is a missing, unreadable or oversized file
-(`runs.max_attachment_mb`, 25 by default) — all before a run directory exists, exit 2. With
-nothing attached the ref is simply dropped, so a workflow that *can* read attachments never
-needs them. A `command` step finds them in `"$WHIPHAND_RUN_DIR/attachments"`. In the
-desktop's New run dialog, add files with the picker, drop them on the dialog, or paste an
-image. The workflows in `examples/` read attachments on their plan step.
-
-## When the review fails (`on_findings`)
-
-For a `verdict` step that is **not** inside a `kind: loop`. Configured in
-`.whiphand/config.yaml` (workflows may override):
-
-- `report` (default) — write the findings, end the run.
-- `loop` — re-run the last writing step with the findings injected, up to
-  `loop.max_iterations` times. This is the older, inferred form of a cycle; an explicit
-  `kind: loop` says the same thing in the workflow, per cycle.
-- `interactive` — drop you into a live session with the findings preloaded.
-
-A verdict step *inside* a loop is governed by that loop instead; its `on_exhausted` takes
-the same `report` / `interactive` values for what happens when the budget runs out.
+See `docs/design.md` for the full reference: cycles and resuming an exhausted loop,
+disabling a step, `on_findings` (what happens when a review outside a loop finds problems),
+and every rule above in detail.
 
 ## Desktop app
 
@@ -372,80 +303,28 @@ the version is pinned across builds, so `apt-get install` over an already-instal
 
 **These are built natively and link this machine's glibc**, so they run on the Ubuntu
 release that built them, not on older ones. Building for wider reach means building in
-an older-glibc container. Design notes:
-`docs/superpowers/specs/2026-09-07-standalone-binaries-design.md`.
+an older-glibc container.
 
-**Releases and auto-update.** Releases are published by hand from the GitHub UI:
-
-1. **Bump the version** in a PR and merge it:
-
-   ```bash
-   npm run bump -- 0.1.3
-   ```
-
-   This writes the version everywhere it lives, `package-lock.json` included.
-
-2. **Publish the release.** On GitHub, go to **Releases → Draft a new release**, create the
-   tag `v0.1.3` on `main`, write the notes (or use **Generate release notes**), and click
-   **Publish release**. Leave **Set as a pre-release** unticked: installed apps only update
-   to the latest full release.
-
-3. **Wait for the build.** Publishing runs `.github/workflows/release.yml`, which builds
-   Linux and Windows and uploads the CLI binaries, the desktop bundles, `latest.json` for
-   Tauri's updater, and a `SHA256SUMS` file into that release. Its first step fails the run
-   if the tag doesn't match the version in the code, which means the bump wasn't merged
-   first. The release is public while the build runs (about 10–15 minutes), but installed
-   apps aren't offered the update until `latest.json` has been uploaded.
-
-Only the `.AppImage` and the Windows NSIS installer self-update. The `.deb` prompts with a
-link to the release page instead, since Tauri's updater cannot install into a `.deb`.
-
-**The updater signing key** was set up once for this repo. The steps are kept here for a
-fork or a change of owner, and neither can be done by CI:
-
-1. **Generate the key**, on your own machine:
-
-   ```bash
-   npx @tauri-apps/cli signer generate -w ~/.tauri/whiphand-updater.key
-   ```
-
-   > **Back the private key up somewhere outside GitHub before going further.** Tauri's
-   > updater only accepts a manifest signed by the key matching the `pubkey` compiled into
-   > the installed app. If the private key is lost, every copy already out there is
-   > permanently unable to auto-update — there is no recovery path short of every user
-   > reinstalling by hand.
-
-2. **Put the key into the repo and the CI secrets.** The *public* key is committed in
-   `plugins.updater.pubkey` in `apps/desktop/src-tauri/tauri.conf.json`. The private key
-   and its password are repository secrets named `TAURI_SIGNING_PRIVATE_KEY` and
-   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, which `release.yml` passes to `tauri-action`.
-   `node scripts/version.mjs --check-release` confirms the committed key is no longer the
-   `REPLACE_WITH_OPERATOR_GENERATED_PUBKEY` placeholder.
-
-The release URLs are already resolved, in the two places they are written — the
-`plugins.updater.endpoints` entry in `tauri.conf.json`, and `RELEASE_PAGE_URL` in
-`apps/desktop/src/lib/updater.ts`. Both point at `PlainBytes/whip-hand`. **If the repo
-moves to another owner, update both by hand.** GitHub redirects the old slug, so nothing
-breaks the day of the move and nothing tells you the values are stale either. The endpoint
-is the one already-installed copies poll, so letting it rot is how a release quietly stops
-reaching anyone; the `RELEASE_PAGE_URL` is the link a `.deb` user is sent to, so a stale one
-404s for exactly the people who cannot self-update.
-
-`createUpdaterArtifacts` is passed by `release.yml` rather than set in `tauri.conf.json` on
-purpose: set globally it would make every `tauri build` demand the signing key, including
-local `npm run package` and CI's own packaging job, neither of which should need it just to
-prove the bundle still builds.
+**Releases are published by hand from the GitHub UI**: bump the version
+(`npm run bump -- 0.1.3`) in a PR and merge it, then on GitHub go to
+**Releases → Draft a new release**, tag `v0.1.3` on `main`, and publish. See
+`docs/design.md` for the full release, auto-update, and updater-signing-key process, and
+for how to roll back a bad release.
 
 **Windows downloads are unsigned.** There is no code-signing certificate yet — the seam for
-one exists (`WHIPHAND_SIGN_COMMAND` for `whiphand.exe`, Tauri's `bundle.windows.signCommand` for the
-installer) but is unset. Expect Windows SmartScreen's "Windows protected your PC" prompt on
-first run, and don't be surprised if antivirus software flags either binary: a ~110 MB
+one exists (`WHIPHAND_SIGN_COMMAND` for `whiphand.exe`, Tauri's `bundle.windows.signCommand`
+for the installer) but is unset. `WHIPHAND_SIGN_COMMAND` must name a single executable, not
+a full command line with its own arguments — it is resolved and spawned directly, never
+through a shell. Expect Windows SmartScreen's "Windows protected your PC" prompt on first
+run, and don't be surprised if antivirus software flags either binary: a ~110 MB
 `postject`-modified `node.exe` and an installer with no publisher signature are both shapes
 heuristic scanners dislike. Neither is a defect in the build; both go away once a real
 certificate is in place.
 
 ## Docs
 
-- `docs/research.md` — why this exists and why we didn't adopt Comanda/Archon.
-- `docs/design.md` — architecture: the TTY seam, adapters, the interactive harvest.
-- `docs/implementation-plan.md` — the task-by-task build plan this was built from.
+- `docs/design.md` — why this exists, the architecture, and every workflow-format detail
+  this README only summarizes.
+- `docs/superpowers/specs/2026-09-08-staged-plans-design.md` — design for the not-yet-built
+  staged/multi-commit plan feature.
+- `docs/review-backlog.md` — known issues and larger refactors, not yet scheduled.

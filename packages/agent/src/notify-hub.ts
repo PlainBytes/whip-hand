@@ -1,19 +1,6 @@
 /**
- * Fan-out for outbound notifications. Before this existed, main.ts's notify()
- * wrote straight to stdout and there was exactly one client; now the desktop
- * (stdio) and a remote browser (WebSocket) both need every notification.
- *
- * THE TAP MUTATES. `tap` is handed each (method, params) BEFORE any sink sees
- * it and its return value is what gets delivered. That is deliberate and it is
- * the only clever thing in this file: scrollback.record() both appends a chunk
- * to its ring buffer and stamps the `seq` that identifies that chunk's absolute
- * position. Doing those in one place makes it impossible for the buffer index
- * and the wire sequence number to disagree — which is the bug that would show
- * up as a silently corrupted terminal on a client that attached mid-run, and
- * which no test would catch until someone actually attached mid-run.
- *
- * Sinks are invoked in registration order. A throwing sink must not stop the
- * others: one dead WebSocket cannot be allowed to cut the desktop's own feed.
+ * Fan-out for outbound notifications: `tap` may rewrite each (method, params)
+ * before sinks see it; sinks run in registration order and a throwing sink does not stop the others.
  */
 import type { NotifyFn } from './frontend.ts';
 

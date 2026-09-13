@@ -1,8 +1,7 @@
 /**
  * Files attached to a run at start, in the parts that need no filesystem.
- * Pure — no fs, no zod, no React — for the same reason enabled.ts is: the
- * engine, the CLI and the desktop's New Run dialog must agree on what counts
- * as consuming attachments and on what an attached file ends up called.
+ * Pure — no fs, no zod, no React, like enabled.ts — so the engine, CLI, and
+ * desktop New Run dialog agree on what counts as consuming attachments.
  */
 import type { Workflow } from './types.ts';
 import { flattenSteps, isLoopStep } from './steps.ts';

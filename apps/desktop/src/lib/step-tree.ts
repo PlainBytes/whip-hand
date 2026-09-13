@@ -1,10 +1,10 @@
 /**
  * Immutable edits to a workflow's step tree, addressed by path.
  *
- * A workflow used to be a flat array, so an index was an address. Loops made it
- * a tree, and every editing action (update, move, remove, add) now needs to
- * say *where* — `[1, 0]` is the first step of the second top-level step's
- * body. Kept out of WorkflowsPage so the tree arithmetic is testable on its own.
+ * Loops nest steps into a tree, so every editing action (update, move,
+ * remove, add) needs to say *where* — `[1, 0]` is the first step of the
+ * second top-level step's body. Kept out of WorkflowsPage so the tree
+ * arithmetic is testable on its own.
  */
 import type { LoopStep, Step } from '../../../../packages/core/src/types.ts';
 import { isLoopStep } from '../../../../packages/core/src/steps.ts';

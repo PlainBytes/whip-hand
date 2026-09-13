@@ -103,6 +103,14 @@ describe('markdown pipeline', () => {
     expect(html('<iframe src="https://example.com"></iframe>')).not.toContain('<iframe');
   });
 
+  it('strips an object tag', () => {
+    expect(html('<object data="https://example.com/x.swf"></object>')).not.toContain('<object');
+  });
+
+  it('strips an embed tag', () => {
+    expect(html('<embed src="https://example.com/x.swf">')).not.toContain('<embed');
+  });
+
   it('leaves a relative href untouched', () => {
     // react-markdown's defaultUrlTransform only filters URLs that carry a
     // scheme, so relative targets already survive — no override needed. This

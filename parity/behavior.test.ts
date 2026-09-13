@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createInterface } from 'node:readline';
-import { mkdtemp, cp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, cp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { TOOL_GROUP_LABELS } from '@whiphand/core';
+import { DEFAULT_CONFIG, TOOL_GROUP_LABELS } from '@whiphand/core';
 import type { ToolGroup } from '@whiphand/core';
 import type { DoctorRow } from '@whiphand/agent/src/protocol.ts';
 
@@ -410,4 +410,255 @@ test('doctor parity: CLI human output and agent doctor() report the same tool fa
     cliFacts, agentFacts,
     'CLI doctor and agent doctor() disagree on group/runner/installed/version/notes for one or more tools',
   );
+});
+
+// ---------------------------------------------------------------------------
+// --name / --max-iterations / --resume --extra-iterations parity
+//
+// budget.yaml is deliberately kind: command throughout (unlike parity.yaml):
+// its 'review' step always fails, so a plain run always exhausts
+// max_iterations without depending on the claude/copilot stub binaries doing
+// anything beyond exiting. That determinism is what makes exhaustion, and
+// then --resume --extra-iterations off the exhausted loop, testable at all.
+// ---------------------------------------------------------------------------
+
+/** Strips every timestamp/pid/path field a real run's manifest carries, so two separate runs compare equal. */
+function normalizeManifest(value: unknown): unknown {
+  const VOLATILE = new Set([
+    'runId', 'workdir', 'runDir', 'pid', 'startedAt', 'endedAt', 'updatedAt', 'heartbeatAt', 'resumedAt',
+  ]);
+  if (Array.isArray(value)) return value.map(normalizeManifest);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([k]) => !VOLATILE.has(k))
+        .map(([k, v]) => [k, normalizeManifest(v)]),
+    );
+  }
+  return value;
+}
+
+async function readManifest(dir: string, runId: string): Promise<unknown> {
+  return normalizeManifest(JSON.parse(await readFile(join(dir, '.whiphand', 'runs', runId, 'run.json'), 'utf8')));
+}
+
+/** Runs to completion (budget.yaml always fails, so a nonzero exit is expected) and returns the minted runId. */
+async function runCliBudget(dir: string, args: string[] = []): Promise<string> {
+  await execFileAsync(process.execPath, [CLI_MAIN, 'run', 'budget', '-C', dir, ...args], { env: childEnv() })
+    .catch(() => {});
+  const [runId] = await readdir(join(dir, '.whiphand', 'runs'));
+  assert.ok(runId, `expected a run directory under ${dir}`);
+  return runId;
+}
+
+async function resumeCliBudget(dir: string, runId: string, args: string[] = []): Promise<void> {
+  await execFileAsync(process.execPath, [CLI_MAIN, 'run', '--resume', runId, '-C', dir, ...args], { env: childEnv() })
+    .catch(() => {});
+}
+
+async function runAgentBudget(dir: string, params: Record<string, unknown> = {}): Promise<string> {
+  const agent = startAgentProcess();
+  try {
+    agent.send({ id: 1, method: 'startRun', params: { workdir: dir, workflow: 'budget', ...params } });
+    const started = await agent.waitFor(m => m.id === 1);
+    const jobId = (started.result as { jobId: string }).jobId;
+    const finalState = await agent.waitFor(m =>
+      m.method === 'runStateChanged' && m.params.jobId === jobId && m.params.status !== 'running');
+    return finalState.params.runId as string;
+  } finally {
+    agent.stop();
+  }
+}
+
+async function resumeAgentBudget(dir: string, runId: string, params: Record<string, unknown> = {}): Promise<void> {
+  const agent = startAgentProcess();
+  try {
+    agent.send({ id: 1, method: 'resumeRun', params: { workdir: dir, runId, ...params } });
+    const started = await agent.waitFor(m => m.id === 1);
+    const jobId = (started.result as { jobId: string }).jobId;
+    await agent.waitFor(m => m.method === 'runStateChanged' && m.params.jobId === jobId && m.params.status !== 'running');
+  } finally {
+    agent.stop();
+  }
+}
+
+test('--name parity: CLI --name and the agent startRun.name land in the same run:start event', async () => {
+  const cliDir = await copyFixtureWorkspace();
+  const agentDir = await copyFixtureWorkspace();
+
+  const { stdout } = await execFileAsync(process.execPath, [
+    CLI_MAIN, 'run', 'parity', '--dry-run', '--json', '--input', 'goal=G', '--name', 'Ship it', '-C', cliDir,
+  ], { env: childEnv() });
+  const cliStart = stdout.split('\n').filter(Boolean).map(l => JSON.parse(l)).find(e => e.type === 'run:start');
+  assert.equal(cliStart.name, 'Ship it');
+
+  const agent = startAgentProcess();
+  try {
+    agent.send({
+      id: 1, method: 'startRun',
+      params: { workdir: agentDir, workflow: 'parity', inputs: { goal: 'G' }, dryRun: true, name: 'Ship it' },
+    });
+    const started = await agent.waitFor(m => m.id === 1);
+    const jobId = (started.result as { jobId: string }).jobId;
+    const agentStart = await agent.waitFor(m =>
+      m.method === 'whiphandEvent' && m.params.jobId === jobId && m.params.event.type === 'run:start');
+    assert.equal(agentStart.params.event.name, 'Ship it');
+  } finally {
+    agent.stop();
+  }
+});
+
+test('--max-iterations parity: CLI and agent startRun.maxIterations exhaust a loop at the same count', async () => {
+  const cliDir = await copyFixtureWorkspace();
+  const agentDir = await copyFixtureWorkspace();
+
+  const cliRunId = await runCliBudget(cliDir, ['--max-iterations', '2']);
+  const agentRunId = await runAgentBudget(agentDir, { maxIterations: 2 });
+
+  const cliManifest = await readManifest(cliDir, cliRunId);
+  const agentManifest = await readManifest(agentDir, agentRunId);
+  assert.deepEqual(cliManifest, agentManifest);
+  assert.equal((cliManifest as { status: string }).status, 'failed');
+  const loopStep = (cliManifest as { steps: Array<{ id: string; iterations?: number }> })
+    .steps.find(s => s.id === 'cycle');
+  assert.equal(loopStep?.iterations, 2, '--max-iterations 2 must exhaust after exactly 2 iterations');
+});
+
+test('--resume --extra-iterations parity: CLI and agent grant the same extra budget to an exhausted loop', async () => {
+  const cliDir = await copyFixtureWorkspace();
+  const agentDir = await copyFixtureWorkspace();
+
+  const cliRunId = await runCliBudget(cliDir);
+  const agentRunId = await runAgentBudget(agentDir);
+  // Both start from the same exhausted-at-1 state before resuming differently.
+  assert.deepEqual(await readManifest(cliDir, cliRunId), await readManifest(agentDir, agentRunId));
+
+  await resumeCliBudget(cliDir, cliRunId, ['--extra-iterations', '2']);
+  await resumeAgentBudget(agentDir, agentRunId, { extraIterations: 2 });
+
+  const cliManifest = await readManifest(cliDir, cliRunId);
+  const agentManifest = await readManifest(agentDir, agentRunId);
+  assert.deepEqual(cliManifest, agentManifest);
+  const loopStep = (cliManifest as { steps: Array<{ id: string; maxIterations?: number }> })
+    .steps.find(s => s.id === 'cycle');
+  assert.equal(loopStep?.maxIterations, 3, '1 (original) + 2 (extra) = 3');
+});
+
+// ---------------------------------------------------------------------------
+// rename-run parity
+// ---------------------------------------------------------------------------
+
+test("rename-run parity: CLI's '' and the agent's null clear a run's name the same way", async () => {
+  const cliDir = await copyFixtureWorkspace();
+  const agentDir = await copyFixtureWorkspace();
+  const cli = await runCliDryRun(cliDir);
+  const agent = await runAgentDryRun(agentDir);
+
+  await execFileAsync(process.execPath, [CLI_MAIN, 'rename-run', cli.runId, 'Before', '-C', cliDir], { env: childEnv() });
+  const { stdout } = await execFileAsync(
+    process.execPath, [CLI_MAIN, 'rename-run', cli.runId, '', '-C', cliDir], { env: childEnv() },
+  );
+  assert.match(stdout, /name cleared/);
+
+  const agentRpc = startAgentProcess();
+  let cleared: AgentMessage;
+  try {
+    agentRpc.send({ id: 1, method: 'renameRun', params: { workdir: agentDir, runId: agent.runId, name: 'Before' } });
+    await agentRpc.waitFor(m => m.id === 1);
+    agentRpc.send({ id: 2, method: 'renameRun', params: { workdir: agentDir, runId: agent.runId, name: null } });
+    cleared = await agentRpc.waitFor(m => m.id === 2);
+  } finally {
+    agentRpc.stop();
+  }
+  assert.deepEqual(cleared.result, { renamed: true });
+
+  const nameMarker = async (dir: string, runId: string) =>
+    readFile(join(dir, '.whiphand', 'runs', runId, '.name'), 'utf8').catch(() => null);
+  assert.equal(await nameMarker(cliDir, cli.runId), null, "CLI's '' must clear the marker file, not write an empty one");
+  assert.equal(await nameMarker(agentDir, agent.runId), null);
+});
+
+// ---------------------------------------------------------------------------
+// init / new-workflow scaffolding parity
+// ---------------------------------------------------------------------------
+
+/** Every file under dir, relative, sorted — the shape of a scaffold's output, regardless of write order. */
+async function fileTree(dir: string): Promise<Array<{ path: string; content: string }>> {
+  const out: Array<{ path: string; content: string }> = [];
+  async function walk(sub: string): Promise<void> {
+    for (const entry of await readdir(join(dir, sub), { withFileTypes: true })) {
+      const rel = join(sub, entry.name);
+      if (entry.isDirectory()) await walk(rel);
+      else out.push({ path: rel, content: await readFile(join(dir, rel), 'utf8') });
+    }
+  }
+  await walk('.');
+  return out.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+test('init parity: CLI `whiphand init` and the agent initWorkspace scaffold the same files', async () => {
+  const cliDir = await mkdtemp(join(tmpdir(), 'whiphand-parity-init-'));
+  const agentDir = await mkdtemp(join(tmpdir(), 'whiphand-parity-init-'));
+
+  await execFileAsync(process.execPath, [CLI_MAIN, 'init', '-C', cliDir], { env: childEnv() });
+  const agent = startAgentProcess();
+  try {
+    agent.send({ id: 1, method: 'initWorkspace', params: { workdir: agentDir } });
+    await agent.waitFor(m => m.id === 1);
+  } finally {
+    agent.stop();
+  }
+
+  assert.deepEqual(await fileTree(join(cliDir, '.whiphand')), await fileTree(join(agentDir, '.whiphand')));
+});
+
+test('new-workflow parity: CLI `whiphand new-workflow` and the agent createWorkflow scaffold the same file', async () => {
+  const cliDir = await mkdtemp(join(tmpdir(), 'whiphand-parity-neww-'));
+  const agentDir = await mkdtemp(join(tmpdir(), 'whiphand-parity-neww-'));
+
+  await execFileAsync(process.execPath, [CLI_MAIN, 'new-workflow', 'triage', '-C', cliDir], { env: childEnv() });
+  const agent = startAgentProcess();
+  try {
+    agent.send({ id: 1, method: 'createWorkflow', params: { workdir: agentDir, name: 'triage', scope: 'project' } });
+    await agent.waitFor(m => m.id === 1);
+  } finally {
+    agent.stop();
+  }
+
+  const content = (dir: string) => readFile(join(dir, '.whiphand', 'workflows', 'triage.yaml'), 'utf8');
+  assert.equal(await content(cliDir), await content(agentDir));
+});
+
+// ---------------------------------------------------------------------------
+// config parity
+// ---------------------------------------------------------------------------
+
+test('config set parity: CLI dotted key/value and the agent configSet write the same project config.yaml', async () => {
+  const cliDir = await mkdtemp(join(tmpdir(), 'whiphand-parity-config-'));
+  const agentDir = await mkdtemp(join(tmpdir(), 'whiphand-parity-config-'));
+
+  await execFileAsync(
+    process.execPath, [CLI_MAIN, 'config', 'set', 'defaults.runner', 'copilot', '-C', cliDir], { env: childEnv() },
+  );
+
+  const agent = startAgentProcess();
+  try {
+    // The desktop's settings form reads the whole merged config, edits one
+    // field, and submits the lot back — configSet's shape mirrors that, unlike
+    // the CLI's single dotted key/value. explicitKeys is what tells
+    // diffConfigLayer to write only this field, same as the CLI's one write.
+    agent.send({
+      id: 1, method: 'configSet',
+      params: {
+        workdir: agentDir, scope: 'project', explicitKeys: ['defaults.runner'],
+        config: { ...DEFAULT_CONFIG, defaults: { ...DEFAULT_CONFIG.defaults, runner: 'copilot' } },
+      },
+    });
+    await agent.waitFor(m => m.id === 1);
+  } finally {
+    agent.stop();
+  }
+
+  const content = (dir: string) => readFile(join(dir, '.whiphand', 'config.yaml'), 'utf8');
+  assert.equal(await content(cliDir), await content(agentDir));
 });

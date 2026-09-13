@@ -1,21 +1,6 @@
 /**
- * A plain <textarea> with syntax highlighting behind it.
- *
- * The textarea's own glyphs are transparent; what you read is a <pre> layered
- * underneath holding the same text, coloured by highlight.js. The caret and
- * the selection band still come from the textarea, so this stays a real
- * textarea — native undo, native selection, native accessibility — rather
- * than a contenteditable pretending to be one.
- *
- * Neither layer scrolls: the <pre> defines the height, the textarea is
- * absolutely positioned over it, and the pane around them does the scrolling.
- * That is what removes the usual scroll-syncing (and the jitter that comes
- * with it) from this technique.
- *
- * The two layers must therefore agree on every metric that decides where a
- * glyph lands — font, size, line height, padding, tab size, wrapping. Those
- * live once in LAYER_STYLE; anything added to one layer has to be added to
- * the other, or the caret drifts away from the text.
+ * A plain <textarea> with syntax highlighting layered behind it via a
+ * highlight.js <pre>; native caret/selection/undo, not a contenteditable.
  */
 import { useEffect, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import { highlightCode } from '../files/highlight.ts';

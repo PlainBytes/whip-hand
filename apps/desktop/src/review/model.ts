@@ -1,12 +1,7 @@
 /**
- * "Present some findings, then ask for a decision", independent of what asked.
- *
- * A manual/approval step is the only thing that raises one of these today, but
- * nothing here mentions one: the panel takes a title, some instructions, a
- * list of *sources* to look at, and a list of choices. That is the whole
- * vocabulary, and it is deliberately the vocabulary of the screen rather than
- * of the engine — so a future gate that wants to show a different kind of
- * finding adds a source kind, not a second review surface.
+ * Vocabulary for "present some findings, then ask for a decision" panels —
+ * title, instructions, sources to look at, and choices — independent of
+ * what raised the request.
  */
 import type { CaptureSpec, ManualChoice } from '../../../../packages/core/src/types.ts';
 

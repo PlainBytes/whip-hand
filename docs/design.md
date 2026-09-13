@@ -1,8 +1,18 @@
 # Design: `whiphand` — a workflow runner for LLM CLIs
 
-See `docs/research.md` for why this is being built rather than adopting Comanda or Archon.
-This document is expected to change as implementation proceeds; treat it as current intent,
-not a frozen record.
+## Background
+
+The requirement (2026-09-01): drive different LLM CLIs per workflow step — e.g. plan with
+one model, execute with another, review with a third — in one working folder. Neither
+`claude` nor `copilot` can drive another vendor's CLI as a subprocess, only models within
+their own harness, so that gap needed something external to both. Comanda (Go) was rejected
+for having no Copilot CLI provider; Archon (TypeScript) came closest — provider registry,
+per-node tool/model policy, a git-mutation assertion for read-only nodes — but its
+multi-turn chat is web-UI-only and its stack (Docker Compose, Postgres, a separate
+auth-service) is far heavier than the problem warrants. `whiphand` borrows proven ideas from
+Archon's schema rather than reinventing them: per-step tool allow/deny lists, a git
+working-tree mutation assertion for read-only steps, and typed output artifacts addressable
+by role (`plan`, `findings`, `report`) rather than by guessing a filename.
 
 ## Summary
 
@@ -24,9 +34,10 @@ Decisions carried in from research and from direct discussion:
 
 ## Why the two target CLIs make a thin adapter layer viable
 
-All flags below were confirmed directly against `claude --help` and `copilot --help` on
-the installed binaries (`claude` 2.1.252, `copilot` 1.0.60) — not taken from memory or
-documentation that could be stale.
+All flags below were confirmed directly against `claude --help` and `copilot --help` at
+the time this table was written — not taken from memory or documentation that could be
+stale. Re-check against a current install before relying on an exact flag spelling; `whiphand
+doctor` reports the installed versions.
 
 | Capability | `claude` | `copilot` |
 |---|---|---|
@@ -72,23 +83,9 @@ interactive processes directly with `stdio: 'inherit'`, every future frontend wo
 stuck re-implementing or fighting that assumption.
 
 So `core` never spawns an interactive step itself. It resolves the step into a
-`SpawnSpec` and hands it to whichever frontend is running:
-
-```ts
-type SpawnSpec = {
-  argv: string[];          // e.g. ['claude', '--session-id', id, '--model', 'opus', prompt]
-  cwd: string;
-  env: Record<string, string>;
-  interactive: boolean;    // true => the frontend must attach a TTY itself
-  endSession?: {           // set by interactive() only: how this session can end itself
-    markerPath: string;    // the file the model creates when the human agrees we're done
-    quitSequence: string;  // what to write to the pty to ask the runner to quit
-  };
-  awaitState?: {           // set by interactive() only: how this session reports being blocked
-    statePath: string;     // the file the runner's own hooks write
-  };
-};
-```
+`SpawnSpec` (`packages/core/src/types.ts` — argv/cwd/env, an `interactive` flag, and the
+optional `endSession`/`awaitState`/`capture`/`progress` extras the sections below explain)
+and hands it to whichever frontend is running.
 
 The **frontend** decides how to attach the human: the `whiphand` CLI spawns with
 `stdio: 'inherit'`; a Tauri app spawns into its own PTY widget in the webview. `core`
@@ -98,27 +95,13 @@ until the Tauri app exists would mean rewriting the run engine's control flow la
 
 ### Adapter interface
 
-```ts
-interface RunnerAdapter {
-  id: 'claude' | 'copilot' | string;
-  capabilities: {
-    sessionIdInjection: boolean;  // can we mint the session id ourselves?
-    sessionResume: boolean;       // required for the interactive handoff
-    toolDenial: boolean;
-    shareTranscript: boolean;     // e.g. copilot --share, as a fallback capture
-  };
-  detect(): Promise<{ installed: boolean; version?: string }>;
-  interactive(step: Step, ctx: RunCtx): SpawnSpec;
-  headless(step: Step, ctx: RunCtx): SpawnSpec;
-  harvest(step: Step, ctx: RunCtx): SpawnSpec;
-  listModels?(): Promise<ModelList>;  // { source: 'live'|'fallback'|'unavailable'; models: ModelInfo[]; note?: string }
-}
-```
-
-`listModels` feeds the workflow editor's Model field with suggestions and typo warnings.
-Optional, and its absence *is* the capability check, same precedent as `suggestName?` (below):
-a runner with no way to ask simply gets no picker, and the field stays free text with no
-warnings.
+`RunnerAdapter` (`packages/core/src/types.ts`) is `id`, a `capabilities` map
+(`sessionIdInjection`, `sessionResume`, `toolDenial`, `shareTranscript`), `detect()`, and
+three `Step → SpawnSpec` builders (`interactive`, `headless`, `harvest`), plus two optional
+methods: `suggestName?` (run auto-naming) and `listModels?` (feeds the workflow editor's
+Model field with suggestions and typo warnings). Both are optional, and the absence of
+either *is* the capability check — a runner with no way to answer simply gets no picker, or
+never auto-names a run, and the field stays free text with no warnings.
 
 The registry is a plain map keyed by adapter `id`, so adding `codex` or `gemini` later is
 additive, not a change to the engine. A step that requests a capability its adapter
@@ -229,8 +212,8 @@ frontend that can watch the filesystem combines them (`agent/frontend.ts`):
   *your turn*, `PermissionRequest` → *needs permission*, `UserPromptSubmit`
   removes the file, and `Notification` dumps its raw payload, from which the
   agent maps `notification_type` (`idle_prompt` → *waiting for you*, claude's own
-  judgement that the human has been silent about a minute). Verified against
-  2.1.260: inline settings **merge** with the user's, so their hooks still run.
+  judgement that the human has been silent about a minute). Inline settings
+  **merge** with the user's own, so their hooks still run alongside these.
   Every hook command ends `; exit 0` — a `Stop` hook exiting nonzero blocks the
   agent from stopping, and a `PermissionRequest` one exiting 2 denies the tool.
 - **The terminal bell (runner-agnostic).** A standalone BEL in the PTY stream
@@ -257,17 +240,16 @@ the model not to edit files is a request, not a control:
    `--deny-tool` plus a restricted `--available-tools` (copilot).
 2. **Git working-tree assertion** — `whiphand` snapshots the working tree before the step runs;
    if anything changed outside the run's own artifact directory, the step fails and names
-   what changed. This is the same idea as Archon's `mutates_checkout` field, implemented
-   independently rather than adopted wholesale (see `docs/research.md`).
+   what changed. This is the same idea as Archon's `mutates_checkout` field (see "Background"
+   above), implemented independently rather than adopted wholesale.
 
 Layer 2 exists precisely because layer 1 can be bypassed by a model that ignores its tool
 policy, or by a future adapter whose `toolDenial` capability turns out to be unreliable.
 
 ## Workflow format
 
-A workflow lives at `.whiphand/workflows/<name>.yaml` inside the working folder. Every step declares a
-`kind`; a step with no `kind` is an `agent` step, which is what every step used to be, so
-workflows written before kinds existed keep working untouched.
+A workflow lives at `.whiphand/workflows/<name>.yaml` inside the working folder. Every step
+declares a `kind`; a step with no `kind` defaults to `agent`.
 
 ### Step kinds
 
@@ -366,6 +348,25 @@ A step that reports a verdict has done its job: a `verdict: true` command exitin
 recorded as **done** with a FAIL, not as a broken step. Without `verdict: true`, a non-zero
 exit fails the run as it always did.
 
+### Command steps and shell injection
+
+A `command` step's `run:` goes through a real shell (`command.ts`'s `SHELL_FLAGS` table —
+`sh -c` on POSIX, `cmd.exe /d /s /c` on Windows by default; `shell:` names a different one
+per step), and `{{ inputs.* }}` / `{{ run.* }}` template values are substituted into it as
+plain text *before* the shell parses the line. A run input containing shell metacharacters
+(`; | & $( ) \` "` …) can therefore inject arbitrary shell syntax — quoting the reference in
+the workflow YAML does not help, since the substitution happens first, not the shell's own
+parsing of the author's quotes.
+
+This is a known, accepted risk rather than an oversight: safely escaping an arbitrary
+template value across three shell dialects (POSIX `sh`, `cmd.exe`, PowerShell), plus an
+operator-overridable `shell:`, is not a small fix, and getting the escaping subtly wrong
+per-dialect would be worse than the current, well-understood behavior. Treat a `command`
+step's inputs the way you would any other shell script: only interpolate values you already
+trust into `run:`, and prefer reading untrusted ones from an environment variable (`env:`)
+instead, since a shell only re-parses `$VAR` expansions, not the variable's contents. See
+`docs/review-backlog.md` for the tracked follow-up.
+
 ### Attachments
 
 Some things a step needs are awkward to pass as an input string: a screenshot, a log, a HAR
@@ -393,8 +394,8 @@ steps:
   directory name under the run dir, and would collide with the attachment directory. It is
   exempt from the ordering checks, since the files exist before step one.
 - **Always copied.** Before step one the files are copied into `<runDir>/attachments/`
-  and recorded in `run.json` (`attachments: [{ name, path, size, source }]`, optional, so
-  older manifests parse unchanged). A file keeps its basename, sanitized to
+  and recorded in `run.json` (`attachments: [{ name, path, size, source }]`, an optional
+  field). A file keeps its basename, sanitized to
   `[A-Za-z0-9._-]` with no leading dot; pasted images become `pasted-N.<ext>`; duplicates
   get `-2`, `-3`, … before the extension, compared case-insensitively. The `run:start` event
   carries the final names, so the CLI's `📎` line and the dialog's chips show exactly what
@@ -482,10 +483,9 @@ inside one. A verdict step inside an explicit loop is governed by the loop, and
 
 ## Disabling a step
 
-`enabled: false` parks a step without deleting it or its prompt. Absent means enabled, so
-every workflow written before this existed parses unchanged — there is no schema default,
-because a default would serialise `enabled: true` onto every step in every file on first
-save.
+`enabled: false` parks a step without deleting it or its prompt. Absent means enabled —
+there is no schema default, because a default would serialise `enabled: true` onto every
+step in every file on first save.
 
 - **A disabled step never starts**: no session, no artifact, no tokens spent. It is still
   recorded in the run's manifest with a distinct `disabled` status (not `skipped`, which
@@ -534,8 +534,7 @@ A `manual`/`approval` step's `capture` field is `'note' | 'review'`, built into 
 `CaptureSpec` (`{ kind, label, requiredFor, perFile }`) that core hands the frontend —
 `requiredFor` names the choices that cannot be answered without text, because that is
 per-choice, not a single boolean: a note you must type to `continue` and a comment you must
-type to `retry` are opposite rules. `capture: 'note'` maps to `requiredFor: ['continue']`,
-unchanged from before `CaptureSpec` existed.
+type to `retry` are opposite rules. `capture: 'note'` maps to `requiredFor: ['continue']`.
 
 `capture: 'review'` is `requiredFor: ['retry']` and `perFile: true`: the frontend offers one
 overall comment plus a comment per file in the diff, and `retry` cannot be answered without
@@ -591,7 +590,7 @@ human does, and this screen belongs to the human.
 
 `ReviewOverlay` is kept mounted, hidden with `display: none`, while the human backs out to the
 `PendingDecisionBar` — the same pattern the run page's own tabs use, and for the same reason:
-unmounting would throw away a typed note or a dozen per-file comments the same way it used to
+unmounting would throw away a typed note or a dozen per-file comments, exactly as it would
 throw away the terminal's xterm buffer.
 
 It is rendered *instead of* the page body, not floating over it — one Fluent Modalizer at a
@@ -608,7 +607,8 @@ binaries and untracked files alike without touching the real index.
 
 A run is minted as `YYYYMMDD-HHmmss-xxxx` and that id never changes: `listRuns` sorts by
 it, retention prunes oldest-first by it, and it is a path segment. On top of that a run
-carries an optional **name** — a human label shown wherever the id used to be shown alone:
+carries an optional **name** — a human label shown in the runs grid, the run page and OS
+notifications, in place of the raw id:
 
 ```bash
 whiphand run feature --input feature="oauth support" --name "OAuth support"
@@ -661,8 +661,8 @@ That is the whole of `whiphand`'s worktree story: the variable, and your own `co
 Per-step worktree isolation stays out of scope (see below) — there is no git-write layer
 here, and every step's `cwd` still flows from the one `workdir`.
 
-Both values are **frozen for the life of the process**. A rename mid-run must not change
-the slug a step already used to name a branch, and `{{ run.name }}` must never disagree
+Both values are **frozen for the life of the process**. A rename mid-run must not change a
+slug a step has already put into a branch name, and `{{ run.name }}` must never disagree
 with `{{ run.slug }}` inside one run. A resumed run is a new process, so it picks up
 whatever the run is called then.
 
@@ -713,43 +713,40 @@ per-workspace choice rather than something the tool hardcodes:
 A workflow may set its own `on_findings`, overriding the workspace default for that workflow
 specifically.
 
-## Build order
+## Desktop app architecture
 
-Ordered so the largest share of correctness is verifiable before any tokens are spent:
+Three principles hold the desktop shell to the same guarantees as the CLI:
 
-1. **Workflow schema + validator** (`packages/core/src/schema.ts`, Zod) — including the
-   adapter-capability check (an `interactive` step requires `sessionResume`).
-2. **Adapter argv builders** (`packages/core/src/adapters/{claude,copilot}.ts`) — pure
-   functions, `Step → SpawnSpec`, no process spawning. This is where TDD applies most
-   directly, since the whole surface is deterministic input/output.
-3. **`whiphand doctor`** — detects installed runners and their versions. Smallest useful
-   end-to-end slice; exercises `detect()` on every adapter.
-4. **`whiphand run --dry-run`** — resolves a full workflow and prints every step's resolved argv
-   without spawning anything. Validates steps 1–3 together at zero token cost.
-5. **Headless engine** — runs non-interactive steps for real: artifact store, git
-   working-tree assertion.
-6. **Interactive handoff** — TTY spawn in the CLI frontend, plus the resume-based harvest.
-7. **`on_findings` modes** — `report` first (it's the default and simplest), then `loop`,
-   then `interactive`.
+1. **The workspace stays the source of truth.** Everything authoritative already lives in
+   the workspace (`.whiphand/config.yaml`, `.whiphand/workflows/`, `.whiphand/runs/<id>/run.json` +
+   `events.ndjson`). The desktop's own app-state store holds only *convenience* data —
+   pointers, preferences, history. Deleting it must lose zero work and break nothing.
+2. **The agent owns all disk I/O.** App-state persistence goes through `@whiphand/agent` RPCs,
+   same as `readArtifact`. The webview gets no fs capability of its own beyond the Files
+   tab's explicitly-granted scope (see the desktop webview security notes in
+   `docs/review-backlog.md` if present, or `apps/desktop/src-tauri/src/lib.rs`).
+3. **CLI/UI parity holds.** `@whiphand/core` is never given a UI-only code path, and no
+   desktop feature does something the CLI cannot — see `parity/`.
 
-Steps 1–4 spend no LLM tokens at all and are where most of the tool's correctness lives;
-they should be fully covered before step 5 touches a real runner.
+**Workspace-scoped navigation.** The sidebar is organized by scope, since mixing the two
+was the actual confusion:
 
-## Verification strategy
+- **Top** — the workspace switcher: colour dot, name, path. Pinned workspaces sort first;
+  Ctrl/Cmd+K opens a filter-as-you-type switcher. The colour is an FNV-1a hash of the
+  absolute path, so two workspaces named the same are still tellable apart.
+- **Upper block** — pages that act on the open workspace: Runs, Workflows, Files, Settings.
+  Disabled, not hidden, when no workspace is open.
+- **Lower block** — pages that outlive any workspace: Activity, Doctor, Preferences. These
+  work with no workspace open.
 
-- **Unit tests on argv builders** — assert exact argv for every runner × mode ×
-  tool-policy combination, including that `writes: false` always emits the denial flags
-  for that adapter.
-- **`whiphand doctor`** — confirms `claude` 2.1.252 and `copilot` 1.0.60 are both detected on
-  this machine.
-- **`whiphand run --dry-run`** on the sample three-step workflow above — every step's argv is
-  correct, no spend occurs.
-- **Git-assertion test** — a `writes: false` step that touches a file must fail the run
-  with a named cause.
-- **End-to-end** — a throwaway repo with one deliberate, findable defect; run the
-  plan/execute/review workflow against it; confirm `plan.md`, `execute-report.md`, and
-  `findings.md` all land, the resulting diff is real, and the plan step left the tree
-  untouched.
+`nav.ts`'s `requiresWorkspace` column is the single source for which pages are gated.
+Switching workspace clears the previous one's cached runs, workflows and config rather than
+leaving them on screen until each page refetches, and every job is tagged with the
+workspace it started in, so a run in one workspace never drives another's window title, run
+rows, or notifications. One workspace is active at a time — there are no workspace tabs and
+no second window — but the Activity page, sidebar job badges, and notifications all carry
+cross-workspace *awareness*, and pinning plus Ctrl+K make switching cheap enough that
+simultaneity is rarely what was actually wanted.
 
 ## Out of scope
 
@@ -757,25 +754,76 @@ DAG or parallel steps, `codex`/`gemini` adapters, per-step git worktree isolatio
 spend ceilings/telemetry (`max_spend_usd` — cycles are bounded by `max_iterations` only).
 These are plausible follow-ups, not commitments.
 
-Command steps go through a resolved shell (`command.ts`'s `SHELL_FLAGS` table — `sh -c` on
-POSIX, `cmd.exe /d /s /c` on Windows by default); `shell:` names a different one per step.
+## Releases
 
-## Release rollback (R6)
+Releases are published by hand from the GitHub UI:
 
-Every rollback below assumes the updater is actually configured. The signing key is a
-one-time operator step — README's "Releases and auto-update" has the procedure, and
-`node scripts/version.mjs --check-release` confirms the committed `pubkey` is no longer a
-placeholder. That matters here specifically: a release built with the placeholder installs
-perfectly well and *then* cannot update, so the failure surfaces only when the next release
-fails to reach anyone — at which point none of the rollback below can help, because the
-broken copies are no longer listening.
+1. **Bump the version** in a PR and merge it: `npm run bump -- 0.1.3` writes the version
+   everywhere it lives, `package-lock.json` included.
+2. **Publish the release.** On GitHub, go to **Releases → Draft a new release**, create the
+   tag `v0.1.3` on `main`, write the notes (or use **Generate release notes**), and click
+   **Publish release**. Leave **Set as a pre-release** unticked: installed apps only update
+   to the latest full release.
+3. **Wait for the build.** Publishing runs `.github/workflows/release.yml`, which builds
+   Linux and Windows and uploads the CLI binaries, the desktop bundles, `latest.json` for
+   Tauri's updater, and a `SHA256SUMS` file into that release. Its first step fails the run
+   if the tag doesn't match the version in the code, which means the bump wasn't merged
+   first. The release is public while the build runs (about 10–15 minutes), but installed
+   apps aren't offered the update until `latest.json` has been uploaded.
 
-Releases are published by hand from the GitHub UI, and publishing one runs
-`.github/workflows/release.yml`, which uploads the CLI binaries, the Linux/Windows bundles,
-and `latest.json` into it — the file every installed copy's Tauri updater polls via
-`releases/latest/download/latest.json`. That URL always resolves to whatever GitHub
-currently considers the repository's *latest* release, so un-shipping a bad one is a
-release-metadata operation, not a rebuild:
+Only the `.AppImage` and the Windows NSIS installer self-update. The `.deb` prompts with a
+link to the release page instead, since Tauri's updater cannot install into a `.deb`.
+
+### The updater signing key
+
+Set up once for this repo. The steps below are kept for a fork or a change of owner, and
+neither can be done by CI:
+
+1. **Generate the key**, on your own machine:
+
+   ```bash
+   npx @tauri-apps/cli signer generate -w ~/.tauri/whiphand-updater.key
+   ```
+
+   Back the private key up somewhere outside GitHub before going further: Tauri's updater
+   only accepts a manifest signed by the key matching the `pubkey` compiled into the
+   installed app. If the private key is lost, every copy already out there is permanently
+   unable to auto-update — there is no recovery path short of every user reinstalling by
+   hand.
+2. **Put the key into the repo and the CI secrets.** The *public* key is committed in
+   `plugins.updater.pubkey` in `apps/desktop/src-tauri/tauri.conf.json`. The private key
+   and its password are repository secrets named `TAURI_SIGNING_PRIVATE_KEY` and
+   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, which `release.yml` passes to `tauri-action`.
+   `node scripts/version.mjs --check-release` confirms the committed key is no longer the
+   `REPLACE_WITH_OPERATOR_GENERATED_PUBKEY` placeholder.
+
+The release URLs are already resolved, in the two places they are written — the
+`plugins.updater.endpoints` entry in `tauri.conf.json`, and `RELEASE_PAGE_URL` in
+`apps/desktop/src/lib/updater.ts`. Both point at `PlainBytes/whip-hand`. If the repo moves
+to another owner, update both by hand: GitHub redirects the old slug, so nothing breaks the
+day of the move and nothing tells you the values are stale either. The endpoint is the one
+already-installed copies poll, so letting it rot is how a release quietly stops reaching
+anyone; the `RELEASE_PAGE_URL` is the link a `.deb` user is sent to, so a stale one 404s for
+exactly the people who cannot self-update.
+
+`createUpdaterArtifacts` is passed by `release.yml` rather than set in `tauri.conf.json` on
+purpose: set globally it would make every `tauri build` demand the signing key, including
+local `npm run package` and CI's own packaging job, neither of which should need it just to
+prove the bundle still builds.
+
+### Rolling back a bad release (R6)
+
+Every rollback below assumes the updater is actually configured — see "The updater signing
+key" above. That matters here specifically: a release built with the placeholder pubkey
+installs perfectly well and *then* cannot update, so the failure surfaces only when the next
+release fails to reach anyone — at which point none of the rollback below can help, because
+the broken copies are no longer listening.
+
+Publishing a release runs `.github/workflows/release.yml`, which uploads the CLI binaries,
+the Linux/Windows bundles, and `latest.json` into it — the file every installed copy's Tauri
+updater polls via `releases/latest/download/latest.json`. That URL always resolves to
+whatever GitHub currently considers the repository's *latest* release, so un-shipping a bad
+one is a release-metadata operation, not a rebuild:
 
 - On the bad release's page, **Edit** it and tick **Set as a pre-release**, or **Delete** it.
   Either way GitHub stops considering it "latest", and the URL falls back to the most recent

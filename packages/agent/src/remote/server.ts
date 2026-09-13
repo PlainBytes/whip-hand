@@ -3,11 +3,16 @@
  *
  * Shape, and why:
  *   - Static SPA on GET, unauthenticated (see static.ts for the reasoning).
- *   - GET /api/ping, token-authenticated, so the web client can validate a
- *     token BEFORE mounting React and show a "rescan" screen instead of an
- *     endless reconnect spinner. This is why AgentClient needs no changes.
- *   - GET /ws, the RPC channel. A browser WebSocket cannot set headers, so the
- *     token arrives as ?t=; the Host and Origin checks in auth.ts do the rest.
+ *   - GET /api/ping, token-authenticated via an Authorization: Bearer header,
+ *     so the web client can validate a token BEFORE mounting React and show a
+ *     "rescan" screen instead of an endless reconnect spinner. This is why
+ *     AgentClient needs no changes.
+ *   - GET /ws, the RPC channel. A browser WebSocket cannot set headers, but it
+ *     can set Sec-WebSocket-Protocol, so the token rides there instead of in
+ *     the URL — see auth.ts's tokenFromProtocolHeader. The handshake response
+ *     echoes back the fixed, non-secret PROTOCOL_NAME (see auth.ts), so the
+ *     token appears only in the request. The Host and Origin checks do the
+ *     rest.
  *
  * The Host/Origin check is applied to EVERY request, not just the authenticated
  * ones. Serving the shell to any Host would technically be harmless (the files
@@ -24,7 +29,9 @@ import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { Dispatcher } from '../rpc.ts';
 import type { NotifyFn } from '../frontend.ts';
-import { FailureThrottle, checkHostAndOrigin, localAddresses, tokenMatches } from './auth.ts';
+import {
+  FailureThrottle, checkHostAndOrigin, localAddresses, tokenFromProtocolHeader, tokenMatches, PROTOCOL_NAME,
+} from './auth.ts';
 import { resolveStatic, sendStatic } from './static.ts';
 
 /**
@@ -171,7 +178,7 @@ export function createRemoteServer(deps: RemoteServerDeps): RemoteServer {
       refuseUpgrade(socket, 404, 'Not Found');
       return;
     }
-    if (!authorized(req, url.searchParams.get('t'))) {
+    if (!authorized(req, tokenFromProtocolHeader(req.headers['sec-websocket-protocol']))) {
       refuseUpgrade(socket, 401, 'Unauthorized');
       return;
     }
@@ -222,7 +229,15 @@ export function createRemoteServer(deps: RemoteServerDeps): RemoteServer {
           res.end('Internal error\n');
         });
       });
-      wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
+      wss = new WebSocketServer({
+        noServer: true,
+        maxPayload: MAX_FRAME_BYTES,
+        // Echoes the fixed, non-secret PROTOCOL_NAME rather than the
+        // token-carrying entry — see auth.ts's TOKEN_PROTOCOL_PREFIX comment
+        // for why the client always offers both. By the time this runs,
+        // handleUpgrade has already authorized the token from the same list.
+        handleProtocols: protocols => (protocols.has(PROTOCOL_NAME) ? PROTOCOL_NAME : false),
+      });
       httpServer.on('upgrade', handleUpgrade);
 
       await new Promise<void>((resolveStart, rejectStart) => {

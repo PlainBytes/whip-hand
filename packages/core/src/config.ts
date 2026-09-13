@@ -197,9 +197,7 @@ export function diffConfigLayer(
 /**
  * The fully resolved config a workspace runs with: DEFAULT_CONFIG, with the
  * global layer applied, with the project's own `.whiphand/config.yaml` applied on
- * top. Signature and return type are unchanged from before global config
- * existed, which is what lets runner.ts, run.ts and handlers.ts call it
- * exactly as they always have.
+ * top.
  */
 export async function loadWorkspaceConfig(workdir: string): Promise<WorkspaceConfig> {
   const [global, project] = await Promise.all([

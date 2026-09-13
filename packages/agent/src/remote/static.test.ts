@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { contentTypeFor, resolveStatic, safeResolve } from './static.ts';
+import { Writable } from 'node:stream';
+import { contentTypeFor, resolveStatic, safeResolve, sendStatic } from './static.ts';
 
 const ROOT = '/srv/web';
 
@@ -72,4 +73,22 @@ test('resolveStatic returns null when the bundle was never built', async () => {
   const root = await mkdtemp(join(tmpdir(), 'whiphand-web-empty-'));
   assert.equal(await resolveStatic(root, '/'), null);
   assert.equal(await resolveStatic(root, '/anything'), null);
+});
+
+test('sendStatic sets a CSP header, since this build has no tauri.conf.json to carry one', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whiphand-web-csp-'));
+  const file = join(root, 'index.html');
+  await writeFile(file, '<!doctype html>', 'utf8');
+
+  let headers: Record<string, string> = {};
+  const sink = new Writable({ write: (_chunk, _enc, cb) => cb() });
+  const res = Object.assign(sink, {
+    writeHead: (_status: number, h: Record<string, string>) => { headers = h; },
+  }) as unknown as Parameters<typeof sendStatic>[0];
+
+  sendStatic(res, { path: file, contentType: 'text/html; charset=utf-8', isShell: true });
+  await new Promise(resolve => sink.on('finish', resolve));
+
+  assert.match(headers['Content-Security-Policy'] ?? '', /default-src 'self'/);
+  assert.doesNotMatch(headers['Content-Security-Policy'] ?? '', /unsafe-eval/);
 });

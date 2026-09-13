@@ -1,11 +1,7 @@
 /**
- * Highlights find matches by splitting text nodes in the hast tree, before
- * React ever renders it.
- *
- * The obvious implementation — walking the rendered DOM and wrapping matches
- * in <mark> — mutates nodes React owns, and React can throw when it next
- * reconciles over them. Doing it in the tree sidesteps that entirely; the
- * marks are ordinary React children.
+ * Highlights find matches by splitting text nodes in the hast tree before
+ * React renders it, rather than mutating the rendered DOM — which React owns
+ * and can throw on when it next reconciles.
  */
 import { visitParents } from 'unist-util-visit-parents';
 import type { Element, Root, Text } from 'hast';

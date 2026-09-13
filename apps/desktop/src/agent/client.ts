@@ -94,8 +94,7 @@ import type {
  * listRuns/getRun results aren't exported as named types from protocol.ts —
  * only their params are (see runSummarySchema/runDetailSchema there, which
  * are intentionally loose: core owns the authoritative run shape). These
- * mirror that shape closely enough for the desktop app; Task 8 owns real
- * consumption of run data and can tighten this if needed.
+ * mirror that shape closely enough for the desktop app's own use.
  */
 export interface RunSummary {
   runId: string;

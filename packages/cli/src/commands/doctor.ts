@@ -6,17 +6,8 @@ import {
 /**
  * Renders exactly what the `doctor` RPC returns, so `whiphand doctor` and the
  * desktop's Doctor page cannot report different facts about the same machine.
- * The parity suite parses this output and compares it against the RPC, which
- * is why the line grammar below is a contract rather than a formatting
- * preference:
- *
- *   heading  a bare line matching no other rule
- *   tool     ^(✔|✘|○) <id> <rest>( \[detect only\])?$
- *   note     ^  · <text>$
- *   blank    separates sections
- *
- * Pure, and takes statuses rather than a registry, so it is testable without
- * spawning anything.
+ * The line grammar is a contract: the parity suite parses this output and
+ * compares it against the RPC.
  */
 export function doctorReport(statuses: readonly ToolStatus[]): string {
   const sections: string[] = [];

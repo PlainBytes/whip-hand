@@ -1,16 +1,7 @@
 /**
  * The end-of-session marker: how an interactive step says "we're done here".
- *
- * A runner CLI in interactive mode is a REPL — it never exits on its own, so
- * without a signal the human has to quit it by hand. The guidance seeded into
- * every interactive session tells the model to create this file once the human
- * agrees the step's goal is met; a frontend that can watch the filesystem (the
- * agent's PTY frontend) closes the session when it appears.
- *
- * A file rather than a sentinel in the output stream: terminal output is
- * ANSI-laden and hard-wrapped at the session's column width, so scanning it for
- * a token is guesswork. A path is exact, and both sides derive it from the same
- * function.
+ * A frontend watching the filesystem closes the session once the model
+ * creates this file, per guidance seeded into every interactive session.
  */
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -33,11 +24,9 @@ export function sanitizeStepId(stepId: string): string {
  *
  * Windows accepts `/` in every API that takes a path, so this names the same
  * file — but a native `D:\w\.whiphand\runs\r1\.plan.done` does not survive being
- * pasted into a command line. Claude runs hook commands and Bash tool calls
+ * pasted into a command line: Claude runs hook commands and Bash tool calls
  * through Git Bash on Windows, where `\` escapes rather than separates, and
- * our own SHELL_SAFE_PATH guard rejects a backslash outright — which used to
- * drop the whole settings object on Windows, leaving an interactive step with
- * no await reporting and no end-session rule at all.
+ * our own SHELL_SAFE_PATH guard rejects a backslash outright.
  *
  * Only for strings a runner parses. Paths that go to `fs` stay native.
  */
@@ -69,6 +58,5 @@ export async function clearEndMarker(runDir: string, stepId: string): Promise<vo
   try {
     await rm(endMarkerPath(runDir, stepId), { force: true });
   } catch {
-    // best effort
   }
 }

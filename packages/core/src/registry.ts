@@ -28,8 +28,8 @@ export function defaultRegistry(): AdapterRegistry {
 
 /**
  * Pre-flight capability gate. Only agent steps name a runner — a command or a
- * manual step has nothing to check here, and asking the registry about their
- * (absent) `runner` used to throw before the run even started.
+ * manual step has nothing to check here, since asking the registry about
+ * their absent `runner` would throw before the run even started.
  */
 export function validateWorkflowRunners(workflow: Workflow, registry: AdapterRegistry): string[] {
   const problems: string[] = [];

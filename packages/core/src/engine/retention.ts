@@ -1,8 +1,6 @@
 /**
  * Manual deletion and automatic retention for runs under a workspace's
- * artifacts dir. Runs are pure filesystem state (no index), so both of these
- * are just `rm -rf` of a run directory, guarded by the same two rules: never
- * touch a locked run, never touch one that is still running.
+ * artifacts dir: both are `rm -rf` of a run directory, guarded by the same two rules — never touch a locked run, never touch one still running.
  */
 import { rm } from 'node:fs/promises';
 import type { WorkspaceConfig } from '../types.ts';

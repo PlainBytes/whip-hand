@@ -39,7 +39,7 @@ export function createSpawnHeadless(
       };
       // A progress spec's stdout is structured output for core to parse, not
       // prose for a human: when there is a reader for it, it skips
-      // stepLog/capture entirely and goes to onLine alone, exactly as before.
+      // stepLog/capture entirely and goes to onLine alone.
       // Belt and braces: with no reader it still falls back to being logged,
       // so a frontend that ignores onLine never silently swallows the
       // child's output outright. Every other line — both streams on an

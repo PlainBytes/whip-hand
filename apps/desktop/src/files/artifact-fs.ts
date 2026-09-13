@@ -1,31 +1,8 @@
 /**
  * A FileSystemPort backed by the agent's artifact RPCs, so the Artifacts tab
- * can reuse the Files page's FilePreview verbatim instead of growing a second
- * viewer.
- *
- * Deliberately not a filesystem: artifacts are addressed by *name* against
- * one run's manifest listing, and this adapter is what preserves that. Paths
- * only appear here because FilePreview is path-shaped; every one of them is
- * translated back to a name the manifest already vouches for, and a path
- * that isn't in the manifest is refused outright.
- *
- * Two things about the RPCs underneath that this port relies on, each of
- * which used to be a limitation:
- *
- * 1. BYTES, NOT TEXT. readFile() always asks `readArtifact` for base64 and
- *    decodes it here, so what arrives is exactly what is on disk. The
- *    default utf8 encoding decodes on the agent, and an image, a HAR trace
- *    or any other binary artifact would already have been mangled by the
- *    time it got here. Text callers lose nothing: the port's contract was
- *    always a Uint8Array, and FilePreview decodes that itself. That is what
- *    lets an attached screenshot render in the Artifacts tab, and a relative
- *    image in a markdown artifact render through MarkdownImage.
- * 2. stat() IS NOT A READ. It goes through `statArtifact`, which returns
- *    size and mtime and no content, so opening a file costs one read, not
- *    two. A caller that gates on stat() before reading something oversized
- *    (FilePreview's image loader) really is spared those bytes, and a
- *    viewer polling a multi-megabyte image is not re-downloading it every
- *    interval.
+ * can reuse the Files page's FilePreview verbatim. Not a real filesystem:
+ * artifacts are addressed by *name* against a run's manifest, and every path
+ * FilePreview passes in is translated back to a name the manifest vouches for.
  */
 import type { AgentClient } from '../agent/client.ts';
 import { decodeBase64ToBytes } from '../lib/base64.ts';
@@ -137,8 +114,8 @@ export class ArtifactFileSystem implements FileSystemPort {
    * is left for the caller to fetch once onChange says it moved.
    *
    * Unlike watch(), a path that isn't one of this run's artifacts is refused
-   * quietly (a no-op unwatch) rather than thrown: Task 11 calls the returned
-   * function from React effect cleanup, where a throw would be disruptive.
+   * quietly (a no-op unwatch) rather than thrown: a React effect's cleanup
+   * calls the returned function, where a throw would be disruptive.
    */
   async watchFile(path: string, onChange: () => void): Promise<() => void> {
     if (!this.artifacts.some(a => a.path === path)) return () => {};

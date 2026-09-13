@@ -189,6 +189,35 @@ test('attaching to a workflow that reads no attachments is refused with the fix'
   assert.equal(existsSync(join(cwd, '.whiphand', 'runs')), false);
 });
 
+test('SIGINT aborts an in-flight run instead of leaving its spawned child an orphan', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'whiphand-cli-'));
+  await mkdir(join(cwd, '.whiphand', 'workflows'), { recursive: true });
+  await writeFile(join(cwd, '.whiphand', 'workflows', 'slow.yaml'), `
+name: slow
+steps:
+  - id: wait
+    kind: command
+    run: node -e "setTimeout(() => {}, 5000)"
+`);
+  // Not \`sleep 5\`: this runs through a resolved shell (sh -c on POSIX,
+  // cmd.exe on Windows, where npm test also runs), and node is guaranteed to
+  // be on PATH — sleep/timeout are not, on every platform.
+
+  const started = Date.now();
+  const promise = withStderr(() => runCommand('slow', { dryRun: false, input: [], cwd }));
+  // Give the command step a moment to actually spawn before signalling it.
+  await new Promise(resolve => setTimeout(resolve, 200));
+  process.emit('SIGINT');
+
+  const { code } = await promise;
+  const elapsedMs = Date.now() - started;
+  assert.equal(code, 1, 'a cancelled run is not ok');
+  assert.ok(
+    elapsedMs < 2000,
+    `must resolve well before the 5s sleep would exit on its own (took ${elapsedMs}ms)`,
+  );
+});
+
 test('a dry run with --attach records the list and copies nothing', async () => {
   const cwd = await attachWorkspace();
   await writeFile(join(cwd, 'a.log'), 'x');

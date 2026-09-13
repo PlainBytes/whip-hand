@@ -1,9 +1,6 @@
 /**
  * The PDF preview's zoom maths: fit-width, the zoom steps, and how sharply a
- * page can afford to be drawn.
- *
- * Pure and React-free, like files/file-kind.ts — this is the part with edge
- * cases worth pinning down, and PdfView shouldn't have to be mounted to do it.
+ * page can afford to be drawn. Pure and React-free, like files/file-kind.ts.
  */
 
 export const MIN_SCALE = 0.25;

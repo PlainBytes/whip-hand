@@ -1,21 +1,8 @@
 /**
  * Every string the app uses to say "someone is waiting on you", in one place.
- *
- * These lived in three separate tables in three files — the run header's badge
- * labels, a prose set above the terminal, and the notification titles — and
- * had already drifted: `permission` was "needs permission", "The session is
- * asking for permission — answer it in the terminal below." and "Permission
- * needed" depending on which surface you were looking at.
- *
- * Two registers survive, and they are two on purpose:
- *
- *   BADGE  hangs off a subject already on screen ("Run r-42  needs permission"),
- *          so it reads as a predicate and stays lower case.
- *   TITLE  is an OS notification with no subject beside it, so it has to stand
- *          on its own and is capitalised.
- *
- * Rewriting one to match the other would make the other read wrong; keeping
- * them in one file is what stops a third from appearing.
+ * BADGE hangs off a subject already on screen, so it stays lower case; TITLE
+ * is a standalone OS notification, so it's capitalised — kept as two
+ * registers on purpose, in one file, so a third can't quietly appear.
  */
 import type { AwaitReason } from '../../../../packages/agent/src/protocol.ts';
 import type { ManualRequest } from '../../../../packages/core/src/types.ts';

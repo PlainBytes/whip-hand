@@ -21,11 +21,17 @@ import type { Transport } from './transport.ts';
 /** Matches CLOSE_TOKEN_REVOKED in packages/agent/src/remote/server.ts. */
 export const CLOSE_TOKEN_REVOKED = 4001;
 
+/** Matches TOKEN_PROTOCOL_PREFIX in packages/agent/src/remote/auth.ts. */
+const TOKEN_PROTOCOL_PREFIX = 'whiphand.token.';
+
+/** Matches PROTOCOL_NAME in packages/agent/src/remote/auth.ts. */
+const PROTOCOL_NAME = 'whiphand';
+
 export interface WebSocketTransportOptions {
   /** Where the agent listens. Defaults to this page's own origin. */
   url?: string;
   /** Injected in tests; defaults to the global constructor. */
-  socketFactory?: (url: string) => WebSocket;
+  socketFactory?: (url: string, protocols?: string[]) => WebSocket;
 }
 
 function defaultUrl(): string {
@@ -38,20 +44,26 @@ export class WebSocketTransport implements Transport {
   private lineCb: ((line: string) => void) | undefined;
   private exitCb: ((code: number | null) => void) | undefined;
   private readonly baseUrl: string;
-  private readonly factory: (url: string) => WebSocket;
+  private readonly factory: (url: string, protocols?: string[]) => WebSocket;
 
   constructor(private readonly getToken: () => string | null, options: WebSocketTransportOptions = {}) {
     this.baseUrl = options.url ?? defaultUrl();
-    this.factory = options.socketFactory ?? (url => new WebSocket(url));
+    this.factory = options.socketFactory ?? ((url, protocols) => new WebSocket(url, protocols));
   }
 
   async start(): Promise<void> {
-    // A browser WebSocket cannot set request headers, so the token has to be a
-    // query parameter. It never leaves this origin, and the agent checks Host
+    // A browser WebSocket cannot set request headers, but it can set
+    // Sec-WebSocket-Protocol — the one handshake header exposed to callers —
+    // so the token rides there instead of in the URL. The agent checks Host
     // and Origin as well — see packages/agent/src/remote/auth.ts.
+    //
+    // PROTOCOL_NAME rides alongside the token so the server has a non-secret
+    // value to echo back: the handshake response must repeat one of the
+    // offered protocols verbatim, and without a second option that would be
+    // the token itself.
     const token = this.getToken();
-    const url = token ? `${this.baseUrl}?t=${encodeURIComponent(token)}` : this.baseUrl;
-    const socket = this.factory(url);
+    const protocols = token ? [PROTOCOL_NAME, `${TOKEN_PROTOCOL_PREFIX}${token}`] : undefined;
+    const socket = this.factory(this.baseUrl, protocols);
     this.socket = socket;
 
     await new Promise<void>((resolve, reject) => {

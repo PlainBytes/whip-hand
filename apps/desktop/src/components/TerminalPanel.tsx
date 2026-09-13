@@ -18,34 +18,27 @@ const RESIZE_DEBOUNCE_MS = 100;
 const EMPTY_BUFFER: string[] = [];
 
 /**
- * xterm.js wired to a job's PTY: outgoing keystrokes go out as ptyInput,
- * incoming ptyData is written to the terminal, and container resizes are
- * fitted and reported as ptyResize (debounced). Actual xterm construction
- * goes through xterm-runtime.ts's createTerminal() — see that module for why
- * (jsdom test boundary).
- *
- * ptyData/ptyExit reach this component indirectly: AgentClientProvider
- * already routes both into the zustand store unconditionally (so nothing is
- * lost if this panel isn't mounted yet), and this component just reacts to
- * the store's per-job ptyDataBuffer/ptyExited/ptyExitCode — which also gives
- * us "replay everything buffered so far" for free on mount.
+ * xterm.js wired to a job's PTY: keystrokes out as ptyInput, ptyData written
+ * to the terminal, and resizes reported as ptyResize (debounced). Actual
+ * construction goes through xterm-runtime.ts's createTerminal() (jsdom test boundary).
+ * The store buffers ptyData/ptyExit unconditionally, whether or not this panel is
+ * mounted, so mounting always replays everything the job has produced so far.
  */
 export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProps) {
   const client = useAgentClient();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const handleRef = useRef<TerminalHandle | null>(null);
-  // Absolute chunk index (not a plain buffer array index): ptyDataBuffer can
-  // be trimmed from the front once it's grown past its cap (see store.ts),
-  // so "how many chunks have we written" has to survive buffer[0] no longer
-  // being chunk #0. ptyDataBaseIndex (below) is what buffer[0] currently
-  // represents; buffer[i] is always absolute chunk (ptyDataBaseIndex + i).
-  // This ref is the single source of truth for the "already trimmed, show
-  // the marker" decision too (see the replay effect) — deliberately not a
-  // separate mount-time-only flag: TauriTransport can dispatch many NDJSON
-  // lines synchronously within one stdout 'data' event, which React batches
-  // into a single render/effect pass, so a trim can jump straight past
-  // chunks this panel never got an individual turn to write — not just
-  // chunks trimmed before it ever mounted.
+  // Absolute chunk index, not a plain buffer array index: ptyDataBuffer can be
+  // trimmed from the front once it grows past its cap (see store.ts), so "how
+  // many chunks have we written" has to survive buffer[0] no longer being
+  // chunk #0. ptyDataBaseIndex is what buffer[0] currently represents;
+  // buffer[i] is always absolute chunk (ptyDataBaseIndex + i).
+  //
+  // Also the single source of truth for the "already trimmed, show the
+  // marker" decision (see the replay effect): TauriTransport can dispatch many
+  // NDJSON lines within one stdout event, which React batches into one
+  // render/effect pass, so a trim can jump past chunks this panel never wrote
+  // individually — not only chunks trimmed before mount.
   const writtenAbsoluteRef = useRef(0);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -58,7 +51,6 @@ export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProp
   // code would read like a crash, so say what actually happened instead.
   const endedDeliberately = ptyExitReason === 'ended';
 
-  // Mount/unmount xterm exactly once per jobId.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -108,20 +100,15 @@ export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProp
   }, [jobId]);
 
   // Replay whatever the store already buffered, then keep writing new chunks
-  // as they arrive — same code path handles both. Converts the absolute
-  // "chunks written so far" count to a local buffer index via
-  // ptyDataBaseIndex, so this stays correct whether or not a trim happened
-  // since the last time this effect ran (batched trims included).
+  // as they arrive via the same loop. Converts the absolute "chunks written"
+  // count to a local buffer index via ptyDataBaseIndex, so this stays correct
+  // across trims (including several batched into one render pass).
   //
-  // ptyDataBaseIndex > writtenAbsoluteRef.current means the buffer's front
-  // has been trimmed past chunks this panel never wrote — whether that's
-  // because they were trimmed before this instance ever mounted
-  // (writtenAbsoluteRef.current starts at 0) or because several ptyData
-  // notifications (one of which triggered a trim) landed in one batched
-  // update before this effect got a turn to run. Either way, show the
-  // marker once. This condition self-disarms after the loop below catches
-  // writtenAbsoluteRef.current back up to ptyDataBaseIndex + buffer.length —
-  // no separate "already shown" flag needed.
+  // ptyDataBaseIndex > writtenAbsoluteRef.current means the buffer's front was
+  // trimmed past chunks this panel never wrote — before mount, or via a
+  // batched update this effect hasn't run for yet. Show the marker once; the
+  // condition self-disarms once the loop below catches writtenAbsoluteRef.current
+  // up to ptyDataBaseIndex + buffer.length.
   useEffect(() => {
     const handle = handleRef.current;
     if (!handle) return;
@@ -137,13 +124,10 @@ export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProp
 
   // Go read-only once the store reports the PTY exited.
   //
-  // This line is the only place the panel reports the exit, and it reports
-  // only the session: the terminal's business ends where the session does.
-  // What happens *next* — the harvest pass that writes the step's artifact —
-  // belongs to the step, and the step's own pill says it (see
-  // lib/step-phase.ts), so a
-  // deliberate end needs no wording of its own here beyond withholding the
-  // exit code that would read like a crash.
+  // This reports only the session ending, not what happens next: the harvest
+  // pass that writes the step's artifact belongs to the step, whose own pill
+  // says so (see lib/step-phase.ts) — hence no wording here beyond withholding
+  // the exit code that would read like a crash.
   useEffect(() => {
     const handle = handleRef.current;
     if (!handle || !ptyExited) return;

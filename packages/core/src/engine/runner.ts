@@ -288,9 +288,9 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
   } catch (e) {
     // Every ordinary failure path goes through fail()/cancelled(), which emit
     // terminal events. An unexpected throw (a runner binary that isn't there,
-    // a PTY that won't start) used to skip them entirely, leaving run.json at
-    // 'running' with a live pid — a state no reader could ever resolve. Write
-    // the same terminal pair here, then rethrow so callers behave as before.
+    // a PTY that won't start) would otherwise skip them entirely, leaving
+    // run.json at 'running' with a live pid — a state no reader could ever
+    // resolve. Write the same terminal pair here, then rethrow.
     emit({ type: 'run:error', message: (e as Error).message });
     emit({ type: 'run:done', runId, ok: false });
     throw e;

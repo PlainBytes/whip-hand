@@ -1,30 +1,15 @@
-// Minimal Tauri 2 app. The webview talks to the @whiphand/agent sidecar over stdio
-// via the shell plugin (see src/agent/tauri-transport.ts); the notification
-// plugin backs F6 desktop notifications (see src/lib/notifier.ts and
-// src/components/NotificationBridge.tsx).
-//
-// Run artifacts are still read through the agent's readArtifact RPC, not the
-// filesystem plugin — that path stays as it was. The fs plugin exists for the
-// Files page (src/files/) and ships with an EMPTY static scope in
-// capabilities/default.json: nothing on disk is reachable until something
-// extends the scope at runtime. Three things can do that, not just one:
-//   - grant_workspace (below), called by the Files page when the user opens
-//     a workspace — or when a previously opened workspace is restored at
-//     startup — to grant the whole workspace tree.
-//   - tauri-plugin-dialog's folder picker, which grants the chosen directory
-//     the moment a folder is picked in App.tsx or WelcomePage.tsx, before the
-//     Files page ever runs.
-//   - tauri-plugin-fs's own window drag-and-drop handler, which grants any
-//     folder dropped onto the window, recursively.
-// grant_workspace checks that its argument canonicalizes to a real directory
-// and refuses the filesystem root, but it does not verify the path is the
-// workspace the user actually opened — Rust has no independent record of
-// that without coupling to the agent's state, which this design avoids. So a
-// compromised webview can still grant an arbitrary directory by calling
-// grant_workspace directly with it; the checks here narrow that (no root, no
-// non-directories, no unresolved symlinks) but do not close it.
+// Minimal Tauri 2 app: the webview talks to the @whiphand/agent sidecar over
+// stdio via the shell plugin. The fs plugin ships with an EMPTY static scope
+// and is granted directory access only at runtime (see grant_workspace below).
 use tauri_plugin_fs::FsExt;
 
+// Checks the path canonicalizes to a real directory and refuses the
+// filesystem root, but cannot verify it's the workspace the user actually
+// opened — Rust has no independent record of that without coupling to the
+// agent's state, which this design avoids. A compromised webview can still
+// grant an arbitrary directory by calling this directly; the checks narrow
+// that (no root, no non-directories, no unresolved symlinks) but don't close
+// it. See docs/review-backlog.md.
 #[tauri::command]
 fn grant_workspace(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let dir = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;

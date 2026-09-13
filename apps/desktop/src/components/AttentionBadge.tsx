@@ -1,17 +1,6 @@
 /**
- * "Someone is waiting on you", rendered the one way this app renders it.
- *
- * Warning-coloured and filled, per the house rule that `filled` means a live
- * state (a run's status, a verdict, this) while `tint` means static metadata
- * (a step's kind, `×N`, "Global"). It is deliberately not a StatusBadge: that
- * one falls back to grey, which is the wrong affordance for the single thing
- * on a run's page we actually want noticed.
- *
- * `compact` is the tab form — a bare dot, because a tab label plus a
- * three-word badge is too wide to sit next to its neighbours. The label is
- * still carried, as the dot's accessible name: before this the tab cue was a
- * literal '•' spliced into the label string, which no screen reader could
- * explain.
+ * "Someone is waiting on you" — warning-coloured and filled, deliberately not
+ * a StatusBadge (which falls back to grey).
  */
 import { Badge } from '@fluentui/react-components';
 

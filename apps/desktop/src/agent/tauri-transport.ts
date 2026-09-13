@@ -1,12 +1,7 @@
 /**
- * The real Transport: starts the @whiphand/agent sidecar via the Tauri shell plugin
- * and wires its stdio to the Transport contract. In a packaged bundle that is
- * the shipped `whiphand-agent` binary; under `tauri dev` it is `node <agent entry>`.
- *
- * One of only two files that import `@tauri-apps/plugin-shell` (main.tsx
- * imports `open` for external links); like main.tsx, nothing vitest loads
- * (AgentClient, MockTransport, and anything that only imports those) ever
- * pulls this module in, so the test suite never needs a Tauri runtime.
+ * The real Transport: starts the @whiphand/agent sidecar via the Tauri shell
+ * plugin and wires its stdio to the Transport contract (the shipped
+ * `whiphand-agent` binary when packaged, `node <agent entry>` under `tauri dev`).
  */
 import { Command, type Child } from '@tauri-apps/plugin-shell';
 import { join, resourceDir } from '@tauri-apps/api/path';

@@ -1,16 +1,92 @@
 name: Release
 
-# Runs when a release is published from the GitHub UI, and uploads the CLI
-# binaries, desktop bundles and the updater's latest.json into that release.
+# Started from Actions → Release → Run workflow, with the version to release.
+#
+# The repo has immutable releases on: once a release is published, nothing can
+# be uploaded to it. So everything goes into a draft first, and the draft is
+# published only after both builds and the checksums are attached.
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, e.g. 0.1.4 (merge the bump first)'
+        required: true
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.draft.outputs.tag }}
+      id: ${{ steps.draft.outputs.id }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Only from main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Run the release from main, not $GITHUB_REF_NAME"
+          exit 1
+
+      - name: Read the version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          version="${INPUT_VERSION#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version must look like 1.2.3, got '$INPUT_VERSION'"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: The version matches the code
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: node scripts/version.mjs --check "$VERSION"
+
+      # Reuses this version's draft if an earlier run left one, so running the
+      # workflow again after a failure doesn't start a second draft.
+      - name: Create or reuse the draft release
+        id: draft
+        shell: bash
+        env:
+          TAG: v${{ steps.version.outputs.version }}
+        run: |
+          if gh api "repos/$GH_REPO/releases/tags/$TAG" --silent 2>/dev/null; then
+            echo "::error::$TAG is already published. Releases are immutable, so bump to a new version."
+            exit 1
+          fi
+          id=$(gh api "repos/$GH_REPO/releases" --paginate \
+                --jq '.[] | select(.draft and .tag_name == env.TAG) | .id' | awk 'NR==1')
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GH_REPO/releases/$id" -f target_commitish="$GITHUB_SHA" --silent
+          else
+            if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+              echo "::error::Tag $TAG already exists. Tags of deleted immutable releases can't be reused, so bump to a new version."
+              exit 1
+            fi
+            id=$(gh api "repos/$GH_REPO/releases" -f tag_name="$TAG" -f target_commitish="$GITHUB_SHA" \
+                  -f name="$TAG" -F draft=true -F generate_release_notes=true --jq .id)
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: prepare
     strategy:
       fail-fast: false
       # Both legs merge their platform into the same latest.json; one at a time
@@ -24,8 +100,9 @@ jobs:
             cli-name: whiphand-windows-x86_64.exe
     runs-on: ${{ matrix.os }}
     env:
-      TAG: ${{ github.event.release.tag_name }}
+      TAG: ${{ needs.prepare.outputs.tag }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
       # Makes the desktop build spawn the bundled sidecar instead of repo-relative node.
       WHIPHAND_PACKAGE: '1'
     steps:
@@ -34,12 +111,6 @@ jobs:
         with:
           node-version: 24
           cache: npm
-
-      # Catches a release tagged before the version bump was merged.
-      - name: The tag matches the version in the code
-        shell: bash
-        run: node scripts/version.mjs --check "${TAG#v}"
-
       - name: Install Tauri Linux deps
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
@@ -77,18 +148,19 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: apps/desktop
-          releaseId: ${{ github.event.release.id }}
+          releaseId: ${{ needs.prepare.outputs.id }}
           uploadUpdaterJson: true
           updaterJsonPreferNsis: true
           args: '--config {"bundle":{"createUpdaterArtifacts":true}} --bundles ${{ steps.prepare.outputs.bundles }}'
 
-  checksums:
-    needs: build
+  publish:
+    needs: [prepare, build]
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
-      TAG: ${{ github.event.release.tag_name }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      ID: ${{ needs.prepare.outputs.id }}
     steps:
       - name: Attach SHA256SUMS
         run: |
@@ -96,3 +168,6 @@ jobs:
           rm -f assets/SHA256SUMS
           (cd assets && sha256sum -- * > ../SHA256SUMS)
           gh release upload "$TAG" SHA256SUMS --clobber
+      # From here on the release is immutable, with every asset already attached.
+      - name: Publish the release
+        run: gh api -X PATCH "repos/$GH_REPO/releases/$ID" -F draft=false --silent

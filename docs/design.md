@@ -756,20 +756,23 @@ These are plausible follow-ups, not commitments.
 
 ## Releases
 
-Releases are published by hand from the GitHub UI:
+Releases are started by hand from GitHub Actions:
 
-1. **Bump the version** in a PR and merge it: `npm run bump -- 0.1.3` writes the version
+1. **Bump the version** in a PR and merge it: `npm run bump -- 0.1.4` writes the version
    everywhere it lives, `package-lock.json` included.
-2. **Publish the release.** On GitHub, go to **Releases → Draft a new release**, create the
-   tag `v0.1.3` on `main`, write the notes (or use **Generate release notes**), and click
-   **Publish release**. Leave **Set as a pre-release** unticked: installed apps only update
-   to the latest full release.
-3. **Wait for the build.** Publishing runs `.github/workflows/release.yml`, which builds
-   Linux and Windows and uploads the CLI binaries, the desktop bundles, `latest.json` for
-   Tauri's updater, and a `SHA256SUMS` file into that release. Its first step fails the run
-   if the tag doesn't match the version in the code, which means the bump wasn't merged
-   first. The release is public while the build runs (about 10–15 minutes), but installed
-   apps aren't offered the update until `latest.json` has been uploaded.
+2. **Run the release workflow.** On GitHub, go to **Actions → Release → Run workflow**, keep
+   the branch on `main`, enter the version (`0.1.4`), and run it.
+3. **Wait for the build** (about 10–15 minutes). `.github/workflows/release.yml` checks that
+   the version matches the code, then builds Linux and Windows into a draft release: the CLI
+   binaries, the desktop bundles, `latest.json` for Tauri's updater, and a `SHA256SUMS` file.
+   It publishes the release as `v0.1.4` only once everything is uploaded, with notes
+   generated from the merged PRs. You can edit the title and notes afterwards.
+
+Releases in this repo are **immutable**: once published, their files can't be changed, and a
+version can't be released twice, even after deleting the release. A mistake ships as a new
+patch version. If the build fails partway, nothing is published and the draft stays hidden:
+re-run the failed jobs from the run page, or run the workflow again with the same version,
+which reuses the draft.
 
 Only the `.AppImage` and the Windows NSIS installer self-update. The `.deb` prompts with a
 link to the release page instead, since Tauri's updater cannot install into a `.deb`.
@@ -819,16 +822,18 @@ installs perfectly well and *then* cannot update, so the failure surfaces only w
 release fails to reach anyone — at which point none of the rollback below can help, because
 the broken copies are no longer listening.
 
-Publishing a release runs `.github/workflows/release.yml`, which uploads the CLI binaries,
-the Linux/Windows bundles, and `latest.json` into it — the file every installed copy's Tauri
-updater polls via `releases/latest/download/latest.json`. That URL always resolves to
-whatever GitHub currently considers the repository's *latest* release, so un-shipping a bad
-one is a release-metadata operation, not a rebuild:
+`.github/workflows/release.yml` uploads the CLI binaries, the Linux/Windows bundles, and
+`latest.json` into each release — the file every installed copy's Tauri updater polls via
+`releases/latest/download/latest.json`. That URL always resolves to whatever GitHub
+currently considers the repository's *latest* release, so un-shipping a bad one is a
+release-metadata operation, not a rebuild:
 
-- On the bad release's page, **Edit** it and tick **Set as a pre-release**, or **Delete** it.
-  Either way GitHub stops considering it "latest", and the URL falls back to the most recent
-  full release before it — whose own `latest.json`, uploaded when *it* was current, still
-  points at itself, so already-updated clients see no further prompt.
+- On the bad release's page, **Edit** it and tick **Set as a pre-release**. The repo's
+  releases are immutable, but GitHub still allows changing the pre-release and "latest"
+  flags, the title and the notes. **Deleting** the release works too, but it permanently
+  retires that tag name. Either way GitHub stops considering it "latest", and the URL falls
+  back to the most recent full release before it — whose own `latest.json`, uploaded when
+  *it* was current, still points at itself, so already-updated clients see no further prompt.
 - This does not un-install the bad version from a machine that already updated — it only
   stops the version from reaching anyone else. Whether a given install already has it has to
   be answered separately (`whiphand --version`, or the app's own version string).
@@ -836,13 +841,18 @@ one is a release-metadata operation, not a rebuild:
   "latest" is another running copy's updater offering it. The fix then ships as a new patch
   version, not as a re-publish of the bad one.
 
-A published release is "latest" from the moment it is published, while the build is still
-running. Until the first leg uploads `latest.json`, the updater URL 404s and installed
-copies are simply offered nothing. A build that fails partway leaves a release with some of
-its assets, which is exactly the case the rollback above is for.
+The workflow builds into a **draft** and publishes it last, and immutable releases are why.
+Once a release is published, GitHub rejects any further asset upload
+(`HTTP 422: Cannot upload assets to an immutable release`), so a flow that publishes first
+and builds after cannot work. Drafts are still writable. The `prepare` job creates the draft,
+or reuses one an earlier failed run left for the same version, and refuses a version that is
+already published or whose tag already exists, since a tag from a deleted immutable release
+can never be reused. `publish` attaches `SHA256SUMS` and only then flips `draft` to false. A
+build that fails partway therefore leaves a hidden draft, not a half-populated public
+release, and never reaches the updater.
 
-Two matrix legs (`ubuntu-24.04`, `windows-latest`) both upload into that release, addressed
-by its id (`github.event.release.id`) rather than by tag. Both also write its `latest.json`
+Two matrix legs (`ubuntu-24.04`, `windows-latest`) both upload into that draft, addressed
+by the id `prepare` outputs rather than by tag. Both also write its `latest.json`
 — see the `build` job's `max-parallel: 1`, which exists specifically so the second leg's
 read of the current manifest happens after the first leg's write, not concurrently with it
 (confirmed by reading `tauri-action`'s `upload-version-json.ts`: it downloads any existing

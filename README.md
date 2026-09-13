@@ -305,11 +305,11 @@ the version is pinned across builds, so `apt-get install` over an already-instal
 release that built them, not on older ones. Building for wider reach means building in
 an older-glibc container.
 
-**Releases are published by hand from the GitHub UI**: bump the version
-(`npm run bump -- 0.1.3`) in a PR and merge it, then on GitHub go to
-**Releases → Draft a new release**, tag `v0.1.3` on `main`, and publish. See
-`docs/design.md` for the full release, auto-update, and updater-signing-key process, and
-for how to roll back a bad release.
+**Releases are started by hand from GitHub Actions**: bump the version
+(`npm run bump -- 0.1.4`) in a PR and merge it, then on GitHub go to
+**Actions → Release → Run workflow** on `main` and enter `0.1.4`. Releases are immutable, so
+a version can only be released once. See `docs/design.md` for the full release,
+auto-update, and updater-signing-key process, and for how to roll back a bad release.
 
 **Windows downloads are unsigned.** There is no code-signing certificate yet — the seam for
 one exists (`WHIPHAND_SIGN_COMMAND` for `whiphand.exe`, Tauri's `bundle.windows.signCommand`

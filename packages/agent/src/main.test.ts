@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { createServer } from 'node:net';
 import { createInterface } from 'node:readline';
 import { mkdtemp, mkdir, writeFile, chmod, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -22,6 +23,8 @@ interface Message {
 
 interface AgentHandle {
   child: ChildProcessWithoutNullStreams;
+  /** Every parsed stdout line so far, in arrival order. */
+  messages: readonly Message[];
   send(obj: unknown): void;
   waitFor(pred: (m: Message) => boolean, timeoutMs?: number): Promise<Message>;
   stop(): void;
@@ -42,6 +45,9 @@ function startAgent(envOverride: Record<string, string> = {}): AgentHandle {
     // test never reads or writes the real developer/CI machine's global
     // workflows or config.yaml.
     ...(envOverride.WHIPHAND_CONFIG_HOME ? {} : { WHIPHAND_CONFIG_HOME: join(isolatedRoot, 'config-home') }),
+    // And its own remote-access config: the real one may have remote access
+    // enabled, which would bind the developer's port and publish its state.
+    ...(envOverride.WHIPHAND_REMOTE_CONFIG_FILE ? {} : { WHIPHAND_REMOTE_CONFIG_FILE: join(isolatedRoot, 'remote-access.json') }),
     ...envOverride,
   };
   const child = spawn(process.execPath, [AGENT_MAIN], {
@@ -98,7 +104,7 @@ function startAgent(envOverride: Record<string, string> = {}): AgentHandle {
     child.kill('SIGKILL');
   }
 
-  return { child, send, waitFor, stop };
+  return { child, messages, send, waitFor, stop };
 }
 
 async function fixtureWorkspace(): Promise<string> {
@@ -237,6 +243,34 @@ test('hello returns the core version and protocolVersion 1', async () => {
     const res = await agent.waitFor(m => m.id === 1);
     assert.equal(res.result.protocolVersion, 1);
     assert.equal(typeof res.result.version, 'string');
+  } finally {
+    agent.stop();
+  }
+});
+
+/** A port nothing is listening on right now, from the range remote-access config accepts. */
+async function freePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+  const { port } = server.address() as { port: number };
+  await new Promise<void>(done => server.close(() => done()));
+  return port;
+}
+
+test('with remote access enabled, nothing precedes the first response on stdout', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'whiphand-agent-remote-'));
+  const configFile = join(dir, 'remote-access.json');
+  await writeFile(configFile, JSON.stringify({
+    schemaVersion: 1, enabled: true, port: await freePort(), token: 'x'.repeat(32),
+  }));
+  const agent = startAgent({ WHIPHAND_REMOTE_CONFIG_FILE: configFile });
+  try {
+    agent.send({ id: 1, method: 'remoteAccessGet', params: {} });
+    const res = await agent.waitFor(m => m.id === 1);
+    // Otherwise the assertion below proves nothing: the server has to have
+    // actually started, since that is what used to publish.
+    assert.equal(res.result.listening, true, `remote server did not start: ${res.result.error}`);
+    assert.deepEqual(agent.messages[0], res);
   } finally {
     agent.stop();
   }

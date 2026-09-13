@@ -36,6 +36,8 @@ export interface RemoteController {
 export function createRemoteController(deps: RemoteControllerDeps): RemoteController {
   let server: RemoteServer | null = null;
   let lastError: string | null = null;
+  /** True while applyConfig() runs; see there. */
+  let applying = false;
 
   async function buildState(): Promise<RemoteAccessState> {
     const config = await deps.store.get();
@@ -93,9 +95,18 @@ export function createRemoteController(deps: RemoteControllerDeps): RemoteContro
      * state with remoteAccessGet. Emitting one here also put an unsolicited
      * line on stdout before the first response, which is exactly the kind of
      * thing a reader of this protocol should never have to tolerate.
+     *
+     * Not publishing here is not enough: starting the server fires its own
+     * onStatusChange, which main.ts routes to publishState(), so that has to
+     * stay quiet for the duration too.
      */
     async applyConfig() {
-      return sync();
+      applying = true;
+      try {
+        return await sync();
+      } finally {
+        applying = false;
+      }
     },
 
     getState: buildState,
@@ -124,6 +135,7 @@ export function createRemoteController(deps: RemoteControllerDeps): RemoteContro
     },
 
     publishState() {
+      if (applying) return;
       void buildState().then(publish).catch(err =>
         console.error('[whiphand-agent] could not publish remote access state:', err));
     },

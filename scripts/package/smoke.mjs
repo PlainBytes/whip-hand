@@ -28,6 +28,14 @@ import { assembleNodePtyResource } from './node-pty-resource.mjs';
 const exeSuffix = process.platform === 'win32' ? '.exe' : '';
 const FIXTURE_BIN = path.join(repoRoot, 'scripts/package/fixtures/bin');
 
+/**
+ * The sidecar's remote-access config lives in the user's data dir, and a
+ * packaging machine that has remote access enabled would otherwise have every
+ * smoke run bind that port on the LAN. Pointed at a file that doesn't exist,
+ * the store falls back to its defaults: off.
+ */
+const ISOLATED_REMOTE_CONFIG = path.join(os.tmpdir(), `whiphand-smoke-${process.pid}`, 'remote-access.json');
+
 function check(label, fn) {
   try {
     fn();
@@ -177,6 +185,7 @@ async function smokeAgentInteractivePty(resourceDir) {
   const env = {
     ...process.env,
     WHIPHAND_NODE_PTY_DIR: resourceDir,
+    WHIPHAND_REMOTE_CONFIG_FILE: ISOLATED_REMOTE_CONFIG,
     PATH: `${FIXTURE_BIN}${path.delimiter}${process.env.PATH ?? ''}`,
   };
 
@@ -218,7 +227,11 @@ export async function smokeAgent() {
   // node-pty is external to the bundle (agent.mjs), so the sidecar needs to
   // be told where to find it even for this smoke test, which runs the binary
   // directly rather than through the desktop bundle's resourceDir() hand-off.
-  const env = { ...process.env, WHIPHAND_NODE_PTY_DIR: path.join(repoRoot, 'node_modules/node-pty') };
+  const env = {
+    ...process.env,
+    WHIPHAND_NODE_PTY_DIR: path.join(repoRoot, 'node_modules/node-pty'),
+    WHIPHAND_REMOTE_CONFIG_FILE: ISOLATED_REMOTE_CONFIG,
+  };
 
   const response = await request(agent, { id: 1, method: 'hello', params: { protocolVersion: 1 } }, env);
   check('hello answers over stdio', () => {

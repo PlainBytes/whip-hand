@@ -10,14 +10,23 @@
  * script installs the artifact it just built rather than globbing dist/ and
  * hoping.
  *
- * The remove step is load-bearing, not just tidiness: the version is pinned at
- * 0.1.0 across builds (scripts/version.mjs), so `apt-get install` over an
- * already-installed 0.1.0 is a no-op and the freshly built bundle would
- * silently not land.
+ * The remove step is load-bearing, not just tidiness: rebuilds between version
+ * bumps (scripts/version.mjs) keep the same version, so `apt-get install` over
+ * an already-installed copy of it is a no-op and the freshly built bundle would
+ * silently not land. Removing first also lets an older version replace a newer
+ * one without `--allow-downgrades`.
+ *
+ * The version check before installing is load-bearing too. Tauri never clears
+ * its bundle directory, so once a version bump left `Whiphand_0.1.0_amd64.deb`
+ * next to `Whiphand_0.1.3_amd64.deb`, this script installed the stale one.
+ * desktop.mjs now clears old bundles before building; the check here makes
+ * sure a regression there fails loudly instead of installing yesterday's build.
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { buildDesktopBundles } from './desktop.mjs';
+import { repoRoot } from './sea.mjs';
 
 // The `.deb`, dpkg and apt are all Ubuntu/Debian — on Windows this script's
 // build step produces an NSIS installer it could do nothing with, and on macOS
@@ -68,8 +77,19 @@ const artifacts = await buildDesktopBundles();
 process.stdout.write('\n');
 for (const artifact of artifacts) process.stdout.write(`  ${artifact}\n`);
 
-const deb = artifacts.find(artifact => artifact.endsWith('.deb'));
-if (!deb) throw new Error(`the desktop build produced no .deb: ${artifacts.join(', ')}`);
+const debs = artifacts.filter(artifact => artifact.endsWith('.deb'));
+if (debs.length !== 1) {
+  throw new Error(`expected the desktop build to produce exactly one .deb, got: ${artifacts.join(', ') || 'none'}`);
+}
+const [deb] = debs;
+
+// The version tauri.conf.json says this build is, against the version dpkg will
+// actually record — the one thing that must agree for the install to be this build.
+const { version } = JSON.parse(fs.readFileSync(path.join(repoRoot, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'));
+const debVersion = capture(['dpkg-deb', '-f', deb, 'Version']);
+if (debVersion !== version) {
+  throw new Error(`${path.basename(deb)} is version ${debVersion}, but tauri.conf.json is ${version}; refusing to install a stale build`);
+}
 
 // Read the dpkg name out of the artifact instead of hardcoding `whiphand`. It
 // comes from `[package] name` in src-tauri/Cargo.toml, lowercased, and is *not*

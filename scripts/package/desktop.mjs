@@ -91,6 +91,13 @@ export async function prepareDesktopBuild() {
  */
 export async function buildDesktopBundles() {
   const { isWindows, bundleFormats, bundleExtensions } = await prepareDesktopBuild();
+  const { productName, version } = JSON.parse(
+    fs.readFileSync(path.join(repoRoot, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'),
+  );
+  // Tauri writes into src-tauri/target/release/bundle/<format>/.
+  const bundleRoot = path.join(repoRoot, 'apps/desktop/src-tauri/target/release/bundle');
+
+  clearStaleBundles({ bundleRoot, distDir, productName, bundleFormats, bundleExtensions });
 
   // `npm` on Windows is `npm.cmd`, which execFileSync cannot launch without a
   // shell — the same CVE-2024-27980 refusal resolveExecutable exists to work
@@ -102,17 +109,58 @@ export async function buildDesktopBundles() {
     shell: process.platform === 'win32',
   });
 
-  // Tauri writes into src-tauri/target/release/bundle/<format>/. Collect the
-  // artifacts next to the CLI binary so `dist/` is the one place to look.
-  const bundleRoot = path.join(repoRoot, 'apps/desktop/src-tauri/target/release/bundle');
+  return collectBundles({ bundleRoot, distDir, productName, version, isWindows, bundleFormats, bundleExtensions });
+}
+
+/** Matches a desktop bundle's filename: `<productName>_…` with one of this platform's bundle extensions. */
+function bundlePattern(productName, bundleExtensions) {
+  const escape = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${escape(productName)}_.*\\.(${bundleExtensions.map(escape).join('|')})$`);
+}
+
+/**
+ * Deletes what earlier builds left behind, before `tauri build` runs: the
+ * whole `bundle/<format>/` directories, and the matching bundles in `dist/`.
+ *
+ * Tauri never clears those directories, and the filename carries the version,
+ * so after a bump the previous version's `.deb` stays next to the new one —
+ * and `Whiphand_0.1.0_amd64.deb` sorts first. reinstall.mjs once installed it
+ * in place of the build it had just made. Matching on `<productName>_` in
+ * `dist/` matters on Windows, where the CLI and agent binaries are `.exe` too.
+ */
+export function clearStaleBundles({ bundleRoot, distDir, productName, bundleFormats, bundleExtensions }) {
+  for (const format of bundleFormats) {
+    fs.rmSync(path.join(bundleRoot, format), { recursive: true, force: true });
+  }
+  if (!fs.existsSync(distDir)) return;
+  const pattern = bundlePattern(productName, bundleExtensions);
+  for (const entry of fs.readdirSync(distDir)) {
+    if (pattern.test(entry)) fs.rmSync(path.join(distDir, entry), { force: true });
+  }
+}
+
+/**
+ * Copies the bundles `tauri build` produced into `dist/`, next to the CLI
+ * binary, so `dist/` is the one place to look. Throws on a bundle whose name
+ * does not carry `version` rather than passing it on: with clearStaleBundles
+ * run first that cannot happen, and if it ever does, a caller installing
+ * whatever comes back would silently install the wrong build.
+ *
+ * @returns {string[]} absolute paths of the artifacts now in dist/
+ */
+export function collectBundles({ bundleRoot, distDir, productName, version, isWindows, bundleFormats, bundleExtensions }) {
   fs.mkdirSync(distDir, { recursive: true });
   const collected = [];
-  const extensionPattern = new RegExp(`\\.(${bundleExtensions.join('|')})$`);
+  const pattern = bundlePattern(productName, bundleExtensions);
+  const current = `${productName}_${version}_`;
   for (const format of bundleFormats) {
     const dir = path.join(bundleRoot, format);
     if (!fs.existsSync(dir)) continue;
     for (const entry of fs.readdirSync(dir)) {
-      if (!extensionPattern.test(entry)) continue;
+      if (!pattern.test(entry)) continue;
+      if (!entry.startsWith(current)) {
+        throw new Error(`${path.join(dir, entry)} is not a ${version} bundle; refusing to collect a stale build`);
+      }
       const target = path.join(distDir, entry);
       fs.copyFileSync(path.join(dir, entry), target);
       if (!isWindows) fs.chmodSync(target, 0o755);

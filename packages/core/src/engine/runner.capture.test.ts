@@ -141,6 +141,36 @@ test('capture is skipped for a resumed step: the manifest\'s id is trusted, not 
   assert.equal(harvestArgv.find(a => a[1] === 'harvest')?.[3], 'ses_original');
 });
 
+for (const ending of ['cancelled', 'exited non-zero'] as const) {
+  test(`a session that ${ending} still records its captured id, so a resume continues that conversation`, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'whiphand-run-'));
+    const events: WhiphandEvent[] = [];
+    const controller = new AbortController();
+    const frontend: Frontend = {
+      runInteractive: async () => {
+        if (ending === 'cancelled') { controller.abort(); return 130; }
+        return 1;
+      },
+      onEvent: e => events.push(e),
+    };
+    const first = await runWorkflow({
+      workflow: planWorkflow, workdir: dir, inputs: {}, config: DEFAULT_CONFIG,
+      registry: registryWith(captureRunner({ capture: async () => 'ses_interrupted' })), frontend,
+      signal: controller.signal,
+      spawnHeadless: async () => 0,
+    });
+    assert.equal(first.ok, false);
+    assert.deepEqual(events.find(e => e.type === 'step:session'),
+      { type: 'step:session', stepId: 'plan', sessionId: 'ses_interrupted' });
+
+    const manifest = JSON.parse(await readFile(join(first.runDir, 'run.json'), 'utf8'));
+    assert.equal(manifest.sessionIds.plan, 'ses_interrupted');
+    const { planResume } = await import('./resume.ts');
+    const plan = await planResume(dir, DEFAULT_CONFIG, first.runId);
+    assert.equal(plan.resumedStepIds.has('plan'), true, 'the resume reopens the interrupted session');
+  });
+}
+
 test('SpawnSpec.files land on disk before the spawn, and are skipped entirely on a dry run', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'whiphand-run-'));
   const { frontend } = collector();

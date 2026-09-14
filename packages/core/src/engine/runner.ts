@@ -16,7 +16,7 @@ import { artifactPath, assertArtifact, ArtifactError, ensureArtifactDir } from '
 import { snapshotTree, diffSnapshots, headSha, pathsFromStatusLines } from './git-guard.ts';
 import { CORE_VERSION } from '../version.ts';
 import { parseVerdict, verdictFromExit, verdictFromChoice, VERDICT_INSTRUCTION } from './verdict.ts';
-import { createProgressParser } from './progress.ts';
+import { createProgressParser, progressErrorMessage } from './progress.ts';
 import { commandSpec, captureHeader, captureFooter } from './command.ts';
 import { buildManualRequest, noteArtifact, reviewArtifact } from './manual.ts';
 import { clearEndMarker } from './session-end.ts';
@@ -513,20 +513,36 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
      * stderr even on a progress-format one — becomes a `step:log` event, which
      * RunJournal routes into run.log. This is the one place a frontend's
      * onLine forwarding turns into the merged audit feed.
+     *
+     * A progress stream's error event is the exception: it is logged as
+     * stderr, and `failure()` appends the last one to the step's exit message,
+     * since for opencode it is the only record of why the spawn failed.
      */
     const lineSink = (stepId: string, spec: SpawnSpec) => {
       // One parser per spawn: a format with its own running state (opencode's
       // turn/cost totals) must never carry it over into the next spawn — see
       // createProgressParser.
-      const parse = spec.progress === undefined ? undefined : createProgressParser(spec.progress.format);
-      return (line: string, stream: 'stdout' | 'stderr'): void => {
-        if (parse !== undefined && stream === 'stdout') {
+      const format = spec.progress?.format;
+      const parse = format === undefined ? undefined : createProgressParser(format);
+      let lastError: string | undefined;
+      const onLine = (line: string, stream: 'stdout' | 'stderr'): void => {
+        if (parse !== undefined && format !== undefined && stream === 'stdout') {
           const progress = parse(line);
-          if (progress !== null) emit({ type: 'step:progress', stepId, progress });
+          if (progress !== null) {
+            emit({ type: 'step:progress', stepId, progress });
+            return;
+          }
+          const error = progressErrorMessage(format, line);
+          if (error !== undefined) {
+            lastError = error;
+            emit({ type: 'step:log', stepId, stream: 'stderr', line: error });
+          }
           return;
         }
         emit({ type: 'step:log', stepId, stream, line });
       };
+      const failure = (message: string): string => lastError === undefined ? message : `${message}: ${lastError}`;
+      return { onLine, failure };
     };
 
     /** Records where a step's artifact went, both as "latest" and in the history. */
@@ -581,10 +597,6 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         const main = await prepareInteractiveSpawn(adapter, eff);
         emit({ type: 'step:spawn', stepId: step.id, spec: main, phase: 'main' });
         const sessionExit = await frontend.runInteractive(main, opts.signal, emit);
-        if (opts.signal?.aborted) return cancelled();
-        if (sessionExit !== 0) {
-          return fail(`interactive step '${step.id}' session exited with code ${sessionExit}`, step.id);
-        }
         // A sessionIdCapture runner (opencode) cannot be handed an id up
         // front — it mints its own, and this is where whiphand learns it.
         // Skipped only when this very spawn resumed an existing session (its
@@ -594,33 +606,49 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         // the same step id but opens a brand-new session each time — and must
         // be captured again: ctx.sessionIds[step.id] being set already just
         // means a *previous* iteration captured one, not this one.
-        if (adapter.capabilities.sessionIdCapture && ctx.resumedStepIds?.has(step.id) !== true) {
+        const captureFresh = adapter.capabilities.sessionIdCapture && ctx.resumedStepIds?.has(step.id) !== true;
+        const recordCapture = async (): Promise<string | undefined> => {
           const captured = await adapter.captureSessionId!(eff, ctx);
+          if (captured !== undefined) {
+            ctx.sessionIds[step.id] = captured;
+            emit({ type: 'step:session', stepId: step.id, sessionId: captured });
+          }
+          return captured;
+        };
+        if (opts.signal?.aborted || sessionExit !== 0) {
+          // The conversation still exists: record it, or a resume opens a new
+          // one and the human's whole session so far is silently gone.
+          if (captureFresh) await recordCapture();
+          if (opts.signal?.aborted) return cancelled();
+          return fail(`interactive step '${step.id}' session exited with code ${sessionExit}`, step.id);
+        }
+        if (captureFresh) {
+          const captured = await recordCapture();
           if (captured === undefined) {
             return fail(
               `could not determine the ${step.runner} session id for step '${step.id}'; `
               + 'the artifact cannot be harvested', step.id);
           }
-          ctx.sessionIds[step.id] = captured;
-          emit({ type: 'step:session', stepId: step.id, sessionId: captured });
         }
         const hSpec = adapter.harvest(eff, ctx);
         await writeSpecFiles(hSpec);
         emit({ type: 'step:spawn', stepId: step.id, spec: hSpec, phase: 'harvest' });
-        const harvestExit = await spawnHeadless(hSpec, opts.signal, lineSink(step.id, hSpec));
+        const harvestSink = lineSink(step.id, hSpec);
+        const harvestExit = await spawnHeadless(hSpec, opts.signal, harvestSink.onLine);
         if (opts.signal?.aborted) return cancelled();
         emit({ type: 'step:done', stepId: step.id, exitCode: harvestExit });
         if (harvestExit !== 0) {
-          return fail(`harvest for step '${step.id}' exited with code ${harvestExit}`, step.id);
+          return fail(harvestSink.failure(`harvest for step '${step.id}' exited with code ${harvestExit}`), step.id);
         }
       } else {
         const spec = adapter.headless(eff, ctx);
         await writeSpecFiles(spec);
         emit({ type: 'step:spawn', stepId: step.id, spec, phase: 'main' });
-        const exitCode = await spawnHeadless(spec, opts.signal, lineSink(step.id, spec));
+        const sink = lineSink(step.id, spec);
+        const exitCode = await spawnHeadless(spec, opts.signal, sink.onLine);
         if (opts.signal?.aborted) return cancelled();
         emit({ type: 'step:done', stepId: step.id, exitCode });
-        if (exitCode !== 0) return fail(`step '${step.id}' exited with code ${exitCode}`, step.id);
+        if (exitCode !== 0) return fail(sink.failure(`step '${step.id}' exited with code ${exitCode}`), step.id);
       }
 
       return finishStep(step, before);
@@ -650,7 +678,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       const spawnHeadless = requireSpawn();
       const before = await guardBefore(step);
       emit({ type: 'step:spawn', stepId: step.id, spec, phase: 'main' });
-      const { exitCode, timedOut } = await runWithTimeout(step, spec, spawnHeadless, lineSink(step.id, spec));
+      const { exitCode, timedOut } = await runWithTimeout(step, spec, spawnHeadless, lineSink(step.id, spec).onLine);
       if (opts.signal?.aborted) return cancelled();
       emit({ type: 'step:done', stepId: step.id, exitCode });
       if (capture !== undefined) {

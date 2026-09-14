@@ -55,3 +55,14 @@ Absolute paths from the recording machine are kept, except that the home directo
 anonymised to `/home/user`; the tests match on suffixes. The opencode capture's paths
 sit under `/tmp/oc-check2`, the throwaway project the recording used — there is no home
 directory in it to anonymise.
+
+`opencode-error.ndjson` holds the only stdout opencode 1.18.31 produced for two failed
+runs on 2026-09-14: a Zen model that is listed but not deployed (after opencode's own
+retries give up) and a model id that does not exist:
+
+```bash
+opencode run --format json -m opencode/kimi-k2.7-code 'Reply with just: pong'
+opencode run --format json -m opencode/does-not-exist 'pong'
+```
+
+Both exit 1 with nothing on stderr, so this line is the only place the reason exists.

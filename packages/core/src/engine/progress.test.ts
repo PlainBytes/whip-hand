@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { createProgressParser, isRecord, parseJsonRecord, parseProgressLine, PROGRESS_TARGET_MAX } from './progress.ts';
+import {
+  createProgressParser, isRecord, parseJsonRecord, parseProgressLine, progressErrorMessage, PROGRESS_TARGET_MAX,
+} from './progress.ts';
 import type { StepProgress } from './progress.ts';
 
 /**
@@ -153,6 +155,20 @@ test('opencode: noise and malformed lines give null, same as the other formats',
   for (const line of ['', '   ', 'not json at all', '{', 'null', '[]', '{"type":"who?"}', '{"type":"error"}']) {
     assert.equal(parser(line), null, JSON.stringify(line));
   }
+});
+
+test('opencode: an error event yields its message, the only place opencode reports why a run failed', () => {
+  assert.deepEqual(fixture('opencode-error.ndjson').map(line => progressErrorMessage('opencode-json', line)), [
+    'Error from provider (Console): Upstream request failed: [NOT_FOUND] Model not found, inaccessible, and/or not deployed',
+    'Unexpected server error. Check server logs for details.',
+  ]);
+});
+
+test('progressErrorMessage: anything that is not an error event gives undefined', () => {
+  for (const line of [...fixture('opencode-json.ndjson'), '', 'not json', '{"type":"error"}', '{"type":"error","error":{}}']) {
+    assert.equal(progressErrorMessage('opencode-json', line), undefined, line.slice(0, 80));
+  }
+  assert.equal(progressErrorMessage('opencode-json', '{"type":"error","error":{"name":"APIError"}}'), 'APIError');
 });
 
 test('opencode: parseProgressLine (no per-spawn memory) still reports tool/text progress correctly', () => {

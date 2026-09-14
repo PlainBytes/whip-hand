@@ -24,7 +24,10 @@
  *     {"type":"step_finish","part":{"cost":…,"tokens":{…}}}   — per-step; opencode has
  *       no `num_turns`/`result` summary of its own, so the parser counts
  *       `step_finish` events itself and keeps a running cost total.
- *     — plus step_start, reasoning (only with --thinking) and error to ignore.
+ *     {"type":"error","error":{"name":…,"data":{"message":…}}}   — not progress;
+ *       see progressErrorMessage. opencode exits 1 with an empty stderr, so
+ *       this line is the only place the reason for a failed run exists.
+ *     — plus step_start and reasoning (only with --thinking) to ignore.
  *
  * These are third-party output schemas, far less stable than the flags in
  * docs/design.md. Every parse is therefore total: an unrecognized, malformed
@@ -194,6 +197,21 @@ export function createProgressParser(format: ProgressFormat): (line: string) => 
     const event = parseJsonRecord(line);
     return event === null ? null : parseOpencode(event);
   };
+}
+
+/**
+ * The reason a runner gave for failing, when a structured-output line carries
+ * one — never progress, so the runner logs it and names it in the step's
+ * failure instead. Only opencode reports errors this way; claude and copilot
+ * print theirs to stderr, which is already logged.
+ */
+export function progressErrorMessage(format: ProgressFormat, line: string): string | undefined {
+  if (format !== 'opencode-json') return undefined;
+  const event = parseJsonRecord(line);
+  if (event === null || event.type !== 'error') return undefined;
+  const error = recordOr(event.error);
+  const message = recordOr(error.data).message ?? error.message ?? error.name;
+  return typeof message === 'string' && message.trim() !== '' ? message.replace(/\s+/g, ' ').trim() : undefined;
 }
 
 export function parseProgressLine(format: ProgressFormat, line: string): StepProgress | null {

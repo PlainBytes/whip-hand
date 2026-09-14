@@ -1,16 +1,20 @@
 /**
- * The desktop's own copy of core's `packages/core/src/engine/run-log.ts`: that
- * module imports `node:fs` and cannot be pulled into the web bundle, unlike
- * `executionKey` (packages/core/src/execution-key.ts), which is
- * dependency-free and so the desktop imports it directly. Keep this in
- * lockstep with run-log.ts's `summarizeEvent` and `parseLogLine` by hand;
- * there is no build-time check that can do it for us.
+ * The row format of `run.log` (see engine/run-log.ts): what one event
+ * summarizes to, how a row is written as a line, and how that line parses back.
  *
- * `summarizeEvent` turns a live WhiphandEvent into the same row shape a
- * finished run's `run.log` parses back into (via `parseLogLine`), which is
- * what lets the Logs tab render "live" and "read from disk" rows identically.
+ * Deliberately dependency-free, unlike engine/run-log.ts (which imports
+ * node:fs to read the file): the desktop imports this module directly, so its
+ * Logs tab builds rows from the live event stream with the very same
+ * `summarizeEvent` the journal used to write the file, and reads a finished
+ * run's file back with the very same `parseLogLine`. That is also why byte
+ * counting goes through TextEncoder rather than Node's `Buffer` — this module
+ * runs in the web bundle. `LoopRef`/`WhiphandEvent` are type-only imports, so
+ * they add nothing at runtime.
  */
-import type { LoopRef, WhiphandEvent } from '../../../../packages/core/src/types.ts';
+import type { LoopRef, WhiphandEvent } from './types.ts';
+
+/** One line's budget, after which it is truncated with a marker — one giant blob must not own the file. */
+export const MAX_LOG_LINE_BYTES = 8 * 1024;
 
 export interface LogRow {
   seq: number;
@@ -21,11 +25,22 @@ export interface LogRow {
   stream?: 'stdout' | 'stderr';
 }
 
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+function byteLength(text: string): number {
+  return encoder.encode(text).length;
+}
+
+/** Injected by command.ts's commandSpec — never a workflow-declared secret, so these are never redacted. */
+const WHIPHAND_ENV_KEYS = new Set([
+  'WHIPHAND_RUN_DIR', 'WHIPHAND_RUN_ID', 'WHIPHAND_RUN_SLUG', 'WHIPHAND_RUN_NAME', 'WHIPHAND_STEP_ID',
+]);
+
 /**
  * `<id>` prefixed with every loop enclosing it, outermost first — e.g.
  * `human-review 2 › fix-cycle`. Empty for a top-level loop, which is what
- * keeps its own rendering byte-identical to what it always was. Mirrors
- * core's run-log.ts `nestedPrefix` — see that file for the canonical version.
+ * keeps its own rendering byte-identical to what it always was.
  */
 function nestedPrefix(id: string, parentLoopId?: string, parentIteration?: number, outerLoops?: LoopRef[]): string {
   const ancestors = [...(outerLoops ?? [])];
@@ -39,16 +54,22 @@ function bytesLabel(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)}MB`;
 }
 
-const WHIPHAND_ENV_KEYS = new Set([
-  'WHIPHAND_RUN_DIR', 'WHIPHAND_RUN_ID', 'WHIPHAND_RUN_SLUG', 'WHIPHAND_RUN_NAME', 'WHIPHAND_STEP_ID',
-]);
-
+/**
+ * Every other env key on a spawn is plausibly a workflow-declared secret
+ * (schema.ts's CommandStep.env) — named so a reader knows one was set, valued
+ * as `<redacted>` so the file stays shareable.
+ */
 function redactedEnvSuffix(env: Record<string, string>): string {
   const keys = Object.keys(env).filter(k => !WHIPHAND_ENV_KEYS.has(k));
   return keys.length === 0 ? '' : `, env: {${keys.map(k => `${k}=<redacted>`).join(', ')}}`;
 }
 
-/** Mirrors core's run-log.ts summarizeEvent — see that file for the canonical version and its comments. */
+/**
+ * The human summary of one WhiphandEvent — what `formatLogLine` serializes.
+ * Deliberately not a dump: `step:spawn` names argv length and prompt size
+ * rather than the argv itself, which is what makes this file safe to paste
+ * into an issue (events.ndjson keeps the full-fidelity version).
+ */
 export function summarizeEvent(event: WhiphandEvent): Omit<LogRow, 'seq' | 'ts'> {
   switch (event.type) {
     case 'run:start': {
@@ -81,10 +102,12 @@ export function summarizeEvent(event: WhiphandEvent): Omit<LogRow, 'seq' | 'ts'>
       const { spec } = event;
       const prompt = spec.argv[spec.argv.length - 1] ?? '';
       const text = `spawn ${spec.argv[0] ?? '?'} (${spec.interactive ? 'interactive' : 'headless'}), `
-        + `${spec.argv.length} arg(s), prompt ${bytesLabel(new TextEncoder().encode(prompt).length)}`
+        + `${spec.argv.length} arg(s), prompt ${bytesLabel(byteLength(prompt))}`
         + `${redactedEnvSuffix(spec.env)} [${event.phase}]`;
       return { kind: event.type, stepId: event.stepId, text };
     }
+    case 'step:session':
+      return { kind: event.type, stepId: event.stepId, text: `session id captured: ${event.sessionId}` };
     case 'step:artifact':
       return {
         kind: event.type, stepId: event.stepId,
@@ -97,8 +120,10 @@ export function summarizeEvent(event: WhiphandEvent): Omit<LogRow, 'seq' | 'ts'>
     case 'step:retry':
       return { kind: event.type, stepId: event.stepId, text: `retrying (attempt ${event.attempt})` };
     case 'step:log':
-      // Stream rides on `kind` (see core's run-log.ts) so it survives a round
-      // trip through parseLogLine, which has no fifth column for it.
+      // The stream rides on `kind` itself (`step:log:stdout`/`step:log:stderr`)
+      // rather than a fifth column: the fixed format has no slot for it, and
+      // a finished run's Logs tab still needs to color stderr red after a
+      // round trip through parseLogLine.
       return { kind: `${event.type}:${event.stream}`, stepId: event.stepId, stream: event.stream, text: event.line };
     case 'session:await':
       return {
@@ -182,20 +207,55 @@ export function summarizeEvent(event: WhiphandEvent): Omit<LogRow, 'seq' | 'ts'>
   }
 }
 
-/** Mirrors core's run-log.ts unescapeText — see that file for why the two tokens must be matched together. */
+/**
+ * `text`'s structural hazard is a literal newline, which would split one row
+ * into two — but a literal backslash must be escaped too, or an already-escaped
+ * newline becomes indistinguishable from a line that genuinely printed the two
+ * characters `\n` (any tool emitting JSON does this). Single pass over the
+ * *source* characters, each expanding to a fixed 2-char token, is what makes
+ * the tokens non-overlapping and unescapeText's matching unambiguous.
+ */
+function escapeText(text: string): string {
+  return text.replace(/\\|\n/g, m => (m === '\\' ? '\\\\' : '\\n'));
+}
+
 function unescapeText(text: string): string {
   return text.replace(/\\\\|\\n/g, m => (m === '\\\\' ? '\\' : '\n'));
 }
 
-/** Inverse of core's formatLogLine — see run-log.ts. `null` for a line that doesn't match the fixed prefix. */
+/**
+ * `<ISO ts>  <seq>  <kind>  <stepId|->  <text>`, two-space separated. Greppable
+ * and `less`-readable by design, and parseable with a bounded split — see
+ * parseLogLine — so the desktop can rebuild the exact same rows from the file
+ * it built live from the event stream.
+ */
+export function formatLogLine(row: LogRow): string {
+  const prefix = `${row.ts}  ${row.seq}  ${row.kind}  ${row.stepId ?? '-'}  `;
+  let text = escapeText(row.text);
+  const budget = MAX_LOG_LINE_BYTES - byteLength(prefix);
+  if (budget > 0 && byteLength(text) > budget) {
+    const marker = '…[truncated]';
+    // '…' is 3 bytes in UTF-8, not 1 — budget math has to use its BYTE
+    // length, not marker.length (a UTF-16 code-unit count), or the kept slice
+    // plus the marker overruns the budget by exactly that difference.
+    const markerBytes = byteLength(marker);
+    const kept = decoder.decode(encoder.encode(text).subarray(0, Math.max(0, budget - markerBytes)));
+    text = `${kept}${marker}`;
+  }
+  return `${prefix}${text}\n`;
+}
+
+/** Inverse of formatLogLine. `null` for a line that doesn't match the fixed prefix — a corrupt or foreign line, never thrown over. */
 export function parseLogLine(line: string): LogRow | null {
   const parts = line.split('  ');
   if (parts.length < 4) return null;
   const [ts, seqRaw, rawKind, stepIdRaw, ...rest] = parts;
   const seq = Number(seqRaw);
   if (!Number.isFinite(seq)) return null;
-  // step:progress:(tool|text|usage) kinds need no inverse mapping here either
-  // — see core's run-log.ts parseLogLine for why.
+  // Undo summarizeEvent's step:log encoding — see the comment there. The
+  // step:progress:(tool|text|usage) kinds need no inverse mapping: unlike the
+  // stream, which has its own LogRow field to land in, the progress kind IS
+  // the whole signal, so it round-trips by passing straight through as `kind`.
   const streamMatch = /^step:log:(stdout|stderr)$/.exec(rawKind);
   const kind = streamMatch ? 'step:log' : rawKind;
   const stream = streamMatch ? (streamMatch[1] as 'stdout' | 'stderr') : undefined;

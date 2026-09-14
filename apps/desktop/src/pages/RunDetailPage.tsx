@@ -35,7 +35,7 @@ import {
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore, executionKey, type JobState, type StepState } from '../state/store.ts';
 import type { RunDetail as RunDetailResult } from '../agent/client.ts';
-import { summarizeEvent, parseLogLine, type LogRow } from '../lib/log-rows.ts';
+import { summarizeEvent, parseLogLine, type LogRow } from '../../../../packages/core/src/log-rows.ts';
 import { StatusBadge } from '../components/StatusBadge.tsx';
 import { AttentionBadge } from '../components/AttentionBadge.tsx';
 import { PageHeader } from '../components/PageHeader.tsx';

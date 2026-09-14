@@ -57,10 +57,8 @@ function refFor(entry: WorkflowEntry): string {
 }
 
 /**
- * Mirrors core's `packages/core/src/workspace.ts` — same reason `parseLogLine`
- * is duplicated in lib/log-rows.ts rather than imported: the desktop bundles
- * no runtime dependency on @whiphand/core, only its types, and workspace.ts
- * reads the filesystem to resolve a workflow ref, which core's own module has
+ * Mirrors core's `packages/core/src/workspace.ts` rather than importing it:
+ * workspace.ts reads the filesystem to resolve a workflow ref, which core's own module has
  * no browser-safe way to do. Keep this in lockstep with workspace.ts's
  * `EXPLICIT_SCOPE_RE` by hand; there is no build-time check that can do it
  * for us.

@@ -11,7 +11,8 @@ import { isSessionCaptureName } from './session-capture.ts';
 import { isOpencodeSupportFileName } from './opencode-files.ts';
 import { LOCK_MARKER_NAME, isRunLocked } from './run-lock.ts';
 import { NAME_MARKER_NAME, SUGGEST_CAPTURE_NAME, readRunName, setRunName } from './run-name.ts';
-import { RUN_LOG_NAME, DEFAULT_RUN_LOG_CAP_BYTES, summarizeEvent, formatLogLine } from './run-log.ts';
+import { RUN_LOG_NAME, DEFAULT_RUN_LOG_CAP_BYTES } from './run-log.ts';
+import { summarizeEvent, formatLogLine } from '../log-rows.ts';
 import { executionKey } from '../execution-key.ts';
 
 const manifestStepSchema = z.object({

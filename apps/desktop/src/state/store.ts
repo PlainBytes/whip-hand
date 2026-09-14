@@ -23,8 +23,8 @@ import type {
 import type { LoopRef, ManualRequest, StepKind, StepMode, StepProgress } from '../../../../packages/core/src/types.ts';
 import { executionKey } from '../../../../packages/core/src/execution-key.ts';
 import type { AppState as AppStateData } from '../../../../packages/agent/src/app-state.ts';
-import type { LogRow } from '../lib/log-rows.ts';
-import { summarizeEvent } from '../lib/log-rows.ts';
+import type { LogRow } from '../../../../packages/core/src/log-rows.ts';
+import { summarizeEvent } from '../../../../packages/core/src/log-rows.ts';
 
 /**
  * Workflows, the runs list, per-job live state, doctor results, config, the
@@ -165,7 +165,7 @@ export interface JobState {
   /**
    * `step:log` whiphandEvents only, as LogRow — the merged Logs tab's output
    * half. Capped like logTail, and for the same reason. Merging this with
-   * `events` (mapped through log-rows.ts's summarizeEvent) and sorting by
+   * `events` (mapped through core's log-rows.ts summarizeEvent) and sorting by
    * `seq` reproduces exactly what run.log holds on disk — see RunDetailPage.
    */
   logRows: LogRow[];

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { AgentStep, DetectResult, ModelInfo, ModelList, RunCtx, RunnerAdapter, SpawnSpec } from '../types.ts';
 import { buildPrompt } from '../template.ts';
 import { interactiveGuidance } from '../engine/interactive-guidance.ts';
-import { endMarkerPath, shellPath } from '../engine/session-end.ts';
+import { endMarkerPath } from '../engine/session-end.ts';
 import { probeRunner } from '../tools.ts';
 import { flagArgs, harvestPrompt, isResumedStep, listModelsVia, requireSessionId, spawnSpec } from './common.ts';
 
@@ -30,13 +30,18 @@ function sessionId(step: AgentStep, ctx: RunCtx): string {
  */
 async function beepNote(): Promise<string[]> {
   const home = process.env.COPILOT_HOME ?? join(homedir(), '.copilot');
-  try {
-    const config = JSON.parse(await readFile(join(home, 'config.json'), 'utf8')) as { beep?: unknown };
-    if (config.beep === true) return [];
-  } catch {
-    // no config yet, or unreadable: the default is off either way
+  // User settings live in settings.json; config.json is copilot's own file
+  // (it says so in a `//` header, which is also why plain JSON.parse fails on it).
+  for (const name of ['settings.json', 'config.json']) {
+    try {
+      const text = await readFile(join(home, name), 'utf8');
+      const config = JSON.parse(text.replace(/^\s*\/\/.*$/gm, '')) as { beep?: unknown };
+      if (config.beep === true) return [];
+    } catch {
+      // no file yet, or unreadable: the default is off either way
+    }
   }
-  return [`copilot will not signal when it needs you; set "beep": true in ${join(home, 'config.json')}`];
+  return [`copilot will not signal when it needs you; set "beep": true in ${join(home, 'settings.json')}`];
 }
 
 /** The heading line `copilot help config` prints ahead of its model id list. */
@@ -107,7 +112,9 @@ export const copilotAdapter: RunnerAdapter = {
       'copilot', '-i', `${interactiveGuidance(step, ctx)}\n\n---\n\n${buildPrompt(step, ctx)}`,
       ...sessionArgs, ...modelArgs(step), ...effortArgs(step),
       ...(step.writes ? [] : ['--deny-tool=write']),
-      `--allow-tool=shell(touch ${shellPath(marker)})`,
+      // A shell rule matches the command name only; naming the marker path
+      // in it matches nothing, and the session-ending touch stops at a prompt.
+      '--allow-tool=shell(touch)',
     ];
     return {
       ...spawnSpec(ctx, argv, true),
@@ -115,12 +122,21 @@ export const copilotAdapter: RunnerAdapter = {
     };
   },
 
+  /**
+   * A read-only step still has to write its artifact, and copilot's deny rules
+   * beat every allow rule, so `--deny-tool=write` cannot carry a run-dir
+   * exception. Instead it gets no --allow-all-tools: shell and URL access are
+   * allowed, and a file write only to the artifact path — any other write has
+   * no rule and is refused, since `-p` has nobody to ask.
+   */
   headless(step: AgentStep, ctx: RunCtx): SpawnSpec {
+    const artifact = ctx.artifacts[step.id] ?? join(ctx.runDir, step.output);
     const argv = [
       'copilot', '-p', buildPrompt(step, ctx),
       ...modelArgs(step), ...effortArgs(step),
-      '--allow-all-tools',
-      ...(step.writes ? [] : ['--deny-tool=write']),
+      ...(step.writes
+        ? ['--allow-all-tools']
+        : ['--allow-tool=shell', '--allow-tool=url', `--allow-tool=write(${artifact})`]),
       '--output-format', 'json', '--stream', 'on',
       '--no-color',
     ];

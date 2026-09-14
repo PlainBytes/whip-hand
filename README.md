@@ -60,7 +60,7 @@ Doctor page renders, so the two can never disagree:
 AI harnesses
 ✔ claude 2.1.263
 ✔ copilot 1.0.83
-  · copilot will not signal when it needs you; set "beep": true in ~/.copilot/config.json
+  · copilot will not signal when it needs you; set "beep": true in ~/.copilot/settings.json
 ✔ opencode 1.17.13
 ○ codex not installed [detect only]
 

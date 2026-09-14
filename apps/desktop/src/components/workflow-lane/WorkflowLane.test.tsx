@@ -54,8 +54,11 @@ function renderLane(entry: WorkflowEntry) {
   const onRun = vi.fn();
   const onEdit = vi.fn();
   const onDelete = vi.fn();
-  render(<WorkflowLane entry={entry} onRun={onRun} onEdit={onEdit} onDelete={onDelete} />);
-  return { onRun, onEdit, onDelete };
+  const onClone = vi.fn();
+  render(<WorkflowLane entry={entry} onRun={onRun} onEdit={onEdit} onDelete={onDelete} onClone={onClone} />);
+  return {
+    onRun, onEdit, onDelete, onClone,
+  };
 }
 
 describe('WorkflowLane header', () => {
@@ -112,47 +115,53 @@ describe('WorkflowLane header', () => {
     expect(screen.getByText('3 steps · 1 step disabled')).toBeInTheDocument();
   });
 
-  it('runs and edits from the lane itself', () => {
-    const { onRun, onEdit } = renderLane(FEATURE);
+  it('runs, edits and clones from the lane itself', () => {
+    const {
+      onRun, onEdit, onClone,
+    } = renderLane(FEATURE);
     fireEvent.click(screen.getByRole('button', { name: /^run$/i }));
     expect(onRun).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
     expect(onEdit).toHaveBeenCalledWith(FEATURE);
+    fireEvent.click(screen.getByRole('button', { name: /^clone$/i }));
+    expect(onClone).toHaveBeenCalledWith(FEATURE);
   });
 
-  it('deletes from the ⋯ menu, handing the whole entry to onDelete', () => {
+  it('deletes from the visible Delete button, handing the whole entry to onDelete', () => {
     const { onDelete } = renderLane(FEATURE);
-    fireEvent.click(screen.getByRole('button', { name: /more actions for feature/i }));
-    fireEvent.click(screen.getByRole('menuitem', { name: /delete/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
     expect(onDelete).toHaveBeenCalledWith(FEATURE);
   });
 });
 
 describe('WorkflowLane parse errors', () => {
-  it('shows the error and offers neither Run nor Edit for an unparseable workflow', () => {
+  it('shows the error and offers neither Run, Edit nor Clone for an unparseable workflow', () => {
     renderLane({ name: 'broken', path: '/ws/.whiphand/workflows/broken.yaml', source: 'project', error: "duplicate step id 'plan'" });
     expect(screen.getByText('broken')).toBeInTheDocument();
     expect(screen.getByText(/duplicate step id/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^run$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^edit$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^clone$/i })).not.toBeInTheDocument();
   });
 
-  it('still offers Delete, from the ⋯ menu, for a workflow file that failed to parse', () => {
+  it('still offers a visible Delete button for a workflow file that failed to parse', () => {
     const { onDelete } = renderLane({
       name: 'broken', path: '/ws/.whiphand/workflows/broken.yaml', source: 'project', error: "duplicate step id 'plan'",
     });
-    fireEvent.click(screen.getByRole('button', { name: /more actions for broken/i }));
-    fireEvent.click(screen.getByRole('menuitem', { name: /delete/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
     expect(onDelete).toHaveBeenCalled();
   });
 
-  it('offers no ⋯ menu at all for the entry naming an unreadable scope directory', () => {
+  it('offers no buttons at all for the entry naming an unreadable scope directory', () => {
     renderLane({
       name: 'global', path: '/home/user/.config/whiphand/workflows', source: 'global',
       error: 'cannot read /home/user/.config/whiphand/workflows: EACCES',
     });
     expect(screen.getByText(/cannot read/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /more actions/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^run$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^edit$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^clone$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^delete$/i })).not.toBeInTheDocument();
   });
 });
 

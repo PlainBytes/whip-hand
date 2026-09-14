@@ -120,6 +120,20 @@ export const deleteWorkflowParams = z.object({
 });
 export const deleteWorkflowResult = z.object({ deleted: z.boolean() });
 
+/**
+ * `name` and `newName` are both workflow names, never paths — the same
+ * boundary deleteWorkflowParams guards. `scope` is the source's (and the
+ * clone's, since a clone always stays in its source scope); there is no
+ * separate target scope to name.
+ */
+export const cloneWorkflowParams = z.object({
+  workdir: z.string().min(1),
+  name: z.string().regex(WORKFLOW_NAME_RE),
+  newName: z.string().regex(WORKFLOW_NAME_RE),
+  scope: scopeSchema.optional(),
+});
+export const cloneWorkflowResult = z.object({ path: z.string() });
+
 export const initWorkspaceParams = z.object({ workdir: z.string().min(1) });
 export const initWorkspaceResult = z.object({ created: z.array(z.string()) });
 
@@ -653,6 +667,7 @@ export const methods = {
   createWorkflow: { params: createWorkflowParams, result: createWorkflowResult },
   updateWorkflow: { params: updateWorkflowParams, result: updateWorkflowResult },
   deleteWorkflow: { params: deleteWorkflowParams, result: deleteWorkflowResult },
+  cloneWorkflow: { params: cloneWorkflowParams, result: cloneWorkflowResult },
   initWorkspace: { params: initWorkspaceParams, result: initWorkspaceResult },
   doctor: { params: doctorParams, result: doctorResult },
   listModels: { params: listModelsParams, result: listModelsResult },
@@ -701,6 +716,8 @@ export type UpdateWorkflowParams = z.infer<typeof updateWorkflowParams>;
 export type UpdateWorkflowResult = z.infer<typeof updateWorkflowResult>;
 export type DeleteWorkflowParams = z.infer<typeof deleteWorkflowParams>;
 export type DeleteWorkflowResult = z.infer<typeof deleteWorkflowResult>;
+export type CloneWorkflowParams = z.infer<typeof cloneWorkflowParams>;
+export type CloneWorkflowResult = z.infer<typeof cloneWorkflowResult>;
 export type InitWorkspaceParams = z.infer<typeof initWorkspaceParams>;
 export type InitWorkspaceResult = z.infer<typeof initWorkspaceResult>;
 export type DoctorParams = z.infer<typeof doctorParams>;

@@ -4,6 +4,8 @@ import type {
   CancelRunResult,
   EndSessionParams,
   EndSessionResult,
+  CloneWorkflowParams,
+  CloneWorkflowResult,
   ConfigGetParams,
   ConfigGetResult,
   ConfigSetParams,
@@ -120,6 +122,7 @@ interface MethodMap {
   createWorkflow: { params: CreateWorkflowParams; result: CreateWorkflowResult };
   updateWorkflow: { params: UpdateWorkflowParams; result: UpdateWorkflowResult };
   deleteWorkflow: { params: DeleteWorkflowParams; result: DeleteWorkflowResult };
+  cloneWorkflow: { params: CloneWorkflowParams; result: CloneWorkflowResult };
   initWorkspace: { params: InitWorkspaceParams; result: InitWorkspaceResult };
   doctor: { params: DoctorParams; result: DoctorResult };
   listModels: { params: ListModelsParams; result: ListModelsResult };

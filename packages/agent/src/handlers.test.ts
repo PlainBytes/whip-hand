@@ -352,6 +352,26 @@ test('deleteWorkflow removes a workflow so listWorkflows no longer shows it', as
   assert.ok(!listed.some(r => r.name === 'doomed'));
 });
 
+test('cloneWorkflow copies a workflow under a new name, end to end', async () => {
+  const appState = await tempAppState();
+  const handlers = createHandlers({ jobs: new JobManager(), notify: () => {}, appState });
+  const ws = await mkdtemp(join(tmpdir(), 'whiphand-clone-'));
+  await handlers.createWorkflow({ workdir: ws, name: 'original' }, { notify: () => {} });
+
+  const result = await handlers.cloneWorkflow(
+    { workdir: ws, name: 'original', newName: 'original-copy' }, { notify: () => {} },
+  ) as { path: string };
+  assert.ok(result.path.endsWith(join('.whiphand', 'workflows', 'original-copy.yaml')));
+
+  const listed = await handlers.listWorkflows({ workdir: ws }, { notify: () => {} }) as { name: string }[];
+  assert.deepEqual(listed.map(r => r.name).sort(), ['original', 'original-copy']);
+
+  const cloned = await handlers.getWorkflow(
+    { workdir: ws, name: 'original-copy' }, { notify: () => {} },
+  ) as { name: string };
+  assert.equal(cloned.name, 'original-copy');
+});
+
 test('createWorkflow/updateWorkflow/getWorkflow honor an explicit global scope', async () => {
   const appState = await tempAppState();
   const handlers = createHandlers({ jobs: new JobManager(), notify: () => {}, appState });

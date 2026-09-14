@@ -4,7 +4,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  createWorkflow, deleteWorkflow, initWorkspace, workflowTemplate, specDrivenTemplate, featureDevelopmentTemplate,
+  createWorkflow, deleteWorkflow, cloneWorkflow, initWorkspace, workflowTemplate, specDrivenTemplate, featureDevelopmentTemplate,
   updateWorkflow,
 } from './scaffold.ts';
 import { parseWorkflow, validateWorkflowWarnings, WorkflowError } from './schema.ts';
@@ -303,4 +303,67 @@ test('deleteWorkflow refuses an invalid name instead of unlinking outside the wo
   await assert.rejects(() => deleteWorkflow(ws, join('..', 'x')), /invalid workflow name/);
   await assert.rejects(() => deleteWorkflow(ws, 'Bad Name!'), /invalid workflow name/);
   await access(escapee); // still there
+});
+
+test("cloneWorkflow writes <to>.yaml with name: <to>, keeps the source's comments, and leaves the source unchanged", async () => {
+  const ws = await mkdtemp(join(tmpdir(), 'whiphand-scaffold-'));
+  const { path: fromPath } = await createWorkflow(ws, 'my-flow');
+  const before = await readFile(fromPath, 'utf8');
+
+  const { path } = await cloneWorkflow(ws, 'my-flow', 'my-flow-copy');
+
+  assert.equal(path, join(ws, '.whiphand', 'workflows', 'my-flow-copy.yaml'));
+  const cloned = await readFile(path, 'utf8');
+  assert.match(cloned, /^name: my-flow-copy$/m);
+  assert.ok(cloned.includes('plan interactively, then implement and review in a cycle'), 'keeps the source\'s leading comment');
+  assert.equal(await readFile(fromPath, 'utf8'), before);
+});
+
+test('cloneWorkflow refuses to overwrite an existing target and leaves it untouched', async () => {
+  const ws = await mkdtemp(join(tmpdir(), 'whiphand-scaffold-'));
+  await createWorkflow(ws, 'my-flow');
+  await createWorkflow(ws, 'already-there');
+  const targetPath = join(ws, '.whiphand', 'workflows', 'already-there.yaml');
+  const before = await readFile(targetPath, 'utf8');
+
+  await assert.rejects(
+    () => cloneWorkflow(ws, 'my-flow', 'already-there'),
+    (e: unknown) => e instanceof Error && (e as NodeJS.ErrnoException).code === 'EEXIST',
+  );
+  assert.equal(await readFile(targetPath, 'utf8'), before);
+});
+
+test('cloneWorkflow stays in the given scope', async () => {
+  await withConfigHome(async configHome => {
+    const ws = await mkdtemp(join(tmpdir(), 'whiphand-scaffold-'));
+    await createWorkflow(ws, 'my-global-flow', 'global');
+
+    const { path } = await cloneWorkflow(ws, 'my-global-flow', 'my-global-flow-copy', 'global');
+    assert.equal(path, join(configHome, 'workflows', 'my-global-flow-copy.yaml'));
+    await assert.rejects(() => access(join(ws, '.whiphand', 'workflows', 'my-global-flow-copy.yaml')), /ENOENT/);
+  });
+});
+
+test('cloneWorkflow works from a .yml source', async () => {
+  const ws = await mkdtemp(join(tmpdir(), 'whiphand-scaffold-'));
+  const dir = join(ws, '.whiphand', 'workflows');
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, 'legacy.yml'), workflowTemplate('legacy'), 'utf8');
+
+  const { path } = await cloneWorkflow(ws, 'legacy', 'legacy-copy');
+  assert.equal(path, join(dir, 'legacy-copy.yaml'));
+  const onDisk = parseWorkflow(await readFile(path, 'utf8'));
+  assert.equal(onDisk.name, 'legacy-copy');
+});
+
+test('cloneWorkflow throws a clear error when the source does not exist', async () => {
+  const ws = await mkdtemp(join(tmpdir(), 'whiphand-scaffold-'));
+  await assert.rejects(() => cloneWorkflow(ws, 'never-there', 'copy'), /not found/);
+});
+
+test('cloneWorkflow rejects an invalid source or target name', async () => {
+  const ws = await mkdtemp(join(tmpdir(), 'whiphand-scaffold-'));
+  await createWorkflow(ws, 'my-flow');
+  await assert.rejects(() => cloneWorkflow(ws, 'Bad Name!', 'copy'), /invalid workflow name/);
+  await assert.rejects(() => cloneWorkflow(ws, 'my-flow', 'Bad Name!'), /invalid workflow name/);
 });

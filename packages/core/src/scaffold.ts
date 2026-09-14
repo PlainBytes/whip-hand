@@ -8,11 +8,12 @@ import { join } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import { globalWorkflowsDir } from './config-home.ts';
 import { DEFAULT_CONFIG } from './config.ts';
-import { WorkflowError, validateWorkflowSemantics } from './schema.ts';
+import { WorkflowError, parseWorkflow, validateWorkflowSemantics } from './schema.ts';
 import { mergeWorkflow } from './workflow-write.ts';
 import type { Scope, Workflow } from './types.ts';
+import { WORKFLOW_NAME_RE } from './workflow-name.ts';
 
-export const WORKFLOW_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/;
+export { WORKFLOW_NAME_RE } from './workflow-name.ts';
 
 /**
  * Every writer *and reader* must run this before interpolating `name` into a
@@ -443,6 +444,36 @@ export async function deleteWorkflow(
     }
   }
   return { deleted: false };
+}
+
+/**
+ * Copies one scoped workflow file onto a new name, in the same scope. Reads
+ * and reparses the source rather than copying it byte-for-byte, so `to` lands
+ * in the `name:` field too, not just the filename; `mergeWorkflow` then
+ * rewrites only that field, keeping the source's comments and formatting.
+ * The write goes through `writeWorkflowFile`'s `wx`-flag guard, so a target
+ * that already exists throws EEXIST rather than being overwritten — the
+ * caller's own existence check can be stale by the time this runs.
+ */
+export async function cloneWorkflow(
+  workdir: string, from: string, to: string, scope: Scope = 'project',
+): Promise<{ path: string }> {
+  assertValidWorkflowName(from);
+  assertValidWorkflowName(to);
+  const dir = workflowsDir(workdir, scope);
+  let raw: string | undefined;
+  for (const ext of ['yaml', 'yml']) {
+    try {
+      raw = await readFile(join(dir, `${from}.${ext}`), 'utf8');
+      break;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+    }
+  }
+  if (raw === undefined) throw new Error(`workflow '${from}' not found`);
+  const parsed = parseWorkflow(raw);
+  const content = mergeWorkflow(raw, { ...parsed, name: to });
+  return writeWorkflowFile(workdir, to, content, scope);
 }
 
 export async function initWorkspace(workdir: string): Promise<{ created: string[] }> {

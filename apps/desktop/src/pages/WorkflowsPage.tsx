@@ -22,6 +22,7 @@ import { useAppStore } from '../state/store.ts';
 import { PageHeader } from '../components/PageHeader.tsx';
 import { WorkflowLane, isWorkflowFile } from '../components/workflow-lane/WorkflowLane.tsx';
 import { DeleteWorkflowDialog } from '../components/DeleteWorkflowDialog.tsx';
+import { CloneWorkflowDialog } from '../components/CloneWorkflowDialog.tsx';
 import type { WorkflowEntry } from '../components/workflow-lane/WorkflowLane.tsx';
 import type { Scope } from '../../../../packages/core/src/types.ts';
 import { WorkflowEditor } from '../workflow-editor/WorkflowEditor.tsx';
@@ -65,6 +66,8 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
   const [editing, setEditing] = useState<{ name: string; source: Scope } | null>(null);
   /** The card awaiting delete confirmation; null when no dialog is open. */
   const [deleting, setDeleting] = useState<{ name: string; source: Scope } | null>(null);
+  /** The card being cloned; null when no dialog is open. */
+  const [cloning, setCloning] = useState<{ name: string; source: Scope } | null>(null);
 
   useEffect(() => {
     if (!workspacePath) return;
@@ -219,7 +222,7 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
   const cardList = workflows.length > 0 && (
     // A single column of full-width pipeline lanes, one per workflow — see
     // the plan for why this replaced the narrow card grid.
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {workflows.map(entry => (
         <WorkflowLane
           key={`${entry.source}:${entry.name}`}
@@ -227,6 +230,7 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
           onRun={() => onRunWorkflow(entry.name, entry.source)}
           onEdit={startEdit}
           onDelete={target => setDeleting({ name: target.name, source: target.source })}
+          onClone={target => setCloning({ name: target.name, source: target.source })}
         />
       ))}
     </div>
@@ -280,6 +284,19 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
             setReloadKey(k => k + 1);
           }}
           onDismiss={() => setDeleting(null)}
+        />
+      )}
+      {cloning && (
+        <CloneWorkflowDialog
+          name={cloning.name}
+          source={cloning.source}
+          workdir={workspacePath}
+          existing={workflows}
+          onCloned={() => {
+            setCloning(null);
+            setReloadKey(k => k + 1);
+          }}
+          onDismiss={() => setCloning(null)}
         />
       )}
     </div>

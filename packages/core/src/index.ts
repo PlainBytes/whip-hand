@@ -96,8 +96,9 @@ export { ancestorLoops } from './execution-key.ts';
 export { planResume, ResumeError } from './engine/resume.ts';
 export type { ResumePlan, DoneExecution, LoopBudget, ResumeOptions } from './engine/resume.ts';
 export {
-  initWorkspace, createWorkflow, updateWorkflow, deleteWorkflow, workflowTemplate, WORKFLOW_NAME_RE,
+  initWorkspace, createWorkflow, updateWorkflow, deleteWorkflow, cloneWorkflow, workflowTemplate,
 } from './scaffold.ts';
+export { WORKFLOW_NAME_RE } from './workflow-name.ts';
 export {
   isEnabled, disabledRoots, disabledIds, pruneDisabled, droppedRefs, droppedRefSentence, untilTargetOf,
 } from './enabled.ts';

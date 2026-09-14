@@ -51,6 +51,7 @@ export const PAGE_HEADER_HEIGHT_VAR = '--whiphand-page-header-height';
  *   Cancel / dismiss an edit    -> Dismiss20Regular
  *   Stop a running thing        -> Stop20Regular      (distinct from Dismiss)
  *   Delete                      -> Delete20Regular
+ *   Duplicate / Clone           -> Copy20Regular
  *   Create (untyped)            -> Add20Regular
  *   Create (typed)              -> DocumentAdd* / FolderAdd* (already in use)
  *   Go back                     -> ArrowLeft20Regular

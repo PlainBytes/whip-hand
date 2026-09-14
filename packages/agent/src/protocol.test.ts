@@ -83,6 +83,21 @@ test('methods: deleteWorkflow params take a workflow name and scope, never a pat
   assert.deepEqual(methods.deleteWorkflow.result.parse({ deleted: false }), { deleted: false });
 });
 
+test('methods: cloneWorkflow params take a workflow name and newName, never a path', () => {
+  assert.equal(methods.cloneWorkflow.params.safeParse({ workdir: '/w', name: 'r', newName: 'r-copy' }).success, true);
+  assert.equal(
+    methods.cloneWorkflow.params.safeParse({ workdir: '/w', name: 'r', newName: 'r-copy', scope: 'global' }).success,
+    true,
+  );
+  assert.equal(methods.cloneWorkflow.params.safeParse({ workdir: '/w', name: '../x', newName: 'r-copy' }).success, false);
+  assert.equal(methods.cloneWorkflow.params.safeParse({ workdir: '/w', name: 'r', newName: '/etc/passwd' }).success, false);
+  assert.equal(methods.cloneWorkflow.params.safeParse({ workdir: '/w', name: 'r', newName: 'Bad Name!' }).success, false);
+  assert.deepEqual(
+    methods.cloneWorkflow.result.parse({ path: '/w/.whiphand/workflows/r-copy.yaml' }),
+    { path: '/w/.whiphand/workflows/r-copy.yaml' },
+  );
+});
+
 test('methods: getWorkflow result requires a full workflow', () => {
   const workflow = {
     name: 'r', steps: [

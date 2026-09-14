@@ -35,6 +35,7 @@ export const REMOTE_METHOD_NAMES = [
   'createWorkflow',
   'updateWorkflow',
   'deleteWorkflow',
+  'cloneWorkflow',
   'initWorkspace',
   'doctor',
   'listModels',

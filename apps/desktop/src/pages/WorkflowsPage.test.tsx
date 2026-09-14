@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  fireEvent, render, screen, waitFor, within,
+} from '@testing-library/react';
 import { WorkflowsPage } from './WorkflowsPage.tsx';
 import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
@@ -238,10 +240,14 @@ describe('WorkflowsPage - delegating to the editor', () => {
   });
 });
 
-/** Opens a lane's ⋯ menu and clicks Delete — that's where the lane now puts it. */
-async function openLaneDeleteMenu(name: string): Promise<void> {
-  fireEvent.click(await screen.findByRole('button', { name: new RegExp(`more actions for ${name}`, 'i') }));
-  fireEvent.click(await screen.findByRole('menuitem', { name: /delete/i }));
+/** The Fluent Dialog surface — used to scope a query to the confirm dialog's own "Delete"/"Clone" button, since the triggering lane button shares the same accessible name. */
+function dialog(): HTMLElement {
+  return screen.getByRole('dialog');
+}
+
+/** Clicks a lane's visible Delete button. With one lane on screen there is exactly one. */
+async function clickLaneDelete(): Promise<void> {
+  fireEvent.click(await screen.findByRole('button', { name: /^delete$/i }));
 }
 
 function sentMethods(transport: MockTransport): string[] {
@@ -267,31 +273,31 @@ describe('WorkflowsPage - deleting a workflow', () => {
     const respond = respondFactory();
     const { transport } = renderWorkflowsPage();
     await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
-    await openLaneDeleteMenu('feature');
+    await clickLaneDelete();
 
     expect(await screen.findByText("Delete workflow 'feature'?")).toBeInTheDocument();
     expect(screen.getByText(/this deletes its file\. this cannot be undone\. past runs keep their own copy\./i))
       .toBeInTheDocument();
     expect(screen.queryByText(/will be used in this workspace instead/i)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+    fireEvent.click(within(dialog()).getByRole('button', { name: /^delete$/i }));
     const req = await lastRequest(transport, 'deleteWorkflow');
     expect(req.params).toEqual({ workdir: '/ws', name: 'feature' });
 
     await respond(transport, 'deleteWorkflow', { deleted: true });
     await respond(transport, 'listWorkflows', []);
     await waitFor(() => expect(screen.queryByText("Delete workflow 'feature'?")).not.toBeInTheDocument());
-    expect(screen.queryByRole('button', { name: /more actions for feature/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^delete$/i })).not.toBeInTheDocument();
   });
 
   it('a global workflow gets the every-workspace wording and sends scope: global', async () => {
     const respond = respondFactory();
     const { transport } = renderWorkflowsPage();
     await respond(transport, 'listWorkflows', [GLOBAL_FEATURE]);
-    await openLaneDeleteMenu('feature');
+    await clickLaneDelete();
 
     expect(await screen.findByText(/every workspace on this machine loses it/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+    fireEvent.click(within(dialog()).getByRole('button', { name: /^delete$/i }));
     const req = await lastRequest(transport, 'deleteWorkflow');
     expect(req.params).toEqual({ workdir: '/ws', name: 'feature', scope: 'global' });
   });
@@ -300,17 +306,15 @@ describe('WorkflowsPage - deleting a workflow', () => {
     const respond = respondFactory();
     const { transport } = renderWorkflowsPage();
     await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW, { ...GLOBAL_FEATURE, shadowed: true as const }]);
-    const [projectMenu, globalMenu] = await screen.findAllByRole('button', { name: /more actions for feature/i });
+    const [projectDelete, globalDelete] = await screen.findAllByRole('button', { name: /^delete$/i });
 
-    fireEvent.click(projectMenu);
-    fireEvent.click(await screen.findByRole('menuitem', { name: /delete/i }));
+    fireEvent.click(projectDelete);
     expect(await screen.findByText("The global 'feature' workflow will be used in this workspace instead."))
       .toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    fireEvent.click(within(dialog()).getByRole('button', { name: /^cancel$/i }));
     await waitFor(() => expect(screen.queryByText("Delete workflow 'feature'?")).not.toBeInTheDocument());
 
-    fireEvent.click(globalMenu);
-    fireEvent.click(await screen.findByRole('menuitem', { name: /delete/i }));
+    fireEvent.click(globalDelete);
     expect(await screen.findByText(/every workspace on this machine loses it/i)).toBeInTheDocument();
     expect(screen.queryByText(/will be used in this workspace instead/i)).not.toBeInTheDocument();
   });
@@ -319,10 +323,10 @@ describe('WorkflowsPage - deleting a workflow', () => {
     const respond = respondFactory();
     const { transport } = renderWorkflowsPage();
     await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
-    await openLaneDeleteMenu('feature');
+    await clickLaneDelete();
     await screen.findByText("Delete workflow 'feature'?");
 
-    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    fireEvent.click(within(dialog()).getByRole('button', { name: /^cancel$/i }));
     await waitFor(() => expect(screen.queryByText("Delete workflow 'feature'?")).not.toBeInTheDocument());
     expect(sentMethods(transport)).not.toContain('deleteWorkflow');
   });
@@ -331,14 +335,14 @@ describe('WorkflowsPage - deleting a workflow', () => {
     const respond = respondFactory();
     const { transport } = renderWorkflowsPage();
     await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
-    await openLaneDeleteMenu('feature');
-    fireEvent.click(await screen.findByRole('button', { name: /^delete$/i }));
+    await clickLaneDelete();
+    fireEvent.click(within(dialog()).getByRole('button', { name: /^delete$/i }));
 
     const req = await lastRequest(transport, 'deleteWorkflow');
     transport.emitLine({ id: req.id, error: { message: 'EACCES: permission denied' } });
     expect(await screen.findByText(/permission denied/i)).toBeInTheDocument();
     expect(screen.getByText("Delete workflow 'feature'?")).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^delete$/i })).toBeEnabled();
+    expect(within(dialog()).getByRole('button', { name: /^delete$/i })).toBeEnabled();
     expect(sentMethods(transport).filter(m => m === 'listWorkflows')).toHaveLength(1);
   });
 
@@ -346,8 +350,8 @@ describe('WorkflowsPage - deleting a workflow', () => {
     const respond = respondFactory();
     const { transport } = renderWorkflowsPage();
     await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
-    await openLaneDeleteMenu('feature');
-    fireEvent.click(await screen.findByRole('button', { name: /^delete$/i }));
+    await clickLaneDelete();
+    fireEvent.click(within(dialog()).getByRole('button', { name: /^delete$/i }));
 
     await respond(transport, 'deleteWorkflow', { deleted: false });
     await respond(transport, 'listWorkflows', []);
@@ -370,5 +374,130 @@ describe('WorkflowsPage - deleting a workflow', () => {
     await respond(transport, 'listWorkflows', []);
     expect(await screen.findByRole('button', { name: /new workflow/i })).toBeInTheDocument();
     expect(screen.queryByText(/edit workflow: feature/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('WorkflowsPage - cloning a workflow', () => {
+  const GLOBAL_FEATURE = {
+    ...FEATURE_WORKFLOW,
+    path: '/home/user/.config/whiphand/workflows/feature.yaml',
+    source: 'global' as const,
+  };
+
+  beforeEach(() => {
+    useAppStore.setState({ workspacePath: '/ws', workflows: [] });
+  });
+
+  afterEach(() => {
+    useAppStore.setState({ workspacePath: null, workflows: [] });
+  });
+
+  /** Clicks Clone on one specific lane — several tests here render two lanes, each with its own Clone button. */
+  async function openClone(laneTestId = 'workflow-lane-project-feature'): Promise<void> {
+    const lane = await screen.findByTestId(laneTestId);
+    fireEvent.click(within(lane).getByRole('button', { name: /^clone$/i }));
+    await screen.findByText('Clone workflow');
+  }
+
+  it('opens pre-filled with <name>-copy', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    await openClone();
+
+    expect(await screen.findByLabelText(/name/i)).toHaveValue('feature-copy');
+    expect(screen.getByText('Clones into: This workspace')).toBeInTheDocument();
+  });
+
+  it('opens pre-filled with <name>-copy-2 when <name>-copy is already taken', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    const TAKEN_COPY = { ...FEATURE_WORKFLOW, name: 'feature-copy', path: '/ws/.whiphand/workflows/feature-copy.yaml' };
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW, TAKEN_COPY]);
+    await openClone();
+
+    expect(await screen.findByLabelText(/name/i)).toHaveValue('feature-copy-2');
+  });
+
+  it('an invalid name, or one already used in the same scope, shows an error and disables Clone', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    await openClone();
+    const nameField = await screen.findByLabelText(/name/i);
+    const cloneButton = () => within(dialog()).getByRole('button', { name: /^clone$/i });
+
+    fireEvent.change(nameField, { target: { value: 'Bad Name!' } });
+    expect(await screen.findByText(/use lowercase letters, digits, - and _/i)).toBeInTheDocument();
+    expect(cloneButton()).toBeDisabled();
+
+    fireEvent.change(nameField, { target: { value: 'feature' } });
+    expect(await screen.findByText('A workflow named feature already exists')).toBeInTheDocument();
+    expect(cloneButton()).toBeDisabled();
+  });
+
+  it('a name used only in the other scope shows a warning and keeps Clone enabled', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    const GLOBAL_OTHER = { ...GLOBAL_FEATURE, name: 'other-flow', path: '/home/user/.config/whiphand/workflows/other-flow.yaml' };
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW, GLOBAL_OTHER]);
+    await openClone();
+    const nameField = await screen.findByLabelText(/name/i);
+
+    fireEvent.change(nameField, { target: { value: 'other-flow' } });
+    expect(await screen.findByText('Will override the global workflow other-flow in this workspace')).toBeInTheDocument();
+    expect(within(dialog()).getByRole('button', { name: /^clone$/i })).toBeEnabled();
+  });
+
+  it('confirming a project clone sends cloneWorkflow without a scope, then reloads and closes', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    await openClone();
+
+    fireEvent.click(within(dialog()).getByRole('button', { name: /^clone$/i }));
+    const req = await lastRequest(transport, 'cloneWorkflow');
+    expect(req.params).toEqual({ workdir: '/ws', name: 'feature', newName: 'feature-copy' });
+
+    await respond(transport, 'cloneWorkflow', { path: '/ws/.whiphand/workflows/feature-copy.yaml' });
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    await waitFor(() => expect(screen.queryByText('Clone workflow')).not.toBeInTheDocument());
+  });
+
+  it('confirming a global clone sends scope: global', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [GLOBAL_FEATURE]);
+    await openClone('workflow-lane-global-feature');
+
+    fireEvent.click(within(dialog()).getByRole('button', { name: /^clone$/i }));
+    const req = await lastRequest(transport, 'cloneWorkflow');
+    expect(req.params).toEqual({
+      workdir: '/ws', name: 'feature', newName: 'feature-copy', scope: 'global',
+    });
+  });
+
+  it('an RPC error keeps the dialog open and shows the message', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    await openClone();
+
+    fireEvent.click(within(dialog()).getByRole('button', { name: /^clone$/i }));
+    const req = await lastRequest(transport, 'cloneWorkflow');
+    transport.emitLine({ id: req.id, error: { message: "workflow 'feature-copy' already exists" } });
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+    expect(screen.getByText('Clone workflow')).toBeInTheDocument();
+  });
+
+  it('Cancel sends nothing', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    await openClone();
+
+    fireEvent.click(within(dialog()).getByRole('button', { name: /^cancel$/i }));
+    await waitFor(() => expect(screen.queryByText('Clone workflow')).not.toBeInTheDocument());
+    expect(sentMethods(transport)).not.toContain('cloneWorkflow');
   });
 });

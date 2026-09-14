@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react';
 import {
-  Badge, Button, Menu, MenuItem, MenuList, MenuPopover, MenuTrigger, MessageBar, MessageBarBody, Text,
+  Badge, Button, MessageBar, MessageBarBody, Text,
 } from '@fluentui/react-components';
-import { Delete20Regular, MoreHorizontal20Regular, Play20Regular } from '@fluentui/react-icons';
+import {
+  Copy20Regular, Delete20Regular, Edit20Regular, Play20Regular,
+} from '@fluentui/react-icons';
 import type { ListWorkflowsResult } from '../../../../../packages/agent/src/protocol.ts';
 import type { Workflow } from '../../../../../packages/core/src/types.ts';
 import { flattenSteps, isLoopStep } from '../../../../../packages/core/src/steps.ts';
@@ -26,6 +28,8 @@ export interface WorkflowLaneProps {
   onEdit: (entry: WorkflowEntry) => void;
   /** Takes the whole entry for the same reason `onEdit` does: the target is its `name` + `source`. */
   onDelete: (entry: WorkflowEntry) => void;
+  /** Takes the whole entry for the same reason `onEdit` does: the target is its `name` + `source`. */
+  onClone: (entry: WorkflowEntry) => void;
 }
 
 /**
@@ -66,7 +70,9 @@ function inputsLine(workflow: Workflow): string | null {
  * that failed to parse shows the error instead — there's no workflow object
  * to run, edit or lay out, but its file can still be deleted.
  */
-export function WorkflowLane({ entry, onRun, onEdit, onDelete }: WorkflowLaneProps) {
+export function WorkflowLane({
+  entry, onRun, onEdit, onDelete, onClone,
+}: WorkflowLaneProps) {
   const workflow = entry.workflow;
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
@@ -82,28 +88,30 @@ export function WorkflowLane({ entry, onRun, onEdit, onDelete }: WorkflowLanePro
   const sourceSet = useMemo(() => new Set(hoveredEntry?.sources ?? []), [hoveredEntry]);
   const dependentSet = useMemo(() => new Set(hoveredEntry?.dependents ?? []), [hoveredEntry]);
 
-  const menu = (
-    <Menu>
-      <MenuTrigger disableButtonEnhancement>
-        <Button appearance="subtle" icon={<MoreHorizontal20Regular />} aria-label={`More actions for ${entry.name}`} />
-      </MenuTrigger>
-      <MenuPopover>
-        <MenuList>
-          <MenuItem icon={<Delete20Regular />} onClick={() => onDelete(entry)}>Delete</MenuItem>
-        </MenuList>
-      </MenuPopover>
-    </Menu>
-  );
-
   return (
     <div
       data-testid={`workflow-lane-${entry.source}-${entry.name}`}
       style={{
-        display: 'flex', flexDirection: 'column', gap: 10, padding: '16px 4px', borderBottom: '1px solid var(--colorNeutralStroke2)',
+        display: 'flex',
+        flexDirection: 'column',
+        border: '1px solid var(--colorNeutralStroke2)',
+        borderRadius: 'var(--borderRadiusLarge)',
+        overflow: 'hidden',
+        background: 'var(--colorNeutralBackground1)',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
-        <Text weight="semibold" size={400}>{entry.name}</Text>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 12,
+          flexWrap: 'wrap',
+          background: 'var(--colorNeutralBackground3)',
+          borderBottom: '1px solid var(--colorNeutralStroke2)',
+          padding: '10px 16px',
+        }}
+      >
+        <Text weight="semibold" size={500}>{entry.name}</Text>
         {entry.source === 'global' && <Badge appearance="tint" color="brand">Global</Badge>}
         {workflow && (
           <Text size={200} style={{ color: 'var(--colorNeutralForeground3)' }}>{stepAndLoopCounts(workflow)}</Text>
@@ -115,38 +123,43 @@ export function WorkflowLane({ entry, onRun, onEdit, onDelete }: WorkflowLanePro
           {workflow && (
             <>
               <Button appearance="primary" icon={<Play20Regular />} onClick={onRun}>Run</Button>
-              <Button appearance="secondary" onClick={() => onEdit(entry)}>Edit</Button>
+              <Button appearance="secondary" icon={<Edit20Regular />} onClick={() => onEdit(entry)}>Edit</Button>
+              <Button appearance="secondary" icon={<Copy20Regular />} onClick={() => onClone(entry)}>Clone</Button>
             </>
           )}
-          {(workflow || isWorkflowFile(entry)) && menu}
+          {(workflow || isWorkflowFile(entry)) && (
+            <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => onDelete(entry)}>Delete</Button>
+          )}
         </div>
       </div>
 
-      {workflow?.description && <Text>{workflow.description}</Text>}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 16px' }}>
+        {workflow?.description && <Text>{workflow.description}</Text>}
 
-      {entry.shadowed && (
-        <Text size={200} italic style={{ color: 'var(--colorNeutralForeground3)' }}>
-          Overridden by this project
-        </Text>
-      )}
+        {entry.shadowed && (
+          <Text size={200} italic style={{ color: 'var(--colorNeutralForeground3)' }}>
+            Overridden by this project
+          </Text>
+        )}
 
-      {!workflow ? (
-        <MessageBar intent="error">
-          <MessageBarBody>{entry.error ?? 'This workflow could not be read.'}</MessageBarBody>
-        </MessageBar>
-      ) : (
-        <StepTrack
-          steps={workflow.steps}
-          workflowSteps={workflow.steps}
-          ordinals={ordinals}
-          dataFlow={flow}
-          wrap
-          sourceSet={sourceSet}
-          dependentSet={dependentSet}
-          onHoverStep={setHoveredId}
-          nestLevel={0}
-        />
-      )}
+        {!workflow ? (
+          <MessageBar intent="error">
+            <MessageBarBody>{entry.error ?? 'This workflow could not be read.'}</MessageBarBody>
+          </MessageBar>
+        ) : (
+          <StepTrack
+            steps={workflow.steps}
+            workflowSteps={workflow.steps}
+            ordinals={ordinals}
+            dataFlow={flow}
+            wrap
+            sourceSet={sourceSet}
+            dependentSet={dependentSet}
+            onHoverStep={setHoveredId}
+            nestLevel={0}
+          />
+        )}
+      </div>
     </div>
   );
 }

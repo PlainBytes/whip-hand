@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import {
   createWorkflow, deleteWorkflow, cloneWorkflow, initWorkspace, workflowTemplate, specDrivenTemplate, featureDevelopmentTemplate,
   updateWorkflow,
@@ -125,6 +127,28 @@ test('specDrivenTemplate produces a parseable spec-driven workflow', () => {
 test('featureDevelopmentTemplate produces a parseable workflow, including the backward reference into the loop', () => {
   const workflow = parseWorkflow(featureDevelopmentTemplate());
   assert.equal(workflow.name, 'feature-development');
+});
+
+test('featureDevelopmentTemplate stage step works when the runs dir is gitignored and files are already staged', async () => {
+  const stage = parseWorkflow(featureDevelopmentTemplate()).steps.find(s => s.id === 'stage');
+  assert.ok(stage && stage.kind === 'command');
+  const git = (...args: string[]) => promisify(execFile)('git', args, { cwd: ws });
+  const ws = await mkdtemp(join(tmpdir(), 'whiphand-stage-'));
+  await git('init', '-b', 'main');
+  await writeFile(join(ws, '.gitignore'), '.whiphand/runs/\n');
+  await writeFile(join(ws, 'a.txt'), 'a\n');
+  await git('add', '-A');
+  await git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-m', 'init');
+  await mkdir(join(ws, '.whiphand', 'runs', 'r1'), { recursive: true });
+  await writeFile(join(ws, '.whiphand', 'runs', 'r1', 'plan.md'), 'plan\n');
+  await writeFile(join(ws, 'a.txt'), 'changed\n');
+  await git('add', 'a.txt');
+  await writeFile(join(ws, 'b.txt'), 'new\n');
+
+  await promisify(execFile)('/bin/sh', ['-c', stage.run], { cwd: ws }); // rejects on a non-zero exit
+
+  const { stdout } = await git('diff', '--cached', '--name-only');
+  assert.deepEqual(stdout.trim().split('\n'), ['a.txt', 'b.txt']);
 });
 
 test('createWorkflow writes the file, refuses overwrite, validates the name', async () => {

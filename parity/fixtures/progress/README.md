@@ -24,10 +24,22 @@ copilot -p --output-format json --stream on --allow-all-tools --no-color \
   > copilot-jsonl.ndjson
 ```
 
-Both runs wrote `/tmp/fixture.txt` successfully — worth re-confirming when regenerating,
-since it is what proves the structured-output flags do not disturb the artifact write
-that a real step depends on. Neither run wrote anything to stderr: all structure arrives
-on stdout, which is why only stdout is parsed.
+`opencode-json.ndjson` was recorded with `opencode` 1.17.13 on 2026-09-14, same prompt
+shape (a relative target path, since the recording project had no attachment outside its
+own tree):
+
+```bash
+OPENCODE_CONFIG_CONTENT='{"agent":{"whiphand":{"mode":"primary","permission":{"edit":{"*":"allow"}}}}}' \
+  opencode run --format json --agent whiphand -m opencode/big-pickle \
+  'Read package.json, then write the value of its "name" field to ./fixture-opencode.txt' \
+  > opencode-json.ndjson
+```
+
+Both runs wrote `/tmp/fixture.txt` (or, for opencode, `./fixture-opencode.txt`)
+successfully — worth re-confirming when regenerating, since it is what proves the
+structured-output flags do not disturb the artifact write that a real step depends on.
+None of the three runs wrote anything to stderr: all structure arrives on stdout, which
+is why only stdout is parsed.
 
 ## What they contain
 
@@ -35,8 +47,11 @@ Deliberately kept as recorded, noise included — the noise is half of what is b
 tested. The claude capture carries `SessionStart` hook events (from whatever hooks the
 recording machine had configured), `thinking_tokens` pings, a `rate_limit_event` and
 `tool_result` echoes. The copilot capture carries `session.*` lifecycle events,
-`assistant.reasoning_delta` and `assistant.message_delta` streams. All of it must parse
-to `null`.
+`assistant.reasoning_delta` and `assistant.message_delta` streams. The opencode capture
+carries a `step_start` line ahead of each turn, which parses to `null` the same way. All
+of it must parse to `null`.
 
 Absolute paths from the recording machine are kept, except that the home directory is
-anonymised to `/home/user`; the tests match on suffixes.
+anonymised to `/home/user`; the tests match on suffixes. The opencode capture's paths
+sit under `/tmp/oc-check2`, the throwaway project the recording used — there is no home
+directory in it to anonymise.

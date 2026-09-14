@@ -8,7 +8,7 @@ function fakeAdapter(id: string, caps: Partial<RunnerAdapter['capabilities']>): 
   return {
     id,
     capabilities: {
-      sessionIdInjection: false, sessionResume: false,
+      sessionIdInjection: false, sessionIdCapture: false, sessionResume: false,
       toolDenial: false, shareTranscript: false, ...caps,
     },
     detect: async () => ({ installed: true }),
@@ -46,6 +46,20 @@ test('interactive requires resume-injection pair or transcript sharing', () => {
   assert.equal(validateWorkflowRunners(workflow('bare', 'interactive'), reg).length, 1);
   assert.equal(validateWorkflowRunners(workflow('resumer', 'interactive'), reg).length, 0);
   assert.equal(validateWorkflowRunners(workflow('sharer', 'interactive'), reg).length, 0);
+});
+
+test('a sessionIdCapture+sessionResume pair satisfies the interactive gate too', () => {
+  // opencode's shape: it cannot be handed an id (sessionIdInjection: false),
+  // but it can report the one it minted and then resume it.
+  const reg = new AdapterRegistry();
+  reg.register(fakeAdapter('capturer', { sessionIdCapture: true, sessionResume: true, toolDenial: true }));
+  assert.equal(validateWorkflowRunners(workflow('capturer', 'interactive'), reg).length, 0);
+});
+
+test('capture alone, with no resume, still fails the interactive gate', () => {
+  const reg = new AdapterRegistry();
+  reg.register(fakeAdapter('half', { sessionIdCapture: true, toolDenial: true }));
+  assert.equal(validateWorkflowRunners(workflow('half', 'interactive'), reg).length, 1);
 });
 
 test('writes:false requires toolDenial', () => {

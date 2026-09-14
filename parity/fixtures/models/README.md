@@ -26,3 +26,12 @@ is kept exactly as observed.
 The full, unedited output of `copilot help config`. Contains no account or machine-specific
 data. The parser reads only the `` `model`: `` block; everything else in the file is the
 noise the parser must ignore.
+
+## `opencode-models.txt`
+
+The full, unedited output of `opencode models`, recorded with `opencode` 1.17.13 on
+2026-09-14. One `provider/model` id per line, in whatever order the binary printed —
+`parseOpencodeModels` (`packages/core/src/adapters/opencode.ts`) keeps every line
+matching that shape and drops anything else, so a future opencode release adding a
+non-conforming line (a heading, a blank separator) degrades to fewer models rather than
+a bad id. Contains no account or machine-specific data.

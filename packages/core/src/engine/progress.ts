@@ -18,6 +18,14 @@
  *     {"type":"result","usage":{"premiumRequests":0.33}}
  *     — plus session, reasoning and delta chatter to ignore.
  *
+ *   opencode run --format json
+ *     {"type":"tool_use","sessionID":…,"part":{"tool":…,"state":{"input":…,"status":…}}}
+ *     {"type":"text","part":{"text":…}}
+ *     {"type":"step_finish","part":{"cost":…,"tokens":{…}}}   — per-step; opencode has
+ *       no `num_turns`/`result` summary of its own, so the parser counts
+ *       `step_finish` events itself and keeps a running cost total.
+ *     — plus step_start, reasoning (only with --thinking) and error to ignore.
+ *
  * These are third-party output schemas, far less stable than the flags in
  * docs/design.md. Every parse is therefore total: an unrecognized, malformed
  * or empty line yields null. A runner changing its output must degrade what
@@ -31,8 +39,8 @@ export type { ProgressFormat, StepProgress };
 /** Targets are truncated here so no renderer has to think about a 400-char command. */
 export const PROGRESS_TARGET_MAX = 120;
 
-/** The argument that best names what a tool is acting *on*, across both runners. */
-const TARGET_KEYS = ['file_path', 'path', 'command', 'pattern', 'url', 'query'];
+/** The argument that best names what a tool is acting *on*, across every runner. */
+const TARGET_KEYS = ['file_path', 'filePath', 'path', 'command', 'pattern', 'url', 'query'];
 
 function truncate(value: string): string {
   const clean = value.replace(/\s+/g, ' ').trim();
@@ -107,7 +115,62 @@ function parseCopilot(event: Record<string, unknown>): StepProgress | null {
   }
 }
 
-export function parseProgressLine(format: ProgressFormat, line: string): StepProgress | null {
+/**
+ * opencode reports no cumulative `result` event of its own — each `step_finish`
+ * is per-step — so the parser keeps its own running totals across the calls it
+ * is fed, which is what makes its `usage` reports agree with the "running total
+ * for this spawn so far" contract every other runner already satisfies for
+ * free. One closure per spawn (see `createProgressParser`), so a fresh spawn
+ * always starts back at zero.
+ */
+function makeOpencodeParser(): (event: Record<string, unknown>) => StepProgress | null {
+  let turns = 0;
+  let costUsd = 0;
+  let sawCost = false;
+  return (event: Record<string, unknown>): StepProgress | null => {
+    switch (event.type) {
+      case 'tool_use': {
+        const part = isRecord(event.part) ? event.part : {};
+        const state = isRecord(part.state) ? part.state : {};
+        return toolProgress(part.tool, state.input);
+      }
+      case 'text': {
+        const part = isRecord(event.part) ? event.part : {};
+        return typeof part.text === 'string' && part.text.trim() !== ''
+          ? { kind: 'text', text: part.text.trim() }
+          : null;
+      }
+      case 'step_finish': {
+        const part = isRecord(event.part) ? event.part : {};
+        turns += 1;
+        const cost = numberOr(part.cost);
+        if (cost !== undefined) { sawCost = true; costUsd += cost; }
+        return { kind: 'usage', turns, ...(sawCost ? { costUsd } : {}) };
+      }
+      default:
+        return null;
+    }
+  };
+}
+
+/**
+ * One parser per spawn, so a runner with per-spawn running state (opencode's
+ * turn/cost totals) never leaks them into the next spawn. claude and copilot
+ * are stateless, so their "parser" is just `parseProgressLine` bound to their
+ * format — cheap enough that a fresh closure per spawn costs nothing.
+ */
+export function createProgressParser(format: ProgressFormat): (line: string) => StepProgress | null {
+  if (format !== 'opencode-json') {
+    return (line: string) => parseProgressLine(format, line);
+  }
+  const parseOpencode = makeOpencodeParser();
+  return (line: string): StepProgress | null => {
+    const event = parseJsonEvent(line);
+    return event === null ? null : parseOpencode(event);
+  };
+}
+
+function parseJsonEvent(line: string): Record<string, unknown> | null {
   if (line.trim() === '') return null;
   let event: unknown;
   try {
@@ -115,6 +178,16 @@ export function parseProgressLine(format: ProgressFormat, line: string): StepPro
   } catch {
     return null;
   }
-  if (!isRecord(event)) return null;
-  return format === 'claude-stream-json' ? parseClaude(event) : parseCopilot(event);
+  return isRecord(event) ? event : null;
+}
+
+export function parseProgressLine(format: ProgressFormat, line: string): StepProgress | null {
+  const event = parseJsonEvent(line);
+  if (event === null) return null;
+  if (format === 'claude-stream-json') return parseClaude(event);
+  if (format === 'copilot-jsonl') return parseCopilot(event);
+  // opencode-json is stateful (running totals) — parseProgressLine has no
+  // per-spawn memory to keep them in, so a lone call only ever sees tool/text
+  // progress; callers that need usage totals must use createProgressParser.
+  return makeOpencodeParser()(event);
 }

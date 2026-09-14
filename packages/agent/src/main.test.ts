@@ -479,7 +479,7 @@ test('doctor reports one entry per built-in tool (shape only)', async () => {
 
     // The registry is the authority on what can be a workflow's `runner:`.
     const runners = res.result.filter((r: any) => r.runner).map((r: any) => r.id).sort();
-    assert.deepEqual(runners, ['claude', 'copilot']);
+    assert.deepEqual(runners, ['claude', 'copilot', 'opencode']);
     const codex = res.result.find((r: any) => r.id === 'codex');
     assert.equal(codex.runner, false, 'a harness with no adapter is detect-only');
   } finally {

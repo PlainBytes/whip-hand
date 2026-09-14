@@ -30,7 +30,15 @@ export type { ToolGroup } from './tool-groups.ts';
 export { loadDoctorConfig, globalDoctorConfigPath, doctorConfigSchema } from './doctor-config.ts';
 export { claudeAdapter, CLAUDE_WRITE_TOOLS, CLAUDE_QUIT_SEQUENCE } from './adapters/claude.ts';
 export { probeClaudeModels, parseInitializeReply, mergeWithAliases } from './adapters/claude-models.ts';
-export { copilotAdapter, transcriptPath, COPILOT_QUIT_SEQUENCE, parseCopilotModels } from './adapters/copilot.ts';
+export { copilotAdapter, COPILOT_QUIT_SEQUENCE, parseCopilotModels } from './adapters/copilot.ts';
+export { opencodeAdapter, OPENCODE_QUIT_SEQUENCE, parseOpencodeModels } from './adapters/opencode.ts';
+export {
+  opencodeGuidanceName, opencodeGuidancePath, opencodePluginName, opencodePluginPath, isOpencodeSupportFileName,
+} from './engine/opencode-files.ts';
+export { harvestPrompt } from './adapters/harvest-prompt.ts';
+export {
+  sessionCaptureName, sessionCapturePath, isSessionCaptureName, clearSessionCapture, readSessionCapture,
+} from './engine/session-capture.ts';
 export {
   loadWorkspaceConfig, loadConfigLayer, loadGlobalConfig, mergeConfig, diffConfigLayer,
   DEFAULT_CONFIG, workspaceConfigSchema, partialConfigSchema, CONFIG_KEYS, configKeySchema,

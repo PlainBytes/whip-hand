@@ -108,14 +108,18 @@ export function parseToolVersion(
 }
 
 /**
- * claude and copilot appear here for their metadata only — `detectTools`
- * routes any registry id through the adapter's own `detect()`, which is what
- * keeps copilot's `beep` advisory note alive. Their `argv` is what a probe
- * WOULD run, kept accurate so nothing goes stale if that routing ever changes.
+ * claude, copilot and opencode appear here for their metadata only —
+ * `detectTools` routes any registry id through the adapter's own `detect()`,
+ * which is what keeps copilot's `beep` advisory note (and opencode's PATH
+ * note) alive. Their `argv` is what a probe WOULD run, kept accurate so
+ * nothing goes stale if that routing ever changes.
  *
- * `optional` defaults to true. Only the three things whiphand cannot work without
- * are required: the two runners it drives, and git, which engine/git-guard.ts
- * shells out to in order to enforce every `writes: false` step.
+ * `optional` defaults to true. Only the things whiphand cannot work without at
+ * all are required: claude and copilot (a fresh install needs at least one
+ * working runner, and these are the two everyone starts from), and git, which
+ * engine/git-guard.ts shells out to in order to enforce every `writes: false`
+ * step. opencode is a third, later runner, and stays optional — nothing about
+ * a working whiphand install depends on it being there.
  */
 export const BUILTIN_TOOLS: readonly ToolProbe[] = [
   // --- harness: what whiphand drives -------------------------------------------
@@ -143,6 +147,10 @@ export const BUILTIN_TOOLS: readonly ToolProbe[] = [
   {
     id: 'cursor-agent', label: 'Cursor Agent', group: 'harness',
     argv: ['cursor-agent', '--version'], url: 'https://cursor.com/cli',
+  },
+  {
+    id: 'opencode', label: 'opencode', group: 'harness',
+    argv: ['opencode', '--version'], optional: true, url: 'https://opencode.ai',
   },
 
   // --- support: what workflows and whiphand itself lean on ---------------------

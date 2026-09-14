@@ -7,6 +7,8 @@ import type {
 } from '../types.ts';
 import { isEndMarkerName } from './session-end.ts';
 import { isAwaitStateName } from './await-state.ts';
+import { isSessionCaptureName } from './session-capture.ts';
+import { isOpencodeSupportFileName } from './opencode-files.ts';
 import { LOCK_MARKER_NAME, isRunLocked } from './run-lock.ts';
 import { NAME_MARKER_NAME, SUGGEST_CAPTURE_NAME, readRunName, setRunName } from './run-name.ts';
 import { RUN_LOG_NAME, DEFAULT_RUN_LOG_CAP_BYTES, summarizeEvent, formatLogLine } from './run-log.ts';
@@ -555,6 +557,13 @@ export class RunJournal {
           this.upsertStep(event.stepId, { sessionStarted: true });
         }
         break; // updatedAt only
+      case 'step:session':
+        // A sessionIdCapture runner's own id, read back after its interactive
+        // spawn exited. Folded into the same map an injected id lives in, so
+        // resume.ts's existing `detail.sessionIds[step.id] !== undefined`
+        // check picks it up with no changes of its own.
+        this.manifest.sessionIds[event.stepId] = event.sessionId;
+        break;
       case 'step:artifact':
         this.upsertStep(event.stepId, { artifact: event.path });
         break;
@@ -943,7 +952,8 @@ function isBookkeepingFile(name: string): boolean {
     || name === LOCK_MARKER_NAME || name === NAME_MARKER_NAME
     || name === SUGGEST_CAPTURE_NAME
     || name === WORKFLOW_SNAPSHOT_NAME
-    || isEndMarkerName(name) || isAwaitStateName(name);
+    || isEndMarkerName(name) || isAwaitStateName(name)
+    || isSessionCaptureName(name) || isOpencodeSupportFileName(name);
 }
 
 export async function getRun(

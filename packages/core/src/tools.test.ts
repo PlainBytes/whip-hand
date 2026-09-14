@@ -11,7 +11,7 @@ function fakeAdapter(id: string, detect: () => Promise<DetectResult>): RunnerAda
   const spec: SpawnSpec = { argv: [id], cwd: '/', env: {}, interactive: false };
   return {
     id,
-    capabilities: { sessionIdInjection: false, sessionResume: false, toolDenial: false, shareTranscript: false },
+    capabilities: { sessionIdInjection: false, sessionIdCapture: false, sessionResume: false, toolDenial: false, shareTranscript: false },
     detect,
     interactive: () => spec, headless: () => spec, harvest: () => spec,
   };

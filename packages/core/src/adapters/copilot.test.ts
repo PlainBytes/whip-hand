@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
-import { copilotAdapter, parseCopilotModels, transcriptPath, COPILOT_QUIT_SEQUENCE } from './copilot.ts';
+import { copilotAdapter, parseCopilotModels, COPILOT_QUIT_SEQUENCE } from './copilot.ts';
 import { interactiveGuidance } from '../engine/interactive-guidance.ts';
 import { endMarkerPath, shellPath } from '../engine/session-end.ts';
 import type { AgentStep, RunCtx } from '../types.ts';
@@ -13,17 +13,13 @@ const fixtureDir = fileURLToPath(new URL('../../../../parity/fixtures/models/', 
 
 const ctx: RunCtx = {
   workdir: '/w', runId: 'r1', runDir: '/w/.whiphand/runs/r1', runSlug: 'r1',
-  sessionIds: {}, artifacts: {}, attempts: {}, inputs: {},
+  sessionIds: { plan: 'sid-123' }, artifacts: {}, attempts: {}, inputs: {},
 };
 
 const planStep: AgentStep = { kind: 'agent',
   id: 'plan', runner: 'copilot', model: 'gpt-5.5', mode: 'interactive',
   writes: false, prompt: 'Plan it.', output: 'plan.md',
 };
-
-test('transcript path convention', () => {
-  assert.equal(transcriptPath(planStep, ctx), '/w/.whiphand/runs/r1/plan-transcript.md');
-});
 
 test('a Windows run dir reaches the runner shell-readable, not backslashed', () => {
   // Runs on every platform on purpose: shellPath is the identity off Windows,
@@ -41,17 +37,23 @@ test('a Windows run dir reaches the runner shell-readable, not backslashed', () 
     'the path the agent watches stays native — it goes to fs, not to a shell');
 });
 
-test('interactive: seeds via -i, denies write, always shares transcript', () => {
+test('interactive: seeds via -i, mints via --session-id, denies write', () => {
   const spec = copilotAdapter.interactive(planStep, ctx);
   // Shell-rendered, because that is what the runner is handed to execute.
   const marker = shellPath(endMarkerPath(ctx.runDir, 'plan'));
   assert.deepEqual(spec.argv, [
     'copilot', '-i', `${interactiveGuidance(planStep, ctx)}\n\n---\n\nPlan it.`,
+    '--session-id', 'sid-123',
     '--model', 'gpt-5.5', '--deny-tool=write',
     `--allow-tool=shell(touch ${marker})`,
-    '--share=/w/.whiphand/runs/r1/plan-transcript.md',
   ]);
   assert.equal(spec.interactive, true);
+});
+
+test('interactive: a resumed step continues via --resume= instead of minting', () => {
+  const spec = copilotAdapter.interactive(planStep, { ...ctx, resumedStepIds: new Set(['plan']) });
+  assert.ok(spec.argv.includes('--resume=sid-123'));
+  assert.ok(!spec.argv.includes('--session-id'));
 });
 
 test('interactive: copilot has no system-prompt flag, so guidance leads and the task prompt ends', () => {
@@ -74,7 +76,7 @@ test('interactive: carries the end-session spec the frontend watches', () => {
   });
 });
 
-test('headless and harvest carry no guidance: they have no human to collaborate with', () => {
+test('headless and harvest carry no interactive guidance: they have no human to collaborate with', () => {
   const step: AgentStep = { ...planStep, mode: 'headless' };
   for (const spec of [copilotAdapter.headless(step, ctx), copilotAdapter.harvest(planStep, ctx)]) {
     assert.ok(!spec.argv.some(a => a.includes('Whiphand workflow')));
@@ -100,14 +102,22 @@ test('headless writes:false adds write denial (denial beats allow-all)', () => {
   ]);
 });
 
-test('harvest distills the shared transcript into the artifact', () => {
+test('harvest resumes the session by id and asks it to write the artifact', () => {
   const spec = copilotAdapter.harvest(planStep, ctx);
   assert.equal(spec.argv[0], 'copilot');
   assert.equal(spec.argv[1], '-p');
   const prompt = spec.argv[2];
-  assert.ok(prompt.includes('/w/.whiphand/runs/r1/plan-transcript.md'));
   assert.ok(prompt.includes('/w/.whiphand/runs/r1/plan.md'));
+  assert.ok(spec.argv.includes('--resume=sid-123'));
   assert.ok(spec.argv.includes('--allow-all-tools'));
+  assert.ok(!spec.argv.some(a => a.includes('--share')));
+});
+
+test('harvest reports progress: --output-format json --stream on does not disturb the write', () => {
+  const spec = copilotAdapter.harvest(planStep, ctx);
+  assert.deepEqual(spec.progress, { format: 'copilot-jsonl' });
+  assert.ok(spec.argv.includes('--output-format'));
+  assert.equal(spec.argv[spec.argv.indexOf('--output-format') + 1], 'json');
 });
 
 test('detect notes that copilot cannot signal for attention while beep is off', async t => {
@@ -138,9 +148,8 @@ test('headless asks for streaming jsonl so a running step can report progress', 
   assert.deepEqual(spec.progress, { format: 'copilot-jsonl' });
 });
 
-test('interactive and harvest ask for no progress: nobody is watching a feed', () => {
+test('interactive asks for no progress: nobody is watching a feed there', () => {
   assert.equal(copilotAdapter.interactive(planStep, ctx).progress, undefined);
-  assert.equal(copilotAdapter.harvest(planStep, ctx).progress, undefined);
 });
 
 // --- listModels -------------------------------------------------------
@@ -175,12 +184,9 @@ test('listModels: copilot not found on PATH reports unavailable, not a throw', a
   }
 });
 
-test('copilot ignores resumedStepIds, having no session id of its own to resume', () => {
-  // sessionIdInjection is false, so whiphand never records an id for a copilot step:
-  // there is nothing to resume and the field must change nothing.
-  const plain = copilotAdapter.interactive(planStep, ctx).argv;
-  const withSet = copilotAdapter
-    .interactive(planStep, { ...ctx, resumedStepIds: new Set(['plan']) }).argv;
-
-  assert.deepEqual(withSet, plain);
+test('copilot capabilities: sessionIdInjection+sessionResume, no share transcript any more', () => {
+  assert.deepEqual(copilotAdapter.capabilities, {
+    sessionIdInjection: true, sessionIdCapture: false, sessionResume: true,
+    toolDenial: true, shareTranscript: false,
+  });
 });

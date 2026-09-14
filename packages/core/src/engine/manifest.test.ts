@@ -510,6 +510,20 @@ test('reducer: a step that started but never spawned records no session', async 
   assert.equal(journal.manifest.steps.find(s => s.id === 'a')!.sessionStarted, undefined);
 });
 
+test('reducer: step:session folds a captured id into manifest.sessionIds, same as an injected one', async () => {
+  const runDir = await tmpRunDir();
+  const journal = new RunJournal(baseInit(runDir, 'run-sess-capture'));
+  const spec = { argv: ['opencode'], cwd: '/w', env: {}, interactive: true };
+  journal.record({ type: 'step:start', stepId: 'a', kind: 'agent', runner: 'opencode', mode: 'interactive' });
+  journal.record({ type: 'step:spawn', stepId: 'a', spec, phase: 'main' });
+  journal.record({ type: 'step:session', stepId: 'a', sessionId: 'ses_captured' });
+  await journal.flush();
+  journal.close();
+
+  assert.equal(journal.manifest.sessionIds.a, 'ses_captured');
+  assert.equal(journal.manifest.steps.find(s => s.id === 'a')!.sessionStarted, true);
+});
+
 test('reducer: a headless spawn opens no session to resume', async () => {
   const runDir = await tmpRunDir();
   const journal = new RunJournal(baseInit(runDir, 'run-sess-3'));

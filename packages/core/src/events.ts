@@ -36,8 +36,9 @@ export const spawnSpecSchema: z.ZodType<SpawnSpec> = z.object({
   awaitState: z.object({ statePath: z.string() }).optional(),
   capture: z.object({ path: z.string() }).optional(),
   progress: z.object({
-    format: z.enum(['claude-stream-json', 'copilot-jsonl']),
+    format: z.enum(['claude-stream-json', 'copilot-jsonl', 'opencode-json']),
   }).optional(),
+  files: z.array(z.object({ path: z.string(), content: z.string() })).optional(),
 });
 
 export const manualChoiceSchema = z.enum(['continue', 'abort', 'retry']);
@@ -102,6 +103,7 @@ export const whiphandEventSchema: z.ZodType<WhiphandEvent> = z.discriminatedUnio
     type: z.literal('step:spawn'), stepId: z.string(), spec: spawnSpecSchema,
     phase: z.enum(['main', 'harvest']),
   }),
+  z.object({ type: z.literal('step:session'), stepId: z.string(), sessionId: z.string() }),
   z.object({
     type: z.literal('step:artifact'), stepId: z.string(), path: z.string(),
     bytes: z.number().int().nonnegative().optional(),

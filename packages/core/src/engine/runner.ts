@@ -16,11 +16,12 @@ import { artifactPath, assertArtifact, ArtifactError, ensureArtifactDir } from '
 import { snapshotTree, diffSnapshots, headSha, pathsFromStatusLines } from './git-guard.ts';
 import { CORE_VERSION } from '../version.ts';
 import { parseVerdict, verdictFromExit, verdictFromChoice, VERDICT_INSTRUCTION } from './verdict.ts';
-import { parseProgressLine } from './progress.ts';
+import { createProgressParser } from './progress.ts';
 import { commandSpec, captureHeader, captureFooter } from './command.ts';
 import { buildManualRequest, noteArtifact, reviewArtifact } from './manual.ts';
 import { clearEndMarker } from './session-end.ts';
 import { clearAwaitState } from './await-state.ts';
+import { clearSessionCapture } from './session-capture.ts';
 import { RunJournal, WORKFLOW_SNAPSHOT_NAME } from './manifest.ts';
 import { ancestorLoops, executionKey } from '../execution-key.ts';
 import { pruneRuns } from './retention.ts';
@@ -102,6 +103,19 @@ function resolveInputs(workflow: Workflow, given: Record<string, string>): Recor
   }
   if (problems.length > 0) throw new WorkflowError(problems);
   return resolved;
+}
+
+/**
+ * Writes a spawn's support files (opencode's guidance and plugin, today)
+ * before the spawn, so adapters themselves stay pure — they only ever
+ * describe what to write, never touch the filesystem. A no-op for every spec
+ * without `files`, which is every claude/copilot spec and most opencode ones.
+ */
+async function writeSpecFiles(spec: SpawnSpec): Promise<void> {
+  for (const file of spec.files ?? []) {
+    await ensureArtifactDir(file.path);
+    await writeFile(file.path, file.content, 'utf8');
+  }
 }
 
 /** Steps passed to adapters get the verdict instruction appended when needed. */
@@ -500,14 +514,19 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
      * RunJournal routes into run.log. This is the one place a frontend's
      * onLine forwarding turns into the merged audit feed.
      */
-    const lineSink = (stepId: string, spec: SpawnSpec) => (line: string, stream: 'stdout' | 'stderr'): void => {
-      const format = spec.progress?.format;
-      if (format !== undefined && stream === 'stdout') {
-        const progress = parseProgressLine(format, line);
-        if (progress !== null) emit({ type: 'step:progress', stepId, progress });
-        return;
-      }
-      emit({ type: 'step:log', stepId, stream, line });
+    const lineSink = (stepId: string, spec: SpawnSpec) => {
+      // One parser per spawn: a format with its own running state (opencode's
+      // turn/cost totals) must never carry it over into the next spawn — see
+      // createProgressParser.
+      const parse = spec.progress === undefined ? undefined : createProgressParser(spec.progress.format);
+      return (line: string, stream: 'stdout' | 'stderr'): void => {
+        if (parse !== undefined && stream === 'stdout') {
+          const progress = parse(line);
+          if (progress !== null) emit({ type: 'step:progress', stepId, progress });
+          return;
+        }
+        emit({ type: 'step:log', stepId, stream, line });
+      };
     };
 
     /** Records where a step's artifact went, both as "latest" and in the history. */
@@ -538,6 +557,15 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         const main = step.mode === 'interactive' ? adapter.interactive(eff, ctx) : adapter.headless(eff, ctx);
         emit({ type: 'step:spawn', stepId: step.id, spec: main, phase: 'main' });
         if (step.mode === 'interactive') {
+          // A capture runner (opencode) only learns its session id from a real
+          // spawn; a dry run never spawns one. Without a placeholder here,
+          // adapter.harvest — which every capture adapter builds around
+          // ctx.sessionIds[step.id] — throws, and dry-run would only work for
+          // sessionIdInjection runners. Never observable past this function: a
+          // dry run makes no further use of ctx.sessionIds.
+          if (adapter.capabilities.sessionIdCapture && ctx.sessionIds[step.id] === undefined) {
+            ctx.sessionIds[step.id] = '<captured at runtime>';
+          }
           emit({ type: 'step:spawn', stepId: step.id, spec: adapter.harvest(eff, ctx), phase: 'harvest' });
         }
         emit({ type: 'step:done', stepId: step.id, exitCode: 0 });
@@ -549,17 +577,41 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
 
       if (step.mode === 'interactive') {
         // Leftovers from an earlier attempt would close this session the
-        // instant it opened, or make it open already looking blocked.
+        // instant it opened, make it open already looking blocked, or leave a
+        // stale captured session id lying around for the fallback below to
+        // trip over.
         await clearEndMarker(runDir, step.id);
         await clearAwaitState(runDir, step.id);
+        if (adapter.capabilities.sessionIdCapture) await clearSessionCapture(runDir, step.id);
         const main = adapter.interactive(eff, ctx);
+        await writeSpecFiles(main);
         emit({ type: 'step:spawn', stepId: step.id, spec: main, phase: 'main' });
         const sessionExit = await frontend.runInteractive(main, opts.signal, emit);
         if (opts.signal?.aborted) return cancelled();
         if (sessionExit !== 0) {
           return fail(`interactive step '${step.id}' session exited with code ${sessionExit}`, step.id);
         }
+        // A sessionIdCapture runner (opencode) cannot be handed an id up
+        // front — it mints its own, and this is where whiphand learns it.
+        // Skipped only when this very spawn resumed an existing session (its
+        // id came from the manifest, and no session.created fires for a
+        // resumed root session to recapture from). Every other spawn is
+        // fresh — including a loop's second-and-later iteration, which reuses
+        // the same step id but opens a brand-new session each time — and must
+        // be captured again: ctx.sessionIds[step.id] being set already just
+        // means a *previous* iteration captured one, not this one.
+        if (adapter.capabilities.sessionIdCapture && ctx.resumedStepIds?.has(step.id) !== true) {
+          const captured = await adapter.captureSessionId!(eff, ctx);
+          if (captured === undefined) {
+            return fail(
+              `could not determine the ${step.runner} session id for step '${step.id}'; `
+              + 'the artifact cannot be harvested', step.id);
+          }
+          ctx.sessionIds[step.id] = captured;
+          emit({ type: 'step:session', stepId: step.id, sessionId: captured });
+        }
         const hSpec = adapter.harvest(eff, ctx);
+        await writeSpecFiles(hSpec);
         emit({ type: 'step:spawn', stepId: step.id, spec: hSpec, phase: 'harvest' });
         const harvestExit = await spawnHeadless(hSpec, opts.signal, lineSink(step.id, hSpec));
         if (opts.signal?.aborted) return cancelled();
@@ -569,6 +621,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         }
       } else {
         const spec = adapter.headless(eff, ctx);
+        await writeSpecFiles(spec);
         emit({ type: 'step:spawn', stepId: step.id, spec, phase: 'main' });
         const exitCode = await spawnHeadless(spec, opts.signal, lineSink(step.id, spec));
         if (opts.signal?.aborted) return cancelled();
@@ -847,9 +900,14 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       }
       await clearEndMarker(runDir, triage.id);
       await clearAwaitState(runDir, triage.id);
+      if (adapter.capabilities.sessionIdCapture) await clearSessionCapture(runDir, triage.id);
       // Triage goes through adapter.interactive too, so it inherits the
-      // guidance and the end-of-session spec without asking for them.
-      await frontend.runInteractive(adapter.interactive(triage, ctx), opts.signal, emit);
+      // guidance and the end-of-session spec without asking for them — and,
+      // for opencode, its support files, which is why they're written here
+      // exactly as the main interactive path writes its own.
+      const triageSpec = adapter.interactive(triage, ctx);
+      await writeSpecFiles(triageSpec);
+      await frontend.runInteractive(triageSpec, opts.signal, emit);
       if (opts.signal?.aborted) return cancelled();
       return null;
     }

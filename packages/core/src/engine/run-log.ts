@@ -102,6 +102,8 @@ export function summarizeEvent(event: WhiphandEvent): Omit<LogRow, 'seq' | 'ts'>
         + `${redactedEnvSuffix(spec.env)} [${event.phase}]`;
       return { kind: event.type, stepId: event.stepId, text };
     }
+    case 'step:session':
+      return { kind: event.type, stepId: event.stepId, text: `session id captured: ${event.sessionId}` };
     case 'step:artifact':
       return {
         kind: event.type, stepId: event.stepId,

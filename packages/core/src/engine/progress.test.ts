@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { parseProgressLine, PROGRESS_TARGET_MAX } from './progress.ts';
+import { createProgressParser, parseProgressLine, PROGRESS_TARGET_MAX } from './progress.ts';
 import type { StepProgress } from './progress.ts';
 
 /**
@@ -99,6 +99,65 @@ test('copilot: ignores session, delta and reasoning noise', () => {
   const parsed = parseAll('copilot-jsonl', fixture('copilot-jsonl.ndjson'));
   // 3 tools + 2 texts + 3 turn-ends + 1 result.
   assert.equal(parsed.length, 9);
+});
+
+// --- opencode ---------------------------------------------------------
+
+test('opencode: reads tool calls out of a recorded run, in order', () => {
+  const parser = createProgressParser('opencode-json');
+  const tools = fixture('opencode-json.ndjson').map(parser).filter((p): p is StepProgress => p !== null)
+    .filter(p => p.kind === 'tool');
+  assert.deepEqual(tools.map(t => t.tool), ['read', 'write']);
+  assert.ok(tools[0].target?.endsWith('package.json'), `got ${tools[0].target}`);
+  assert.ok(tools[1].target?.endsWith('fixture-opencode.txt'), `got ${tools[1].target}`);
+});
+
+test('opencode: reads assistant prose as text', () => {
+  const parser = createProgressParser('opencode-json');
+  const texts = fixture('opencode-json.ndjson').map(parser).filter((p): p is StepProgress => p !== null)
+    .filter(p => p.kind === 'text');
+  assert.equal(texts.length, 1);
+  assert.match(texts[0].text, /fixture-opencode\.txt/);
+});
+
+test('opencode: ignores step_start noise, only step_finish reports usage', () => {
+  const lines = fixture('opencode-json.ndjson');
+  const parser = createProgressParser('opencode-json');
+  const parsed = lines.map(parser).filter((p): p is StepProgress => p !== null);
+  // 2 tools + 1 text + 3 usage (one step_finish per turn) = 6; 3 step_start lines are noise.
+  assert.equal(parsed.length, 6);
+});
+
+test('opencode: usage is a running total for the spawn, accumulating turns and cost across step_finish events', () => {
+  const parser = createProgressParser('opencode-json');
+  const usage = fixture('opencode-json.ndjson').map(parser).filter((p): p is StepProgress => p !== null)
+    .filter(p => p.kind === 'usage');
+  assert.deepEqual(usage.map(u => u.turns), [1, 2, 3]);
+  // The fixture's steps all cost 0 (a free model) — the running total still
+  // has to be reported once any step_finish carried a cost field at all.
+  for (const u of usage) assert.equal(u.costUsd, 0);
+});
+
+test('opencode: a fresh parser starts its running totals back at zero — no leakage across spawns', () => {
+  const lines = fixture('opencode-json.ndjson');
+  const first = createProgressParser('opencode-json');
+  for (const line of lines) first(line);
+
+  const second = createProgressParser('opencode-json');
+  const usage = lines.map(second).filter((p): p is StepProgress => p !== null).filter(p => p.kind === 'usage');
+  assert.deepEqual(usage.map(u => u.turns), [1, 2, 3], 'the second parser is not still counting from the first');
+});
+
+test('opencode: noise and malformed lines give null, same as the other formats', () => {
+  const parser = createProgressParser('opencode-json');
+  for (const line of ['', '   ', 'not json at all', '{', 'null', '[]', '{"type":"who?"}', '{"type":"error"}']) {
+    assert.equal(parser(line), null, JSON.stringify(line));
+  }
+});
+
+test('opencode: parseProgressLine (no per-spawn memory) still reports tool/text progress correctly', () => {
+  const tool = JSON.stringify({ type: 'tool_use', part: { tool: 'bash', state: { input: { command: 'ls' } } } });
+  assert.deepEqual(parseProgressLine('opencode-json', tool), { kind: 'tool', tool: 'bash', target: 'ls' });
 });
 
 // --- robustness -----------------------------------------------------------

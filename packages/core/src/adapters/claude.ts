@@ -6,6 +6,7 @@ import { awaitStatePath } from '../engine/await-state.ts';
 import { execRunner } from '../exec.ts';
 import { parseToolVersion, PROBE_TIMEOUT_MS } from '../tools.ts';
 import { probeClaudeModels } from './claude-models.ts';
+import { harvestPrompt } from './harvest-prompt.ts';
 
 export const CLAUDE_WRITE_TOOLS = 'Write,Edit,NotebookEdit';
 const READONLY_ALLOWED = 'Read,Grep,Glob,Bash';
@@ -83,15 +84,12 @@ function settingsArg(markerPath: string, awaitPath: string): string[] {
   return ['--settings', JSON.stringify(interactiveSettings(markerPath, awaitPath))];
 }
 
-export function harvestPrompt(step: AgentStep, ctx: RunCtx): string {
-  const path = `${ctx.runDir}/${step.output}`;
-  return `Write the final '${step.output}' artifact we agreed on in this conversation to ${path}. ` +
-    `Write only the artifact content to that file, then reply with just: done`;
-}
-
 export const claudeAdapter: RunnerAdapter = {
   id: 'claude',
-  capabilities: { sessionIdInjection: true, sessionResume: true, toolDenial: true, shareTranscript: false },
+  capabilities: {
+    sessionIdInjection: true, sessionIdCapture: false, sessionResume: true,
+    toolDenial: true, shareTranscript: false,
+  },
 
   async detect(): Promise<DetectResult> {
     try {

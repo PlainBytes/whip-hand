@@ -5,10 +5,13 @@
  * doing the work of later steps; the only other guard is the write-tool denial
  * on read-only steps, which any shell command walks straight around.
  *
- * The text is shared; only delivery differs per runner (claude has
+ * The text is shared; only delivery differs per runner: claude has
  * --append-system-prompt, copilot has no system-prompt flag at all and takes it
- * as a prompt prefix), so keep it tight — for copilot it competes with the task
- * prompt rather than sitting above it.
+ * as a prompt prefix (so keep it tight there — it competes with the task prompt
+ * rather than sitting above it), and opencode takes it as a real system
+ * instruction via its `instructions` config array (delivered as one of
+ * `SpawnSpec.files`, written to `<runDir>/.<stepId>.guidance.md` and named in
+ * `OPENCODE_CONFIG_CONTENT` — see adapters/opencode.ts).
  */
 import type { AgentStep, RunCtx } from '../types.ts';
 import { endMarkerPath, shellPath } from './session-end.ts';

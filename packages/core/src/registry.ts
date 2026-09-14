@@ -2,6 +2,7 @@ import type { Workflow, RunnerAdapter, Step } from './types.ts';
 import { flattenSteps, isAgentStep, isManualStep } from './steps.ts';
 import { claudeAdapter } from './adapters/claude.ts';
 import { copilotAdapter } from './adapters/copilot.ts';
+import { opencodeAdapter } from './adapters/opencode.ts';
 
 export class AdapterRegistry {
   #adapters = new Map<string, RunnerAdapter>();
@@ -23,6 +24,7 @@ export function defaultRegistry(): AdapterRegistry {
   const registry = new AdapterRegistry();
   registry.register(claudeAdapter);
   registry.register(copilotAdapter);
+  registry.register(opencodeAdapter);
   return registry;
 }
 
@@ -41,11 +43,11 @@ export function validateWorkflowRunners(workflow: Workflow, registry: AdapterReg
     }
     const caps = registry.get(step.runner).capabilities;
     if (step.mode === 'interactive') {
-      const viaResume = caps.sessionIdInjection && caps.sessionResume;
+      const viaResume = (caps.sessionIdInjection || caps.sessionIdCapture) && caps.sessionResume;
       if (!viaResume && !caps.shareTranscript) {
         problems.push(
           `step '${step.id}': runner '${step.runner}' cannot harvest an interactive session ` +
-          `(needs sessionIdInjection+sessionResume or shareTranscript)`);
+          `(needs (sessionIdInjection or sessionIdCapture)+sessionResume or shareTranscript)`);
       }
     }
     if (!step.writes && !caps.toolDenial) {

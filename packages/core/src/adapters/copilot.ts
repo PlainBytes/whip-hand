@@ -7,13 +7,10 @@ import { interactiveGuidance } from '../engine/interactive-guidance.ts';
 import { endMarkerPath, shellPath } from '../engine/session-end.ts';
 import { execRunner } from '../exec.ts';
 import { parseToolVersion, PROBE_TIMEOUT_MS } from '../tools.ts';
+import { harvestPrompt } from './harvest-prompt.ts';
 
-/** `/exit` quits copilot cleanly, giving it the chance to flush its --share transcript. */
+/** `/exit` quits copilot cleanly. */
 export const COPILOT_QUIT_SEQUENCE = '/exit\r';
-
-export function transcriptPath(step: AgentStep, ctx: RunCtx): string {
-  return `${ctx.runDir}/${step.id}-transcript.md`;
-}
 
 function modelArgs(step: AgentStep): string[] {
   return step.model ? ['--model', step.model] : [];
@@ -23,6 +20,11 @@ function effortArgs(step: AgentStep): string[] {
 }
 function spec(ctx: RunCtx, argv: string[], interactive: boolean): SpawnSpec {
   return { argv, cwd: ctx.workdir, env: {}, interactive };
+}
+function sessionId(step: AgentStep, ctx: RunCtx): string {
+  const sid = ctx.sessionIds[step.id];
+  if (!sid) throw new Error(`no session id minted for step '${step.id}'`);
+  return sid;
 }
 
 /**
@@ -77,8 +79,14 @@ export function parseCopilotModels(helpOutput: string): ModelInfo[] {
 
 export const copilotAdapter: RunnerAdapter = {
   id: 'copilot',
-  // --session-id RESUMES on copilot; it cannot mint. Interactive harvest goes via --share.
-  capabilities: { sessionIdInjection: false, sessionResume: true, toolDenial: true, shareTranscript: true },
+  // copilot 1.0.83's --session-id mints a new session, same as claude's flag
+  // of the same name (--help: "or set the UUID for a new session"); a bare
+  // id string means "resume". Interactive harvest goes via --resume, same as
+  // claude — there is no --share transcript any more.
+  capabilities: {
+    sessionIdInjection: true, sessionIdCapture: false, sessionResume: true,
+    toolDenial: true, shareTranscript: false,
+  },
 
   async detect(): Promise<DetectResult> {
     try {
@@ -95,14 +103,20 @@ export const copilotAdapter: RunnerAdapter = {
 
   interactive(step: AgentStep, ctx: RunCtx): SpawnSpec {
     const marker = endMarkerPath(ctx.runDir, step.id);
+    // --session-id mints a conversation; continuing one needs --resume=, the
+    // same flag harvest() already uses. Same rule as claude's own
+    // sessionArgs: only a resumed run sets this, and only for a step the
+    // manifest saw spawn a session.
+    const sessionArgs = ctx.resumedStepIds?.has(step.id) === true
+      ? [`--resume=${sessionId(step, ctx)}`]
+      : ['--session-id', sessionId(step, ctx)];
     // copilot has no system-prompt flag, so the guidance rides in front of the
     // task prompt; the separator keeps the two from bleeding into each other.
     const argv = [
       'copilot', '-i', `${interactiveGuidance(step, ctx)}\n\n---\n\n${buildPrompt(step, ctx)}`,
-      ...modelArgs(step), ...effortArgs(step),
+      ...sessionArgs, ...modelArgs(step), ...effortArgs(step),
       ...(step.writes ? [] : ['--deny-tool=write']),
       `--allow-tool=shell(touch ${shellPath(marker)})`,
-      `--share=${transcriptPath(step, ctx)}`,
     ];
     return {
       ...spec(ctx, argv, true),
@@ -132,12 +146,17 @@ export const copilotAdapter: RunnerAdapter = {
     return { ...spec(ctx, argv, false), capture: { path: capturePath, streams: 'stdout' } };
   },
 
+  // No guidance/settings here, despite resuming the same session: a headless
+  // harvest has no human to wait for. --output-format json --stream on is
+  // safe alongside --resume and a file write (verified against 1.0.83: the
+  // write lands and the events stream cleanly around it), so a harvest step
+  // reports progress exactly like any other headless spawn.
   harvest(step: AgentStep, ctx: RunCtx): SpawnSpec {
-    const prompt =
-      `Read the planning transcript at ${transcriptPath(step, ctx)} and write the final ` +
-      `'${step.output}' artifact that was agreed in it to ${ctx.runDir}/${step.output}. ` +
-      `Write only the artifact content to that file, then reply with just: done`;
-    return spec(ctx, ['copilot', '-p', prompt, '--allow-all-tools', '--no-color'], false);
+    const argv = [
+      'copilot', '-p', harvestPrompt(step, ctx), `--resume=${sessionId(step, ctx)}`,
+      ...modelArgs(step), '--allow-all-tools', '--output-format', 'json', '--stream', 'on', '--no-color',
+    ];
+    return { ...spec(ctx, argv, false), progress: { format: 'copilot-jsonl' } };
   },
 
   /**

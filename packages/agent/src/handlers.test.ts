@@ -987,7 +987,7 @@ async function stubCopilotPath(modelId: string): Promise<{ dir: string; rewrite:
 test('listModels: returns one ModelList per adapter that offers listModels, keyed by runner id', async () => {
   const { listModels } = await setup();
   const result = await listModels({}, { notify: () => {} }) as Record<string, { source: string; models: unknown[] }>;
-  assert.deepEqual(Object.keys(result).sort(), ['claude', 'copilot']);
+  assert.deepEqual(Object.keys(result).sort(), ['claude', 'copilot', 'opencode']);
   for (const row of Object.values(result)) {
     assert.ok(['live', 'fallback', 'unavailable'].includes(row.source));
   }

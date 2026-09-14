@@ -13,6 +13,7 @@ import { Button, MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle 
 import { Dismiss20Regular } from '@fluentui/react-icons';
 import { useAppStore } from '../state/store.ts';
 import { createTauriUpdater, type AvailableUpdate, type InstallKind, type Updater } from '../lib/updater.ts';
+import { errorMessage } from '../lib/error-message.ts';
 
 /** Not instant: yields to startup work (workspace restore, agent connect) that matters more. */
 const CHECK_DELAY_MS = 5000;
@@ -41,7 +42,7 @@ export function UpdateBanner({
         const [update, installKind] = await Promise.all([updater.check(), updater.installKind()]);
         setPhase(update ? { kind: 'available', update, installKind } : { kind: 'up-to-date', manual });
       } catch (error) {
-        setPhase({ kind: 'error', message: error instanceof Error ? error.message : String(error) });
+        setPhase({ kind: 'error', message: errorMessage(error) });
       }
     })();
   }, [updater]);
@@ -115,7 +116,7 @@ export function UpdateBanner({
   const onInstall = (): void => {
     setPhase({ kind: 'installing' });
     void phase.update.install().catch(error => {
-      setPhase({ kind: 'error', message: error instanceof Error ? error.message : String(error) });
+      setPhase({ kind: 'error', message: errorMessage(error) });
     });
   };
 

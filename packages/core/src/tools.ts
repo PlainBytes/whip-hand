@@ -108,11 +108,13 @@ export function parseToolVersion(
 }
 
 /**
- * claude, copilot and opencode appear here for their metadata only —
+ * claude, copilot and opencode are probed through their adapters —
  * `detectTools` routes any registry id through the adapter's own `detect()`,
- * which is what keeps copilot's `beep` advisory note (and opencode's PATH
- * note) alive. Their `argv` is what a probe WOULD run, kept accurate so
- * nothing goes stale if that routing ever changes.
+ * which is what keeps copilot's `beep` advisory note (and opencode's PATH and
+ * env notes) alive. The adapters don't re-implement the probe to do that,
+ * though: each `detect()` runs *this* entry via `probeRunner`, then layers its
+ * notes on top, so the argv here is the one that actually runs — edit it and
+ * both Doctor and the run:env snapshot follow.
  *
  * `optional` defaults to true. Only the things whiphand cannot work without at
  * all are required: claude and copilot (a fresh install needs at least one
@@ -206,13 +208,34 @@ export async function probeTool(probe: ToolProbe): Promise<DetectResult> {
       const version = parseToolVersion(String(stdout), String(stderr), probe.versionPattern);
       // Naming the binary matters only when it isn't the one we asked for —
       // otherwise every row would carry a note repeating its own id.
-      const notes = argv[0] === probe.argv[0] ? undefined : [`found as '${argv[0]}'`];
-      return { installed: true, version, notes };
+      // Omitted rather than `notes: undefined`, so an adapter returning this
+      // as its own detect() result has the same shape it always had.
+      return argv[0] === probe.argv[0]
+        ? { installed: true, version }
+        : { installed: true, version, notes: [`found as '${argv[0]}'`] };
     } catch {
       continue;
     }
   }
   return { installed: false };
+}
+
+/**
+ * The spawn half of a runner adapter's `detect()`: probes the adapter's own
+ * BUILTIN_TOOLS row, so adapters share probeTool's version parsing, timeout
+ * and alias fallback instead of each carrying a copy. Deliberately the
+ * *built-in* row, not the doctor.yaml-merged table — an override there cannot
+ * change how a registry id is detected (see resolveToolTable), and a run's
+ * run:env snapshot has no doctor config to consult anyway.
+ *
+ * An id with no row gets `<id> --version`, the same default resolveToolTable
+ * synthesizes for a registered adapter the table hasn't heard of — so a
+ * third-party adapter can use this too, and a missing row degrades to a
+ * sensible probe instead of throwing out of Doctor.
+ */
+export function probeRunner(id: string): Promise<DetectResult> {
+  const builtin = BUILTIN_TOOLS.find(probe => probe.id === id);
+  return probeTool(builtin ?? { id, label: id, group: 'harness', argv: [id, '--version'] });
 }
 
 export interface DoctorToolsConfig {

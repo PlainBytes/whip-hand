@@ -20,6 +20,7 @@ import { useHarnessCatalog } from './use-harness-catalog.ts';
 import { WorkflowSettingsCard } from './WorkflowSettingsCard.tsx';
 import { StepCard } from './StepCard.tsx';
 import type { EditorRow } from '../lib/editor-model.ts';
+import { errorMessage } from '../lib/error-message.ts';
 
 export interface WorkflowEditorProps {
   workflow: Workflow;
@@ -180,7 +181,7 @@ export function WorkflowEditor({
       setConfirmingGlobalSave(false);
       onSaved();
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : String(err));
+      setSaveError(errorMessage(err));
     } finally {
       setSaving(false);
     }

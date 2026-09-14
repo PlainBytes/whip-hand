@@ -269,6 +269,47 @@ describe('RunsPage', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
+  it('a rejected deleteRun shows the error in the dialog instead of escaping unhandled', async () => {
+    const { transport } = renderRunsPage();
+    await respondListRuns(transport, [
+      { runId: 'r1', runDir: '/ws/.whiphand/runs/r1', status: 'succeeded', workflow: 'demo' },
+    ]);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete r1' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Delete' }));
+
+    const req = await waitFor(() => {
+      const parsed = transport.sentRequest(transport.sent.length - 1);
+      if (parsed.method !== 'deleteRun') throw new Error('deleteRun not sent yet');
+      return parsed;
+    });
+    transport.emitLine({ id: req.id, error: { code: -32000, message: 'EACCES: permission denied' } });
+
+    expect(await screen.findByText(/EACCES: permission denied/)).toBeInTheDocument();
+    const dialog = screen.getByRole('dialog');
+    // Busy cleared: the user can retry or walk away.
+    expect(within(dialog).getByRole('button', { name: 'Delete' })).toBeEnabled();
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeEnabled();
+  });
+
+  it('delete cannot be dismissed while deleteRun is in flight', async () => {
+    const { transport } = renderRunsPage();
+    await respondListRuns(transport, [
+      { runId: 'r1', runDir: '/ws/.whiphand/runs/r1', status: 'succeeded', workflow: 'demo' },
+    ]);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete r1' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => {
+      const parsed = transport.sentRequest(transport.sent.length - 1);
+      if (parsed.method !== 'deleteRun') throw new Error('deleteRun not sent yet');
+    });
+
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
   it('offers no cross-workspace switch: Runs is this workspace only', async () => {
     const { transport } = renderRunsPage();
     await respondListRuns(transport, []);

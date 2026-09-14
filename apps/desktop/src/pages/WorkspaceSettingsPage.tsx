@@ -16,7 +16,9 @@ import {
 import { Save20Regular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
+import { spinInteger } from '../lib/spin-value.ts';
 import type { WorkspaceConfig, OnFindings } from '../../../../packages/core/src/types.ts';
+import { errorMessage } from '../lib/error-message.ts';
 
 /** Seeded when the override checkbox is first turned on from "inherit". */
 const DEFAULT_OVERRIDE_MAX_RETAINED = 10;
@@ -81,7 +83,7 @@ export function WorkspaceSettingsPage() {
         setDirty(false);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) setError(errorMessage(err));
       });
     return () => {
       cancelled = true;
@@ -169,7 +171,7 @@ export function WorkspaceSettingsPage() {
         void client.request('pruneRuns', { workdir: workspacePath, max: form.runs.max_retained }).catch(() => {});
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
     } finally {
       setSaving(false);
     }
@@ -259,8 +261,8 @@ export function WorkspaceSettingsPage() {
           min={1}
           value={form.loop.max_iterations}
           onChange={(_e, data) => {
-            const next = data.value ?? (data.displayValue ? Number(data.displayValue) : undefined);
-            if (typeof next === 'number' && Number.isInteger(next) && next >= 1) {
+            const next = spinInteger(data, { min: 1 });
+            if (next !== undefined) {
               update(prev => ({ ...prev, loop: { ...prev.loop, max_iterations: next } }));
             }
           }}
@@ -342,8 +344,8 @@ export function WorkspaceSettingsPage() {
               min={1}
               value={form.runs.max_retained}
               onChange={(_e, data) => {
-                const next = data.value ?? (data.displayValue ? Number(data.displayValue) : undefined);
-                if (typeof next === 'number' && Number.isInteger(next) && next >= 1) {
+                const next = spinInteger(data, { min: 1 });
+                if (next !== undefined) {
                   update(prev => ({ ...prev, runs: { ...prev.runs, max_retained: next } }));
                 }
               }}

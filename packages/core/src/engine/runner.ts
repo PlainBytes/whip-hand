@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import type {
   AgentStep, AttachmentSource, CommandStep, Frontend, LoopFrame, LoopStep, ManualStep, WhiphandEvent,
-  OnFindings, Scope, Workflow, RunCtx, SpawnSpec, Step, WorkspaceConfig,
+  OnFindings, RunnerAdapter, Scope, Workflow, RunCtx, SpawnSpec, Step, WorkspaceConfig,
 } from '../types.ts';
 import { AdapterRegistry, validateWorkflowRunners, validateWorkflowFrontend } from '../registry.ts';
 import { WorkflowError } from '../schema.ts';
@@ -561,12 +561,14 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
           // spawn; a dry run never spawns one. Without a placeholder here,
           // adapter.harvest — which every capture adapter builds around
           // ctx.sessionIds[step.id] — throws, and dry-run would only work for
-          // sessionIdInjection runners. Never observable past this function: a
-          // dry run makes no further use of ctx.sessionIds.
-          if (adapter.capabilities.sessionIdCapture && ctx.sessionIds[step.id] === undefined) {
-            ctx.sessionIds[step.id] = '<captured at runtime>';
-          }
-          emit({ type: 'step:spawn', stepId: step.id, spec: adapter.harvest(eff, ctx), phase: 'harvest' });
+          // sessionIdInjection runners. Handed to harvest on a copy, never
+          // written into ctx.sessionIds: RunJournal holds that object by
+          // reference, so the placeholder would land in run.json, where resume
+          // reads any recorded id as a real session to reattach to.
+          const harvestCtx = adapter.capabilities.sessionIdCapture && ctx.sessionIds[step.id] === undefined
+            ? { ...ctx, sessionIds: { ...ctx.sessionIds, [step.id]: '<captured at runtime>' } }
+            : ctx;
+          emit({ type: 'step:spawn', stepId: step.id, spec: adapter.harvest(eff, harvestCtx), phase: 'harvest' });
         }
         emit({ type: 'step:done', stepId: step.id, exitCode: 0 });
         return null;
@@ -576,15 +578,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       const before = await guardBefore(step);
 
       if (step.mode === 'interactive') {
-        // Leftovers from an earlier attempt would close this session the
-        // instant it opened, make it open already looking blocked, or leave a
-        // stale captured session id lying around for the fallback below to
-        // trip over.
-        await clearEndMarker(runDir, step.id);
-        await clearAwaitState(runDir, step.id);
-        if (adapter.capabilities.sessionIdCapture) await clearSessionCapture(runDir, step.id);
-        const main = adapter.interactive(eff, ctx);
-        await writeSpecFiles(main);
+        const main = await prepareInteractiveSpawn(adapter, eff);
         emit({ type: 'step:spawn', stepId: step.id, spec: main, phase: 'main' });
         const sessionExit = await frontend.runInteractive(main, opts.signal, emit);
         if (opts.signal?.aborted) return cancelled();
@@ -746,6 +740,24 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       return kept.length === step.inputs.length ? step : { ...step, inputs: kept };
     }
 
+    /**
+     * Everything that must happen before an interactive session opens, for a
+     * declared interactive step and a triage handoff alike, so the two cannot
+     * drift. Leftovers from an earlier attempt would close the session the
+     * instant it opened, make it open already looking blocked, or leave a
+     * stale captured session id lying around for the capture fallback to trip
+     * over; the spec's support files (opencode's guidance and plugin) must be
+     * on disk before the runner starts reading them.
+     */
+    async function prepareInteractiveSpawn(adapter: RunnerAdapter, step: AgentStep): Promise<SpawnSpec> {
+      await clearEndMarker(runDir, step.id);
+      await clearAwaitState(runDir, step.id);
+      if (adapter.capabilities.sessionIdCapture) await clearSessionCapture(runDir, step.id);
+      const spec = adapter.interactive(step, ctx);
+      await writeSpecFiles(spec);
+      return spec;
+    }
+
     function requireSpawn(): (
       spec: SpawnSpec, signal?: AbortSignal, onLine?: (line: string, stream: 'stdout' | 'stderr') => void,
     ) => Promise<number> {
@@ -898,15 +910,20 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       if (adapter.capabilities.sessionIdInjection) {
         ctx.sessionIds[triage.id] = randomUUID();
       }
-      await clearEndMarker(runDir, triage.id);
-      await clearAwaitState(runDir, triage.id);
-      if (adapter.capabilities.sessionIdCapture) await clearSessionCapture(runDir, triage.id);
-      // Triage goes through adapter.interactive too, so it inherits the
-      // guidance and the end-of-session spec without asking for them — and,
-      // for opencode, its support files, which is why they're written here
-      // exactly as the main interactive path writes its own.
-      const triageSpec = adapter.interactive(triage, ctx);
-      await writeSpecFiles(triageSpec);
+      // Triage goes through the same preparation as a declared interactive
+      // step, so it inherits the guidance, the end-of-session spec and (for
+      // opencode) the support files without asking for them.
+      const triageSpec = await prepareInteractiveSpawn(adapter, triage);
+      // Deliberately not a step: triage has no step:start/step:done lifecycle,
+      // so it emits no step:spawn either — the journal would have no manifest
+      // entry to hang one on (RunJournal's step:spawn branch only marks an
+      // entry step:start already created; `sessionStarted` therefore has
+      // nowhere to go, and resume never offers to reopen a triage session),
+      // and a lone spawn line for a step that never started would only
+      // confuse run.log readers and the desktop's step list. The exit code is
+      // ignored for the same reason the handoff returns null on success:
+      // either way the findings stand and both callers end the run as not ok,
+      // so a non-zero session exit has no outcome left to change.
       await frontend.runInteractive(triageSpec, opts.signal, emit);
       if (opts.signal?.aborted) return cancelled();
       return null;

@@ -10,19 +10,10 @@
  * file or read by CI, and an in-place spinner would corrupt both.
  */
 import { join } from 'node:path';
-import { ATTACHMENTS_DIR, formatBytes } from '@whiphand/core';
-import type { LoopRef, WhiphandEvent } from '@whiphand/core';
-
-/**
- * `<id>` prefixed with every loop enclosing it, outermost first — e.g.
- * `human-review 2 › fix-cycle`. Empty for a top-level loop, which is what
- * keeps its own rendering byte-identical to what it always was.
- */
-function nestedPrefix(id: string, parentLoopId?: string, parentIteration?: number, outerLoops?: LoopRef[]): string {
-  const ancestors = [...(outerLoops ?? [])];
-  if (parentLoopId !== undefined) ancestors.push({ id: parentLoopId, iteration: parentIteration ?? 1 });
-  return ancestors.length === 0 ? id : `${ancestors.map(l => `${l.id} ${l.iteration}`).join(' › ')} › ${id}`;
-}
+import {
+  ATTACHMENTS_DIR, formatBytes, formatElapsed, mergeUsage, nestedPrefix, progressActionText, usageParts,
+} from '@whiphand/core';
+import type { UsageCounters, WhiphandEvent } from '@whiphand/core';
 
 export interface RenderSinks {
   out: (line: string) => void;
@@ -39,11 +30,8 @@ export interface RenderOptions {
 }
 
 /** What a headless step has told us so far, cleared when it finishes. */
-interface StepTally {
+interface StepTally extends UsageCounters {
   startedMs: number;
-  turns?: number;
-  costUsd?: number;
-  premiumRequests?: number;
 }
 
 /** Loop bodies are indented so a cycle reads as a cycle, not a flat replay. */
@@ -55,23 +43,16 @@ function stepLine(event: Extract<WhiphandEvent, { type: 'step:start' }>): string
   return `${indent}→ step ${event.stepId} (${detail})`;
 }
 
-function elapsed(ms: number): string {
-  const total = Math.max(0, Math.round(ms / 1000));
-  const minutes = Math.floor(total / 60);
-  return minutes === 0 ? `${total}s` : `${minutes}m${String(total % 60).padStart(2, '0')}s`;
-}
-
 /**
  * Elapsed time is always known because we measure it ourselves; everything
  * else depends on what the runner chose to report, so an absent counter is
  * omitted rather than printed as a zero.
  */
 function summary(tally: StepTally, nowMs: number): string {
-  const parts: string[] = [];
-  if (tally.turns !== undefined) parts.push(`${tally.turns} turns`);
-  parts.push(elapsed(nowMs - tally.startedMs));
-  if (tally.costUsd !== undefined) parts.push(`$${tally.costUsd.toFixed(2)}`);
-  if (tally.premiumRequests !== undefined) parts.push(`${tally.premiumRequests} premium requests`);
+  const parts = usageParts(tally, usd => `$${usd.toFixed(2)}`);
+  // Elapsed sits right after turns (first when there are none): how long and
+  // how many rounds read together, spend after them.
+  parts.splice(tally.turns === undefined ? 0 : 1, 0, formatElapsed(nowMs - tally.startedMs));
   return `  ${parts.join(' · ')}`;
 }
 
@@ -125,14 +106,12 @@ export function createRenderer(
       case 'step:progress': {
         const { progress } = event;
         if (progress.kind === 'tool') {
-          return out(`  ${progress.tool}${progress.target === undefined ? '' : ` ${progress.target}`}`);
+          return out(`  ${progressActionText(progress)}`);
         }
         if (progress.kind === 'usage') {
           const tally = tallies.get(event.stepId);
           if (tally === undefined) return;
-          if (progress.turns !== undefined) tally.turns = progress.turns;
-          if (progress.costUsd !== undefined) tally.costUsd = progress.costUsd;
-          if (progress.premiumRequests !== undefined) tally.premiumRequests = progress.premiumRequests;
+          tallies.set(event.stepId, mergeUsage(tally, progress));
         }
         // Prose is deliberately dropped: it would drown the terminal.
         return;

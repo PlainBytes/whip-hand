@@ -12,8 +12,8 @@ import { isOpencodeSupportFileName } from './opencode-files.ts';
 import { LOCK_MARKER_NAME, isRunLocked } from './run-lock.ts';
 import { NAME_MARKER_NAME, SUGGEST_CAPTURE_NAME, readRunName, setRunName } from './run-name.ts';
 import { RUN_LOG_NAME, DEFAULT_RUN_LOG_CAP_BYTES } from './run-log.ts';
-import { summarizeEvent, formatLogLine } from '../log-rows.ts';
-import { executionKey } from '../execution-key.ts';
+import { summarizeEvent, formatLogLine, mergeUsage, progressActionText } from '../log-rows.ts';
+import { executionKey, sameLoopRefs } from '../execution-key.ts';
 
 const manifestStepSchema = z.object({
   id: z.string().min(1),
@@ -197,13 +197,6 @@ export interface RunJournalInit {
 }
 
 const TERMINAL_EVENTS = new Set<WhiphandEvent['type']>(['run:done', 'run:error', 'run:cancelled']);
-
-/** Order-sensitive equality for a row's `outerLoops`, treating absent as empty. */
-function sameLoopRefs(a: readonly LoopRef[] | undefined, b: readonly LoopRef[]): boolean {
-  const aa = a ?? [];
-  if (aa.length !== b.length) return false;
-  return aa.every((r, i) => r.id === b[i].id && r.iteration === b[i].iteration);
-}
 
 /**
  * Reduces the run's WhiphandEvent stream into an on-disk RunManifest (run.json,
@@ -469,17 +462,9 @@ export class RunJournal {
     if (progress.kind === 'text') return;
     const entry = this.findStep(stepId);
     if (entry === undefined) return;
-    const next = { ...entry.progress };
-    if (progress.kind === 'tool') {
-      next.lastAction = progress.target === undefined
-        ? progress.tool
-        : `${progress.tool} ${progress.target}`;
-    } else {
-      if (progress.turns !== undefined) next.turns = progress.turns;
-      if (progress.costUsd !== undefined) next.costUsd = progress.costUsd;
-      if (progress.premiumRequests !== undefined) next.premiumRequests = progress.premiumRequests;
-    }
-    entry.progress = next;
+    entry.progress = progress.kind === 'tool'
+      ? { ...entry.progress, lastAction: progressActionText(progress) }
+      : mergeUsage(entry.progress ?? {}, progress);
   }
 
   /**

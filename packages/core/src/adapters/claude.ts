@@ -3,10 +3,9 @@ import { buildPrompt } from '../template.ts';
 import { interactiveGuidance } from '../engine/interactive-guidance.ts';
 import { endMarkerPath, shellPath } from '../engine/session-end.ts';
 import { awaitStatePath } from '../engine/await-state.ts';
-import { execRunner } from '../exec.ts';
-import { parseToolVersion, PROBE_TIMEOUT_MS } from '../tools.ts';
+import { probeRunner } from '../tools.ts';
 import { probeClaudeModels } from './claude-models.ts';
-import { harvestPrompt } from './harvest-prompt.ts';
+import { flagArgs, harvestPrompt, isResumedStep, requireSessionId, spawnSpec } from './common.ts';
 
 export const CLAUDE_WRITE_TOOLS = 'Write,Edit,NotebookEdit';
 const READONLY_ALLOWED = 'Read,Grep,Glob,Bash';
@@ -17,18 +16,13 @@ export const CLAUDE_QUIT_SEQUENCE = '/exit\r';
 const SHELL_SAFE_PATH = /^[A-Za-z0-9_@%+=:,./-]+$/;
 
 function modelArgs(step: AgentStep): string[] {
-  return step.model ? ['--model', step.model] : [];
+  return flagArgs('--model', step.model);
 }
 function effortArgs(step: AgentStep): string[] {
-  return step.effort ? ['--effort', step.effort] : [];
-}
-function spec(ctx: RunCtx, argv: string[], interactive: boolean): SpawnSpec {
-  return { argv, cwd: ctx.workdir, env: {}, interactive };
+  return flagArgs('--effort', step.effort);
 }
 function sessionId(step: AgentStep, ctx: RunCtx): string {
-  const sid = ctx.sessionIds[step.id];
-  if (!sid) throw new Error(`no session id minted for step '${step.id}'`);
-  return sid;
+  return requireSessionId(step, ctx, 'minted');
 }
 /**
  * Everything whiphand asks of the session's settings, in the one
@@ -91,13 +85,9 @@ export const claudeAdapter: RunnerAdapter = {
     toolDenial: true, shareTranscript: false,
   },
 
-  async detect(): Promise<DetectResult> {
-    try {
-      const { stdout, stderr } = await execRunner(['claude', '--version'], { timeout: PROBE_TIMEOUT_MS });
-      return { installed: true, version: parseToolVersion(stdout, stderr) };
-    } catch {
-      return { installed: false };
-    }
+  /** Nothing to add on top of the plain probe — claude's hooks mean it never needs a setup advisory. */
+  detect(): Promise<DetectResult> {
+    return probeRunner('claude');
   },
 
   interactive(step: AgentStep, ctx: RunCtx): SpawnSpec {
@@ -107,12 +97,9 @@ export const claudeAdapter: RunnerAdapter = {
   // and `awaitPath` stay native below, where they go to fs.
   const settings = settingsArg(shellPath(marker), shellPath(awaitPath));
     // --session-id mints a conversation; continuing one needs --resume, the
-    // same flag harvest() already uses. Only a resumed run sets this, and only
-    // for a step the manifest saw spawn a session — "the step started" is not
-    // enough, because step:start fires before the prompt is built and a step
-    // that dies in between leaves its minted id naming nothing. --resume on
-    // such an id exits 1 (see planResume, which is where the set is built).
-    const sessionArgs = ctx.resumedStepIds?.has(step.id) === true
+    // same flag harvest() already uses. isResumedStep is deliberately strict
+    // (see its doc): --resume on an id that never spawned a session exits 1.
+    const sessionArgs = isResumedStep(step, ctx)
       ? ['--resume', sessionId(step, ctx)]
       : ['--session-id', sessionId(step, ctx)];
     const argv = [
@@ -124,7 +111,7 @@ export const claudeAdapter: RunnerAdapter = {
       buildPrompt(step, ctx),
     ];
     return {
-      ...spec(ctx, argv, true),
+      ...spawnSpec(ctx, argv, true),
       endSession: { markerPath: marker, quitSequence: CLAUDE_QUIT_SEQUENCE },
       // No settings means no hooks means nothing to watch.
       ...(settings.length > 0 ? { awaitState: { statePath: awaitPath } } : {}),
@@ -144,7 +131,7 @@ export const claudeAdapter: RunnerAdapter = {
       'claude', '-p', '--output-format', 'stream-json', '--verbose',
       ...modelArgs(step), ...effortArgs(step), ...tools, buildPrompt(step, ctx),
     ];
-    return { ...spec(ctx, argv, false), progress: { format: 'claude-stream-json' } };
+    return { ...spawnSpec(ctx, argv, false), progress: { format: 'claude-stream-json' } };
   },
 
   /**
@@ -155,7 +142,7 @@ export const claudeAdapter: RunnerAdapter = {
    */
   suggestName(prompt: string, ctx: RunCtx, capturePath: string): SpawnSpec {
     const argv = ['claude', '-p', '--model', 'haiku', '--allowedTools=', prompt];
-    return { ...spec(ctx, argv, false), capture: { path: capturePath, streams: 'stdout' } };
+    return { ...spawnSpec(ctx, argv, false), capture: { path: capturePath, streams: 'stdout' } };
   },
 
   // No settings arg here, despite resuming the same session: hooks come from the
@@ -165,7 +152,7 @@ export const claudeAdapter: RunnerAdapter = {
       'claude', '-p', '--resume', sessionId(step, ctx),
       ...modelArgs(step), '--allowedTools=Write', harvestPrompt(step, ctx),
     ];
-    return spec(ctx, argv, false);
+    return spawnSpec(ctx, argv, false);
   },
 
   /** See claude-models.ts for the probe itself — live-only vs. static aliases lives there, not here. */

@@ -8,12 +8,6 @@ import {
   DataGridHeader,
   DataGridHeaderCell,
   DataGridRow,
-  Dialog,
-  DialogActions,
-  DialogBody,
-  DialogContent,
-  DialogSurface,
-  DialogTitle,
   Spinner,
   Switch,
   Text,
@@ -26,6 +20,8 @@ import { useAppStore, waitingRunIds } from '../state/store.ts';
 import type { RunSummary } from '../agent/client.ts';
 import { POLL_INTERVAL_MS, runColumns, runLabel } from './run-columns.tsx';
 import { NewRunDialog } from '../components/NewRunDialog.tsx';
+import { DeleteRunDialog } from '../components/DeleteRunDialog.tsx';
+import { errorMessage } from '../lib/error-message.ts';
 
 export interface RunsPageProps {
   onSelectRun: (runId: string) => void;
@@ -53,8 +49,6 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
   const [newRunOpen, setNewRunOpen] = useState(false);
   /** The run awaiting delete confirmation; null when no dialog is open. */
   const [deleting, setDeleting] = useState<RunSummary | null>(null);
-  const [deleteBusy, setDeleteBusy] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [lockingId, setLockingId] = useState<string | null>(null);
 
   // Hoisted out of the polling effect so row actions can trigger an immediate
@@ -69,7 +63,7 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
         setError(null);
       })
       .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : String(err));
+        setError(errorMessage(err));
       });
   }, [client, workspacePath, setRuns]);
 
@@ -92,27 +86,6 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
       poll();
     } finally {
       setLockingId(null);
-    }
-  }
-
-  async function confirmDelete(): Promise<void> {
-    if (!workspacePath || !deleting) return;
-    setDeleteBusy(true);
-    setDeleteError(null);
-    try {
-      const result = await client.request('deleteRun', { workdir: workspacePath, runId: deleting.runId });
-      if (!result.deleted) {
-        setDeleteError(
-          result.reason === 'locked' ? 'This run is locked.'
-            : result.reason === 'running' ? 'This run is still running.'
-              : 'This run no longer exists.',
-        );
-        return;
-      }
-      setDeleting(null);
-      poll();
-    } finally {
-      setDeleteBusy(false);
     }
   }
 
@@ -140,7 +113,7 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
           size="small"
           icon={<Delete16Regular />}
           aria-label={`Delete ${runLabel(run)}`}
-          onClick={event => { event.stopPropagation(); setDeleting(run); setDeleteError(null); }}
+          onClick={event => { event.stopPropagation(); setDeleting(run); }}
         >
           Delete
         </Button>
@@ -221,32 +194,16 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
         </DataGrid>
       )}
       {deleting && (
-        // Mounted only while a delete is pending confirmation: a closed-but-
-        // mounted Dialog is still a live Fluent Modalizer (see FilesPage).
-        <Dialog
-          open
-          onOpenChange={(_event, data) => {
-            // A deleteRun already issued can't be un-issued: dismissal (Esc,
-            // backdrop, window close) must not lie about having stopped it.
-            if (!data.open && !deleteBusy) setDeleting(null);
+        <DeleteRunDialog
+          workdir={workspacePath}
+          runId={deleting.runId}
+          name={deleting.name}
+          onDeleted={() => {
+            setDeleting(null);
+            poll();
           }}
-        >
-          <DialogSurface>
-            <DialogBody>
-              <DialogTitle>Delete {deleting.name ?? `run ${deleting.runId}`}?</DialogTitle>
-              <DialogContent>
-                This deletes the run's directory and everything in it. This cannot be undone.
-                {deleteError ? ` — ${deleteError}` : ''}
-              </DialogContent>
-              <DialogActions>
-                <Button appearance="primary" disabled={deleteBusy} onClick={() => void confirmDelete()}>
-                  {deleteBusy ? <Spinner size="tiny" /> : 'Delete'}
-                </Button>
-                <Button disabled={deleteBusy} onClick={() => setDeleting(null)}>Cancel</Button>
-              </DialogActions>
-            </DialogBody>
-          </DialogSurface>
-        </Dialog>
+          onDismiss={() => setDeleting(null)}
+        />
       )}
     </div>
   );

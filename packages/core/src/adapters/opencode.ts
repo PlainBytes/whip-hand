@@ -55,9 +55,10 @@ import { endMarkerPath, sanitizeStepId, shellPath } from '../engine/session-end.
 import { awaitStatePath } from '../engine/await-state.ts';
 import { sessionCapturePath, readSessionCapture } from '../engine/session-capture.ts';
 import { opencodeGuidancePath, opencodePluginPath } from '../engine/opencode-files.ts';
+import { isRecord } from '../engine/progress.ts';
 import { execRunner } from '../exec.ts';
-import { parseToolVersion, PROBE_TIMEOUT_MS } from '../tools.ts';
-import { harvestPrompt } from './harvest-prompt.ts';
+import { PROBE_TIMEOUT_MS, probeRunner } from '../tools.ts';
+import { flagArgs, harvestPrompt, isResumedStep, listModelsVia, requireSessionId, spawnSpec } from './common.ts';
 
 /** No PTY harness was available to verify a real quit keystroke sequence (see the module doc). */
 export const OPENCODE_QUIT_SEQUENCE = '';
@@ -68,16 +69,23 @@ const AGENT_NAME = 'whiphand';
 const NAME_AGENT_NAME = 'whiphand-name';
 
 function modelArgs(step: AgentStep): string[] {
-  return step.model ? ['-m', step.model] : [];
+  return flagArgs('-m', step.model);
 }
 /** `--variant` is a real `run` flag but not a TUI one — the agent config's own `variant` field covers the TUI instead. */
 function variantArgs(step: AgentStep): string[] {
-  return step.effort ? ['--variant', step.effort] : [];
+  return flagArgs('--variant', step.effort);
 }
 function sessionId(step: AgentStep, ctx: RunCtx): string {
-  const sid = ctx.sessionIds[step.id];
-  if (!sid) throw new Error(`no session id captured yet for step '${step.id}'`);
-  return sid;
+  return requireSessionId(step, ctx, 'captured yet');
+}
+/**
+ * Every opencode spawn carries its whole agent config in
+ * `OPENCODE_CONFIG_CONTENT` — which *replaces* any value already in the
+ * environment (hence detect()'s note), so the config each spawn builds is the
+ * only one opencode sees.
+ */
+function opencodeSpec(ctx: RunCtx, argv: string[], interactive: boolean, config: string): SpawnSpec {
+  return spawnSpec(ctx, argv, interactive, { OPENCODE_CONFIG_CONTENT: config });
 }
 
 /**
@@ -250,24 +258,22 @@ export const opencodeAdapter: RunnerAdapter = {
   },
 
   async detect(): Promise<DetectResult> {
-    const notes: string[] = [];
-    if (process.env.OPENCODE_CONFIG_CONTENT !== undefined) {
-      notes.push(
-        'OPENCODE_CONFIG_CONTENT is already set in this environment; whiphand replaces it for every spawn');
-    }
-    try {
-      const { stdout, stderr } = await execRunner(['opencode', '--version'], { timeout: PROBE_TIMEOUT_MS });
-      return { installed: true, version: parseToolVersion(stdout, stderr), ...(notes.length ? { notes } : {}) };
-    } catch {
+    const probed = await probeRunner('opencode');
+    const notes = [...(probed.notes ?? [])];
+    if (!probed.installed) {
       // opencode is only on PATH in an interactive shell (it's added by
       // .bashrc), so a whiphand run — which never sources one — can find the
       // binary installed and still fail to launch it.
       const fallback = join(homedir(), '.opencode', 'bin', 'opencode');
       if (existsSync(fallback)) {
-        notes.unshift(`opencode is installed at ${fallback} but not on PATH for this process; add its directory to PATH`);
+        notes.push(`opencode is installed at ${fallback} but not on PATH for this process; add its directory to PATH`);
       }
-      return { installed: false, ...(notes.length ? { notes } : {}) };
     }
+    if (process.env.OPENCODE_CONFIG_CONTENT !== undefined) {
+      notes.push(
+        'OPENCODE_CONFIG_CONTENT is already set in this environment; whiphand replaces it for every spawn');
+    }
+    return { ...probed, ...(notes.length ? { notes } : {}) };
   },
 
   interactive(step: AgentStep, ctx: RunCtx): SpawnSpec {
@@ -275,7 +281,7 @@ export const opencodeAdapter: RunnerAdapter = {
     const awaitPath = awaitStatePath(ctx.runDir, step.id);
     const guidance = opencodeGuidancePath(ctx.runDir, step.id);
     const plugin = opencodePluginPath(ctx.runDir, step.id);
-    const resumed = ctx.resumedStepIds?.has(step.id) === true;
+    const resumed = isResumedStep(step, ctx);
 
     const config = configContent({
       agentName: AGENT_NAME,
@@ -294,8 +300,7 @@ export const opencodeAdapter: RunnerAdapter = {
       : ['opencode', '--agent', AGENT_NAME, ...modelArgs(step), '--prompt', buildPrompt(step, ctx)];
 
     return {
-      argv, cwd: ctx.workdir, interactive: true,
-      env: { OPENCODE_CONFIG_CONTENT: config },
+      ...opencodeSpec(ctx, argv, true, config),
       files: [
         { path: guidance, content: interactiveGuidance(step, ctx) },
         { path: plugin, content: pluginSource(ctx.runDir, step.id, resumed ? ctx.sessionIds[step.id] : undefined) },
@@ -316,11 +321,7 @@ export const opencodeAdapter: RunnerAdapter = {
       'opencode', 'run', '--format', 'json', '--agent', AGENT_NAME,
       ...modelArgs(step), ...variantArgs(step), buildPrompt(step, ctx),
     ];
-    return {
-      argv, cwd: ctx.workdir, interactive: false,
-      env: { OPENCODE_CONFIG_CONTENT: config },
-      progress: { format: 'opencode-json' },
-    };
+    return { ...opencodeSpec(ctx, argv, false, config), progress: { format: 'opencode-json' } };
   },
 
   /**
@@ -340,11 +341,7 @@ export const opencodeAdapter: RunnerAdapter = {
       'opencode', 'run', '--format', 'json', '-s', sessionId(step, ctx), '--agent', AGENT_NAME,
       ...modelArgs(step), harvestPrompt(step, ctx),
     ];
-    return {
-      argv, cwd: ctx.workdir, interactive: false,
-      env: { OPENCODE_CONFIG_CONTENT: config },
-      progress: { format: 'opencode-json' },
-    };
+    return { ...opencodeSpec(ctx, argv, false, config), progress: { format: 'opencode-json' } };
   },
 
   /**
@@ -368,11 +365,11 @@ export const opencodeAdapter: RunnerAdapter = {
       const sessions: unknown = JSON.parse(stdout);
       if (!Array.isArray(sessions)) return undefined;
       const matches = sessions.filter((s): s is { id: string } =>
-        typeof s === 'object' && s !== null
-        && typeof (s as { id?: unknown }).id === 'string'
-        && (s as { directory?: unknown }).directory === ctx.workdir
-        && typeof (s as { created?: unknown }).created === 'number'
-        && (s as { created: number }).created >= guidanceMtime);
+        isRecord(s)
+        && typeof s.id === 'string'
+        && s.directory === ctx.workdir
+        && typeof s.created === 'number'
+        && s.created >= guidanceMtime);
       return matches.length === 1 ? matches[0].id : undefined;
     } catch {
       return undefined;
@@ -388,23 +385,12 @@ export const opencodeAdapter: RunnerAdapter = {
     const config = JSON.stringify({
       agent: { [NAME_AGENT_NAME]: { mode: 'primary', permission: { '*': 'deny' } } },
     });
-    return {
-      argv: ['opencode', 'run', '--agent', NAME_AGENT_NAME, prompt],
-      cwd: ctx.workdir, interactive: false,
-      env: { OPENCODE_CONFIG_CONTENT: config },
-      capture: { path: capturePath, streams: 'stdout' },
-    };
+    const argv = ['opencode', 'run', '--agent', NAME_AGENT_NAME, prompt];
+    return { ...opencodeSpec(ctx, argv, false, config), capture: { path: capturePath, streams: 'stdout' } };
   },
 
   /** `opencode models` prints one `provider/model` id per line; anything else means no list. */
-  async listModels(): Promise<ModelList> {
-    try {
-      const { stdout } = await execRunner(['opencode', 'models'], { timeout: PROBE_TIMEOUT_MS });
-      const models = parseOpencodeModels(stdout);
-      if (models.length === 0) return { source: 'unavailable', models: [] };
-      return { source: 'live', models };
-    } catch {
-      return { source: 'unavailable', models: [] };
-    }
+  listModels(): Promise<ModelList> {
+    return listModelsVia(['opencode', 'models'], parseOpencodeModels);
   },
 };

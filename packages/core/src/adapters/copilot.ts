@@ -5,26 +5,20 @@ import type { AgentStep, DetectResult, ModelInfo, ModelList, RunCtx, RunnerAdapt
 import { buildPrompt } from '../template.ts';
 import { interactiveGuidance } from '../engine/interactive-guidance.ts';
 import { endMarkerPath, shellPath } from '../engine/session-end.ts';
-import { execRunner } from '../exec.ts';
-import { parseToolVersion, PROBE_TIMEOUT_MS } from '../tools.ts';
-import { harvestPrompt } from './harvest-prompt.ts';
+import { probeRunner } from '../tools.ts';
+import { flagArgs, harvestPrompt, isResumedStep, listModelsVia, requireSessionId, spawnSpec } from './common.ts';
 
 /** `/exit` quits copilot cleanly. */
 export const COPILOT_QUIT_SEQUENCE = '/exit\r';
 
 function modelArgs(step: AgentStep): string[] {
-  return step.model ? ['--model', step.model] : [];
+  return flagArgs('--model', step.model);
 }
 function effortArgs(step: AgentStep): string[] {
-  return step.effort ? ['--effort', step.effort] : [];
-}
-function spec(ctx: RunCtx, argv: string[], interactive: boolean): SpawnSpec {
-  return { argv, cwd: ctx.workdir, env: {}, interactive };
+  return flagArgs('--effort', step.effort);
 }
 function sessionId(step: AgentStep, ctx: RunCtx): string {
-  const sid = ctx.sessionIds[step.id];
-  if (!sid) throw new Error(`no session id minted for step '${step.id}'`);
-  return sid;
+  return requireSessionId(step, ctx, 'minted');
 }
 
 /**
@@ -88,26 +82,23 @@ export const copilotAdapter: RunnerAdapter = {
     toolDenial: true, shareTranscript: false,
   },
 
+  /**
+   * The beep note is only worth reading config for once copilot is actually
+   * there — a missing runner's row has nothing to advise about. `notes` is
+   * always an array when installed (empty once beep is on), never absent.
+   */
   async detect(): Promise<DetectResult> {
-    try {
-      const { stdout, stderr } = await execRunner(['copilot', '--version'], { timeout: PROBE_TIMEOUT_MS });
-      return {
-        installed: true,
-        version: parseToolVersion(stdout, stderr),
-        notes: await beepNote(),
-      };
-    } catch {
-      return { installed: false };
-    }
+    const probed = await probeRunner('copilot');
+    if (!probed.installed) return probed;
+    return { ...probed, notes: [...(probed.notes ?? []), ...await beepNote()] };
   },
 
   interactive(step: AgentStep, ctx: RunCtx): SpawnSpec {
     const marker = endMarkerPath(ctx.runDir, step.id);
     // --session-id mints a conversation; continuing one needs --resume=, the
     // same flag harvest() already uses. Same rule as claude's own
-    // sessionArgs: only a resumed run sets this, and only for a step the
-    // manifest saw spawn a session.
-    const sessionArgs = ctx.resumedStepIds?.has(step.id) === true
+    // sessionArgs (see isResumedStep).
+    const sessionArgs = isResumedStep(step, ctx)
       ? [`--resume=${sessionId(step, ctx)}`]
       : ['--session-id', sessionId(step, ctx)];
     // copilot has no system-prompt flag, so the guidance rides in front of the
@@ -119,7 +110,7 @@ export const copilotAdapter: RunnerAdapter = {
       `--allow-tool=shell(touch ${shellPath(marker)})`,
     ];
     return {
-      ...spec(ctx, argv, true),
+      ...spawnSpec(ctx, argv, true),
       endSession: { markerPath: marker, quitSequence: COPILOT_QUIT_SEQUENCE },
     };
   },
@@ -133,7 +124,7 @@ export const copilotAdapter: RunnerAdapter = {
       '--output-format', 'json', '--stream', 'on',
       '--no-color',
     ];
-    return { ...spec(ctx, argv, false), progress: { format: 'copilot-jsonl' } };
+    return { ...spawnSpec(ctx, argv, false), progress: { format: 'copilot-jsonl' } };
   },
 
   /** See claudeAdapter.suggestName — same contract, copilot's flags. */
@@ -143,7 +134,7 @@ export const copilotAdapter: RunnerAdapter = {
       '--model', 'gpt-5-mini', '--deny-tool=write', '--deny-tool=shell',
       '--no-color',
     ];
-    return { ...spec(ctx, argv, false), capture: { path: capturePath, streams: 'stdout' } };
+    return { ...spawnSpec(ctx, argv, false), capture: { path: capturePath, streams: 'stdout' } };
   },
 
   // No guidance/settings here, despite resuming the same session: a headless
@@ -156,24 +147,16 @@ export const copilotAdapter: RunnerAdapter = {
       'copilot', '-p', harvestPrompt(step, ctx), `--resume=${sessionId(step, ctx)}`,
       ...modelArgs(step), '--allow-all-tools', '--output-format', 'json', '--stream', 'on', '--no-color',
     ];
-    return { ...spec(ctx, argv, false), progress: { format: 'copilot-jsonl' } };
+    return { ...spawnSpec(ctx, argv, false), progress: { format: 'copilot-jsonl' } };
   },
 
   /**
    * copilot has no `--list-models` flag; `help config`'s prose is the only
-   * source. `source: 'unavailable'` (not 'fallback') on any failure — copilot
-   * has no static aliases of its own to fall back to, and 'unavailable' is
-   * what tells the editor to show plain free text with no warnings, exactly
-   * as it did before this existed.
+   * source. Any failure reads as 'unavailable' (see listModelsVia) — plain
+   * free text with no warnings, exactly as the editor behaved before this
+   * existed.
    */
-  async listModels(): Promise<ModelList> {
-    try {
-      const { stdout } = await execRunner(['copilot', 'help', 'config'], { timeout: PROBE_TIMEOUT_MS });
-      const models = parseCopilotModels(stdout);
-      if (models.length === 0) return { source: 'unavailable', models: [] };
-      return { source: 'live', models };
-    } catch {
-      return { source: 'unavailable', models: [] };
-    }
+  listModels(): Promise<ModelList> {
+    return listModelsVia(['copilot', 'help', 'config'], parseCopilotModels);
   },
 };

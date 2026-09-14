@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { createProgressParser, parseProgressLine, PROGRESS_TARGET_MAX } from './progress.ts';
+import { createProgressParser, isRecord, parseJsonRecord, parseProgressLine, PROGRESS_TARGET_MAX } from './progress.ts';
 import type { StepProgress } from './progress.ts';
 
 /**
@@ -168,6 +168,22 @@ test('never throws on a line a runner should not have emitted', () => {
       assert.equal(parseProgressLine(format, line), null, `${format} / ${JSON.stringify(line)}`);
     }
   }
+});
+
+test('claude: an empty text block does not hide the block after it', () => {
+  const line = JSON.stringify({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: '  ' }, { type: 'text', text: ' real prose ' }] },
+  });
+  assert.deepEqual(parseProgressLine('claude-stream-json', line), { kind: 'text', text: 'real prose' });
+});
+
+test('parseJsonRecord accepts only a JSON object, and never throws', () => {
+  assert.deepEqual(parseJsonRecord('{"type":"x"}'), { type: 'x' });
+  for (const line of ['', '   ', 'not json', '{', 'null', '[]', '"str"', '42']) {
+    assert.equal(parseJsonRecord(line), null, JSON.stringify(line));
+  }
+  assert.equal(isRecord([]), false, 'arrays are objects to typeof, not records to us');
 });
 
 test('truncates an overlong target so renderers never have to', () => {

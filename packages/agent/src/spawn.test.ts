@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { appendFileSync } from 'node:fs';
+import { pbkdf2 } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -195,4 +197,32 @@ test('a progress spec with no reader falls back to logging stdout', async () => 
   const spawnHeadless = createSpawnHeadless('job-1', notify);
   await spawnHeadless(progressSpec("console.log('one')"));
   assert.deepEqual(calls.filter(c => c.method === 'stepLog').map(c => c.params.line), ['one']);
+});
+
+test('the capture file is complete and closed by the time the promise resolves', async () => {
+  // Regression: spawn.ts used to `end()` the capture stream and resolve in the
+  // same breath, so core's footer (runner.ts appends it the moment the spawn
+  // resolves) or auto-name's read-back could beat the last buffered write to
+  // disk. On a quiet local disk that write nearly always wins anyway, so the
+  // race is forced: fs writes run on libuv's threadpool and pipe reads do
+  // not, so occupying every pool thread as the last line arrives holds its
+  // write back while the child's 'close' still fires on time.
+  const dir = await mkdtemp(join(tmpdir(), 'whiphand-capture-close-'));
+  const path = join(dir, 'out.log');
+  const busy: Promise<void>[] = [];
+  const spawnHeadless = createSpawnHeadless('job-1', (method, params) => {
+    if (method !== 'stepLog' || (params as { line?: string }).line !== 'last') return;
+    // Well past the default pool of 4, in case UV_THREADPOOL_SIZE was raised.
+    for (let i = 0; i < 16; i++) {
+      busy.push(new Promise(resolve => pbkdf2('k', 's', 200_000, 64, 'sha512', () => resolve())));
+    }
+  });
+  const code = await spawnHeadless({ ...nodeSpec("console.log('first'); console.log('last')"), capture: { path } });
+  assert.equal(code, 0);
+  // Synchronously, before yielding to anything that could let a straggling
+  // write land: this is what "closed at resolve time" has to mean.
+  appendFileSync(path, 'FOOTER\n');
+  assert.equal(await readFile(path, 'utf8'), 'first\nlast\nFOOTER\n');
+  await Promise.all(busy);
+  await rm(dir, { recursive: true, force: true });
 });

@@ -5,10 +5,10 @@ import {
 } from '@fluentui/react-components';
 import { Copy20Regular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
-import { WORKFLOW_NAME_RE } from '../../../../packages/core/src/workflow-name.ts';
 import type { Scope } from '../../../../packages/core/src/types.ts';
-import { isWorkflowFile } from './workflow-lane/WorkflowLane.tsx';
 import type { WorkflowEntry } from './workflow-lane/WorkflowLane.tsx';
+import { isWorkflowNameTaken, workflowNameProblem } from './workflow-name-problem.ts';
+import { errorMessage } from '../lib/error-message.ts';
 
 export interface CloneWorkflowDialogProps {
   /** The list entry's `name` + `source` — the workflow being cloned. */
@@ -21,41 +21,13 @@ export interface CloneWorkflowDialogProps {
   onDismiss: () => void;
 }
 
-/** Whether `candidate` is already used by a real workflow file in `scope`. */
-function isTaken(existing: WorkflowEntry[], candidate: string, scope: Scope): boolean {
-  return existing.some(e => e.source === scope && e.name === candidate && isWorkflowFile(e));
-}
-
 /** The first free `<base>-copy`, `<base>-copy-2`, `<base>-copy-3`, ... in `scope`. */
 function suggestName(existing: WorkflowEntry[], base: string, scope: Scope): string {
   const first = `${base}-copy`;
-  if (!isTaken(existing, first, scope)) return first;
+  if (!isWorkflowNameTaken(existing, first, scope)) return first;
   let n = 2;
-  while (isTaken(existing, `${base}-copy-${n}`, scope)) n += 1;
+  while (isWorkflowNameTaken(existing, `${base}-copy-${n}`, scope)) n += 1;
   return `${base}-copy-${n}`;
-}
-
-interface NameProblem {
-  message: string;
-  /** An error blocks Clone; a same-name-in-the-other-scope warning does not. */
-  blocking: boolean;
-}
-
-function nameProblem(newName: string, source: Scope, existing: WorkflowEntry[]): NameProblem | null {
-  if (!WORKFLOW_NAME_RE.test(newName)) {
-    return { message: 'Use lowercase letters, digits, - and _ (start with a letter or digit)', blocking: true };
-  }
-  if (isTaken(existing, newName, source)) {
-    return { message: `A workflow named ${newName} already exists`, blocking: true };
-  }
-  const otherScope: Scope = source === 'global' ? 'project' : 'global';
-  if (isTaken(existing, newName, otherScope)) {
-    const message = source === 'project'
-      ? `Will override the global workflow ${newName} in this workspace`
-      : `Hidden in this workspace by the project workflow ${newName}`;
-    return { message, blocking: false };
-  }
-  return null;
 }
 
 /**
@@ -74,7 +46,7 @@ export function CloneWorkflowDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const problem = nameProblem(newName, source, existing);
+  const problem = workflowNameProblem(newName, source, existing);
 
   async function confirm(): Promise<void> {
     setBusy(true);
@@ -86,7 +58,7 @@ export function CloneWorkflowDialog({
       });
       onCloned();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
     } finally {
       setBusy(false);
     }

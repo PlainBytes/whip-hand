@@ -43,3 +43,17 @@ export function executionKey(stepId: string, iteration?: number, outerLoops: rea
   const own = segment(stepId, iteration);
   return prefix === '' ? own : `${prefix}/${own}`;
 }
+
+/**
+ * Order-sensitive equality for two `outerLoops` chains, treating absent as
+ * empty — the same identity executionKey folds into a string, compared
+ * directly. Shared by the journal (matching a step:start to its manifest row)
+ * and the desktop's run tree (deciding which loop round owns a row), which
+ * would otherwise each carry a copy that could disagree about whether round 1
+ * and round 2 of an enclosing loop are the same place.
+ */
+export function sameLoopRefs(a: readonly LoopRef[] | undefined, b: readonly LoopRef[] | undefined): boolean {
+  const aa = a ?? [];
+  const bb = b ?? [];
+  return aa.length === bb.length && aa.every((r, i) => r.id === bb[i].id && r.iteration === bb[i].iteration);
+}

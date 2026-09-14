@@ -8,10 +8,17 @@
  * `summarizeEvent` the journal used to write the file, and reads a finished
  * run's file back with the very same `parseLogLine`. That is also why byte
  * counting goes through TextEncoder rather than Node's `Buffer` — this module
- * runs in the web bundle. `LoopRef`/`WhiphandEvent` are type-only imports, so
- * they add nothing at runtime.
+ * runs in the web bundle. `LoopRef`/`StepProgress`/`WhiphandEvent` are
+ * type-only imports, so they add nothing at runtime; format.ts is itself
+ * dependency-free.
+ *
+ * It is also where the *shared* spellings of a step's progress live —
+ * nestedPrefix, progressActionText, mergeUsage, usageParts — because every
+ * surface that renders progress (this file, the CLI renderer, the journal's
+ * manifest fold, the desktop store and step pills) can already import it.
  */
-import type { LoopRef, WhiphandEvent } from './types.ts';
+import type { LoopRef, StepProgress, WhiphandEvent } from './types.ts';
+import { formatBytes } from './format.ts';
 
 /** One line's budget, after which it is truncated with a marker — one giant blob must not own the file. */
 export const MAX_LOG_LINE_BYTES = 8 * 1024;
@@ -40,18 +47,61 @@ const WHIPHAND_ENV_KEYS = new Set([
 /**
  * `<id>` prefixed with every loop enclosing it, outermost first — e.g.
  * `human-review 2 › fix-cycle`. Empty for a top-level loop, which is what
- * keeps its own rendering byte-identical to what it always was.
+ * keeps its own rendering byte-identical to what it always was. Exported for
+ * the CLI renderer, so run.log and the terminal name a nested loop alike.
  */
-function nestedPrefix(id: string, parentLoopId?: string, parentIteration?: number, outerLoops?: LoopRef[]): string {
+export function nestedPrefix(id: string, parentLoopId?: string, parentIteration?: number, outerLoops?: LoopRef[]): string {
   const ancestors = [...(outerLoops ?? [])];
   if (parentLoopId !== undefined) ancestors.push({ id: parentLoopId, iteration: parentIteration ?? 1 });
   return ancestors.length === 0 ? id : `${ancestors.map(l => `${l.id} ${l.iteration}`).join(' › ')} › ${id}`;
 }
 
-function bytesLabel(n: number): string {
-  if (n < 1024) return `${n}B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
-  return `${(n / 1024 / 1024).toFixed(1)}MB`;
+/** The counters a `usage` report carries — and every summary that accumulates them. */
+export interface UsageCounters {
+  turns?: number;
+  costUsd?: number;
+  premiumRequests?: number;
+}
+
+/**
+ * A tool call as one line of activity: `Read foo.ts`, or just `Bash` when the
+ * runner named no target — never a trailing space. The same text is a
+ * run.log row, a CLI activity line, the desktop feed entry and the manifest's
+ * `lastAction`, so a reader comparing any two sees the identical string.
+ */
+export function progressActionText(progress: Extract<StepProgress, { kind: 'tool' }>): string {
+  return progress.target === undefined ? progress.tool : `${progress.tool} ${progress.target}`;
+}
+
+/**
+ * `base` with every counter `usage` actually reported laid over it. A report
+ * is a running total (see StepProgress), so a present field replaces rather
+ * than adds; an absent one leaves the earlier value alone, because copilot
+ * reporting turns and premium requests in separate events must not erase
+ * whichever arrived first. Returns a new object — callers hand the result to
+ * immutable state (the desktop store) as well as mutable (the journal).
+ */
+export function mergeUsage<T extends UsageCounters>(base: T, usage: UsageCounters): T {
+  const next = { ...base };
+  if (usage.turns !== undefined) next.turns = usage.turns;
+  if (usage.costUsd !== undefined) next.costUsd = usage.costUsd;
+  if (usage.premiumRequests !== undefined) next.premiumRequests = usage.premiumRequests;
+  return next;
+}
+
+/**
+ * The present counters as labelled parts, turns first, absent ones omitted
+ * rather than shown as zeroes. Only the cost's spelling differs by surface —
+ * run.log keeps the raw figure (`$0.0358`) because it is a record, the UIs
+ * round to cents — so that is the one thing a caller supplies; joining is left
+ * to the caller too, as the CLI also slots its elapsed time in among them.
+ */
+export function usageParts(usage: UsageCounters, formatCost: (usd: number) => string): string[] {
+  const parts: string[] = [];
+  if (usage.turns !== undefined) parts.push(`${usage.turns} turns`);
+  if (usage.costUsd !== undefined) parts.push(formatCost(usage.costUsd));
+  if (usage.premiumRequests !== undefined) parts.push(`${usage.premiumRequests} premium requests`);
+  return parts;
 }
 
 /**
@@ -102,7 +152,7 @@ export function summarizeEvent(event: WhiphandEvent): Omit<LogRow, 'seq' | 'ts'>
       const { spec } = event;
       const prompt = spec.argv[spec.argv.length - 1] ?? '';
       const text = `spawn ${spec.argv[0] ?? '?'} (${spec.interactive ? 'interactive' : 'headless'}), `
-        + `${spec.argv.length} arg(s), prompt ${bytesLabel(byteLength(prompt))}`
+        + `${spec.argv.length} arg(s), prompt ${formatBytes(byteLength(prompt))}`
         + `${redactedEnvSuffix(spec.env)} [${event.phase}]`;
       return { kind: event.type, stepId: event.stepId, text };
     }
@@ -111,7 +161,7 @@ export function summarizeEvent(event: WhiphandEvent): Omit<LogRow, 'seq' | 'ts'>
     case 'step:artifact':
       return {
         kind: event.type, stepId: event.stepId,
-        text: `wrote artifact ${event.path}${event.bytes === undefined ? '' : ` (${bytesLabel(event.bytes)})`}`,
+        text: `wrote artifact ${event.path}${event.bytes === undefined ? '' : ` (${formatBytes(event.bytes)})`}`,
       };
     case 'step:artifact-missing':
       return { kind: event.type, stepId: event.stepId, text: `artifact ${event.reason}: ${event.path}` };
@@ -192,17 +242,13 @@ export function summarizeEvent(event: WhiphandEvent): Omit<LogRow, 'seq' | 'ts'>
     case 'step:progress': {
       const { progress } = event;
       if (progress.kind === 'tool') {
-        const text = `${progress.tool}${progress.target === undefined ? '' : ` ${progress.target}`}`;
-        return { kind: 'step:progress:tool', stepId: event.stepId, text };
+        return { kind: 'step:progress:tool', stepId: event.stepId, text: progressActionText(progress) };
       }
       if (progress.kind === 'text') {
         return { kind: 'step:progress:text', stepId: event.stepId, text: progress.text };
       }
-      const parts: string[] = [];
-      if (progress.turns !== undefined) parts.push(`${progress.turns} turns`);
-      if (progress.costUsd !== undefined) parts.push(`$${progress.costUsd}`);
-      if (progress.premiumRequests !== undefined) parts.push(`${progress.premiumRequests} premium requests`);
-      return { kind: 'step:progress:usage', stepId: event.stepId, text: parts.join(', ') };
+      const text = usageParts(progress, usd => `$${usd}`).join(', ');
+      return { kind: 'step:progress:usage', stepId: event.stepId, text };
     }
   }
 }

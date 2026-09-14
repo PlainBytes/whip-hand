@@ -195,6 +195,11 @@ test('a dry run against the real opencode adapter builds a harvest spec without 
   assert.equal(result.ok, true);
   const harvestSpawn = events.find(e => e.type === 'step:spawn' && e.phase === 'harvest');
   assert.ok(harvestSpawn, 'the harvest step:spawn must still be emitted on a dry run');
+  // The placeholder id exists only to build that spec. RunJournal holds
+  // ctx.sessionIds by reference, so leaking it there would persist it into
+  // run.json — where resume treats any recorded id as a real session.
+  const manifest = JSON.parse(await readFile(join(result.runDir, 'run.json'), 'utf8')) as { sessionIds: Record<string, string> };
+  assert.deepEqual(manifest.sessionIds, {});
 });
 
 test('a loop re-captures the session id every fresh interactive iteration, not just the first', async () => {

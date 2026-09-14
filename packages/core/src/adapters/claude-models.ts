@@ -7,6 +7,7 @@
  */
 import { tmpdir } from 'node:os';
 import type { ModelInfo, ModelList } from '../types.ts';
+import { isRecord, parseJsonRecord } from '../engine/progress.ts';
 import { spawnRunner } from '../exec.ts';
 import { PROBE_TIMEOUT_MS } from '../tools.ts';
 
@@ -40,10 +41,6 @@ function initializeRequestLine(): string {
   return `${JSON.stringify({ type: 'control_request', request_id: REQUEST_ID, request: { subtype: 'initialize' } })}\n`;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 /**
  * One NDJSON line -> the models claude's `initialize` control_response
  * carries, or null when this line is not a usable answer to our request (a
@@ -54,13 +51,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * logged in.
  */
 export function parseInitializeReply(line: string): ModelInfo[] | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(line);
-  } catch {
-    return null;
-  }
-  if (!isRecord(parsed) || parsed.type !== 'control_response') return null;
+  const parsed = parseJsonRecord(line);
+  if (parsed === null || parsed.type !== 'control_response') return null;
   const response = parsed.response;
   if (!isRecord(response) || response.request_id !== REQUEST_ID) return null;
   const inner = response.response;

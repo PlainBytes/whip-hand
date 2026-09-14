@@ -35,7 +35,7 @@ export { opencodeAdapter, OPENCODE_QUIT_SEQUENCE, parseOpencodeModels } from './
 export {
   opencodeGuidanceName, opencodeGuidancePath, opencodePluginName, opencodePluginPath, isOpencodeSupportFileName,
 } from './engine/opencode-files.ts';
-export { harvestPrompt } from './adapters/harvest-prompt.ts';
+export { harvestPrompt } from './adapters/common.ts';
 export {
   sessionCaptureName, sessionCapturePath, isSessionCaptureName, clearSessionCapture, readSessionCapture,
 } from './engine/session-capture.ts';
@@ -54,8 +54,12 @@ export {
 export { snapshotTree, diffSnapshots, headSha, pathsFromStatusLines } from './engine/git-guard.ts';
 export { RUN_LOG_NAME, DEFAULT_RUN_LOG_CAP_BYTES, readRunLog } from './engine/run-log.ts';
 export type { ReadRunLogParams, ReadRunLogResult } from './engine/run-log.ts';
-export { MAX_LOG_LINE_BYTES, summarizeEvent, formatLogLine, parseLogLine } from './log-rows.ts';
-export type { LogRow } from './log-rows.ts';
+export {
+  MAX_LOG_LINE_BYTES, summarizeEvent, formatLogLine, parseLogLine,
+  nestedPrefix, progressActionText, mergeUsage, usageParts,
+} from './log-rows.ts';
+export type { LogRow, UsageCounters } from './log-rows.ts';
+export { elapsedMs, formatElapsed } from './format.ts';
 export {
   workingDiffFiles, parseNumstatZ, splitPatch, pairPatches,
   MAX_DIFF_FILES, MAX_PATCH_BYTES, MAX_TOTAL_PATCH_BYTES,
@@ -67,8 +71,12 @@ export {
 export { commandSpec, captureHeader, captureFooter, DEFAULT_SHELL, shellFlags } from './engine/command.ts';
 export {
   resolveExecutable, spawnRunner, execRunner, planLaunch, cmdInvocation, msvcrtQuote,
+  pipeChild, routeHeadless,
 } from './exec.ts';
-export type { ResolvedExecutable, ResolveExecutableOpts, CmdInvocation, LaunchPlan } from './exec.ts';
+export type {
+  ResolvedExecutable, ResolveExecutableOpts, CmdInvocation, LaunchPlan,
+  ChildStream, HeadlessRouting, PipeChildOptions,
+} from './exec.ts';
 export {
   buildManualRequest, manualChoices, noteArtifact, reviewArtifact, workingDiff, DIFF_LINE_LIMIT,
 } from './engine/manual.ts';

@@ -49,6 +49,13 @@ export function validateWorkflowRunners(workflow: Workflow, registry: AdapterReg
           `step '${step.id}': runner '${step.runner}' cannot harvest an interactive session ` +
           `(needs (sessionIdInjection or sessionIdCapture)+sessionResume or shareTranscript)`);
       }
+      // captureSessionId is optional on the type, but the runner calls it for
+      // every sessionIdCapture interactive step — and only once the whole
+      // session is over, so a missing method must be caught here instead.
+      if (caps.sessionIdCapture && registry.get(step.runner).captureSessionId === undefined) {
+        problems.push(
+          `step '${step.id}': runner '${step.runner}' declares sessionIdCapture but has no captureSessionId`);
+      }
     }
     if (!step.writes && !caps.toolDenial) {
       problems.push(`step '${step.id}': runner '${step.runner}' lacks toolDenial, cannot enforce read-only`);

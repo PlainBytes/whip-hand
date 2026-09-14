@@ -24,7 +24,7 @@ import type { LoopRef, ManualRequest, StepKind, StepMode, StepProgress } from '.
 import { executionKey } from '../../../../packages/core/src/execution-key.ts';
 import type { AppState as AppStateData } from '../../../../packages/agent/src/app-state.ts';
 import type { LogRow } from '../../../../packages/core/src/log-rows.ts';
-import { summarizeEvent } from '../../../../packages/core/src/log-rows.ts';
+import { mergeUsage, progressActionText, summarizeEvent } from '../../../../packages/core/src/log-rows.ts';
 
 /**
  * Workflows, the runs list, per-job live state, doctor results, config, the
@@ -375,16 +375,10 @@ function applyProgress(job: JobState, stepId: string, progress: StepProgress): J
   if (progress.kind === 'usage') {
     const key = job.currentExecution[stepId];
     const current = key === undefined ? undefined : job.steps[key]?.progress;
-    const next = { ...current };
-    if (progress.turns !== undefined) next.turns = progress.turns;
-    if (progress.costUsd !== undefined) next.costUsd = progress.costUsd;
-    if (progress.premiumRequests !== undefined) next.premiumRequests = progress.premiumRequests;
-    return patchCurrent(job, stepId, { progress: next });
+    return patchCurrent(job, stepId, { progress: mergeUsage(current ?? {}, progress) });
   }
 
-  const text = progress.kind === 'tool'
-    ? `${progress.tool}${progress.target === undefined ? '' : ` ${progress.target}`}`
-    : progress.text;
+  const text = progress.kind === 'tool' ? progressActionText(progress) : progress.text;
   const activityTail = [...job.activityTail, { stepId, text }];
   if (activityTail.length > ACTIVITY_TAIL_CAP) {
     activityTail.splice(0, activityTail.length - ACTIVITY_TAIL_CAP);

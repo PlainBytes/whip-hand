@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatLogLine, parseLogLine, summarizeEvent } from './log-rows.ts';
+import { formatLogLine, mergeUsage, parseLogLine, summarizeEvent, usageParts } from './log-rows.ts';
 import type { LogRow } from './log-rows.ts';
-import type { WhiphandEvent } from './types.ts';
+import type { StepProgress, WhiphandEvent } from './types.ts';
 
 // ---------------------------------------------------------------------------
 // summarizeEvent: step:progress
@@ -67,4 +67,27 @@ test('formatLogLine -> parseLogLine still round-trips step:log, unaffected by th
   const line = formatLogLine({ ...row, kind: 'step:log:stdout' });
   const parsed = parseLogLine(line.trimEnd());
   assert.deepEqual(parsed, row);
+});
+
+// ---------------------------------------------------------------------------
+// shared progress helpers
+// ---------------------------------------------------------------------------
+
+test('mergeUsage: a present counter replaces, an absent one keeps the earlier value, and `kind` never leaks in', () => {
+  const base = { turns: 2, lastAction: 'Read a.ts' };
+  const usage: Extract<StepProgress, { kind: 'usage' }> = { kind: 'usage', premiumRequests: 0.33 };
+  const merged = mergeUsage(base, usage);
+  assert.deepEqual(merged, { turns: 2, lastAction: 'Read a.ts', premiumRequests: 0.33 });
+  assert.deepEqual(base, { turns: 2, lastAction: 'Read a.ts' }, 'returns a new object rather than mutating');
+});
+
+test('usageParts: turns first, cost spelled by the caller, absent counters omitted', () => {
+  assert.deepEqual(usageParts({ turns: 7, costUsd: 0.4123, premiumRequests: 1 }, usd => `$${usd.toFixed(2)}`),
+    ['7 turns', '$0.41', '1 premium requests']);
+  assert.deepEqual(usageParts({}, String), []);
+});
+
+test('summarizeEvent: an artifact row names its size in the shared byte format', () => {
+  const row = summarizeEvent({ type: 'step:artifact', stepId: 'a', path: 'plan.md', bytes: 340 * 1024 });
+  assert.equal(row.text, 'wrote artifact plan.md (340 KB)');
 });

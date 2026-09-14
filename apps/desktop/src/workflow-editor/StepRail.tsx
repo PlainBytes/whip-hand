@@ -10,6 +10,7 @@ import { ATTACHMENTS_REF } from '../../../../packages/core/src/attachments.ts';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
 import { useStepLayoutStyles } from './step-layout.ts';
+import { numberOrUndefined } from './number-field.ts';
 import { refreshModelCatalog } from './use-harness-catalog.ts';
 
 const SUBTLE = { color: 'var(--colorNeutralForeground3)' };
@@ -21,11 +22,6 @@ const CAPTURE_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'note', label: 'Note' },
   { value: 'review', label: 'Review' },
 ];
-
-function numberOrUndefined(raw: string): number | undefined {
-  const n = Number.parseInt(raw, 10);
-  return Number.isInteger(n) && n > 0 ? n : undefined;
-}
 
 export interface StepRailProps {
   step: AgentStep | CommandStep | ManualStep;

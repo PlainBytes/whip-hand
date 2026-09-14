@@ -40,7 +40,7 @@ test('a finished step summarises turns, elapsed and cost', () => {
   render({ type: 'step:progress', stepId: 'impl', progress: { kind: 'usage', turns: 7, costUsd: 0.41 } });
   clock.ms = 192_000;
   render({ type: 'step:done', stepId: 'impl', exitCode: 0 });
-  assert.deepEqual(out.at(-1), '  7 turns · 3m12s · $0.41');
+  assert.deepEqual(out.at(-1), '  7 turns · 3m 12s · $0.41');
 });
 
 test('a copilot step summarises premium requests, having no dollar cost', () => {

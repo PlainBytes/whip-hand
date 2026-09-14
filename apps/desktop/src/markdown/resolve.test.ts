@@ -58,6 +58,14 @@ describe('resolveInWorkspace', () => {
     expect(resolveInWorkspace('/ws', root, './arch.png')?.kind).toBe('image');
   });
 
+  it('classifies images by the Files preview rule: a dotfile or bare name has no extension', () => {
+    // `.png` is a dotfile and `png` a file with no extension — neither is an
+    // image to the preview (isImagePath), so neither may be one here.
+    expect(resolveInWorkspace('/ws', root, './.png')?.kind).toBe('link');
+    expect(resolveInWorkspace('/ws', root, './png')?.kind).toBe('link');
+    expect(resolveInWorkspace('/ws', root, './ARCH.PNG')?.kind).toBe('image');
+  });
+
   it('works with Windows separators', () => {
     expect(resolveInWorkspace('C:\\ws\\docs', 'C:\\ws', '../plan.md'))
       .toEqual({ path: 'C:\\ws\\plan.md', kind: 'link' });

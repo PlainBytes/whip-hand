@@ -20,6 +20,7 @@ import { useAgentClient } from '../agent/agent-context.tsx';
 import { useOpenExternal } from '../lib/open-external.tsx';
 import { PageHeader } from '../components/PageHeader.tsx';
 import { useAppStore } from '../state/store.ts';
+import { errorMessage } from '../lib/error-message.ts';
 // tool-groups.ts, not tools.ts: the latter reaches for node:child_process to
 // run a probe and cannot be bundled for the browser.
 import { TOOL_GROUPS, TOOL_GROUP_LABELS } from '../../../../packages/core/src/tool-groups.ts';
@@ -129,7 +130,7 @@ export function DoctorPage() {
         // a doctor reply landing after listModels's would wipe a fresh catalog.
         setModelCatalog(null);
       })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+      .catch((err: unknown) => setError(errorMessage(err)))
       .finally(() => setLoading(false));
   }, [client, setDoctorResult, setModelCatalog]);
 

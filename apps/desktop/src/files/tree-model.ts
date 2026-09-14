@@ -46,7 +46,12 @@ const NOISE_DIRS = new Set(['node_modules', 'target', 'dist', 'build', 'coverage
 /** Never hidden despite the leading dot: it holds the workflows and runs. */
 const ALWAYS_VISIBLE = new Set(['.whiphand']);
 
-function separatorOf(path: string): string {
+/**
+ * The separator a path is written with: backslash only for a path that has
+ * backslashes and no forward slash (a native Windows path), forward slash
+ * otherwise — so a mixed or POSIX path keeps using '/'.
+ */
+export function separatorOf(path: string): string {
   return path.includes('\\') && !path.includes('/') ? '\\' : '/';
 }
 

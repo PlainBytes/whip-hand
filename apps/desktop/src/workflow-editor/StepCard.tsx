@@ -11,13 +11,9 @@ import { StepSummary } from '../components/StepSummary.tsx';
 import { StepIdField } from './StepIdField.tsx';
 import { convertStep, StepRail } from './StepRail.tsx';
 import { useStepLayoutStyles } from './step-layout.ts';
+import { numberOrUndefined } from './number-field.ts';
 
 const KIND_OPTIONS: StepKind[] = ['agent', 'command', 'manual', 'approval', 'loop'];
-
-function numberOrUndefined(raw: string): number | undefined {
-  const n = Number.parseInt(raw, 10);
-  return Number.isInteger(n) && n > 0 ? n : undefined;
-}
 
 export interface StepCardProps {
   step: Step;

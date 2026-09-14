@@ -5,22 +5,18 @@
  * them from artifact lists, exactly like `.done` and `.await`) does not have
  * to import an adapter module to do it.
  */
-import { join } from 'node:path';
-import { sanitizeStepId } from './session-end.ts';
+import { stepStateFile } from './session-end.ts';
 
-export function opencodeGuidanceName(stepId: string): string {
-  return `.${sanitizeStepId(stepId)}.guidance.md`;
-}
-export function opencodeGuidancePath(runDir: string, stepId: string): string {
-  return join(runDir, opencodeGuidanceName(stepId));
-}
-export function opencodePluginName(stepId: string): string {
-  return `.${sanitizeStepId(stepId)}.opencode-plugin.mjs`;
-}
-export function opencodePluginPath(runDir: string, stepId: string): string {
-  return join(runDir, opencodePluginName(stepId));
-}
+// Neither needs clearing before a spawn: writeSpecFiles rewrites both from the
+// spec every time, so there is never a stale copy for a session to read.
+const guidance = stepStateFile('guidance.md');
+const plugin = stepStateFile('opencode-plugin.mjs');
+
+export const opencodeGuidanceName: (stepId: string) => string = guidance.name;
+export const opencodeGuidancePath: (runDir: string, stepId: string) => string = guidance.path;
+export const opencodePluginName: (stepId: string) => string = plugin.name;
+export const opencodePluginPath: (runDir: string, stepId: string) => string = plugin.path;
 /** True for any name opencodeGuidanceName/opencodePluginName could have produced — hidden from artifact lists. */
 export function isOpencodeSupportFileName(name: string): boolean {
-  return /^\..+\.guidance\.md$/.test(name) || /^\..+\.opencode-plugin\.mjs$/.test(name);
+  return guidance.isName(name) || plugin.isName(name);
 }

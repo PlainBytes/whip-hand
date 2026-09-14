@@ -20,7 +20,8 @@ import type { StepState } from '../state/store.ts';
 import { AttentionBadge } from './AttentionBadge.tsx';
 import { GENERATING_ARTIFACT_LABEL, isGeneratingArtifact } from '../lib/step-phase.ts';
 import { buildRunTree, flattenNodes, type LeafNode, type LoopNode, type StepNode } from '../lib/run-tree.ts';
-import { elapsedMs, formatElapsed } from '../lib/duration.ts';
+import { elapsedMs, formatElapsed } from '../../../../packages/core/src/format.ts';
+import { usageParts } from '../../../../packages/core/src/log-rows.ts';
 
 /**
  * What the stepper needs to know about a session waiting on the human. Comes
@@ -122,10 +123,7 @@ function loopProgress(loop: StepState): string | null {
  * duplication this row was cleaned up to stop.
  */
 function spendSummary(progress: NonNullable<StepState['progress']>): string | null {
-  const parts: string[] = [];
-  if (progress.turns !== undefined) parts.push(`${progress.turns} turns`);
-  if (progress.costUsd !== undefined) parts.push(`$${progress.costUsd.toFixed(2)}`);
-  if (progress.premiumRequests !== undefined) parts.push(`${progress.premiumRequests} premium requests`);
+  const parts = usageParts(progress, usd => `$${usd.toFixed(2)}`);
   return parts.length === 0 ? null : parts.join(' · ');
 }
 

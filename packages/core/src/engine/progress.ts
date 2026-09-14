@@ -47,8 +47,36 @@ function truncate(value: string): string {
   return clean.length <= PROGRESS_TARGET_MAX ? clean : `${clean.slice(0, PROGRESS_TARGET_MAX - 1)}…`;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+/**
+ * A plain JSON object — arrays excluded, which `typeof` alone would let
+ * through. Exported as core's one copy for everything else in core that picks
+ * apart third-party JSON (claude's model probe, opencode's session list);
+ * this module has no runtime imports, so depending on it costs nothing.
+ */
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** The object itself, or an empty one — so a missing or malformed nested field reads as "no keys" rather than a guard at every access. */
+function recordOr(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+/**
+ * One JSON-object line, or null for anything else: blank, malformed, or valid
+ * JSON that isn't an object. Total by design (see the module doc) — every
+ * NDJSON reader in core starts here, so none of them can throw on a runner's
+ * stray output line.
+ */
+export function parseJsonRecord(line: string): Record<string, unknown> | null {
+  if (line.trim() === '') return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  return isRecord(parsed) ? parsed : null;
 }
 
 function targetOf(input: unknown): string | undefined {
@@ -66,6 +94,12 @@ function toolProgress(name: unknown, input: unknown): StepProgress | null {
   return target === undefined ? { kind: 'tool', tool: name } : { kind: 'tool', tool: name, target };
 }
 
+/** Assistant prose, trimmed; null when there isn't any, since an empty message says nothing worth showing. */
+function textProgress(value: unknown): StepProgress | null {
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  return { kind: 'text', text: value.trim() };
+}
+
 function numberOr(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
@@ -77,9 +111,9 @@ function parseClaude(event: Record<string, unknown>): StepProgress | null {
     for (const block of message.content) {
       if (!isRecord(block)) continue;
       if (block.type === 'tool_use') return toolProgress(block.name, block.input);
-      if (block.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '') {
-        return { kind: 'text', text: block.text.trim() };
-      }
+      // An empty text block falls through to the next block rather than ending the scan.
+      const text = block.type === 'text' ? textProgress(block.text) : null;
+      if (text !== null) return text;
     }
     return null;
   }
@@ -90,24 +124,21 @@ function parseClaude(event: Record<string, unknown>): StepProgress | null {
 }
 
 function parseCopilot(event: Record<string, unknown>): StepProgress | null {
-  const data = isRecord(event.data) ? event.data : {};
+  const data = recordOr(event.data);
   switch (event.type) {
     case 'tool.execution_start':
       return toolProgress(data.toolName, data.arguments);
-    case 'assistant.message': {
+    case 'assistant.message':
       // A message carrying only toolRequests has empty content; the matching
       // tool.execution_start events are what report those.
-      const content = data.content;
-      if (typeof content !== 'string' || content.trim() === '') return null;
-      return { kind: 'text', text: content.trim() };
-    }
+      return textProgress(data.content);
     case 'assistant.turn_end': {
       // turnId is a stringified 0-based index, so the count is one more.
       const index = Number(data.turnId);
       return Number.isInteger(index) && index >= 0 ? { kind: 'usage', turns: index + 1 } : null;
     }
     case 'result': {
-      const usage = isRecord(event.usage) ? event.usage : {};
+      const usage = recordOr(event.usage);
       return { kind: 'usage', premiumRequests: numberOr(usage.premiumRequests) };
     }
     default:
@@ -130,18 +161,13 @@ function makeOpencodeParser(): (event: Record<string, unknown>) => StepProgress 
   return (event: Record<string, unknown>): StepProgress | null => {
     switch (event.type) {
       case 'tool_use': {
-        const part = isRecord(event.part) ? event.part : {};
-        const state = isRecord(part.state) ? part.state : {};
-        return toolProgress(part.tool, state.input);
+        const part = recordOr(event.part);
+        return toolProgress(part.tool, recordOr(part.state).input);
       }
-      case 'text': {
-        const part = isRecord(event.part) ? event.part : {};
-        return typeof part.text === 'string' && part.text.trim() !== ''
-          ? { kind: 'text', text: part.text.trim() }
-          : null;
-      }
+      case 'text':
+        return textProgress(recordOr(event.part).text);
       case 'step_finish': {
-        const part = isRecord(event.part) ? event.part : {};
+        const part = recordOr(event.part);
         turns += 1;
         const cost = numberOr(part.cost);
         if (cost !== undefined) { sawCost = true; costUsd += cost; }
@@ -165,24 +191,13 @@ export function createProgressParser(format: ProgressFormat): (line: string) => 
   }
   const parseOpencode = makeOpencodeParser();
   return (line: string): StepProgress | null => {
-    const event = parseJsonEvent(line);
+    const event = parseJsonRecord(line);
     return event === null ? null : parseOpencode(event);
   };
 }
 
-function parseJsonEvent(line: string): Record<string, unknown> | null {
-  if (line.trim() === '') return null;
-  let event: unknown;
-  try {
-    event = JSON.parse(line);
-  } catch {
-    return null;
-  }
-  return isRecord(event) ? event : null;
-}
-
 export function parseProgressLine(format: ProgressFormat, line: string): StepProgress | null {
-  const event = parseJsonEvent(line);
+  const event = parseJsonRecord(line);
   if (event === null) return null;
   if (format === 'claude-stream-json') return parseClaude(event);
   if (format === 'copilot-jsonl') return parseCopilot(event);

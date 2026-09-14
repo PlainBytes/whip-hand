@@ -147,6 +147,90 @@ describe('WorkflowsPage', () => {
     expect(req.params).toEqual({ workdir: '/ws', name: 'shared-thing', scope: 'global' });
   });
 
+  it('New workflow flags an invalid or taken name and disables Create, but only warns across scopes', async () => {
+    const respond = respondFactory();
+    const GLOBAL_OTHER = {
+      ...FEATURE_WORKFLOW, name: 'other-flow', source: 'global' as const,
+      path: '/home/user/.config/whiphand/workflows/other-flow.yaml',
+    };
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW, GLOBAL_OTHER]);
+    fireEvent.click(screen.getByRole('button', { name: /new workflow/i }));
+    const nameField = await screen.findByLabelText(/name/i);
+    const createButton = () => within(screen.getByRole('dialog')).getByRole('button', { name: 'Create' });
+
+    // Empty is not yet an error, just not submittable.
+    expect(screen.queryByText(/use lowercase letters/i)).not.toBeInTheDocument();
+    expect(createButton()).toBeDisabled();
+
+    fireEvent.change(nameField, { target: { value: 'Bad Name!' } });
+    expect(await screen.findByText(/use lowercase letters, digits, - and _/i)).toBeInTheDocument();
+    expect(createButton()).toBeDisabled();
+
+    fireEvent.change(nameField, { target: { value: 'feature' } });
+    expect(await screen.findByText('A workflow named feature already exists')).toBeInTheDocument();
+    expect(createButton()).toBeDisabled();
+
+    // Switching scope re-asks the question: no global 'feature' exists.
+    fireEvent.click(screen.getByRole('radio', { name: /global/i }));
+    expect(await screen.findByText('Hidden in this workspace by the project workflow feature')).toBeInTheDocument();
+    expect(createButton()).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('radio', { name: /this workspace/i }));
+    fireEvent.change(nameField, { target: { value: 'other-flow' } });
+    expect(await screen.findByText('Will override the global workflow other-flow in this workspace')).toBeInTheDocument();
+    expect(createButton()).toBeEnabled();
+    expect(sentMethods(transport)).not.toContain('createWorkflow');
+  });
+
+  it('New workflow cannot be dismissed while createWorkflow is in flight, and shows an RPC error', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    fireEvent.click(screen.getByRole('button', { name: /new workflow/i }));
+    fireEvent.change(await screen.findByLabelText(/name/i), { target: { value: 'review-pr' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Create' }));
+    const req = await lastRequest(transport, 'createWorkflow');
+
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: /cancel/i })).toBeDisabled();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    transport.emitLine({ id: req.id, error: { code: -32000, message: "workflow 'review-pr' already exists" } });
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('New workflow is unmounted while closed, so reopening starts from a clean form', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /new workflow/i }));
+    fireEvent.change(await screen.findByLabelText(/name/i), { target: { value: 'half-typed' } });
+    fireEvent.click(screen.getByRole('radio', { name: /global/i }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /cancel/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /new workflow/i }));
+    expect(await screen.findByLabelText(/name/i)).toHaveValue('');
+    expect(screen.getByRole('radio', { name: /this workspace/i })).toBeChecked();
+  });
+
+  it('a successful create closes the dialog and reloads the list', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    fireEvent.click(screen.getByRole('button', { name: /new workflow/i }));
+    fireEvent.change(await screen.findByLabelText(/name/i), { target: { value: 'review-pr' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Create' }));
+
+    await respond(transport, 'createWorkflow', { path: '/ws/.whiphand/workflows/review-pr.yaml' });
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
   it('an uninitialized workspace still shows a global workflow next to the setup CTA', async () => {
     const respond = respondFactory();
     const GLOBAL_ONLY = { ...FEATURE_WORKFLOW, source: 'global' as const };

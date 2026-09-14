@@ -12,6 +12,7 @@ import { access, constants, copyFile, mkdir, stat, writeFile } from 'node:fs/pro
 import { isAbsolute, join } from 'node:path';
 import type { AttachmentSource, RunAttachment, Workflow } from '../types.ts';
 import { WorkflowError } from '../schema.ts';
+import { formatBytes } from '../format.ts';
 import {
   ATTACHMENTS_REF, attachmentNames, consumesAttachments, unusedAttachmentsMessage,
 } from '../attachments.ts';
@@ -40,12 +41,8 @@ export interface PlannedAttachment extends RunAttachment {
 
 const MB = 1024 * 1024;
 
-/** `1.2 MB`, `340 KB`, `12 B` — one decimal only where it carries information. */
-export function formatBytes(bytes: number): string {
-  if (bytes >= MB) return `${(bytes / MB).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${bytes} B`;
-}
+/** Re-exported where it has always been exported from; the one spelling lives in format.ts. */
+export { formatBytes };
 
 function tooBig(label: string, size: number, maxMb: number): string {
   return `attachment ${label} is ${formatBytes(size)}, over the ${maxMb} MB limit `

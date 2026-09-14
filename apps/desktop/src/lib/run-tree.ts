@@ -12,6 +12,7 @@
  */
 import type { StepState } from '../state/store.ts';
 import type { LoopRef } from '../../../../packages/core/src/types.ts';
+import { sameLoopRefs } from '../../../../packages/core/src/execution-key.ts';
 
 interface NodeCommon {
   /** The declared step id. Unique among its siblings, not across the tree. */
@@ -85,11 +86,6 @@ export function buildRunTree(steps: StepState[]): StepNode[] {
   return number(build(undefined));
 }
 
-/** Order-sensitive equality for a row's `outerLoops`, treating absent as empty. */
-function sameLoopRefs(a: readonly LoopRef[], b: readonly LoopRef[]): boolean {
-  return a.length === b.length && a.every((r, i) => r.id === b[i].id && r.iteration === b[i].iteration);
-}
-
 /** The `outerLoops` a body of `node`'s own loop would carry: its `(id, iteration)`, prepended onto whatever is beyond it. */
 function loopContextOf(node: StepState): LoopRef[] {
   return node.loopId === undefined ? [] : [...(node.outerLoops ?? []), { id: node.loopId, iteration: node.iteration ?? 1 }];
@@ -120,7 +116,7 @@ function belongsTo(
     return step.loopId === undefined || !loopIds.has(step.loopId);
   }
   if (step.loopId !== parent.id) return false;
-  if (sameLoopRefs(step.outerLoops ?? [], loopContextOf(parent))) return true;
+  if (sameLoopRefs(step.outerLoops, loopContextOf(parent))) return true;
   return step.outerLoops === undefined && loopRows.filter(l => l.id === parent.id).length === 1;
 }
 

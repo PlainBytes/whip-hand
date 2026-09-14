@@ -3,9 +3,7 @@
  * working or blocked on the human. Written out-of-band by the runner's own
  * hooks; the model is deliberately never told this file exists.
  */
-import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
-import { sanitizeStepId } from './session-end.ts';
+import { stepStateFile } from './session-end.ts';
 
 /**
  * Why a session is waiting. 'attention' never appears in the file — it is the
@@ -35,20 +33,16 @@ export type AwaitParse =
 
 const IGNORE: AwaitParse = { kind: 'ignore' };
 
+const awaitState = stepStateFile('await');
+
 /** State-file basename for a step: one safe path segment, distinct from the `.done` marker. */
-export function awaitStateName(stepId: string): string {
-  return `.${sanitizeStepId(stepId)}.await`;
-}
+export const awaitStateName: (stepId: string) => string = awaitState.name;
 
 /** Absolute path of a step's await-state file. */
-export function awaitStatePath(runDir: string, stepId: string): string {
-  return join(runDir, awaitStateName(stepId));
-}
+export const awaitStatePath: (runDir: string, stepId: string) => string = awaitState.path;
 
 /** True for any name awaitStateName could have produced — used to hide it from artifact lists. */
-export function isAwaitStateName(name: string): boolean {
-  return /^\..+\.await$/.test(name);
-}
+export const isAwaitStateName: (name: string) => boolean = awaitState.isName;
 
 /**
  * Reads one state-file body.
@@ -82,10 +76,4 @@ export function parseAwaitState(raw: string): AwaitParse {
  * Removes a leftover state file so a new session never opens already looking
  * blocked. Never throws, for the same reason clearEndMarker doesn't.
  */
-export async function clearAwaitState(runDir: string, stepId: string): Promise<void> {
-  try {
-    await rm(awaitStatePath(runDir, stepId), { force: true });
-  } catch {
-    // best effort
-  }
-}
+export const clearAwaitState: (runDir: string, stepId: string) => Promise<void> = awaitState.clear;

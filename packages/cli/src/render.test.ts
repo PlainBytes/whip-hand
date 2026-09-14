@@ -73,6 +73,12 @@ test('each step is timed from its own start', () => {
   assert.deepEqual(out.at(-1), '  31s');
 });
 
+test("a model id that already carries a provider prefix is not glued onto the runner name", () => {
+  const { out, render } = capture();
+  render({ ...startHeadless, runner: 'opencode', model: 'opencode/claude-haiku-4-5' });
+  assert.deepEqual(out, ['→ step impl (opencode · opencode/claude-haiku-4-5, headless)']);
+});
+
 test('the existing per-event rendering is unchanged', () => {
   const { out, err, render } = capture();
   render({ type: 'run:start', runId: 'r1', workflow: 'cycle' });
@@ -84,7 +90,7 @@ test('the existing per-event rendering is unchanged', () => {
   render({ type: 'run:done', runId: 'r1', ok: true });
   assert.deepEqual(out, [
     "whiphand run r1 — workflow 'cycle'",
-    '→ step impl (claude/opus, headless)',
+    '→ step impl (claude · opus, headless)',
     '  ✔ artifact /w/.whiphand/runs/r1/impl.md',
     '  verdict: PASS',
     '↻ fix — iteration 2/5',

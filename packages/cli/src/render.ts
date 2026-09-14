@@ -38,7 +38,7 @@ interface StepTally extends UsageCounters {
 function stepLine(event: Extract<WhiphandEvent, { type: 'step:start' }>): string {
   const indent = event.loopId === undefined ? '' : '  ';
   const detail = event.kind === 'agent'
-    ? `${event.runner}${event.model ? '/' + event.model : ''}, ${event.mode}`
+    ? `${event.runner}${event.model ? ' · ' + event.model : ''}, ${event.mode}`
     : event.kind;
   return `${indent}→ step ${event.stepId} (${detail})`;
 }

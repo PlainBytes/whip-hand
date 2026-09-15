@@ -336,8 +336,10 @@ that owns it, and `enabled` has no single owner — it is valid on every kind �
 registered there and gets its own check instead.
 
 A workflow's own `inputs:` map (as opposed to a step's) takes `required`, `prompt`, `default`,
-and `remember`. `remember` is a desktop New-run prefill hint — the CLI never reads it — and
-without it a new run starts that field blank every time, even if a previous run filled it in.
+`remember`, and `multiline`. `remember` is a desktop New-run prefill hint — the CLI never reads
+it — and without it a new run starts that field blank every time, even if a previous run filled
+it in. `multiline` is also a desktop New-run display hint the CLI ignores: `multiline: false`
+shows the field as a one-line box instead of the default growing text area.
 
 ```yaml
 name: cycle

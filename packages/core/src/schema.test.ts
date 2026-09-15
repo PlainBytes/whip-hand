@@ -93,6 +93,16 @@ test('an input may declare remember: true, and it survives onto the workflow', (
   assert.equal(r.inputs?.feature.remember, undefined);
 });
 
+test('an input may declare multiline: false, and it survives onto the workflow', () => {
+  const y = VALID.replace(
+    'feature: { required: true, prompt: "What are we building?" }',
+    'feature: { required: true, prompt: "What are we building?" }\n  branch: { required: false, multiline: false }',
+  );
+  const r = parseWorkflow(y);
+  assert.equal(r.inputs?.branch.multiline, false);
+  assert.equal(r.inputs?.feature.multiline, undefined);
+});
+
 // ---------------------------------------------------------------------------
 // Step kinds and loops
 // ---------------------------------------------------------------------------

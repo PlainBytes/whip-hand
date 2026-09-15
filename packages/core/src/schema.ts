@@ -155,6 +155,7 @@ export const workflowSchema: z.ZodType<Workflow, unknown> = z.object({
     prompt: optionalText(),
     default: optionalText(),
     remember: z.boolean().optional(),
+    multiline: z.boolean().optional(),
   })).optional(),
   on_findings: z.enum(['report', 'loop', 'interactive']).optional(),
   steps: z.array(stepSchema).min(1),

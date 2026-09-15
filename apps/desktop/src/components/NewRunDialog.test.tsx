@@ -40,6 +40,21 @@ const MEMORY_WORKFLOW = {
   },
 };
 
+// A workflow with one one-line input (multiline: false) and one unflagged
+// (growing textarea) input, for the multiline-hint rendering test.
+const MULTILINE_WORKFLOW = {
+  name: 'ship-feature',
+  path: '/ws/.whiphand/workflows/ship-feature.yaml',
+  workflow: {
+    name: 'ship-feature',
+    inputs: {
+      branch: { required: true, prompt: 'Branch to start from', default: 'main', multiline: false },
+      feature: { required: true, prompt: 'What are we building?' },
+    },
+    steps: [{ id: 'plan', kind: 'agent', runner: 'claude', mode: 'headless', writes: false, prompt: 'plan', output: 'plan.md' }],
+  },
+};
+
 // NewRunDialog fires listWorkflows and listRuns from separate effects on mount,
 // so their relative arrival order in transport.sent isn't guaranteed —
 // search by method instead of assuming position.
@@ -245,6 +260,29 @@ describe('NewRunDialog', () => {
     expect((req.params as { inputs: Record<string, string> }).inputs.ticket).toBe(
       'first line\nsecond line\n\nfourth line',
     );
+  });
+
+  it('renders a multiline: false input as a one-line box and reaches startRun', async () => {
+    const { transport } = renderNewRunDialog();
+    await respond(transport, 'listWorkflows', [MULTILINE_WORKFLOW]);
+    await respond(transport, 'listRuns', []);
+    await selectWorkflow(transport, 'ship-feature');
+
+    const branchField = await screen.findByLabelText('Branch to start from', { exact: false });
+    expect(branchField.tagName).toBe('INPUT');
+    const featureField = screen.getByLabelText('What are we building?', { exact: false });
+    expect(featureField.tagName).toBe('TEXTAREA');
+
+    fireEvent.change(branchField, { target: { value: 'my-branch' } });
+    fireEvent.change(featureField, { target: { value: 'a feature' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+
+    const req = await waitFor(() => {
+      const parsed = transport.sentRequest(transport.sent.length - 1);
+      if (parsed.method !== 'startRun') throw new Error('startRun not sent yet');
+      return parsed;
+    });
+    expect((req.params as { inputs: Record<string, string> }).inputs.branch).toBe('my-branch');
   });
 
   it('starts the run on Ctrl+Enter', async () => {

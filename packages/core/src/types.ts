@@ -26,6 +26,8 @@ export interface WorkflowInput {
   default?: string;
   /** Desktop New-run prefill hint only; the CLI never reads it. Absent means false. */
   remember?: boolean;
+  /** Desktop New-run display hint only; the CLI never reads it. Absent means true. */
+  multiline?: boolean;
 }
 
 /** Fields shared by every step that produces an artifact and can be referenced. */

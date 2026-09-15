@@ -124,6 +124,7 @@ See `docs/design.md` for the full reference. The short version:
 name: cycle
 inputs:
   feature: { required: true }
+  test_command: { required: false, default: npm test }
 steps:
   - id: plan          # live terminal chat; artifact harvested from the session afterwards
     runner: claude
@@ -144,22 +145,30 @@ steps:
         until: review
         max_iterations: 3
         steps:
-          - id: execute   # headless; may write
-            runner: copilot
-            model: gpt-5.5
-            mode: headless
-            writes: true
-            # `review` and `sign-off` are forward references: the previous
-            # iteration's/round's findings and feedback, dropped when absent.
-            inputs: [plan, review, sign-off]
-            output: execute-report.md
-            prompt: Implement the attached plan. If sign-off feedback is attached, address every requested change.
+          - id: test-fix    # repeats until the tests pass, before `review` ever runs
+            kind: loop
+            until: tests
+            max_iterations: 3
+            steps:
+              - id: execute   # headless; may write
+                runner: copilot
+                model: gpt-5.5
+                mode: headless
+                writes: true
+                # `tests`, `review` and `sign-off` are forward references: the
+                # previous iteration's/round's log, findings and feedback,
+                # each dropped when its own loop has none yet to read.
+                inputs: [plan, tests, review, sign-off]
+                output: execute-report.md
+                prompt: |
+                  Implement the attached plan. If a tests log marked VERDICT: FAIL
+                  is attached, fix every failure it shows first.
 
-          - id: tests     # a shell command: no runner, no tokens
-            kind: command
-            run: npm test
-            verdict: true            # non-zero exit sends the loop round again
-            output: tests.log
+              - id: tests     # a shell command: no runner, no tokens
+                kind: command
+                run: "{{ inputs.test_command }}"
+                verdict: true            # non-zero exit sends test-fix round again
+                output: tests.log
 
           - id: review    # headless, read-only, must emit VERDICT: PASS|FAIL
             runner: claude
@@ -184,9 +193,11 @@ steps:
         output: feedback.md
 ```
 
-`execute` and `review` both read `sign-off` as a forward reference, so a round that requests
-changes sends fresh feedback back into the next one. That's the shape every starter workflow
-ships with — see `docs/design.md`'s "Sending work back" section for the nested-loop details.
+`execute` reads `tests`, `review` and `sign-off` as forward references, each resolving to its
+own loop's previous pass and dropped when that loop has none yet — so a round that requests
+changes, or a run that just failed its tests, sends fresh feedback back into the next attempt.
+That's the shape every starter workflow ships with — see `docs/design.md`'s "Sending work
+back" section for the nested-loop details.
 
 **Step kinds.** `agent` (the default), `command`, `manual`, `approval`, and `loop` — a cycle
 over its own `steps` that repeats until its `until` step passes, bounded by

@@ -6,7 +6,7 @@ import type { AgentStep, RunCtx } from '../types.ts';
 
 const ctx: RunCtx = {
   workdir: '/w', runId: 'r1', runDir: '/w/.whiphand/runs/r1', runSlug: 'r1',
-  sessionIds: {}, artifacts: {}, attempts: {}, inputs: {},
+  sessionIds: {}, artifacts: {}, attempts: {}, verdicts: {}, inputs: {},
 };
 
 const step: AgentStep = { kind: 'agent',

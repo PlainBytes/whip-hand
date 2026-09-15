@@ -7,6 +7,12 @@ inputs:
   feature:
     required: true
     prompt: What are we building?
+  test_command:
+    required: false
+    default: npm test
+    prompt: Test command (leave blank to skip tests)
+    remember: true
+    multiline: false
 steps:
   - id: plan # live terminal chat; artifact harvested afterwards
     runner: claude
@@ -34,34 +40,45 @@ steps:
         until: review
         max_iterations: 3
         steps:
-          - id: execute # headless; may write
-            runner: claude
-            mode: headless
-            writes: true
-            # 'review' comes later in this body, so it means the PREVIOUS
-            # iteration's findings; 'sign-off' is a later sibling of the OUTER
-            # loop, so it means the previous ROUND's feedback — both are simply
-            # skipped, on the first pass of each, when there is nothing yet to read.
-            inputs: [plan, review, sign-off]
-            output: execute-report.md
-            prompt: Implement the attached plan. If sign-off feedback is attached, address every requested change.
-            model: sonnet
-
-          # A shell step: no tokens, no runner. Uncomment to make the tests part of
-          # the cycle — with 'verdict: true' a non-zero exit sends the loop round
-          # again instead of failing the run.
-          # - id: tests
-          #   kind: command
-          #   run: npm test
-          #   verdict: true
-          #   output: tests.log
+          # Repeats until the tests pass, handing the failing log back to
+          # 'execute' each time. 'review' only runs once they are green. A
+          # blank test_command runs 'sh -c ""', which exits 0, so tests pass
+          # immediately and are effectively skipped.
+          - id: test-fix
+            kind: loop
+            until: tests
+            max_iterations: 3
+            steps:
+              - id: execute # headless; may write
+                runner: claude
+                mode: headless
+                writes: true
+                # 'tests' is later in THIS loop, so it means the PREVIOUS
+                # iteration's log; 'review' and 'sign-off' are later siblings
+                # of the OUTER loops, so they mean the previous ROUND's
+                # findings/feedback — all three are simply skipped, on the
+                # first pass of each, when there is nothing yet to read.
+                inputs: [plan, tests, review, sign-off]
+                output: execute-report.md
+                prompt: |
+                  Implement the attached plan. If a tests log marked VERDICT: FAIL
+                  is attached, fix every failure it shows before anything else.
+                  If review findings or sign-off feedback are attached, address
+                  every point.
+                model: sonnet
+              - id: tests
+                kind: command
+                run: "{{ inputs.test_command }}"
+                verdict: true # a failing exit sends the loop round again, not a crash
+                output: tests.log
+                timeout_ms: 1800000 # a hung suite fails the run (resumable) rather than blocking forever
 
           - id: review # headless, read-only, must end with VERDICT: PASS|FAIL
             runner: claude
             mode: headless
             writes: false
             verdict: true
-            inputs: [plan, execute, sign-off]
+            inputs: [plan, execute, tests, sign-off]
             output: review.md
             prompt: |
               Review the implementation against the attached plan. If sign-off

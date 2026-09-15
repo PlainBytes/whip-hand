@@ -584,6 +584,199 @@ test('resuming mid round 2 of a nested loop skips round 1 and only replays round
 });
 
 // ---------------------------------------------------------------------------
+// A `test-fix`-shaped loop nested inside another loop: forward references
+// into the inner loop must resolve against *its own* first iteration, not
+// whatever the outer loop's previous round left lying around in ctx.artifacts.
+// ---------------------------------------------------------------------------
+
+/** `fix-cycle` (until: review) wrapping `test-fix` (until: tests) — the shape `.whiphand/workflows/*.yaml` ship. */
+function nestedTestFixWorkflow(): Workflow {
+  return {
+    name: 'nested-test-fix',
+    steps: [{
+      kind: 'loop', id: 'fix-cycle', until: 'review', max_iterations: 3,
+      steps: [
+        {
+          kind: 'loop', id: 'test-fix', until: 'tests', max_iterations: 3,
+          steps: [
+            agent({ id: 'execute', writes: true, inputs: ['tests', 'review'] }),
+            { kind: 'command', id: 'tests', verdict: true, output: 'tests.log', run: 'true' },
+          ],
+        },
+        agent({ id: 'review', verdict: true, inputs: ['execute', 'tests'] }),
+      ],
+    }],
+  };
+}
+
+test('a forward ref into a nested loop drops on that loop\'s own first iteration, even on the outer loop\'s later rounds', async () => {
+  const dir = await tmpWorkdir();
+  const h = harness();
+  let executeAttempts = 0;
+  let testsAttempts = 0;
+  let reviewAttempts = 0;
+  const executePrompts: string[] = [];
+  const reviewPrompts: string[] = [];
+
+  const result = await runWorkflow({
+    workflow: nestedTestFixWorkflow(), workdir: dir, inputs: {}, config: DEFAULT_CONFIG,
+    registry: registry(), frontend: h.frontend,
+    spawnHeadless: async spec => {
+      if (spec.argv[0] === 'fake') {
+        const stepId = spec.argv[2];
+        if (stepId === 'execute') {
+          executeAttempts += 1;
+          executePrompts.push(spec.argv[4]);
+          await writeFile(spec.argv[3], `attempt ${executeAttempts}\n`);
+        } else {
+          reviewAttempts += 1;
+          reviewPrompts.push(spec.argv[4]);
+          await writeFile(spec.argv[3], reviewAttempts > 1 ? 'VERDICT: PASS\n' : 'VERDICT: FAIL\nfix it\n');
+        }
+        return 0;
+      }
+      // The 'tests' command step: passes round 1 straight away, fails round
+      // 2's first attempt (so test-fix has to go round again), then passes.
+      testsAttempts += 1;
+      return testsAttempts === 2 ? 1 : 0;
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(executeAttempts, 3, 'round 1, round 2 iter 1, round 2 iter 2');
+  assert.equal(testsAttempts, 3);
+  assert.equal(reviewAttempts, 2, 'round 1 requests changes; round 2 approves');
+
+  // Round 1 (fix-cycle iteration 1): test-fix's own first iteration — no
+  // previous tests run, and fix-cycle's own first iteration has no review yet.
+  assert.ok(!executePrompts[0].includes('- tests:'), 'round 1 has no previous tests run');
+  assert.ok(!executePrompts[0].includes('- review:'), 'round 1 has no previous review either');
+
+  // Round 2 (fix-cycle iteration 2), test-fix iteration 1: the bug this fixes.
+  // ctx.artifacts.tests still holds round 1's PASSING log, but test-fix is on
+  // its own first iteration, so the reference must still be dropped.
+  assert.ok(!executePrompts[1].includes('- tests:'),
+    'test-fix\'s first iteration of round 2 must not see round 1\'s stale tests.log');
+  // review belongs to the *outer* loop, which is on iteration 2 — its
+  // previous round's feedback is exactly what a forward ref should resolve to.
+  assert.ok(executePrompts[1].includes('- review:'), 'round 2 sees round 1\'s review feedback');
+
+  // Round 2, test-fix iteration 2: now the reference resolves, to that same
+  // loop's own iteration 1 result — which failed.
+  assert.ok(executePrompts[2].includes('- tests:'), 'test-fix\'s iteration 2 sees its own iteration 1 result');
+  assert.ok(executePrompts[2].includes('(VERDICT: FAIL)'), 'that result failed');
+
+  // review reads tests too — a backward ref, resolved once test-fix has
+  // actually passed within this same round.
+  assert.ok(reviewPrompts[1].includes('- tests:') && reviewPrompts[1].includes('(VERDICT: PASS)'),
+    'round 2\'s review sees test-fix\'s passing result');
+});
+
+test('a forward ref to a step skipped after `until` stays dropped on iteration 2, not just iteration 1', async () => {
+  const dir = await tmpWorkdir();
+  const h = harness();
+  let attempts = 0;
+  const executePrompts: string[] = [];
+
+  const workflow: Workflow = {
+    name: 'cycle',
+    steps: [{
+      kind: 'loop', id: 'fix', until: 'tests', max_iterations: 2,
+      steps: [
+        agent({ id: 'execute', writes: true, inputs: ['notes'] }),
+        { kind: 'command', id: 'tests', verdict: true, output: 'tests.log', run: 'true' },
+        // Both a failing and a passing 'tests' end the round right there —
+        // fails abandon the rest of the body, passes exit the loop — so this
+        // step never runs, on iteration 1 or any later one.
+        agent({ id: 'notes' }),
+      ],
+    }],
+  };
+
+  const result = await runWorkflow({
+    workflow, workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: registry(), frontend: h.frontend,
+    spawnHeadless: async spec => {
+      if (spec.argv[0] === 'fake') {
+        if (spec.argv[2] === 'execute') {
+          attempts += 1;
+          executePrompts.push(spec.argv[4]);
+        }
+        await writeFile(spec.argv[3], `attempt ${attempts}\n`);
+        return 0;
+      }
+      return attempts > 1 ? 0 : 1; // 'tests': fails iteration 1, passes iteration 2
+    },
+  });
+
+  assert.equal(result.ok, true, 'the loop should exit once tests pass');
+  assert.equal(attempts, 2);
+  assert.ok(!executePrompts[0].includes('- notes:'), 'iteration 1 has no notes run yet');
+  assert.ok(!executePrompts[1].includes('- notes:'),
+    'notes never ran on iteration 1 either, so the ref must stay dropped on iteration 2 too');
+});
+
+test('resuming mid round 2 of a nested test-fix loop resolves forward references the same way', async () => {
+  const dir = await tmpWorkdir();
+  const h = harness();
+  const controller = new AbortController();
+  let executeAttempts = 0;
+  let testsAttempts = 0;
+  let reviewAttempts = 0;
+  const executePrompts: string[] = [];
+  const reviewPrompts: string[] = [];
+
+  const spawnHeadless = async (spec: SpawnSpec): Promise<number> => {
+    if (spec.argv[0] === 'fake') {
+      const stepId = spec.argv[2];
+      if (stepId === 'execute') {
+        executeAttempts += 1;
+        executePrompts.push(spec.argv[4]);
+        await writeFile(spec.argv[3], `attempt ${executeAttempts}\n`);
+      } else {
+        reviewAttempts += 1;
+        reviewPrompts.push(spec.argv[4]);
+        await writeFile(spec.argv[3], reviewAttempts > 1 ? 'VERDICT: PASS\n' : 'VERDICT: FAIL\nfix it\n');
+      }
+      return 0;
+    }
+    testsAttempts += 1;
+    // Round 1 passes. Round 2's first attempt is interrupted before it can
+    // record a verdict — the run stops there, mid test-fix, mid round 2.
+    if (testsAttempts === 2) { controller.abort(); return 1; }
+    // Replayed after resume: round 2's first real attempt now fails outright
+    // (forcing a genuine second test-fix iteration), then the second passes.
+    return testsAttempts === 3 ? 1 : 0;
+  };
+
+  const broken = await runWorkflow({
+    workflow: nestedTestFixWorkflow(), workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: registry(),
+    frontend: h.frontend, signal: controller.signal, spawnHeadless,
+  });
+  assert.equal(broken.cancelled, true);
+  assert.equal(executeAttempts, 2, 'round 1 and round 2 iteration 1 ran before the interruption');
+  assert.equal(reviewAttempts, 1, 'only round 1\'s review (a FAIL) ran so far');
+
+  const plan = await planResume(dir, DEFAULT_CONFIG, broken.runId);
+  const resumed = harness();
+  const result = await runWorkflow({
+    workflow: nestedTestFixWorkflow(), workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: registry(),
+    frontend: resumed.frontend, resume: plan, spawnHeadless,
+  });
+
+  assert.equal(result.ok, true);
+  // Round 2 iteration 1's execute is skipped (already done); test-fix then
+  // fails again for real, iterates, and round 2 iteration 2's execute is a
+  // genuinely fresh spawn — the one whose prompt this test cares about.
+  assert.equal(executeAttempts, 3);
+  assert.equal(reviewAttempts, 2);
+
+  assert.ok(executePrompts[2].includes('- tests:') && executePrompts[2].includes('(VERDICT: FAIL)'),
+    'after resume, test-fix\'s iteration 2 still sees its own iteration 1\'s failing result, not something stale');
+  assert.ok(reviewPrompts[1].includes('- tests:') && reviewPrompts[1].includes('(VERDICT: PASS)'),
+    'after resume, round 2\'s review still sees test-fix\'s eventual pass');
+});
+
+// ---------------------------------------------------------------------------
 // Disabling a step
 // ---------------------------------------------------------------------------
 

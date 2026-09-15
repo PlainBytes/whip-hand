@@ -13,7 +13,7 @@ const fixtureDir = fileURLToPath(new URL('../../../../parity/fixtures/models/', 
 
 const ctx: RunCtx = {
   workdir: '/w', runId: 'r1', runDir: '/w/.whiphand/runs/r1', runSlug: 'r1',
-  sessionIds: { plan: 'sid-123' }, artifacts: {}, attempts: {}, inputs: {},
+  sessionIds: { plan: 'sid-123' }, artifacts: {}, attempts: {}, verdicts: {}, inputs: {},
 };
 
 const planStep: AgentStep = { kind: 'agent',

@@ -11,7 +11,7 @@ import {
   createWorkflow, deleteWorkflow, cloneWorkflow, initWorkspace, workflowTemplate, specDrivenTemplate, featureDevelopmentTemplate,
   updateWorkflow,
 } from './scaffold.ts';
-import { parseWorkflow, validateWorkflowWarnings, WorkflowError } from './schema.ts';
+import { parseWorkflow, validateWorkflowWarnings, validateWorkflowSemantics, WorkflowError } from './schema.ts';
 import { loadWorkspaceConfig } from './config.ts';
 import type { Workflow } from './types.ts';
 
@@ -30,9 +30,15 @@ async function withConfigHome<T>(fn: (configHome: string) => Promise<T>): Promis
 /**
  * Every shipped template gives the human sign-off the same shape:
  * `human-review` loops until an approval that can send fresh feedback back to
- * both `execute` and `review` in the inner cycle it wraps.
+ * both `execute` and `review` in the inner cycle it wraps — and that inner
+ * cycle itself wraps a `test-fix` loop that repeats until `test_command`
+ * passes before `review` ever runs.
  */
 function assertHumanReviewShape(workflow: Workflow, innerLoopId: string): void {
+  const testCommand = workflow.inputs?.test_command;
+  assert.ok(testCommand !== undefined, 'test_command input is present');
+  assert.equal(testCommand?.default, 'npm test');
+
   const humanReview = workflow.steps.find(s => s.id === 'human-review');
   assert.ok(humanReview !== undefined, 'human-review loop is present');
   if (humanReview === undefined || humanReview.kind !== 'loop') return assert.fail('human-review is a loop');
@@ -49,12 +55,28 @@ function assertHumanReviewShape(workflow: Workflow, innerLoopId: string): void {
   const inner = humanReview.steps.find(s => s.id === innerLoopId);
   assert.ok(inner !== undefined && inner.kind === 'loop');
   if (inner === undefined || inner.kind !== 'loop') return;
+
+  const testFix = inner.steps.find(s => s.id === 'test-fix');
+  assert.ok(testFix !== undefined && testFix.kind === 'loop', 'test-fix loop is present inside the review cycle');
+  if (testFix === undefined || testFix.kind !== 'loop') return;
+  const tests = testFix.steps.find(s => s.id === testFix.until);
+  assert.ok(tests !== undefined && tests.kind === 'command' && tests.verdict === true,
+    'test-fix\'s until is a verdict command step');
+  assert.equal(tests?.kind === 'command' ? tests.output : undefined, 'tests.log');
+
+  const execute = testFix.steps.find(s => s.id === 'execute');
+  assert.ok(execute !== undefined && execute.kind === 'agent', 'execute is inside test-fix');
+  if (execute === undefined || execute.kind !== 'agent') return;
+  assert.ok(execute.inputs?.includes('tests'), 'execute reads the tests log');
+  assert.ok(execute.inputs?.includes('sign-off'), 'execute reads the sign-off feedback');
+
+  const innerIds = inner.steps.map(s => s.id);
   const review = inner.steps.find(s => s.id === 'review');
   assert.ok(review !== undefined && review.kind === 'agent' && review.verdict === true);
-  const execute = inner.steps.find(s => s.id === 'execute');
-  assert.ok(execute !== undefined && execute.kind === 'agent');
-  if (execute === undefined || execute.kind !== 'agent' || review === undefined || review.kind !== 'agent') return;
-  assert.ok(execute.inputs?.includes('sign-off'), 'execute reads the sign-off feedback');
+  if (review === undefined || review.kind !== 'agent') return;
+  assert.ok(innerIds.indexOf('review') > innerIds.indexOf('test-fix'),
+    'review comes after test-fix in the same parent loop');
+  assert.ok(review.inputs?.includes('tests'), 'review reads this round\'s passing tests log');
   assert.ok(review.inputs?.includes('sign-off'), 'review reads the sign-off feedback too, to enforce it');
 }
 
@@ -66,13 +88,17 @@ test('every shipped template gives the human sign-off the same send-it-back shap
   ] as const) {
     assertHumanReviewShape(workflow, innerLoopId);
     assert.deepEqual(validateWorkflowWarnings(workflow), []);
+    assert.deepEqual(validateWorkflowSemantics(workflow), []);
   }
 });
 
 test('workflowTemplate produces a parseable canonical workflow', () => {
   const workflow = parseWorkflow(workflowTemplate('my-flow'));
   assert.equal(workflow.name, 'my-flow');
-  assert.equal(workflow.description, 'Plan with a human, then implement and review in a cycle until the review passes.');
+  assert.equal(
+    workflow.description,
+    'Plan with a human, then implement, gate on tests, and review in a cycle until the review passes.',
+  );
   assert.deepEqual(workflow.steps.map(s => s.id), ['plan', 'human-review']);
 
   const plan = workflow.steps[0];
@@ -88,7 +114,12 @@ test('workflowTemplate produces a parseable canonical workflow', () => {
   assert.equal(fixCycle.kind, 'loop');
   if (fixCycle.kind !== 'loop') return;
   assert.equal(fixCycle.until, 'review');
-  assert.deepEqual(fixCycle.steps.map(s => s.id), ['execute', 'review']);
+  assert.deepEqual(fixCycle.steps.map(s => s.id), ['test-fix', 'review']);
+  const testFix = fixCycle.steps[0];
+  assert.equal(testFix.kind, 'loop');
+  if (testFix.kind !== 'loop') return;
+  assert.equal(testFix.until, 'tests');
+  assert.deepEqual(testFix.steps.map(s => s.id), ['execute', 'tests']);
   const review = fixCycle.steps[1];
   assert.equal(review.kind === 'agent' && review.verdict, true);
 });
@@ -121,7 +152,12 @@ test('specDrivenTemplate produces a parseable spec-driven workflow', () => {
   assert.equal(buildCycle.kind, 'loop');
   if (buildCycle.kind !== 'loop') return;
   assert.equal(buildCycle.until, 'review');
-  assert.deepEqual(buildCycle.steps.map(s => s.id), ['execute', 'review']);
+  assert.deepEqual(buildCycle.steps.map(s => s.id), ['test-fix', 'review']);
+  const testFix = buildCycle.steps[0];
+  assert.equal(testFix.kind, 'loop');
+  if (testFix.kind !== 'loop') return;
+  assert.equal(testFix.until, 'tests');
+  assert.deepEqual(testFix.steps.map(s => s.id), ['execute', 'tests']);
   const review = buildCycle.steps[1];
   assert.equal(review.kind === 'agent' && review.verdict, true);
 });
@@ -343,7 +379,7 @@ test("cloneWorkflow writes <to>.yaml with name: <to>, keeps the source's comment
   assert.equal(path, join(ws, '.whiphand', 'workflows', 'my-flow-copy.yaml'));
   const cloned = await readFile(path, 'utf8');
   assert.match(cloned, /^name: my-flow-copy$/m);
-  assert.ok(cloned.includes('plan interactively, then implement and review in a cycle'), 'keeps the source\'s leading comment');
+  assert.ok(cloned.includes('plan interactively, then implement, gate on tests passing'), 'keeps the source\'s leading comment');
   assert.equal(await readFile(fromPath, 'utf8'), before);
 });
 

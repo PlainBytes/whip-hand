@@ -362,19 +362,24 @@ steps:
     until: review          # a body step with verdict: true
     max_iterations: 3
     steps:
-      - id: execute
-        runner: copilot
-        mode: headless
-        writes: true
-        inputs: [plan, review]   # `review` is later => the previous iteration
-        output: execute-report.md
-        prompt: Implement the attached plan. This is attempt {{ loop.iteration }}.
+      - id: test-fix        # repeats until the tests pass, before 'review' ever runs
+        kind: loop
+        until: tests
+        max_iterations: 3
+        steps:
+          - id: execute
+            runner: copilot
+            mode: headless
+            writes: true
+            inputs: [plan, tests]   # `tests` is later in THIS loop => its previous iteration
+            output: execute-report.md
+            prompt: Implement the attached plan. This is attempt {{ loop.iteration }}.
 
-      - id: tests
-        kind: command
-        run: npm test
-        verdict: true            # a non-zero exit is a signal, not a crash
-        output: tests.log
+          - id: tests
+            kind: command
+            run: npm test
+            verdict: true            # a non-zero exit sends test-fix round again, not a crash
+            output: tests.log
 
       - id: review
         runner: claude
@@ -410,6 +415,11 @@ It is uniform across kinds, which is what lets a loop's `until` name any of them
 A step that reports a verdict has done its job: a `verdict: true` command exiting 1 is
 recorded as **done** with a FAIL, not as a broken step. Without `verdict: true`, a non-zero
 exit fails the run as it always did.
+
+A downstream step's `## Input artifacts` line is labelled with that verdict, when the input
+names a step that has one: `- tests: /…/tests.log (VERDICT: FAIL)`. Both PASS and FAIL are
+labelled, so a prompt never has to guess whether an attached log is the one that just failed;
+`attachments/*` entries, which name a file rather than a step, are never labelled.
 
 ### Command steps and shell injection
 
@@ -513,9 +523,14 @@ Three rules carry the weight, and all three are deliberate:
 - **`until` exits immediately.** When the `until` step finishes with a passing verdict the
   iteration ends there and the loop exits — any remaining body steps are skipped. Put the
   exit check last if you want the whole body to run every time.
-- **A forward reference inside a loop body means "the previous iteration".** Referencing a
-  *later* body step resolves to its artifact from the iteration before, and is simply
-  dropped on the first pass, when there is none. That is how findings feed back into the
+- **A reference to a later step in loop L's body means "L's previous iteration".** It
+  resolves to nothing on L's first iteration — including when L is nested inside an outer
+  loop that has gone round again, so L itself is starting over: the reference is dropped
+  there too, even though the outer loop's previous round may have left an artifact from L's
+  last run sitting in the run's context. On any later iteration, it is simply dropped when
+  there is none — for instance a body step after `until` that a passing or failing iteration
+  skipped never leaves an artifact behind, so a sibling's forward reference to it stays
+  dropped on every iteration, not just the first. That is how findings feed back into the
   next attempt — visibly, in the workflow, rather than by prose the engine injects.
 - **Each iteration keeps its own artifacts.** A body step writes to
   `<runDir>/<loopId>/iter-<n>/<output>`, so iteration 3 cannot erase what iteration 1
@@ -566,6 +581,15 @@ recurs once per round of the outer loop, so identity needs a second axis:
   `outerLoops`, so `planResume` throws a `ResumeError` telling the operator to start a fresh
   run rather than best-effort resuming into a state it cannot verify. A single-level pre-v4
   run resumes exactly as it always did: nothing about its identity changed.
+- **A forward reference into a nested loop still means that loop's own previous iteration**,
+  not whatever the outer loop's previous round left behind. `test-fix` inside `fix-cycle`
+  (the shape every shipped workflow uses to gate `review` on a passing test run) is the case
+  this matters for: on round 2 of `fix-cycle`, `test-fix` starts over at iteration 1, and
+  `execute`'s reference to `tests` must resolve to nothing there, even though `ctx.artifacts`
+  still holds round 1's *passing* `tests.log`. `scopeInputs` resolves this by finding the
+  referenced step's enclosing loop's frame — walking a step's own frame outward via `parent`
+  when the reference reaches past it — and checking *that* frame's iteration, not just
+  whether an artifact happens to be sitting in `ctx.artifacts` already.
 
 ### Relationship to `on_findings`
 
@@ -665,12 +689,21 @@ inner implement/review cycle and the sign-off step itself:
       kind: loop
       until: review
       steps:
-        - id: execute
-          inputs: [plan, review, sign-off]   # sign-off: the previous ROUND's feedback
-          # ...
+        - id: test-fix          # repeats until the tests pass, before 'review' ever runs
+          kind: loop
+          until: tests
+          steps:
+            - id: execute
+              inputs: [plan, tests, review, sign-off]  # sign-off: the previous ROUND's feedback
+              # ...
+            - id: tests
+              kind: command
+              verdict: true
+              output: tests.log
+              # ...
         - id: review
           verdict: true
-          inputs: [plan, execute, sign-off]  # FAIL unless every request was addressed
+          inputs: [plan, execute, tests, sign-off]  # FAIL unless every request was addressed
           # ...
     - id: sign-off
       kind: approval
@@ -681,10 +714,13 @@ inner implement/review cycle and the sign-off step itself:
       output: feedback.md
 ```
 
-Both `execute` and `review` read `sign-off` as a forward reference to a *later sibling of the
-outer loop* — dropped on the run's very first pass, when there is nothing yet to read, exactly
-like a forward reference to a later sibling of their own inner loop. Requesting changes sends
-`fix-cycle` round again with that feedback attached to both steps; `review` reading it too is
+`execute` sits one loop deeper than `review` — inside `test-fix`, which `fix-cycle` wraps — so
+it reads three forward references, one per enclosing loop: `tests` (its own loop, `test-fix`),
+`review` (one loop out, `fix-cycle`) and `sign-off` (two loops out, `human-review`). Each is
+dropped exactly when *that* reference's own loop is on its first iteration, whether or not an
+outer loop has gone round before — see "Nested loops" above. `review` reads `sign-off` the same
+way, one loop out from its own `fix-cycle`. Requesting changes sends `fix-cycle` round again
+with that feedback attached to both `execute` and `review`; `review` reading it too is
 what makes the FAIL-unless-addressed instruction more than a suggestion — an attempt that
 ignored the human's request fails the inner loop's own exit check, not just the outer one's.
 Only the newest round's feedback carries forward: round 3 sees round 2's, not round 1's,

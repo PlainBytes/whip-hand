@@ -247,6 +247,13 @@ export interface RunCtx {
   artifacts: Record<string, string>;
   /** stepId -> every artifact path it has written this run, oldest first. */
   attempts: Record<string, string[]>;
+  /**
+   * stepId -> the verdict of the execution that wrote `artifacts[stepId]`.
+   * Cleared whenever that step (re)starts, so a step's old verdict never
+   * survives past the point its own artifact does — see `recordArtifact`.
+   * Read by `buildPrompt` to label an input artifact line PASS/FAIL.
+   */
+  verdicts: Record<string, 'pass' | 'fail'>;
   inputs: Record<string, string>;        // resolved workflow input values
   loop?: LoopFrame;
   /**

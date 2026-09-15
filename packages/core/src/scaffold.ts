@@ -30,15 +30,21 @@ export function assertValidWorkflowName(name: string): void {
 }
 
 export function workflowTemplate(name: string): string {
-  return `# ${name} — plan interactively, then implement and review in a cycle
-# until the review passes, then a human sign-off that can send it back for
-# another cycle. Reference: docs/design.md
+  return `# ${name} — plan interactively, then implement, gate on tests passing, and
+# review in a cycle until the review passes, then a human sign-off that can
+# send it back for another cycle. Reference: docs/design.md
 name: ${name}
-description: Plan with a human, then implement and review in a cycle until the review passes.
+description: Plan with a human, then implement, gate on tests, and review in a cycle until the review passes.
 inputs:
   feature:
     required: true
     prompt: What are we building?
+  test_command:
+    required: false
+    default: npm test
+    prompt: Test command (leave blank to skip tests)
+    remember: true
+    multiline: false
 steps:
   - id: plan          # live terminal chat; artifact harvested afterwards
     runner: claude
@@ -62,33 +68,44 @@ steps:
         until: review
         max_iterations: 3
         steps:
-          - id: execute   # headless; may write
-            runner: claude
-            mode: headless
-            writes: true
-            # 'review' comes later in this body, so it means the PREVIOUS
-            # iteration's findings; 'sign-off' is a later sibling of the OUTER
-            # loop, so it means the previous ROUND's feedback — both are simply
-            # skipped, on the first pass of each, when there is nothing yet to read.
-            inputs: [plan, review, sign-off]
-            output: execute-report.md
-            prompt: Implement the attached plan. If sign-off feedback is attached, address every requested change.
-
-          # A shell step: no tokens, no runner. Uncomment to make the tests part of
-          # the cycle — with 'verdict: true' a non-zero exit sends the loop round
-          # again instead of failing the run.
-          # - id: tests
-          #   kind: command
-          #   run: npm test
-          #   verdict: true
-          #   output: tests.log
+          # Repeats until the tests pass, handing the failing log back to
+          # 'execute' each time. 'review' only runs once they are green. A
+          # blank test_command runs 'sh -c ""', which exits 0, so tests pass
+          # immediately and are effectively skipped.
+          - id: test-fix
+            kind: loop
+            until: tests
+            max_iterations: 3
+            steps:
+              - id: execute   # headless; may write
+                runner: claude
+                mode: headless
+                writes: true
+                # 'tests' is later in THIS loop, so it means the PREVIOUS
+                # iteration's log; 'review' and 'sign-off' are later siblings
+                # of the OUTER loops, so they mean the previous ROUND's
+                # findings/feedback — all three are simply skipped, on the
+                # first pass of each, when there is nothing yet to read.
+                inputs: [plan, tests, review, sign-off]
+                output: execute-report.md
+                prompt: |
+                  Implement the attached plan. If a tests log marked VERDICT: FAIL
+                  is attached, fix every failure it shows before anything else.
+                  If review findings or sign-off feedback are attached, address
+                  every point.
+              - id: tests
+                kind: command
+                run: "{{ inputs.test_command }}"
+                verdict: true         # a failing exit sends the loop round again, not a crash
+                output: tests.log
+                timeout_ms: 1800000   # a hung suite fails the run (resumable) rather than blocking forever
 
           - id: review    # headless, read-only, must end with VERDICT: PASS|FAIL
             runner: claude
             mode: headless
             writes: false
             verdict: true
-            inputs: [plan, execute, sign-off]
+            inputs: [plan, execute, tests, sign-off]
             output: review.md
             prompt: |
               Review the implementation against the attached plan. If sign-off
@@ -117,14 +134,21 @@ steps:
  * only so scaffold.test.ts can parse it directly.
  */
 export function specDrivenTemplate(): string {
-  return `# spec-driven — settle WHAT, then HOW, grilling each with you, then build and
-# review in a cycle until the review passes. Reference: docs/design.md
+  return `# spec-driven — settle WHAT, then HOW, grilling each with you, then build,
+# gate on tests passing, and review in a cycle until the review passes.
+# Reference: docs/design.md
 name: spec-driven
-description: A functional spec and a technical spec, each grilled, then a build/review cycle.
+description: A functional spec and a technical spec, each grilled, then a build/test/review cycle.
 inputs:
   feature:
     required: true
     prompt: What are we building?
+  test_command:
+    required: false
+    default: npm test
+    prompt: Test command (leave blank to skip tests)
+    remember: true
+    multiline: false
 steps:
   - id: functional-plan       # live chat: what it must do, and for whom
     runner: claude
@@ -204,29 +228,39 @@ steps:
         until: review
         max_iterations: 3
         steps:
-          - id: execute
-            runner: claude
-            model: sonnet     # the specs did the thinking; this half is cheap
-            mode: headless
-            writes: true
-            # 'review' is later in this body, so it means the PREVIOUS
-            # iteration's findings; 'sign-off' is a later sibling of the OUTER
-            # loop, so it means the previous ROUND's feedback — both are simply
-            # skipped, on the first pass of each, when there is nothing yet to read.
-            inputs: [functional-grill, technical-grill, review, sign-off]
-            output: execute-report.md
-            prompt: |
-              Implement the attached technical spec. It serves the functional
-              spec; where they disagree, say so rather than guessing. If
-              sign-off feedback is attached, address every requested change.
-
-          # Uncomment to make verification part of the cycle: with 'verdict: true'
-          # a non-zero exit sends the loop round again instead of failing the run.
-          # - id: tests
-          #   kind: command
-          #   run: npm test
-          #   verdict: true
-          #   output: tests.log
+          # Repeats until the tests pass, handing the failing log back to
+          # 'execute' each time. 'review' only runs once they are green. A
+          # blank test_command runs 'sh -c ""', which exits 0, so tests pass
+          # immediately and are effectively skipped.
+          - id: test-fix
+            kind: loop
+            until: tests
+            max_iterations: 3
+            steps:
+              - id: execute
+                runner: claude
+                model: sonnet     # the specs did the thinking; this half is cheap
+                mode: headless
+                writes: true
+                # 'tests' is later in THIS loop, so it means the PREVIOUS
+                # iteration's log; 'review' and 'sign-off' are later siblings
+                # of the OUTER loops, so they mean the previous ROUND's
+                # findings/feedback — all three are simply skipped, on the
+                # first pass of each, when there is nothing yet to read.
+                inputs: [functional-grill, technical-grill, tests, review, sign-off]
+                output: execute-report.md
+                prompt: |
+                  Implement the attached technical spec. It serves the functional
+                  spec; where they disagree, say so rather than guessing. If a
+                  tests log marked VERDICT: FAIL is attached, fix every failure it
+                  shows before anything else. If sign-off feedback is attached,
+                  address every requested change.
+              - id: tests
+                kind: command
+                run: "{{ inputs.test_command }}"
+                verdict: true         # a failing exit sends the loop round again, not a crash
+                output: tests.log
+                timeout_ms: 1800000   # a hung suite fails the run (resumable) rather than blocking forever
 
           - id: review
             runner: claude
@@ -234,7 +268,7 @@ steps:
             mode: headless
             writes: false
             verdict: true
-            inputs: [functional-grill, technical-grill, execute, sign-off]
+            inputs: [functional-grill, technical-grill, execute, tests, sign-off]
             output: review.md
             prompt: |
               Review the implementation against both specs — the functional one
@@ -266,10 +300,10 @@ steps:
  * Exported only so scaffold.test.ts can parse it directly.
  */
 export function featureDevelopmentTemplate(): string {
-  return `# feature-development — branch off trunk, plan, implement and review in a cycle,
-# then commit on sign-off. Reference: docs/design.md
+  return `# feature-development — branch off trunk, plan, implement, gate on tests
+# passing, and review in a cycle, then commit on sign-off. Reference: docs/design.md
 name: feature-development
-description: Branch off trunk, plan, implement and review in a cycle, then commit on sign-off.
+description: Branch off trunk, plan, implement, gate on tests, and review in a cycle, then commit on sign-off.
 inputs:
   feature:
     required: true
@@ -278,6 +312,12 @@ inputs:
     required: false
     default: main
     prompt: Branch to start from
+    multiline: false
+  test_command:
+    required: false
+    default: npm test
+    prompt: Test command (leave blank to skip tests)
+    remember: true
     multiline: false
 steps:
   - id: sync-base       # a dirty tree or a diverged trunk fails the run here,
@@ -315,17 +355,41 @@ steps:
         until: review
         max_iterations: 10
         steps:
-          - id: execute
-            inputs: [plan, review, sign-off]
-            kind: agent
-            runner: claude
-            model: sonnet
-            mode: headless
-            writes: true
-            prompt: Implement the attached plan. If sign-off feedback is attached, address every requested change.
-            output: execute-report.md
+          # Repeats until the tests pass, handing the failing log back to
+          # 'execute' each time. 'review' only runs once they are green. A
+          # blank test_command runs 'sh -c ""', which exits 0, so tests pass
+          # immediately and are effectively skipped.
+          - id: test-fix
+            kind: loop
+            until: tests
+            max_iterations: 3
+            steps:
+              - id: execute
+                # 'tests' is later in THIS loop, so it means the PREVIOUS
+                # iteration's log; 'review' and 'sign-off' are later siblings
+                # of the OUTER loops, so they mean the previous ROUND's
+                # findings/feedback — all three are simply skipped, on the
+                # first pass of each, when there is nothing yet to read.
+                inputs: [plan, tests, review, sign-off]
+                kind: agent
+                runner: claude
+                model: sonnet
+                mode: headless
+                writes: true
+                prompt: |
+                  Implement the attached plan. If a tests log marked VERDICT: FAIL
+                  is attached, fix every failure it shows before anything else.
+                  If review findings or sign-off feedback are attached, address
+                  every point.
+                output: execute-report.md
+              - id: tests
+                kind: command
+                run: "{{ inputs.test_command }}"
+                verdict: true         # a failing exit sends the loop round again, not a crash
+                output: tests.log
+                timeout_ms: 1800000   # a hung suite fails the run (resumable) rather than blocking forever
           - id: review
-            inputs: [plan, execute, sign-off]
+            inputs: [plan, execute, tests, sign-off]
             verdict: true
             kind: agent
             runner: claude

@@ -74,7 +74,10 @@ export function buildPrompt(step: Templated, ctx: RunCtx): string {
   if (inputs.length === 0) return body;
   const lines = inputs.map(({ id, path }) => {
     if (path === undefined) throw new TemplateError(`no artifact recorded for step '${id}'`);
-    return `- ${id}: ${path}`;
+    // attachments/* entries name a file, not a step, so they never carry a verdict.
+    const verdict = id.startsWith(`${ATTACHMENTS_REF}/`) ? undefined : ctx.verdicts[id];
+    const label = verdict === undefined ? '' : ` (VERDICT: ${verdict.toUpperCase()})`;
+    return `- ${id}: ${path}${label}`;
   });
   return `${body}\n\n## Input artifacts (read these files first)\n${lines.join('\n')}`;
 }

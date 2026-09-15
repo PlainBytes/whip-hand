@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App } from './App.tsx';
 import { AgentClient } from './agent/client.ts';
@@ -8,6 +8,13 @@ import { useAppStore } from './state/store.ts';
 import { FakeFileSystem } from './files/fake-fs.ts';
 import { FileSystemProvider } from './files/fs-context.tsx';
 import { EMPTY_APP_STATE } from '../../../packages/agent/src/app-state.ts';
+
+// The real banner renders nothing under vitest (it only runs in production
+// builds), so this marker stands in to make its position in the layout
+// observable.
+vi.mock('./components/UpdateBanner.tsx', () => ({
+  UpdateBanner: () => <div data-testid="update-banner-marker" />,
+}));
 
 // A FileSystemProvider is always present: the Files tab throws without one,
 // and an unused FakeFileSystem costs the other tests nothing.
@@ -79,6 +86,17 @@ describe('App', () => {
   it('shows the agent-down banner before the transport connects', () => {
     renderApp();
     expect(screen.getByText(/whiphand agent/i)).toBeInTheDocument();
+  });
+
+  it('renders the update banner inside the height:100% layout column', () => {
+    renderApp();
+    const marker = screen.getByTestId('update-banner-marker');
+    // The sidebar/main row's parent is the column itself, so the banner and
+    // the row must share it. A banner outside the column stacks its own
+    // height on top of the column's full 100% and pushes Preferences past
+    // the window edge.
+    const row = screen.getByRole('navigation', { name: 'Main' }).parentElement as HTMLElement;
+    expect(marker.parentElement).toBe(row.parentElement);
   });
 
   it('renders Doctor placeholder rows from a scripted MockTransport doctor response', async () => {

@@ -171,6 +171,10 @@ export function Sidebar({ page, onSelectPage, onOpenRun }: SidebarProps) {
         // Block separation is stated once via the named spacers below, not
         // silently summed from this gap plus each spacer's own size.
         gap: 0,
+        // A tall middle section must shrink here, never push the app group
+        // (Preferences, …) past the window's bottom edge.
+        minHeight: 0,
+        overflow: 'hidden',
         borderRight: '1px solid var(--colorNeutralStroke2)',
         padding: 8,
         width: 220,
@@ -180,21 +184,37 @@ export function Sidebar({ page, onSelectPage, onOpenRun }: SidebarProps) {
     >
       <WorkspaceSwitcher />
       <div style={{ height: SIDEBAR_GROUP_GAP }} />
-      {group('workspace')}
-      {/* Everything below the spacer is app-scoped: it outlives any one workspace. */}
-      <div style={{ flex: 1, minHeight: SIDEBAR_GROUP_GAP }} />
-      {hasOngoingRuns && (
-        <>
-          <OngoingRuns jobs={ongoing} onOpenRun={onOpenRun} onShowMore={() => onSelectPage('activity')} />
-          <div style={{ height: SIDEBAR_GROUP_GAP }} />
-        </>
-      )}
-      {remoteListening && (
-        <>
-          <RemoteAccessIndicator />
-          <div style={{ height: SIDEBAR_GROUP_GAP }} />
-        </>
-      )}
+      <div
+        data-testid="sidebar-scroll-region"
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          // Fluent's focus ring draws slightly outside the row; this keeps it
+          // visible at the scroll edges while the negative margin keeps rows
+          // aligned with the switcher and the app group.
+          paddingInline: 2,
+          marginInline: -2,
+        }}
+      >
+        {group('workspace')}
+        {/* Everything below the spacer is app-scoped: it outlives any one workspace. */}
+        <div style={{ flex: 1, minHeight: SIDEBAR_GROUP_GAP }} />
+        {hasOngoingRuns && (
+          <>
+            <OngoingRuns jobs={ongoing} onOpenRun={onOpenRun} onShowMore={() => onSelectPage('activity')} />
+            <div style={{ height: SIDEBAR_GROUP_GAP }} />
+          </>
+        )}
+        {remoteListening && (
+          <>
+            <RemoteAccessIndicator />
+            <div style={{ height: SIDEBAR_GROUP_GAP }} />
+          </>
+        )}
+      </div>
       {group('app')}
     </nav>
   );

@@ -161,6 +161,33 @@ describe('Sidebar', () => {
     }
   });
 
+  describe('Sidebar layout', () => {
+    it('keeps the app group out of the middle scroll region', () => {
+      useAppStore.setState({ workspacePath: '/ws' });
+      renderSidebar();
+      const region = screen.getByTestId('sidebar-scroll-region');
+      // The workspace pages scroll; Preferences and friends don't — the app
+      // group must stay pinned at the bottom of the nav.
+      expect(within(region).getByRole('button', { name: 'Runs' })).toBeInTheDocument();
+      expect(within(region).queryByRole('button', { name: 'Preferences' })).not.toBeInTheDocument();
+      expect(within(region).queryByRole('button', { name: 'Activity' })).not.toBeInTheDocument();
+    });
+
+    it('makes the middle section the only flexible, scrolling part', () => {
+      useAppStore.setState({ workspacePath: '/ws' });
+      renderSidebar();
+      const nav = screen.getByRole('navigation', { name: 'Main' }) as HTMLElement;
+      const region = screen.getByTestId('sidebar-scroll-region') as HTMLElement;
+      // A nav that can't shrink, or a middle section that can't shrink, lets
+      // a tall sidebar push its bottom rows past the window edge again.
+      expect(nav.style.minHeight).toBe('0px');
+      expect(nav.style.overflow).toBe('hidden');
+      expect(region.style.flex).toBe('1 1 0%');
+      expect(region.style.minHeight).toBe('0px');
+      expect(region.style.overflowY).toBe('auto');
+    });
+  });
+
   describe('Ongoing runs', () => {
     // Defaults to a workdir so every row also exercises the workspace dot and
     // its "· basename" suffix; tests about the no-workdir case override it.

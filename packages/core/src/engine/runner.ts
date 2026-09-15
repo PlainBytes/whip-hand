@@ -7,7 +7,7 @@ import type {
   OnFindings, RunnerAdapter, Scope, Workflow, RunCtx, SpawnSpec, Step, WorkspaceConfig,
 } from '../types.ts';
 import { AdapterRegistry, validateWorkflowRunners, validateWorkflowFrontend } from '../registry.ts';
-import { WorkflowError } from '../schema.ts';
+import { WorkflowError, locateSteps, isForwardRef } from '../schema.ts';
 import { collectLoops, flattenSteps, isAgentStep, isCommandStep, isLoopStep, isManualStep } from '../steps.ts';
 import { disabledIds, droppedRefs, droppedRefSentence, pruneDisabled } from '../enabled.ts';
 import { ATTACHMENTS_REF } from '../attachments.ts';
@@ -144,6 +144,10 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
   // ask a human.
   const disabled = disabledIds(workflow.steps);
   const effective = pruneDisabled(workflow);
+  // Built once per run, from the tree that actually runs: what `scopeInputs`
+  // needs to tell a forward reference (this loop's previous iteration) from a
+  // backward one (already ran this iteration, artifact just sitting in ctx).
+  const stepLocations = locateSteps(effective.steps);
 
   if (effective.steps.length === 0) {
     throw new WorkflowError(['the workflow has no enabled steps']);
@@ -208,6 +212,10 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     sessionIds: { ...(opts.resume?.sessionIds ?? {}) },
     artifacts: { ...(opts.resume?.artifacts ?? {}) },
     attempts: { ...(opts.resume?.attempts ?? {}) },
+    // Not seeded from `opts.resume`: a resume rebuilds these as the replay
+    // walk re-skips each done execution (see executeStep's alreadyDone path),
+    // the same way it rebuilds ctx.loop rather than restoring it wholesale.
+    verdicts: {},
     inputs,
     ...(opts.resume === undefined ? {} : { resumedStepIds: opts.resume.resumedStepIds }),
   };
@@ -474,6 +482,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         v = parsed;
       }
       verdict = v;
+      ctx.verdicts[step.id] = v;
       emit({ type: 'step:verdict', stepId: step.id, verdict: v });
       return v === 'fail' ? 'verdict-fail' : null;
     };
@@ -549,6 +558,10 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     const recordArtifact = (stepId: string, path: string): void => {
       ctx.artifacts[stepId] = path;
       (ctx.attempts[stepId] ??= []).push(path);
+      // This execution hasn't produced a verdict yet — drop whatever an
+      // earlier one left, so a step that starts again never carries a stale
+      // PASS/FAIL into a prompt built before it finishes this time.
+      delete ctx.verdicts[stepId];
     };
 
     // -----------------------------------------------------------------------
@@ -757,14 +770,28 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
      * there is no such artifact, so the reference is simply dropped rather
      * than failing prompt assembly.
      *
+     * A forward reference into loop L means L's *previous* iteration, even
+     * when L is nested inside an outer loop that has gone round again: L's
+     * frame is found by walking up from `frame`, and if L is on its own first
+     * iteration the reference is dropped there too — `ctx.artifacts[id]`
+     * alone isn't enough, since it may still hold L's artifact from the
+     * outer loop's previous round.
+     *
      * `attachments` is dropped the same way, anywhere, when the run has no
      * files attached — a workflow that can use them must not need them.
      */
     function scopeInputs<T extends AgentStep | CommandStep | ManualStep>(step: T, frame?: LoopFrame): T {
       if (step.inputs === undefined) return step;
-      const kept = step.inputs.filter(id => id === ATTACHMENTS_REF
-        ? (ctx.attachments?.length ?? 0) > 0
-        : frame === undefined || ctx.artifacts[id] !== undefined);
+      const kept = step.inputs.filter(id => {
+        if (id === ATTACHMENTS_REF) return (ctx.attachments?.length ?? 0) > 0;
+        if (frame !== undefined && isForwardRef(stepLocations, step.id, id)) {
+          const loopId = stepLocations.get(id)?.parentLoopId;
+          let owner: LoopFrame | undefined = frame;
+          while (owner !== undefined && owner.id !== loopId) owner = owner.parent;
+          if (owner !== undefined && owner.iteration === 1) return false;
+        }
+        return frame === undefined || ctx.artifacts[id] !== undefined;
+      });
       return kept.length === step.inputs.length ? step : { ...step, inputs: kept };
     }
 
@@ -810,6 +837,10 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         if (alreadyDone !== undefined) {
           skippable.delete(key);
           if (alreadyDone.artifact !== undefined) recordArtifact(step.id, alreadyDone.artifact);
+          // After recordArtifact, which just cleared it for this execution —
+          // a replayed step's prompt label must see the verdict it actually
+          // produced, exactly like a fresh execution's finishStep would set.
+          if (alreadyDone.verdict !== undefined) ctx.verdicts[step.id] = alreadyDone.verdict;
           emit({
             type: 'step:skipped', stepId: step.id,
             ...(frame === undefined ? {} : { loopId: frame.id, iteration: frame.iteration }),

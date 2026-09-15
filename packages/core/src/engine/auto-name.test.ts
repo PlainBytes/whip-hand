@@ -20,7 +20,7 @@ async function ctxIn(inputs: Record<string, string> = { feature: 'oauth support'
   const runDir = await mkdtemp(join(tmpdir(), 'whiphand-auto-name-'));
   return {
     workdir: '/w', runId: '20260101-000000-aaaa', runDir, runSlug: '20260101-000000-aaaa',
-    sessionIds: {}, artifacts: {}, attempts: {}, inputs,
+    sessionIds: {}, artifacts: {}, attempts: {}, verdicts: {}, inputs,
   };
 }
 

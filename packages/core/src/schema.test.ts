@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseWorkflow, validateWorkflowWarnings, validateWorkflowDraft, formatWorkflowIssues, formatWorkflowFieldIssues,
-  workflowSchema, WorkflowError,
+  workflowSchema, WorkflowError, locateSteps, isForwardRef,
 } from './schema.ts';
+import type { Step } from './types.ts';
 
 const VALID = `
 name: feature
@@ -726,4 +727,56 @@ steps:
     assert.ok(!e.message.includes('"origin"'), 'must not be zod\'s raw JSON issue dump');
     return true;
   });
+});
+
+// ---------------------------------------------------------------------------
+// locateSteps / isForwardRef — what the runner's scopeInputs uses to tell a
+// forward reference (this loop's previous iteration) from a backward one.
+// ---------------------------------------------------------------------------
+
+const NESTED_STEPS: Step[] = [
+  {
+    kind: 'loop', id: 'outer', until: 'sign-off', steps: [
+      {
+        kind: 'loop', id: 'inner', until: 'tests', steps: [
+          {
+            id: 'execute', kind: 'agent', runner: 'claude', mode: 'headless', writes: true,
+            inputs: ['tests', 'review', 'sign-off'], output: 'report.md', prompt: 'Do it.',
+          },
+          { id: 'tests', kind: 'command', verdict: true, output: 'tests.log', run: 'npm test' },
+        ],
+      },
+      {
+        id: 'review', kind: 'agent', runner: 'claude', mode: 'headless', writes: false, verdict: true,
+        inputs: ['execute', 'tests'], output: 'findings.md', prompt: 'Review it.',
+      },
+    ],
+  },
+  {
+    id: 'sign-off', kind: 'approval', verdict: true, title: 'Ship it?', instructions: 'Look at the diff.',
+    capture: 'review', show_diff: true, inputs: ['review'], output: 'feedback.md',
+  },
+];
+
+test('locateSteps records each step\'s document-order path, enclosing loop and loop chain', () => {
+  const located = locateSteps(NESTED_STEPS);
+  assert.deepEqual(located.get('execute')?.parentLoopId, 'inner');
+  assert.deepEqual(located.get('execute')?.loopChain, ['outer', 'inner']);
+  assert.deepEqual(located.get('tests')?.parentLoopId, 'inner');
+  assert.deepEqual(located.get('review')?.parentLoopId, 'outer');
+  assert.deepEqual(located.get('review')?.loopChain, ['outer']);
+  assert.equal(located.get('sign-off')?.parentLoopId, undefined);
+  assert.deepEqual(located.get('sign-off')?.loopChain, []);
+});
+
+test('isForwardRef is true for a later sibling, false for an earlier one or an unknown id', () => {
+  const located = locateSteps(NESTED_STEPS);
+  assert.equal(isForwardRef(located, 'execute', 'tests'), true);
+  assert.equal(isForwardRef(located, 'execute', 'review'), true);
+  assert.equal(isForwardRef(located, 'execute', 'sign-off'), true);
+  assert.equal(isForwardRef(located, 'review', 'execute'), false);
+  assert.equal(isForwardRef(located, 'tests', 'execute'), false);
+  assert.equal(isForwardRef(located, 'execute', 'execute'), false);
+  assert.equal(isForwardRef(located, 'nonexistent', 'tests'), false);
+  assert.equal(isForwardRef(located, 'execute', 'nonexistent'), false);
 });

@@ -253,6 +253,34 @@ function comparePaths(a: number[], b: number[]): number {
   return 0;
 }
 
+/** Where one step sits in the tree, by id — what `scopeInputs` needs to tell a forward reference from a backward one. */
+export interface StepTreeLocation {
+  path: number[];
+  /** id of the enclosing loop, when this step is a direct loop body member. */
+  parentLoopId?: string;
+  /** ids of every loop this step is nested inside, directly or transitively, outermost first. */
+  loopChain: string[];
+}
+
+/** Every step's location, keyed by id — built once per run (or per validation pass) and read by id from there on. */
+export function locateSteps(steps: Step[]): Map<string, StepTreeLocation> {
+  const located: Located[] = [];
+  locate(steps, [], [], located);
+  const byId = new Map<string, StepTreeLocation>();
+  for (const entry of located) {
+    byId.set(entry.step.id, { path: entry.path, parentLoopId: entry.parentLoopId, loopChain: entry.loopChain });
+  }
+  return byId;
+}
+
+/** Whether `toId` comes after `fromId` in document order — a reference from `fromId` to `toId` means "the previous iteration". */
+export function isForwardRef(locations: Map<string, StepTreeLocation>, fromId: string, toId: string): boolean {
+  const from = locations.get(fromId);
+  const to = locations.get(toId);
+  if (from === undefined || to === undefined) return false;
+  return comparePaths(to.path, from.path) > 0;
+}
+
 /**
  * Cross-field checks zod's shape validation can't express: id uniqueness across
  * the whole tree, artifact-reference direction, and loop wiring.

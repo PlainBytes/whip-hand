@@ -47,7 +47,8 @@ test('an unknown run.* reference is left alone rather than throwing', () => {
 
 const ctx: RunCtx = {
   workdir: '/w', runId: 'r1', runDir: '/w/.whiphand/runs/r1', runSlug: 'r1',
-  sessionIds: {}, artifacts: { plan: '/w/.whiphand/runs/r1/plan.md' }, attempts: {}, inputs: { feature: 'oauth' },
+  sessionIds: {}, artifacts: { plan: '/w/.whiphand/runs/r1/plan.md' }, attempts: {}, verdicts: {},
+  inputs: { feature: 'oauth' },
 };
 
 test('buildPrompt appends artifact section for steps with inputs', () => {
@@ -81,6 +82,40 @@ test('buildPrompt expands attachments to one line per attached file', () => {
   assert.equal(buildPrompt(step, withFiles), 'Plan it.\n\n## Input artifacts (read these files first)\n'
     + '- attachments/bug.png: /w/.whiphand/runs/r1/attachments/bug.png\n'
     + '- attachments/server.log: /w/.whiphand/runs/r1/attachments/server.log');
+});
+
+test('buildPrompt labels an input artifact with its verdict, pass or fail', () => {
+  const step: AgentStep = { kind: 'agent',
+    id: 'execute', runner: 'claude', mode: 'headless', writes: true,
+    prompt: 'Fix it.', inputs: ['plan', 'tests'], output: 'report.md',
+  };
+  const failing: RunCtx = {
+    ...ctx,
+    artifacts: { ...ctx.artifacts, tests: '/w/.whiphand/runs/r1/tests.log' },
+    verdicts: { tests: 'fail' },
+  };
+  assert.equal(buildPrompt(step, failing), 'Fix it.\n\n## Input artifacts (read these files first)\n'
+    + '- plan: /w/.whiphand/runs/r1/plan.md\n'
+    + '- tests: /w/.whiphand/runs/r1/tests.log (VERDICT: FAIL)');
+
+  const passing: RunCtx = { ...failing, verdicts: { tests: 'pass' } };
+  assert.equal(buildPrompt(step, passing), 'Fix it.\n\n## Input artifacts (read these files first)\n'
+    + '- plan: /w/.whiphand/runs/r1/plan.md\n'
+    + '- tests: /w/.whiphand/runs/r1/tests.log (VERDICT: PASS)');
+});
+
+test('buildPrompt leaves attachments unlabelled even when a verdict is recorded under that name', () => {
+  const step: AgentStep = { kind: 'agent',
+    id: 'plan', runner: 'claude', mode: 'headless', writes: false,
+    prompt: 'Plan it.', inputs: ['attachments'], output: 'plan.md',
+  };
+  const withFiles: RunCtx = {
+    ...ctx,
+    attachments: ['/w/.whiphand/runs/r1/attachments/bug.png'],
+    verdicts: { 'attachments/bug.png': 'fail' },
+  };
+  assert.equal(buildPrompt(step, withFiles), 'Plan it.\n\n## Input artifacts (read these files first)\n'
+    + '- attachments/bug.png: /w/.whiphand/runs/r1/attachments/bug.png');
 });
 
 test('buildPrompt lists nothing for attachments when the run has none', () => {

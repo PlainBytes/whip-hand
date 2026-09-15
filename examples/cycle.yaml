@@ -29,26 +29,36 @@ steps:
     max_iterations: 3
     on_exhausted: report    # report | interactive; default: the workspace's on_findings
     steps:
-      - id: execute
-        runner: claude
-        model: sonnet
-        mode: headless
-        writes: true
-        # `review` and `sign-off` come later in this body, so both resolve to
-        # the PREVIOUS iteration's findings and feedback — and are skipped on
-        # the first pass, when there are none.
-        inputs: [plan, review, sign-off]
-        output: execute-report.md
-        prompt: |
-          Implement the attached plan. This is attempt {{ loop.iteration }} of
-          {{ loop.max_iterations }}. Report what you changed.
+      # Nested loop: repeats until the tests pass, handing the failing log
+      # back to `execute` each time — `review` only runs once they are green.
+      - id: test-fix
+        kind: loop
+        until: tests
+        max_iterations: 3
+        steps:
+          - id: execute
+            runner: claude
+            model: sonnet
+            mode: headless
+            writes: true
+            # `tests` is later in THIS loop, so it resolves to the PREVIOUS
+            # iteration's log. `review` and `sign-off` are later siblings of
+            # the OUTER loop, so they resolve to the previous ROUND's findings
+            # and feedback. All three are skipped on the first pass of their
+            # own loop, when there is nothing yet to read — even on a later
+            # round of `fix-cycle`, when `test-fix` is starting over.
+            inputs: [plan, tests, review, sign-off]
+            output: execute-report.md
+            prompt: |
+              Implement the attached plan. This is attempt {{ loop.iteration }} of
+              {{ loop.max_iterations }}. Report what you changed.
 
-      - id: tests
-        kind: command
-        run: npm test
-        verdict: true       # a non-zero exit is a signal to the loop, not a crash
-        output: tests.log
-        timeout_ms: 600000
+          - id: tests
+            kind: command
+            run: npm test
+            verdict: true       # a non-zero exit sends test-fix round again, not a crash
+            output: tests.log
+            timeout_ms: 600000
 
       - id: review
         runner: claude

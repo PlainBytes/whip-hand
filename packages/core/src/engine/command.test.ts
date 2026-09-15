@@ -13,7 +13,7 @@ const defaultShell = (run: string): string[] => [DEFAULT_SHELL, ...shellFlags(DE
 
 const ctx: RunCtx = {
   workdir: '/w', runId: 'r1', runDir: '/w/.whiphand/runs/r1', runSlug: 'r1',
-  sessionIds: {}, artifacts: {}, attempts: {},
+  sessionIds: {}, artifacts: {}, attempts: {}, verdicts: {},
   inputs: { suite: 'unit' },
 };
 

@@ -604,10 +604,18 @@ export function NewRunDialog({ open, onOpenChange, onStarted }: NewRunDialogProp
                     label={input.prompt ?? key}
                     required={input.required}
                   >
-                    <AutoGrowTextarea
-                      value={values[key] ?? ''}
-                      onChange={(_e, data) => setValues(prev => ({ ...prev, [key]: data.value }))}
-                    />
+                    {input.multiline === false ? (
+                      <Input
+                        style={NARROW}
+                        value={values[key] ?? ''}
+                        onChange={(_e, data) => setValues(prev => ({ ...prev, [key]: data.value }))}
+                      />
+                    ) : (
+                      <AutoGrowTextarea
+                        value={values[key] ?? ''}
+                        onChange={(_e, data) => setValues(prev => ({ ...prev, [key]: data.value }))}
+                      />
+                    )}
                   </Field>
                 ))}
 

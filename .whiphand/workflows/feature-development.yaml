@@ -10,6 +10,7 @@ inputs:
     required: false
     default: main
     prompt: Branch to start from
+    multiline: false
 steps:
   - id: sync-base # a dirty tree or a diverged trunk fails the run here,
     kind: command # with git's own message in the artifact

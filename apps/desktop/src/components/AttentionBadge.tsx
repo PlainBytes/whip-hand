@@ -3,6 +3,7 @@
  * a StatusBadge (which falls back to grey).
  */
 import { Badge } from '@fluentui/react-components';
+import { WAITING_BADGE_COLOR } from '../lib/status-style.ts';
 
 export interface AttentionBadgeProps {
   /** Badge register — from AWAIT_LABEL / manualLabel, never written inline. */
@@ -16,7 +17,7 @@ export function AttentionBadge({ label, compact, 'data-testid': testId }: Attent
   if (compact) {
     return (
       <Badge
-        color="warning"
+        color={WAITING_BADGE_COLOR}
         appearance="filled"
         size="tiny"
         aria-label={label}
@@ -26,7 +27,7 @@ export function AttentionBadge({ label, compact, 'data-testid': testId }: Attent
     );
   }
   return (
-    <Badge color="warning" appearance="filled" data-testid={testId}>
+    <Badge color={WAITING_BADGE_COLOR} appearance="filled" data-testid={testId}>
       {label}
     </Badge>
   );

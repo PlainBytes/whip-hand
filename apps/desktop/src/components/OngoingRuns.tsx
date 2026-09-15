@@ -1,9 +1,10 @@
-import { Button, Spinner, Tooltip } from '@fluentui/react-components';
-import { DismissCircleFilled, PauseCircleFilled } from '@fluentui/react-icons';
+import { Badge, Button, Spinner, Tooltip } from '@fluentui/react-components';
+import { DismissFilled, PauseFilled } from '@fluentui/react-icons';
 import { WorkspaceDot } from './WorkspaceDot.tsx';
 import { RowGlyph, RowTrailing, SIDEBAR_ROW_GAP, SIDEBAR_ROW_STYLE } from './sidebar-row.tsx';
 import { isWaitingJob, type JobState } from '../state/store.ts';
 import { AWAIT_LABEL, manualLabel } from '../lib/await-copy.ts';
+import { STATUS_BADGE_SIZE, STATUS_SPINNER_SIZE, WAITING_BADGE_COLOR } from '../lib/status-style.ts';
 import { basename } from '../lib/workspace-identity.ts';
 
 /** Beyond this, the rest collapse into a single "+N more" row into Activity. */
@@ -27,20 +28,26 @@ function stateLabel(job: JobState): string {
 export type RunStatus = 'running' | 'waiting' | 'failed';
 
 /**
- * The row's trailing glyph, mirroring the shape of `StepStatusIcon`. `failed`
- * is not reachable from this list today — `ongoingJobs` filters to
- * `!job.finished`, so a failed run leaves the sidebar the moment it fails —
- * but is kept ready for if that selector ever changes, and is exercised
- * directly by tests.
+ * The row's trailing marker, mirroring the shape of `StepStatusIcon`: a
+ * spinner while the run is live, and a filled circular badge once it's
+ * waiting on the human (or failed). `failed` is not reachable from this list
+ * today — `ongoingJobs` filters to `!job.finished`, so a failed run leaves
+ * the sidebar the moment it fails — but is kept ready for if that selector
+ * ever changes, and is exercised directly by tests. The markers stay
+ * decorative: the row's accessible name already carries the state.
  */
 export function RunStatusIcon({ status }: { status: RunStatus }) {
   switch (status) {
     case 'running':
-      return <Spinner size="extra-tiny" />;
+      return <Spinner size={STATUS_SPINNER_SIZE} />;
     case 'waiting':
-      return <PauseCircleFilled fontSize={16} style={{ color: 'var(--colorPaletteDarkOrangeForeground1)' }} />;
+      return (
+        <Badge appearance="filled" shape="circular" color={WAITING_BADGE_COLOR} size={STATUS_BADGE_SIZE} icon={<PauseFilled />} />
+      );
     case 'failed':
-      return <DismissCircleFilled fontSize={16} style={{ color: 'var(--colorPaletteRedForeground1)' }} />;
+      return (
+        <Badge appearance="filled" shape="circular" color="danger" size={STATUS_BADGE_SIZE} icon={<DismissFilled />} />
+      );
   }
 }
 

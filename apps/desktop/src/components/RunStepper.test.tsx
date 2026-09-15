@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { RunStepper, StepDetails } from './RunStepper.tsx';
+import { RunStepper, StepDetails, StepStatusIcon } from './RunStepper.tsx';
+import { hasInjectedStyle } from '../test/badge-style.ts';
 import { executionKey, type StepState } from '../state/store.ts';
 
 function steps(): StepState[] {
@@ -78,6 +79,40 @@ describe('RunStepper', () => {
     render(<RunStepper steps={steps()} focusStepId="b" collapsed onToggleCollapse={vi.fn()} />);
     // 'b' is step 2 of 3 — collapsing must not renumber it to 1.
     expect(screen.getByTestId('step-ordinal-b')).toHaveTextContent('2');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// StepStatusIcon — the one status marker every pill and popover header shares
+// ---------------------------------------------------------------------------
+
+describe('StepStatusIcon', () => {
+  it('renders filled badges at the shared 24px status size for done, failed and interrupted', () => {
+    const cases: Array<[StepState['status'], string]> = [
+      ['done', 'var(--colorPaletteGreenBackground3)'],
+      ['failed', 'var(--colorPaletteRedBackground3)'],
+      ['interrupted', 'var(--colorPaletteDarkOrangeBackground3)'],
+    ];
+    for (const [status, fill] of cases) {
+      const { container, unmount } = render(<StepStatusIcon status={status} />);
+      const badge = container.querySelector('.fui-Badge') as HTMLElement;
+      expect(badge, `${status} renders a filled badge`).not.toBeNull();
+      expect(hasInjectedStyle(badge, 'background-color', fill)).toBe(true);
+      expect(hasInjectedStyle(badge, 'height', '24px')).toBe(true);
+      unmount();
+    }
+  });
+
+  it('keeps running a spinner', () => {
+    const { container } = render(<StepStatusIcon status="running" />);
+    expect(container.querySelector('[role="progressbar"]')).not.toBeNull();
+    expect(container.querySelector('.fui-Badge')).toBeNull();
+  });
+
+  it('renders nothing for disabled', () => {
+    // A disabled step never ran, which is not the fact a pending circle tells.
+    const { container } = render(<StepStatusIcon status="disabled" />);
+    expect(container.firstChild).toBeNull();
   });
 });
 

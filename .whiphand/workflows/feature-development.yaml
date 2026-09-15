@@ -79,7 +79,7 @@ steps:
 
   - id: stage # everything but the run artifacts, so the message
     kind: command # writer below sees the whole change as one diff
-    run: git add -A -- . ":(exclude,glob)[.]whiphand/runs/**"
+    run: git add -A -- . ":![.]whiphand/runs/*"
     output: stage.log
 
   - id: commit-message

@@ -224,6 +224,15 @@ async function tmpRunDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'whiphand-opencode-capture-'));
 }
 
+/**
+ * The stub is a bash script, which Windows' PATHEXT lookup never finds — the
+ * fallback would see no `opencode` at all, so the tests would either fail or
+ * pass for the wrong reason. Same trade as claude-models.test.ts's stubs.
+ */
+const posixStubs = {
+  skip: process.platform === 'win32' && 'stub binaries on PATH are POSIX-only; see the comment above posixStubs',
+};
+
 /** Puts a stub `opencode` answering `session list` ahead of PATH for the duration of `fn`. */
 async function withSessionListStub<T>(jsonBody: string, fn: () => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), 'whiphand-opencode-stub-'));
@@ -258,7 +267,7 @@ test('captureSessionId: reads the plugin-written file first, never shelling out'
   }
 });
 
-test('captureSessionId: with no file, falls back to session list; exactly one match wins', async () => {
+test('captureSessionId: with no file, falls back to session list; exactly one match wins', posixStubs, async () => {
   const runDir = await tmpRunDir();
   try {
     await writeFile(opencodeGuidancePath(runDir, 'plan'), 'guidance');
@@ -272,7 +281,7 @@ test('captureSessionId: with no file, falls back to session list; exactly one ma
   }
 });
 
-test('captureSessionId: two equally-plausible sessions is ambiguous, not a guess', async () => {
+test('captureSessionId: two equally-plausible sessions is ambiguous, not a guess', posixStubs, async () => {
   const runDir = await tmpRunDir();
   try {
     await writeFile(opencodeGuidancePath(runDir, 'plan'), 'guidance');
@@ -289,7 +298,7 @@ test('captureSessionId: two equally-plausible sessions is ambiguous, not a guess
   }
 });
 
-test('captureSessionId: no session in this directory created after the guidance file means undefined', async () => {
+test('captureSessionId: no session in this directory created after the guidance file means undefined', posixStubs, async () => {
   const runDir = await tmpRunDir();
   try {
     await writeFile(opencodeGuidancePath(runDir, 'plan'), 'guidance');

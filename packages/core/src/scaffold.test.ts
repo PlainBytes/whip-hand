@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { execRunner } from './exec.ts';
+import { DEFAULT_SHELL, shellFlags } from './engine/command.ts';
 import {
   createWorkflow, deleteWorkflow, cloneWorkflow, initWorkspace, workflowTemplate, specDrivenTemplate, featureDevelopmentTemplate,
   updateWorkflow,
@@ -145,7 +147,9 @@ test('featureDevelopmentTemplate stage step works when the runs dir is gitignore
   await git('add', 'a.txt');
   await writeFile(join(ws, 'b.txt'), 'new\n');
 
-  await promisify(execFile)('/bin/sh', ['-c', stage.run], { cwd: ws }); // rejects on a non-zero exit
+  // The shell a command step really gets (cmd.exe on Windows), so this also
+  // pins that the run line survives cmd's quoting. Rejects on a non-zero exit.
+  await execRunner([DEFAULT_SHELL, ...shellFlags(DEFAULT_SHELL), stage.run], { cwd: ws });
 
   const { stdout } = await git('diff', '--cached', '--name-only');
   assert.deepEqual(stdout.trim().split('\n'), ['a.txt', 'b.txt']);

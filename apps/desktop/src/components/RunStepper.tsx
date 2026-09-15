@@ -9,18 +9,20 @@ import {
   Text,
 } from '@fluentui/react-components';
 import {
-  CheckmarkCircleFilled,
+  CheckmarkFilled,
   ChevronDownRegular,
   ChevronUpRegular,
   CircleRegular,
-  DismissCircleFilled,
+  DismissFilled,
   WarningFilled,
 } from '@fluentui/react-icons';
 import type { StepState } from '../state/store.ts';
 import { AttentionBadge } from './AttentionBadge.tsx';
 import { GENERATING_ARTIFACT_LABEL, isGeneratingArtifact } from '../lib/step-phase.ts';
+import { STATUS_BADGE_SIZE, STATUS_GLYPH_PX, STATUS_SPINNER_SIZE } from '../lib/status-style.ts';
 import { buildRunTree, flattenNodes, type LeafNode, type LoopNode, type StepNode } from '../lib/run-tree.ts';
-import { elapsedMs, formatElapsed } from '../lib/duration.ts';
+import { elapsedMs, formatElapsed } from '../../../../packages/core/src/format.ts';
+import { usageParts } from '../../../../packages/core/src/log-rows.ts';
 
 /**
  * What the stepper needs to know about a session waiting on the human. Comes
@@ -36,35 +38,35 @@ export interface StepAwaiting {
 export function StepStatusIcon({ status }: { status: StepState['status'] }) {
   switch (status) {
     case 'done':
-      return <CheckmarkCircleFilled style={{ color: 'var(--colorPaletteGreenForeground1)' }} />;
+      return <Badge appearance="filled" shape="circular" color="success" size={STATUS_BADGE_SIZE} icon={<CheckmarkFilled />} />;
     case 'failed':
-      return <DismissCircleFilled style={{ color: 'var(--colorPaletteRedForeground1)' }} />;
+      return <Badge appearance="filled" shape="circular" color="danger" size={STATUS_BADGE_SIZE} icon={<DismissFilled />} />;
     case 'running':
-      return <Spinner size="tiny" />;
+      return <Spinner size={STATUS_SPINNER_SIZE} />;
     case 'interrupted':
       // Never a spinner: this step is over, it just never got to say how it
       // ended. A spinner here is what made abandoned runs look alive forever.
-      return <WarningFilled style={{ color: 'var(--colorPaletteDarkOrangeForeground1)' }} />;
+      return <Badge appearance="filled" shape="circular" color="severe" size={STATUS_BADGE_SIZE} icon={<WarningFilled />} />;
     case 'disabled':
       // No icon at all — a disabled step never ran, which is not the same
       // fact a hollow 'pending' circle tells: pending means "not yet",
       // disabled means "never".
       return null;
     default:
-      return <CircleRegular />;
+      return <CircleRegular fontSize={STATUS_GLYPH_PX} style={{ color: 'var(--colorNeutralForeground3)' }} />;
   }
 }
 
 /**
- * The pill outline per status — the same palette StepStatusIcon uses, so the
- * ring and the glyph always agree. CSS variables (not the `tokens` object) so
+ * The pill outline per status — the same fill the status badge uses, so the
+ * ring and the badge always agree. CSS variables (not the `tokens` object) so
  * both webLightTheme and webDarkTheme work with no extra wiring.
  */
 const STEP_STATUS_COLOR: Record<StepState['status'], string> = {
-  done: 'var(--colorPaletteGreenForeground1)',
-  failed: 'var(--colorPaletteRedForeground1)',
+  done: 'var(--colorPaletteGreenBackground3)',
+  failed: 'var(--colorPaletteRedBackground3)',
   running: 'var(--colorBrandStroke1)',
-  interrupted: 'var(--colorPaletteDarkOrangeForeground1)',
+  interrupted: 'var(--colorPaletteDarkOrangeBackground3)',
   pending: 'var(--colorNeutralStroke2)',
   disabled: 'var(--colorNeutralStroke2)',
 };
@@ -122,10 +124,7 @@ function loopProgress(loop: StepState): string | null {
  * duplication this row was cleaned up to stop.
  */
 function spendSummary(progress: NonNullable<StepState['progress']>): string | null {
-  const parts: string[] = [];
-  if (progress.turns !== undefined) parts.push(`${progress.turns} turns`);
-  if (progress.costUsd !== undefined) parts.push(`$${progress.costUsd.toFixed(2)}`);
-  if (progress.premiumRequests !== undefined) parts.push(`${progress.premiumRequests} premium requests`);
+  const parts = usageParts(progress, usd => `$${usd.toFixed(2)}`);
   return parts.length === 0 ? null : parts.join(' · ');
 }
 

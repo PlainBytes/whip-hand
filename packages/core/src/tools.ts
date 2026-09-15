@@ -108,14 +108,20 @@ export function parseToolVersion(
 }
 
 /**
- * claude and copilot appear here for their metadata only — `detectTools`
- * routes any registry id through the adapter's own `detect()`, which is what
- * keeps copilot's `beep` advisory note alive. Their `argv` is what a probe
- * WOULD run, kept accurate so nothing goes stale if that routing ever changes.
+ * claude, copilot and opencode are probed through their adapters —
+ * `detectTools` routes any registry id through the adapter's own `detect()`,
+ * which is what keeps copilot's `beep` advisory note (and opencode's PATH and
+ * env notes) alive. The adapters don't re-implement the probe to do that,
+ * though: each `detect()` runs *this* entry via `probeRunner`, then layers its
+ * notes on top, so the argv here is the one that actually runs — edit it and
+ * both Doctor and the run:env snapshot follow.
  *
- * `optional` defaults to true. Only the three things whiphand cannot work without
- * are required: the two runners it drives, and git, which engine/git-guard.ts
- * shells out to in order to enforce every `writes: false` step.
+ * `optional` defaults to true. Only the things whiphand cannot work without at
+ * all are required: claude and copilot (a fresh install needs at least one
+ * working runner, and these are the two everyone starts from), and git, which
+ * engine/git-guard.ts shells out to in order to enforce every `writes: false`
+ * step. opencode is a third, later runner, and stays optional — nothing about
+ * a working whiphand install depends on it being there.
  */
 export const BUILTIN_TOOLS: readonly ToolProbe[] = [
   // --- harness: what whiphand drives -------------------------------------------
@@ -143,6 +149,10 @@ export const BUILTIN_TOOLS: readonly ToolProbe[] = [
   {
     id: 'cursor-agent', label: 'Cursor Agent', group: 'harness',
     argv: ['cursor-agent', '--version'], url: 'https://cursor.com/cli',
+  },
+  {
+    id: 'opencode', label: 'opencode', group: 'harness',
+    argv: ['opencode', '--version'], optional: true, url: 'https://opencode.ai',
   },
 
   // --- support: what workflows and whiphand itself lean on ---------------------
@@ -198,13 +208,34 @@ export async function probeTool(probe: ToolProbe): Promise<DetectResult> {
       const version = parseToolVersion(String(stdout), String(stderr), probe.versionPattern);
       // Naming the binary matters only when it isn't the one we asked for —
       // otherwise every row would carry a note repeating its own id.
-      const notes = argv[0] === probe.argv[0] ? undefined : [`found as '${argv[0]}'`];
-      return { installed: true, version, notes };
+      // Omitted rather than `notes: undefined`, so an adapter returning this
+      // as its own detect() result has the same shape it always had.
+      return argv[0] === probe.argv[0]
+        ? { installed: true, version }
+        : { installed: true, version, notes: [`found as '${argv[0]}'`] };
     } catch {
       continue;
     }
   }
   return { installed: false };
+}
+
+/**
+ * The spawn half of a runner adapter's `detect()`: probes the adapter's own
+ * BUILTIN_TOOLS row, so adapters share probeTool's version parsing, timeout
+ * and alias fallback instead of each carrying a copy. Deliberately the
+ * *built-in* row, not the doctor.yaml-merged table — an override there cannot
+ * change how a registry id is detected (see resolveToolTable), and a run's
+ * run:env snapshot has no doctor config to consult anyway.
+ *
+ * An id with no row gets `<id> --version`, the same default resolveToolTable
+ * synthesizes for a registered adapter the table hasn't heard of — so a
+ * third-party adapter can use this too, and a missing row degrades to a
+ * sensible probe instead of throwing out of Doctor.
+ */
+export function probeRunner(id: string): Promise<DetectResult> {
+  const builtin = BUILTIN_TOOLS.find(probe => probe.id === id);
+  return probeTool(builtin ?? { id, label: id, group: 'harness', argv: [id, '--version'] });
 }
 
 export interface DoctorToolsConfig {

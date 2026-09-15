@@ -12,6 +12,7 @@ import { useFileSystem } from './fs-context.tsx';
 import {
   applyDirError, applyDirListing, makeRootNode, parentPath, type TreeNodes,
 } from './tree-model.ts';
+import { errorMessage } from '../lib/error-message.ts';
 
 const SHOW_HIDDEN_KEY = 'whiphand.files.showHidden';
 
@@ -74,7 +75,7 @@ export function useFileTree(root: string | null): FileTreeState {
       const entries = await fs.readDir(dirPath);
       setNodes(current => applyDirListing(current, dirPath, entries, hidden));
     } catch (e) {
-      setNodes(current => applyDirError(current, dirPath, e instanceof Error ? e.message : String(e)));
+      setNodes(current => applyDirError(current, dirPath, errorMessage(e)));
     }
   }, [fs]);
 
@@ -96,7 +97,7 @@ export function useFileTree(root: string | null): FileTreeState {
         await fs.ensureGranted(root);
       } catch (e) {
         if (!cancelled) {
-          setNodes(current => applyDirError(current, root, e instanceof Error ? e.message : String(e)));
+          setNodes(current => applyDirError(current, root, errorMessage(e)));
         }
         return;
       }

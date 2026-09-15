@@ -11,12 +11,11 @@
  *
  * Nothing writes this file, so it stays exactly as the user typed it.
  */
-import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { parse as parseYaml } from 'yaml';
 import { resolveConfigHome } from './config-home.ts';
+import { loadYamlLayer } from './config.ts';
 import { WorkflowError } from './schema.ts';
 import type { DoctorToolsConfig, ToolProbe } from './tools.ts';
 
@@ -93,32 +92,13 @@ function assertPatternsCompile(tools: DoctorToolLayer[], path: string): void {
 export async function loadDoctorConfig(
   path: string = globalDoctorConfigPath(),
 ): Promise<DoctorToolsConfig> {
-  let text: string;
-  try {
-    text = await readFile(path, 'utf8');
-  } catch {
-    return {};
-  }
+  const data = await loadYamlLayer(path, doctorConfigSchema);
+  if (data === undefined) return {};
 
-  let value: unknown;
-  try {
-    value = parseYaml(text) ?? {};
-  } catch (e) {
-    throw new WorkflowError([`${path}: ${(e as Error).message}`]);
-  }
-
-  const parsed = doctorConfigSchema.safeParse(value);
-  if (!parsed.success) {
-    throw new WorkflowError(parsed.error.issues.map(i => {
-      const at = i.path.join('.');
-      return at.length > 0 ? `${path}: ${at}: ${i.message}` : `${path}: ${i.message}`;
-    }));
-  }
-
-  const tools = parsed.data.tools ?? [];
+  const tools = data.tools ?? [];
   assertPatternsCompile(tools, path);
   return {
-    ...(parsed.data.tools === undefined ? {} : { tools: tools.map(toProbe) }),
-    ...(parsed.data.hide === undefined ? {} : { hide: parsed.data.hide }),
+    ...(data.tools === undefined ? {} : { tools: tools.map(toProbe) }),
+    ...(data.hide === undefined ? {} : { hide: data.hide }),
   };
 }

@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import type {
   AgentStep, AttachmentSource, CommandStep, Frontend, LoopFrame, LoopStep, ManualStep, WhiphandEvent,
-  OnFindings, Scope, Workflow, RunCtx, SpawnSpec, Step, WorkspaceConfig,
+  OnFindings, RunnerAdapter, Scope, Workflow, RunCtx, SpawnSpec, Step, WorkspaceConfig,
 } from '../types.ts';
 import { AdapterRegistry, validateWorkflowRunners, validateWorkflowFrontend } from '../registry.ts';
 import { WorkflowError } from '../schema.ts';
@@ -16,11 +16,12 @@ import { artifactPath, assertArtifact, ArtifactError, ensureArtifactDir } from '
 import { snapshotTree, diffSnapshots, headSha, pathsFromStatusLines } from './git-guard.ts';
 import { CORE_VERSION } from '../version.ts';
 import { parseVerdict, verdictFromExit, verdictFromChoice, VERDICT_INSTRUCTION } from './verdict.ts';
-import { parseProgressLine } from './progress.ts';
+import { createProgressParser, progressErrorMessage } from './progress.ts';
 import { commandSpec, captureHeader, captureFooter } from './command.ts';
 import { buildManualRequest, noteArtifact, reviewArtifact } from './manual.ts';
 import { clearEndMarker } from './session-end.ts';
 import { clearAwaitState } from './await-state.ts';
+import { clearSessionCapture } from './session-capture.ts';
 import { RunJournal, WORKFLOW_SNAPSHOT_NAME } from './manifest.ts';
 import { ancestorLoops, executionKey } from '../execution-key.ts';
 import { pruneRuns } from './retention.ts';
@@ -102,6 +103,19 @@ function resolveInputs(workflow: Workflow, given: Record<string, string>): Recor
   }
   if (problems.length > 0) throw new WorkflowError(problems);
   return resolved;
+}
+
+/**
+ * Writes a spawn's support files (opencode's guidance and plugin, today)
+ * before the spawn, so adapters themselves stay pure — they only ever
+ * describe what to write, never touch the filesystem. A no-op for every spec
+ * without `files`, which is every claude/copilot spec and most opencode ones.
+ */
+async function writeSpecFiles(spec: SpawnSpec): Promise<void> {
+  for (const file of spec.files ?? []) {
+    await ensureArtifactDir(file.path);
+    await writeFile(file.path, file.content, 'utf8');
+  }
 }
 
 /** Steps passed to adapters get the verdict instruction appended when needed. */
@@ -499,15 +513,36 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
      * stderr even on a progress-format one — becomes a `step:log` event, which
      * RunJournal routes into run.log. This is the one place a frontend's
      * onLine forwarding turns into the merged audit feed.
+     *
+     * A progress stream's error event is the exception: it is logged as
+     * stderr, and `failure()` appends the last one to the step's exit message,
+     * since for opencode it is the only record of why the spawn failed.
      */
-    const lineSink = (stepId: string, spec: SpawnSpec) => (line: string, stream: 'stdout' | 'stderr'): void => {
+    const lineSink = (stepId: string, spec: SpawnSpec) => {
+      // One parser per spawn: a format with its own running state (opencode's
+      // turn/cost totals) must never carry it over into the next spawn — see
+      // createProgressParser.
       const format = spec.progress?.format;
-      if (format !== undefined && stream === 'stdout') {
-        const progress = parseProgressLine(format, line);
-        if (progress !== null) emit({ type: 'step:progress', stepId, progress });
-        return;
-      }
-      emit({ type: 'step:log', stepId, stream, line });
+      const parse = format === undefined ? undefined : createProgressParser(format);
+      let lastError: string | undefined;
+      const onLine = (line: string, stream: 'stdout' | 'stderr'): void => {
+        if (parse !== undefined && format !== undefined && stream === 'stdout') {
+          const progress = parse(line);
+          if (progress !== null) {
+            emit({ type: 'step:progress', stepId, progress });
+            return;
+          }
+          const error = progressErrorMessage(format, line);
+          if (error !== undefined) {
+            lastError = error;
+            emit({ type: 'step:log', stepId, stream: 'stderr', line: error });
+          }
+          return;
+        }
+        emit({ type: 'step:log', stepId, stream, line });
+      };
+      const failure = (message: string): string => lastError === undefined ? message : `${message}: ${lastError}`;
+      return { onLine, failure };
     };
 
     /** Records where a step's artifact went, both as "latest" and in the history. */
@@ -538,7 +573,18 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         const main = step.mode === 'interactive' ? adapter.interactive(eff, ctx) : adapter.headless(eff, ctx);
         emit({ type: 'step:spawn', stepId: step.id, spec: main, phase: 'main' });
         if (step.mode === 'interactive') {
-          emit({ type: 'step:spawn', stepId: step.id, spec: adapter.harvest(eff, ctx), phase: 'harvest' });
+          // A capture runner (opencode) only learns its session id from a real
+          // spawn; a dry run never spawns one. Without a placeholder here,
+          // adapter.harvest — which every capture adapter builds around
+          // ctx.sessionIds[step.id] — throws, and dry-run would only work for
+          // sessionIdInjection runners. Handed to harvest on a copy, never
+          // written into ctx.sessionIds: RunJournal holds that object by
+          // reference, so the placeholder would land in run.json, where resume
+          // reads any recorded id as a real session to reattach to.
+          const harvestCtx = adapter.capabilities.sessionIdCapture && ctx.sessionIds[step.id] === undefined
+            ? { ...ctx, sessionIds: { ...ctx.sessionIds, [step.id]: '<captured at runtime>' } }
+            : ctx;
+          emit({ type: 'step:spawn', stepId: step.id, spec: adapter.harvest(eff, harvestCtx), phase: 'harvest' });
         }
         emit({ type: 'step:done', stepId: step.id, exitCode: 0 });
         return null;
@@ -548,32 +594,61 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       const before = await guardBefore(step);
 
       if (step.mode === 'interactive') {
-        // Leftovers from an earlier attempt would close this session the
-        // instant it opened, or make it open already looking blocked.
-        await clearEndMarker(runDir, step.id);
-        await clearAwaitState(runDir, step.id);
-        const main = adapter.interactive(eff, ctx);
+        const main = await prepareInteractiveSpawn(adapter, eff);
         emit({ type: 'step:spawn', stepId: step.id, spec: main, phase: 'main' });
         const sessionExit = await frontend.runInteractive(main, opts.signal, emit);
-        if (opts.signal?.aborted) return cancelled();
-        if (sessionExit !== 0) {
+        // A sessionIdCapture runner (opencode) cannot be handed an id up
+        // front — it mints its own, and this is where whiphand learns it.
+        // Skipped only when this very spawn resumed an existing session (its
+        // id came from the manifest, and no session.created fires for a
+        // resumed root session to recapture from). Every other spawn is
+        // fresh — including a loop's second-and-later iteration, which reuses
+        // the same step id but opens a brand-new session each time — and must
+        // be captured again: ctx.sessionIds[step.id] being set already just
+        // means a *previous* iteration captured one, not this one.
+        const captureFresh = adapter.capabilities.sessionIdCapture && ctx.resumedStepIds?.has(step.id) !== true;
+        const recordCapture = async (): Promise<string | undefined> => {
+          const captured = await adapter.captureSessionId!(eff, ctx);
+          if (captured !== undefined) {
+            ctx.sessionIds[step.id] = captured;
+            emit({ type: 'step:session', stepId: step.id, sessionId: captured });
+          }
+          return captured;
+        };
+        if (opts.signal?.aborted || sessionExit !== 0) {
+          // The conversation still exists: record it, or a resume opens a new
+          // one and the human's whole session so far is silently gone.
+          if (captureFresh) await recordCapture();
+          if (opts.signal?.aborted) return cancelled();
           return fail(`interactive step '${step.id}' session exited with code ${sessionExit}`, step.id);
         }
+        if (captureFresh) {
+          const captured = await recordCapture();
+          if (captured === undefined) {
+            return fail(
+              `could not determine the ${step.runner} session id for step '${step.id}'; `
+              + 'the artifact cannot be harvested', step.id);
+          }
+        }
         const hSpec = adapter.harvest(eff, ctx);
+        await writeSpecFiles(hSpec);
         emit({ type: 'step:spawn', stepId: step.id, spec: hSpec, phase: 'harvest' });
-        const harvestExit = await spawnHeadless(hSpec, opts.signal, lineSink(step.id, hSpec));
+        const harvestSink = lineSink(step.id, hSpec);
+        const harvestExit = await spawnHeadless(hSpec, opts.signal, harvestSink.onLine);
         if (opts.signal?.aborted) return cancelled();
         emit({ type: 'step:done', stepId: step.id, exitCode: harvestExit });
         if (harvestExit !== 0) {
-          return fail(`harvest for step '${step.id}' exited with code ${harvestExit}`, step.id);
+          return fail(harvestSink.failure(`harvest for step '${step.id}' exited with code ${harvestExit}`), step.id);
         }
       } else {
         const spec = adapter.headless(eff, ctx);
+        await writeSpecFiles(spec);
         emit({ type: 'step:spawn', stepId: step.id, spec, phase: 'main' });
-        const exitCode = await spawnHeadless(spec, opts.signal, lineSink(step.id, spec));
+        const sink = lineSink(step.id, spec);
+        const exitCode = await spawnHeadless(spec, opts.signal, sink.onLine);
         if (opts.signal?.aborted) return cancelled();
         emit({ type: 'step:done', stepId: step.id, exitCode });
-        if (exitCode !== 0) return fail(`step '${step.id}' exited with code ${exitCode}`, step.id);
+        if (exitCode !== 0) return fail(sink.failure(`step '${step.id}' exited with code ${exitCode}`), step.id);
       }
 
       return finishStep(step, before);
@@ -603,7 +678,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       const spawnHeadless = requireSpawn();
       const before = await guardBefore(step);
       emit({ type: 'step:spawn', stepId: step.id, spec, phase: 'main' });
-      const { exitCode, timedOut } = await runWithTimeout(step, spec, spawnHeadless, lineSink(step.id, spec));
+      const { exitCode, timedOut } = await runWithTimeout(step, spec, spawnHeadless, lineSink(step.id, spec).onLine);
       if (opts.signal?.aborted) return cancelled();
       emit({ type: 'step:done', stepId: step.id, exitCode });
       if (capture !== undefined) {
@@ -691,6 +766,24 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         ? (ctx.attachments?.length ?? 0) > 0
         : frame === undefined || ctx.artifacts[id] !== undefined);
       return kept.length === step.inputs.length ? step : { ...step, inputs: kept };
+    }
+
+    /**
+     * Everything that must happen before an interactive session opens, for a
+     * declared interactive step and a triage handoff alike, so the two cannot
+     * drift. Leftovers from an earlier attempt would close the session the
+     * instant it opened, make it open already looking blocked, or leave a
+     * stale captured session id lying around for the capture fallback to trip
+     * over; the spec's support files (opencode's guidance and plugin) must be
+     * on disk before the runner starts reading them.
+     */
+    async function prepareInteractiveSpawn(adapter: RunnerAdapter, step: AgentStep): Promise<SpawnSpec> {
+      await clearEndMarker(runDir, step.id);
+      await clearAwaitState(runDir, step.id);
+      if (adapter.capabilities.sessionIdCapture) await clearSessionCapture(runDir, step.id);
+      const spec = adapter.interactive(step, ctx);
+      await writeSpecFiles(spec);
+      return spec;
     }
 
     function requireSpawn(): (
@@ -845,11 +938,21 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       if (adapter.capabilities.sessionIdInjection) {
         ctx.sessionIds[triage.id] = randomUUID();
       }
-      await clearEndMarker(runDir, triage.id);
-      await clearAwaitState(runDir, triage.id);
-      // Triage goes through adapter.interactive too, so it inherits the
-      // guidance and the end-of-session spec without asking for them.
-      await frontend.runInteractive(adapter.interactive(triage, ctx), opts.signal, emit);
+      // Triage goes through the same preparation as a declared interactive
+      // step, so it inherits the guidance, the end-of-session spec and (for
+      // opencode) the support files without asking for them.
+      const triageSpec = await prepareInteractiveSpawn(adapter, triage);
+      // Deliberately not a step: triage has no step:start/step:done lifecycle,
+      // so it emits no step:spawn either — the journal would have no manifest
+      // entry to hang one on (RunJournal's step:spawn branch only marks an
+      // entry step:start already created; `sessionStarted` therefore has
+      // nowhere to go, and resume never offers to reopen a triage session),
+      // and a lone spawn line for a step that never started would only
+      // confuse run.log readers and the desktop's step list. The exit code is
+      // ignored for the same reason the handoff returns null on success:
+      // either way the findings stand and both callers end the run as not ok,
+      // so a non-zero session exit has no outcome left to change.
+      await frontend.runInteractive(triageSpec, opts.signal, emit);
       if (opts.signal?.aborted) return cancelled();
       return null;
     }

@@ -4,16 +4,15 @@ import {
 } from '@fluentui/react-components';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
+import { spinInteger } from '../lib/spin-value.ts';
 import type { RemoteAccessGetResult } from '../../../../packages/agent/src/protocol.ts';
+import { errorMessage } from '../lib/error-message.ts';
+// Value import from wire.ts, not protocol.ts: see wire.ts for why.
+import { remoteUrl } from '../../../../packages/agent/src/remote/wire.ts';
 
 // Only pulled in once the user actually turns remote access on, so the QR
 // renderer stays out of the initial bundle for everyone who never does.
 const QRCodeSVG = lazy(async () => ({ default: (await import('qrcode.react')).QRCodeSVG }));
-
-/** The shareable link. The token rides in the fragment — see remote/server.ts. */
-function remoteUrl(address: string, port: number, token: string): string {
-  return `http://${address}:${port}/#t=${token}`;
-}
 
 /**
  * Turns the remote channel on and off, and shows what to point a browser at.
@@ -40,7 +39,7 @@ export function RemoteAccessCard() {
     try {
       setState(await client.request('remoteAccessGet', {}));
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
     }
   }, [client]);
 
@@ -58,7 +57,7 @@ export function RemoteAccessCard() {
     try {
       setState(await fn());
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -183,9 +182,8 @@ export function RemoteAccessCard() {
             value={view.port}
             disabled={busy}
             onChange={(_e, data) => {
-              const next = data.value ?? (data.displayValue ? Number(data.displayValue) : undefined);
-              if (typeof next !== 'number' || !Number.isInteger(next) || next < 1024 || next > 65535) return;
-              if (next === view.port) return;
+              const next = spinInteger(data, { min: 1024, max: 65535 });
+              if (next === undefined || next === view.port) return;
               void act(() => client.request('remoteAccessSet', { port: next }));
             }}
           />

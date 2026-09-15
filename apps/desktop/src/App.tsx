@@ -107,8 +107,8 @@ export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
       style={{ height: '100%' }}
     >
       <NotificationBridge notifier={notifier} />
-      <UpdateBanner />
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <UpdateBanner />
         <AgentDownBanner />
         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
           <Sidebar page={page} onSelectPage={requestPage} onOpenRun={job => void openRun(job)} />

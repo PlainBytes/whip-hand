@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  isEnabled, disabledRoots, disabledIds, pruneDisabled, droppedRefs, droppedRefSentence, untilTargetOf,
+  isEnabled, disabledRoots, disabledIds, pruneDisabled, droppedRefs, droppedRefSentence, joinNames, untilTargetOf,
 } from './enabled.ts';
 import type { AgentStep, LoopStep, Workflow } from './types.ts';
 
@@ -146,6 +146,13 @@ test('droppedRefSentence: groups every reader that lost the same id into one sen
 test('droppedRefSentence: a single reader still gets a grammatical sentence', () => {
   const sentences = droppedRefSentence([{ reader: 'execute', missing: ['plan'] }]);
   assert.deepEqual(sentences, ["plan is disabled. execute reads it; it'll run without it."]);
+});
+
+test('joinNames: none, one, two, and a list with no Oxford comma', () => {
+  assert.equal(joinNames([]), '');
+  assert.equal(joinNames(['plan']), 'plan');
+  assert.equal(joinNames(['plan', 'review']), 'plan and review');
+  assert.equal(joinNames(['plan', 'review', 'fix']), 'plan, review and fix');
 });
 
 test('untilTargetOf: finds the loop whose until: names the id, at any depth', () => {

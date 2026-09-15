@@ -9,18 +9,12 @@
  * CLI needs it too. Both are derived from the same `droppedRefs`, so the two
  * voices can never disagree about the facts.
  */
-import { droppedRefs } from '../../../../packages/core/src/enabled.ts';
+import { droppedRefs, joinNames } from '../../../../packages/core/src/enabled.ts';
 import type { Workflow } from '../../../../packages/core/src/types.ts';
 
 export interface ReaderNote {
   stepId: string;
   text: string;
-}
-
-function joinNames(names: string[]): string {
-  if (names.length <= 1) return names.join('');
-  if (names.length === 2) return `${names[0]} and ${names[1]}`;
-  return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 }
 
 /** One note per reader that lost a reference to a disabled step. */

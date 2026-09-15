@@ -8,6 +8,7 @@ import { readRunName, SUGGEST_CAPTURE_NAME } from './run-name.ts';
 import { AdapterRegistry } from '../registry.ts';
 import { claudeAdapter } from '../adapters/claude.ts';
 import { copilotAdapter } from '../adapters/copilot.ts';
+import { opencodeAdapter } from '../adapters/opencode.ts';
 import type { RunCtx, RunnerAdapter, SpawnSpec, Workflow } from '../types.ts';
 
 const workflow: Workflow = {
@@ -27,7 +28,7 @@ async function ctxIn(inputs: Record<string, string> = { feature: 'oauth support'
 function answering(reply: string | null, exitCode = 0): RunnerAdapter {
   const base = {
     id: 'fake',
-    capabilities: { sessionIdInjection: false, sessionResume: false, toolDenial: true, shareTranscript: false },
+    capabilities: { sessionIdInjection: false, sessionIdCapture: false, sessionResume: false, toolDenial: true, shareTranscript: false },
     detect: async () => ({ installed: true }),
     interactive: () => { throw new Error('unused'); },
     headless: () => { throw new Error('unused'); },
@@ -96,7 +97,7 @@ test('the naming spec asks for stdout only, so a stderr warning cannot become th
   // tells the frontend which streams to tee. Both set it; the fake above does
   // not, so assert against the real ones rather than the stand-in.
   const runCtx = { ...ctx, workdir: ctx.runDir };
-  for (const real of [claudeAdapter, copilotAdapter]) {
+  for (const real of [claudeAdapter, copilotAdapter, opencodeAdapter]) {
     const built = real.suggestName!('name this run', runCtx, '/tmp/cap');
     assert.equal(built.capture?.streams, 'stdout', real.id);
   }

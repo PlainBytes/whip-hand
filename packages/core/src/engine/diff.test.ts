@@ -257,6 +257,17 @@ test('excludes the run directory under .whiphand/', async () => {
   assert.deepEqual(result!.files.map(f => f.path), ['real.ts']);
 });
 
+test('still diffs when .whiphand/ itself is gitignored', async () => {
+  // git rejects an exclude pathspec whose literal prefix is an ignored path.
+  const dir = await gitRepo();
+  await writeFile(join(dir, '.gitignore'), '.whiphand/\n');
+  await mkdir(join(dir, '.whiphand', 'runs', 'r1'), { recursive: true });
+  await writeFile(join(dir, '.whiphand', 'runs', 'r1', 'plan.md'), 'plan\n');
+  await writeFile(join(dir, 'real.ts'), 'x\n');
+  const result = await workingDiffFiles(dir);
+  assert.deepEqual(result!.files.map(f => f.path).sort(), ['.gitignore', 'real.ts']);
+});
+
 test('a repo with no commits reports everything as added', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'whiphand-empty-'));
   await run('git', ['init', '-b', 'main'], { cwd: dir });

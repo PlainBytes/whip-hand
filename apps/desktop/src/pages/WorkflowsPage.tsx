@@ -1,19 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import {
   Button,
-  Dialog,
-  DialogActions,
-  DialogBody,
-  DialogContent,
-  DialogSurface,
-  DialogTitle,
-  DialogTrigger,
-  Field,
-  Input,
   MessageBar,
   MessageBarBody,
-  Radio,
-  RadioGroup,
   Text,
 } from '@fluentui/react-components';
 import { Add20Regular } from '@fluentui/react-icons';
@@ -23,9 +12,11 @@ import { PageHeader } from '../components/PageHeader.tsx';
 import { WorkflowLane, isWorkflowFile } from '../components/workflow-lane/WorkflowLane.tsx';
 import { DeleteWorkflowDialog } from '../components/DeleteWorkflowDialog.tsx';
 import { CloneWorkflowDialog } from '../components/CloneWorkflowDialog.tsx';
+import { NewWorkflowDialog } from '../components/NewWorkflowDialog.tsx';
 import type { WorkflowEntry } from '../components/workflow-lane/WorkflowLane.tsx';
 import type { Scope } from '../../../../packages/core/src/types.ts';
 import { WorkflowEditor } from '../workflow-editor/WorkflowEditor.tsx';
+import { errorMessage } from '../lib/error-message.ts';
 
 export interface WorkflowsPageProps {
   /**
@@ -58,10 +49,6 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
   const [setupError, setSetupError] = useState<string | null>(null);
 
   const [newWorkflowOpen, setNewWorkflowOpen] = useState(false);
-  const [newWorkflowName, setNewWorkflowName] = useState('');
-  const [newWorkflowScope, setNewWorkflowScope] = useState<Scope>('project');
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
 
   const [editing, setEditing] = useState<{ name: string; source: Scope } | null>(null);
   /** The card awaiting delete confirmation; null when no dialog is open. */
@@ -80,7 +67,7 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
         if (!cancelled) setWorkflows(result);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) setError(errorMessage(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -98,31 +85,9 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
       await client.request('initWorkspace', { workdir: workspacePath });
       setReloadKey(k => k + 1);
     } catch (err) {
-      setSetupError(err instanceof Error ? err.message : String(err));
+      setSetupError(errorMessage(err));
     } finally {
       setSettingUp(false);
-    }
-  }
-
-  async function createNewWorkflow(): Promise<void> {
-    if (!workspacePath) return;
-    setCreating(true);
-    setCreateError(null);
-    try {
-      await client.request('createWorkflow', {
-        workdir: workspacePath, name: newWorkflowName,
-        // Omitted rather than sent as 'project': keeps the common-case
-        // request identical to before scopes existed.
-        ...(newWorkflowScope === 'global' ? { scope: newWorkflowScope } : {}),
-      });
-      setNewWorkflowOpen(false);
-      setNewWorkflowName('');
-      setNewWorkflowScope('project');
-      setReloadKey(k => k + 1);
-    } catch (err) {
-      setCreateError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setCreating(false);
     }
   }
 
@@ -135,57 +100,6 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
   function revealsGlobal(name: string, source: Scope): boolean {
     return source === 'project' && workflows.some(w => w.source === 'global' && w.name === name && isWorkflowFile(w));
   }
-
-  const newWorkflowDialog = (
-    <Dialog
-      open={newWorkflowOpen}
-      onOpenChange={(_e, data) => {
-        setNewWorkflowOpen(data.open);
-        if (!data.open) {
-          setNewWorkflowName('');
-          setNewWorkflowScope('project');
-          setCreateError(null);
-        }
-      }}
-    >
-      <DialogTrigger disableButtonEnhancement>
-        <Button appearance="primary" icon={<Add20Regular />}>New workflow</Button>
-      </DialogTrigger>
-      <DialogSurface>
-        <DialogBody>
-          <DialogTitle>New workflow</DialogTitle>
-          <DialogContent>
-            <Field label="Name" required>
-              <Input value={newWorkflowName} onChange={(_e, data) => setNewWorkflowName(data.value)} />
-            </Field>
-            <Field label="Scope">
-              <RadioGroup
-                layout="horizontal"
-                value={newWorkflowScope}
-                onChange={(_e, data) => setNewWorkflowScope(data.value as Scope)}
-              >
-                <Radio value="project" label="This workspace" />
-                <Radio value="global" label="Global (every workspace)" />
-              </RadioGroup>
-            </Field>
-            {createError && <MessageBar intent="error"><MessageBarBody>{createError}</MessageBarBody></MessageBar>}
-          </DialogContent>
-          <DialogActions>
-            <Button appearance="secondary" onClick={() => setNewWorkflowOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              appearance="primary"
-              disabled={!newWorkflowName.trim() || creating}
-              onClick={() => void createNewWorkflow()}
-            >
-              {creating ? 'Creating…' : 'Create'}
-            </Button>
-          </DialogActions>
-        </DialogBody>
-      </DialogSurface>
-    </Dialog>
-  );
 
   if (!workspacePath) {
     return <Text>Choose a workspace to see its workflows.</Text>;
@@ -269,10 +183,23 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
           <Text weight="semibold" size={500}>
             Workflows{workflows.length > 0 && ` — ${workflows.length} workflow${workflows.length === 1 ? '' : 's'}`}
           </Text>
-          {newWorkflowDialog}
+          <Button appearance="primary" icon={<Add20Regular />} onClick={() => setNewWorkflowOpen(true)}>
+            New workflow
+          </Button>
         </div>
       </PageHeader>
       <div style={{ marginTop: 16 }}>{body}</div>
+      {newWorkflowOpen && (
+        <NewWorkflowDialog
+          workdir={workspacePath}
+          existing={workflows}
+          onCreated={() => {
+            setNewWorkflowOpen(false);
+            setReloadKey(k => k + 1);
+          }}
+          onDismiss={() => setNewWorkflowOpen(false)}
+        />
+      )}
       {deleting && (
         <DeleteWorkflowDialog
           name={deleting.name}

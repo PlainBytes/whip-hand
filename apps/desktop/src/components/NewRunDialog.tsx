@@ -28,12 +28,14 @@ import { useAgentClient } from '../agent/agent-context.tsx';
 import { useCapabilities } from '../capabilities.tsx';
 import { extensionForImageMime } from '../files/file-kind.ts';
 import { bytesToBase64 } from '../lib/base64.ts';
+import { parsePositiveInt } from '../lib/parse-number.ts';
 import { useAppStore } from '../state/store.ts';
 import { collectLoops, findStep, flattenSteps, isLoopStep } from '../../../../packages/core/src/steps.ts';
 import { disabledRoots, droppedRefs, droppedRefSentence } from '../../../../packages/core/src/enabled.ts';
 import { attachmentNames, consumesAttachments } from '../../../../packages/core/src/attachments.ts';
 import type { Workflow } from '../../../../packages/core/src/types.ts';
 import type { ListWorkflowsResult } from '../../../../packages/agent/src/protocol.ts';
+import { errorMessage } from '../lib/error-message.ts';
 
 type WorkflowEntry = ListWorkflowsResult[number];
 
@@ -57,10 +59,8 @@ function refFor(entry: WorkflowEntry): string {
 }
 
 /**
- * Mirrors core's `packages/core/src/workspace.ts` — same reason `parseLogLine`
- * is duplicated in lib/log-rows.ts rather than imported: the desktop bundles
- * no runtime dependency on @whiphand/core, only its types, and workspace.ts
- * reads the filesystem to resolve a workflow ref, which core's own module has
+ * Mirrors core's `packages/core/src/workspace.ts` rather than importing it:
+ * workspace.ts reads the filesystem to resolve a workflow ref, which core's own module has
  * no browser-safe way to do. Keep this in lockstep with workspace.ts's
  * `EXPLICIT_SCOPE_RE` by hand; there is no build-time check that can do it
  * for us.
@@ -79,13 +79,6 @@ function findEntry(workflows: WorkflowEntry[], ref: string): WorkflowEntry | und
     return workflows.find(e => e.name === name && e.source === scope);
   }
   return workflows.find(e => e.name === ref);
-}
-
-/** Blank means "leave the workflow's own budgets alone"; anything else must be a real count. */
-function parsePositiveInt(raw: string): number | undefined {
-  if (!/^\d+$/.test(raw.trim())) return undefined;
-  const n = Number(raw.trim());
-  return n > 0 ? n : undefined;
 }
 
 /**
@@ -277,7 +270,7 @@ export function NewRunDialog({ open, onOpenChange, onStarted }: NewRunDialogProp
         if (!cancelled) setWorkflows(result);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) setLoadError(errorMessage(err));
       });
     return () => {
       cancelled = true;
@@ -352,6 +345,8 @@ export function NewRunDialog({ open, onOpenChange, onStarted }: NewRunDialogProp
 
   const inputEntries = selectedWorkflow?.inputs ? Object.entries(selectedWorkflow.inputs) : [];
   const hasLoop = (selectedWorkflow?.steps.length ?? 0) > 0 && collectLoops(selectedWorkflow!.steps).length > 0;
+  // Blank means "leave the workflow's own budgets alone" — which is why the
+  // field below only flags undefined when something was actually typed.
   const maxIterations = parsePositiveInt(maxIterationsRaw);
 
   // The field only exists where a picker does — a browser has none, and a
@@ -392,7 +387,7 @@ export function NewRunDialog({ open, onOpenChange, onStarted }: NewRunDialogProp
     try {
       addPaths(await pickFiles());
     } catch (err) {
-      setAttachError(err instanceof Error ? err.message : String(err));
+      setAttachError(errorMessage(err));
     }
   }
 
@@ -509,7 +504,7 @@ export function NewRunDialog({ open, onOpenChange, onStarted }: NewRunDialogProp
       rememberInputsLocal(workspacePath, workflowRef, values);
       onStarted(result.jobId);
     } catch (err) {
-      setStartError(err instanceof Error ? err.message : String(err));
+      setStartError(errorMessage(err));
     } finally {
       setStarting(false);
     }

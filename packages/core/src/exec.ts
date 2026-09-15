@@ -2,10 +2,17 @@
  * One seam for launching a runner CLI (tty.ts, spawn.ts, pty.ts), so Windows'
  * several ways of not being POSIX are dealt with once. Transparent on POSIX;
  * see the comments below for how the Windows `.cmd`-shim/cmd.exe handling works.
+ *
+ * And, once launched, one seam for draining a piped child (`pipeChild`, at the
+ * bottom), so every headless frontend shares the same answer to "when is this
+ * child actually done".
  */
 import { execFile, spawn as nodeSpawn, type ChildProcess, type ExecFileOptions, type SpawnOptions } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { once } from 'node:events';
+import { createWriteStream, existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import { createInterface, type Interface } from 'node:readline';
+import type { SpawnSpec } from './types.ts';
 
 export interface ResolvedExecutable {
   /** Absolute path when found on PATH; the original command otherwise (let spawn's own ENOENT surface). */
@@ -371,5 +378,152 @@ export function execRunner(
         resolvePromise({ stdout: String(stdout), stderr: String(stderr) });
       },
     );
+  });
+}
+
+export type ChildStream = 'stdout' | 'stderr';
+
+/**
+ * Which headless output goes where, decided once from the spec so the
+ * frontends cannot drift apart on it (they did: the CLI checked `capture`
+ * before `progress`, so a spec carrying both would have echoed raw NDJSON).
+ *
+ * `progress` is true when stdout is a structured stream *and* someone is
+ * reading it: those lines then belong to `onLine` alone — not the terminal,
+ * not the log panel, and not the capture file, which is for prose. Without a
+ * reader, stdout falls back to being ordinary output rather than vanishing.
+ * stderr is never structured, so it is always forwarded and, unless
+ * `capture.streams` narrows the file to stdout, always captured.
+ */
+export interface HeadlessRouting {
+  progress: boolean;
+  capture?: { path: string; streams: ChildStream[] };
+}
+
+export function routeHeadless(spec: SpawnSpec, hasLineReader: boolean): HeadlessRouting {
+  const progress = spec.progress !== undefined && hasLineReader;
+  if (spec.capture === undefined) return { progress };
+  const wanted: ChildStream[] = (spec.capture.streams ?? 'both') === 'both' ? ['stdout', 'stderr'] : ['stdout'];
+  return {
+    progress,
+    capture: { path: spec.capture.path, streams: wanted.filter(s => !(progress && s === 'stdout')) },
+  };
+}
+
+export interface PipeChildOptions {
+  /** Every raw chunk, as it arrives — for a tee that must not alter a byte. */
+  onChunk?: (chunk: Buffer, stream: ChildStream) => void;
+  /** Every line, from a second reader on the same stream; the final unterminated line included. */
+  onLine?: (line: string, stream: ChildStream) => void;
+  /**
+   * Appends the named streams to `path`. `unit` is the frontend's choice of
+   * fidelity: 'chunk' keeps the bytes exactly (a terminal user's artifact
+   * should match their scrollback); 'line' writes `line + "\n"`, which never
+   * splices stdout and stderr mid-line and suits a frontend already working
+   * in lines.
+   */
+  capture?: { path: string; streams: readonly ChildStream[]; unit: 'chunk' | 'line' };
+  /**
+   * Abort policy, left to the caller because it genuinely differs by frontend.
+   * Called once when `signal` aborts — immediately, if it already has —
+   * and may return a disposer, run when the child settles (to cancel a
+   * pending SIGKILL escalation, say).
+   */
+  signal?: AbortSignal;
+  onAbort?: (child: ChildProcess) => (() => void) | void;
+  /**
+   * Maps a child 'error' to an exit code to resolve with, settling at once
+   * rather than waiting for 'close'; `undefined` rejects with the error. How
+   * a frontend that hands Node's own `signal` option to spawn turns its
+   * ABORT_ERR into a sentinel exit code.
+   */
+  errorExitCode?: (err: NodeJS.ErrnoException) => number | undefined;
+}
+
+/**
+ * Drains a child spawned with piped stdout/stderr and resolves with its exit
+ * code — only once everything the child wrote has been delivered *and* the
+ * capture file is closed.
+ *
+ * Both halves matter. 'close', not 'exit', is the event that guarantees the
+ * pipes have drained ('exit' fires on reap and can beat the last lines). And
+ * `end()` on the capture stream only *queues* the close: fs writes run on
+ * libuv's threadpool, so a caller that appends a footer (runner.ts) or reads
+ * the reply back (auto-name.ts) the moment the promise resolves could
+ * otherwise beat the last buffered write to disk. The agent frontend used to
+ * do exactly that; waiting for the stream's own 'close' is the fix.
+ *
+ * Nothing is delivered after the promise settles: an error-mapped settle
+ * (an abort) does not wait for the pipes, and a straggling chunk must not
+ * reach a closed capture stream, where it would raise write-after-end.
+ */
+export function pipeChild(child: ChildProcess, opts: PipeChildOptions = {}): Promise<number> {
+  return new Promise((resolvePromise, reject) => {
+    let settled = false;
+    let exitCode: number | null = null;
+
+    const capture = opts.capture === undefined ? undefined : createWriteStream(opts.capture.path, { flags: 'a' });
+    // A capture that cannot be written (its directory vanished, say) must not
+    // take the whole frontend down with an unhandled 'error' event, nor fail a
+    // child that ran fine: core asserts the artifact afterwards rather than
+    // trusting the frontend, so that is where a missing file surfaces.
+    capture?.on('error', () => {});
+    const captures = (stream: ChildStream, unit: 'chunk' | 'line'): boolean =>
+      opts.capture !== undefined && opts.capture.unit === unit && opts.capture.streams.includes(stream);
+
+    const readers: Interface[] = [];
+    for (const stream of ['stdout', 'stderr'] as const) {
+      const input = child[stream];
+      if (input === null) continue;
+      const byChunk = opts.onChunk !== undefined || captures(stream, 'chunk');
+      const byLine = opts.onLine !== undefined || captures(stream, 'line');
+      if (byChunk) {
+        input.on('data', (chunk: Buffer) => {
+          if (settled) return;
+          opts.onChunk?.(chunk, stream);
+          if (captures(stream, 'chunk')) capture!.write(chunk);
+        });
+      }
+      if (byLine) {
+        const reader = createInterface({ input });
+        reader.on('line', line => {
+          if (settled) return;
+          opts.onLine?.(line, stream);
+          if (captures(stream, 'line')) capture!.write(`${line}\n`);
+        });
+        readers.push(reader);
+      }
+      // Nobody listening still has to mean "drained": an unread pipe fills,
+      // the child blocks writing to it, and 'close' never comes.
+      if (!byChunk && !byLine) input.resume();
+    }
+
+    let disposeAbort: (() => void) | void;
+    const onAbort = (): void => { disposeAbort = opts.onAbort?.(child); };
+    if (opts.signal !== undefined && opts.onAbort !== undefined) {
+      if (opts.signal.aborted) onAbort();
+      else opts.signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    const settle = async (outcome: () => void): Promise<void> => {
+      if (settled) return;
+      settled = true;
+      opts.signal?.removeEventListener('abort', onAbort);
+      disposeAbort?.();
+      for (const reader of readers) reader.close();
+      if (capture !== undefined && !capture.closed) {
+        const closed = once(capture, 'close').catch(() => {});
+        capture.end();
+        await closed;
+      }
+      outcome();
+    };
+
+    child.on('error', err => {
+      const code = opts.errorExitCode?.(err);
+      void settle(code === undefined ? () => reject(err) : () => resolvePromise(code));
+    });
+    child.on('exit', code => { exitCode = code ?? 1; });
+    child.on('close', () => { void settle(() => resolvePromise(exitCode ?? 1)); });
   });
 }

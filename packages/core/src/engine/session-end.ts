@@ -34,29 +34,64 @@ export function shellPath(path: string): string {
   return path.replace(/\\/g, '/');
 }
 
-/** Marker basename for a step: one safe path segment. */
-export function endMarkerName(stepId: string): string {
-  return `.${sanitizeStepId(stepId)}.done`;
+/**
+ * The shape every per-step file in a run dir shares: `.<step>.<suffix>`,
+ * sitting directly in the run dir. The end marker, the await-state file, the
+ * session-capture file and opencode's support files all need the same four
+ * things — the name, the path, a "could this be one?" check to hide it from
+ * artifact lists, and a best-effort clear before a new session — and every
+ * copy of that quartet was a chance for one of them to forget sanitizeStepId
+ * or drift its hiding pattern away from the names it actually produces.
+ */
+export interface StepStateFile {
+  /** Basename for a step: one safe path segment. */
+  name(stepId: string): string;
+  /** Absolute path of the step's file, directly in the run dir. */
+  path(runDir: string, stepId: string): string;
+  /** True for any name `name` could have produced. */
+  isName(name: string): boolean;
+  /**
+   * Removes a leftover file. Never throws: a file we cannot delete is not a
+   * reason to fail the run, and every caller's worst case is one session that
+   * starts with stale state.
+   */
+  clear(runDir: string, stepId: string): Promise<void>;
 }
+
+/** Builds the StepStateFile for `.<step>.<suffix>`; `suffix` is literal (dots included), never a pattern. */
+export function stepStateFile(suffix: string): StepStateFile {
+  const escaped = suffix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`^\\..+\\.${escaped}$`);
+  const name = (stepId: string): string => `.${sanitizeStepId(stepId)}.${suffix}`;
+  const path = (runDir: string, stepId: string): string => join(runDir, name(stepId));
+  return {
+    name,
+    path,
+    isName: candidate => pattern.test(candidate),
+    clear: async (runDir, stepId) => {
+      try {
+        await rm(path(runDir, stepId), { force: true });
+      } catch {
+        // best effort
+      }
+    },
+  };
+}
+
+const endMarker = stepStateFile('done');
+
+/** Marker basename for a step: one safe path segment. */
+export const endMarkerName: (stepId: string) => string = endMarker.name;
 
 /** Absolute path of a step's marker: its appearance means the human agreed we're done. */
-export function endMarkerPath(runDir: string, stepId: string): string {
-  return join(runDir, endMarkerName(stepId));
-}
+export const endMarkerPath: (runDir: string, stepId: string) => string = endMarker.path;
 
 /** True for any name endMarkerName could have produced — used to hide markers from artifact lists. */
-export function isEndMarkerName(name: string): boolean {
-  return /^\..+\.done$/.test(name);
-}
+export const isEndMarkerName: (name: string) => boolean = endMarker.isName;
 
 /**
  * Removes a leftover marker so a re-run never starts with a session that is
  * already "finished". Never throws: a marker we cannot delete is not a reason
  * to fail the run, and the worst case is one session that closes immediately.
  */
-export async function clearEndMarker(runDir: string, stepId: string): Promise<void> {
-  try {
-    await rm(endMarkerPath(runDir, stepId), { force: true });
-  } catch {
-  }
-}
+export const clearEndMarker: (runDir: string, stepId: string) => Promise<void> = endMarker.clear;

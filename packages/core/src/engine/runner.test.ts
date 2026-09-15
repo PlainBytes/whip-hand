@@ -24,7 +24,7 @@ import type {
 function fakeRunner(): RunnerAdapter {
   return {
     id: 'fake',
-    capabilities: { sessionIdInjection: true, sessionResume: true, toolDenial: true, shareTranscript: false },
+    capabilities: { sessionIdInjection: true, sessionIdCapture: false, sessionResume: true, toolDenial: true, shareTranscript: false },
     detect: async () => ({ installed: true }),
     interactive(step: AgentStep, ctx: RunCtx): SpawnSpec {
       return {
@@ -930,6 +930,31 @@ test('a headless step reports each parsed progress line as an event', async () =
     events.filter(e => e.type === 'step:progress').map(e => e.progress),
     [{ kind: 'tool', tool: 'Read', target: '/w/runner.ts' }, { kind: 'usage', turns: 2, costUsd: 0.5 }],
   );
+});
+
+test("a headless step's runner error event is logged and named in the run error", async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'whiphand-run-'));
+  const { events, frontend } = collector();
+  const base = fakeRunner();
+  const reg = new AdapterRegistry();
+  reg.register({
+    ...base,
+    headless: (step: AgentStep, ctx: RunCtx): SpawnSpec => ({ ...base.headless(step, ctx), progress: { format: 'opencode-json' } }),
+  });
+  const result = await runWorkflow({
+    workflow: oneStep, workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: reg, frontend,
+    spawnHeadless: async (_spec, _signal, onLine) => {
+      onLine?.(JSON.stringify({ type: 'error', error: { name: 'APIError', data: { message: 'Model not found' } } }), 'stdout');
+      return 1;
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.deepEqual(
+    events.filter(e => e.type === 'step:log').map(e => ({ stream: e.stream, line: e.line })),
+    [{ stream: 'stderr', line: 'Model not found' }],
+  );
+  const error = events.find(e => e.type === 'run:error');
+  assert.equal(error?.type === 'run:error' && error.message, "step 'a' exited with code 1: Model not found");
 });
 
 test('a step that asked for no progress still gets a line callback, and its lines become step:log', async () => {

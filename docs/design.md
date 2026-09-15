@@ -39,24 +39,28 @@ the time this table was written — not taken from memory or documentation that 
 stale. Re-check against a current install before relying on an exact flag spelling; `whiphand
 doctor` reports the installed versions.
 
-| Capability | `claude` | `copilot` |
-|---|---|---|
-| Interactive session, seeded with a prompt | `claude "<prompt>"` | `copilot` (interactive by default; a prompt can auto-execute) |
-| Headless / non-interactive | `-p`, `--print` | `-p`, `--prompt <text>` |
-| Model selection | `--model <alias\|full-id>` (e.g. `opus`, `claude-opus-5`) | `--model <id>` |
-| Pin a specific session id | `--session-id <uuid>` (must be a valid UUID) | `--session-id <id>` |
-| Resume a session | `-r, --resume [id]` | `-r, --resume[=id]` |
-| Continue most recent | `-c, --continue` | `--continue` |
-| Deny specific tools | `--disallowedTools <tools...>` | `--deny-tool[=tools...]` |
-| Restrict to a tool allowlist | `--allowedTools <tools...>` | `--allow-tool[=tools...]`, `--available-tools[=tools...]` |
-| Reasoning effort | `--effort low\|medium\|high\|xhigh\|max` | `--effort none\|low\|medium\|high\|xhigh\|max` |
-| Extra working directories | `--add-dir <dirs...>` | `--add-dir <dir>`, `-C <dir>` |
-| Structured output | `--output-format text\|json\|stream-json` (NDJSON needs `--verbose`) | `--output-format json --stream on` (JSONL, one object per line) |
-| Transcript export | — (use resume harvest, below) | `--share[=path]`, `--share-gist` |
+| Capability | `claude` | `copilot` | `opencode` |
+|---|---|---|---|
+| Interactive session, seeded with a prompt | `claude "<prompt>"` | `copilot` (interactive by default; a prompt can auto-execute) | `opencode --prompt "<p>"` (auto-submits on the home screen) |
+| Headless / non-interactive | `-p`, `--print` | `-p`, `--prompt <text>` | `run [message..]` |
+| Model selection | `--model <alias\|full-id>` (e.g. `opus`, `claude-opus-5`) | `--model <id>` | `-m provider/model` |
+| Pin a specific session id | `--session-id <uuid>` (must be a valid UUID) | `--session-id <id>` (1.0.83+: mints, same as claude) | — (cannot be minted; see below) |
+| Resume a session | `-r, --resume [id]` | `-r, --resume[=id]` | `-s, --session <id>` |
+| Continue most recent | `-c, --continue` | `--continue` | `-c, --continue` |
+| Deny specific tools | `--disallowedTools <tools...>` | `--deny-tool[=tools...]` | `permission` config, per pattern (`allow`/`ask`/`deny`) |
+| Restrict to a tool allowlist | `--allowedTools <tools...>` | `--allow-tool[=tools...]`, `--available-tools[=tools...]` | `permission` config (same mechanism, no separate allowlist flag) |
+| Reasoning effort | `--effort low\|medium\|high\|xhigh\|max` | `--effort none\|low\|medium\|high\|xhigh\|max` | `--variant <v>` (`run` only; the TUI has none — set via the agent config's own `variant` field instead) |
+| Extra working directories | `--add-dir <dirs...>` | `--add-dir <dir>`, `-C <dir>` | `permission.external_directory`, per pattern |
+| Structured output | `--output-format text\|json\|stream-json` (NDJSON needs `--verbose`) | `--output-format json --stream on` (JSONL, one object per line) | `run --format json` (NDJSON) |
+| Transcript export | — (use resume harvest, below) | — (use resume harvest, below) | `opencode export <id>` (not used by whiphand) |
 
-The two CLIs are close to isomorphic on exactly the primitives a workflow runner needs:
-model selection, session identity, resumability, and tool policy. That symmetry is what
-makes a thin, uniform adapter interface viable instead of one bespoke integration per CLI.
+The two original CLIs are close to isomorphic on exactly the primitives a workflow runner
+needs: model selection, session identity, resumability, and tool policy. That symmetry is
+what made a thin, uniform adapter interface viable instead of one bespoke integration per
+CLI. opencode breaks the "session identity" isomorphism — it cannot be handed an id, only
+asked afterwards what id it picked — which is why the adapter interface has a second
+capability for minting (`sessionIdCapture`, alongside `sessionIdInjection`; see "Adapter
+interface" below) rather than assuming every runner can be pinned up front.
 
 ## Architecture
 
@@ -96,12 +100,23 @@ until the Tauri app exists would mean rewriting the run engine's control flow la
 ### Adapter interface
 
 `RunnerAdapter` (`packages/core/src/types.ts`) is `id`, a `capabilities` map
-(`sessionIdInjection`, `sessionResume`, `toolDenial`, `shareTranscript`), `detect()`, and
-three `Step → SpawnSpec` builders (`interactive`, `headless`, `harvest`), plus two optional
-methods: `suggestName?` (run auto-naming) and `listModels?` (feeds the workflow editor's
-Model field with suggestions and typo warnings). Both are optional, and the absence of
-either *is* the capability check — a runner with no way to answer simply gets no picker, or
-never auto-names a run, and the field stays free text with no warnings.
+(`sessionIdInjection`, `sessionIdCapture`, `sessionResume`, `toolDenial`, `shareTranscript`),
+`detect()`, and three `Step → SpawnSpec` builders (`interactive`, `headless`, `harvest`),
+plus two optional methods: `suggestName?` (run auto-naming) and `listModels?` (feeds the
+workflow editor's Model field with suggestions and typo warnings). Both are optional, and
+the absence of either *is* the capability check — a runner with no way to answer simply
+gets no picker, or never auto-names a run, and the field stays free text with no warnings.
+
+`sessionIdInjection` and `sessionIdCapture` are two ways to reach the same place — an
+interactive step's harvest needs *some* id to resume — for runners that mint an id
+differently. claude and copilot take `sessionIdInjection`: whiphand generates a UUID before
+the step ever spawns and hands it over. opencode cannot be handed one, so it takes
+`sessionIdCapture` instead: the runner reports whatever id it picked, read back by an
+optional `captureSessionId?(step, ctx)` once the interactive spawn has exited 0, and folded
+into the run the same way an injected id is (`step:session`, mirroring `step:spawn`'s own
+role for `sessionStarted`). `registry.ts`'s interactive-mode gate accepts either capability
+paired with `sessionResume`, or `shareTranscript` on its own — a runner needs one resumable
+identity mechanism or a transcript, not necessarily both kinds of identity.
 
 The registry is a plain map keyed by adapter `id`, so adding `codex` or `gemini` later is
 additive, not a change to the engine. A step that requests a capability its adapter
@@ -178,6 +193,17 @@ headlessly, after the human has left:
 5. `whiphand` asserts the artifact file exists and is non-empty. If not, the step fails loudly —
    it does not silently pass an empty artifact downstream.
 
+**The capture variant (opencode).** opencode cannot be handed a session id in step 2 — there
+is no flag and no API call that mints one — so steps 1–2 invert: opencode spawns with no
+identity pinned at all, picks one on its own the moment its session opens, and whiphand
+learns it only *after* the human leaves, from the same await-state plugin that answers "is
+the human needed" (see "Knowing when the session is waiting for the human" below). Step 4's
+resume then targets that learned id (`-s <id>`) exactly as claude's `--resume` and
+copilot's `--resume=` do. An id that never gets learned — the plugin didn't run, or ran and
+still couldn't tell — fails the step outright rather than attempting a harvest with nothing
+to resume; a fallback (`opencode session list`, matched to exactly one candidate) covers the
+plugin not running at all, but ambiguity is never guessed through.
+
 ### Keeping the session in its lane, and getting it to end
 
 Two things a seeded prompt alone does not achieve, both handled by the guidance appended
@@ -222,14 +248,34 @@ frontend that can watch the filesystem combines them (`agent/frontend.ts`):
   the terminator of an OSC sequence, and claude emits OSC title and hyperlink
   sequences constantly, so `agent/bel.ts` tracks OSC state and counts only bells
   that stand alone.
+- **opencode's plugin (precise, and doing double duty).** opencode has no hooks, but it does
+  have an in-process plugin API — a small generated `.mjs` module, delivered via
+  `OPENCODE_CONFIG_CONTENT`'s `plugin: ["file://…"]` and written to disk by core before the
+  spawn (`SpawnSpec.files`, since adapters themselves never touch the filesystem). It
+  subscribes to opencode's own event stream and writes the same `.await` file claude's hooks
+  write, using the same JSON body `parseAwaitState` already reads — no agent-side change
+  needed for a third runner to report through this channel. `session.status: idle` on the
+  *root* session → `turn`; `permission.asked`/`question.asked` → `permission`; the
+  complementary events (`busy`, `*.replied`, `question.rejected`) clear it.
+  This is also the channel that solves session-identity capture (see "The capture variant"
+  above): the same plugin writes the session id to a second file the instant the root
+  session is created, since a plugin has direct filesystem access no tool permission gates.
+  Subagent sessions (`session.created` with a `parentID`) are tracked and always excluded —
+  their own status chatter must never flap the root session's await-state. Every handler is
+  wrapped in its own try/catch: a plugin fault must degrade to "no await-state reported",
+  never take the human's live session down with it.
 
-Hooks always win: a bell must never downgrade a state we actually know. The
-model is never told the await file exists — its value is being out-of-band.
+Hooks and the plugin both win over the bell: a bell must never downgrade a state we
+actually know. The model is never told the await file (or, for opencode, the session-id
+file) exists — both are populated out-of-band.
 
-Both CLIs installed on this machine support `--session-id` + `-r/--resume` + a headless
-print mode, so this exact five-step mechanism is uniform across `claude` and `copilot`
-without per-adapter special-casing. `copilot --share <path>` is documented here as a
-fallback capture path if a resume-based harvest ever proves unreliable for that adapter.
+All three CLIs support a headless print mode and some way to resume a specific session, so
+this mechanism is uniform across `claude`, `copilot` and `opencode`, modulo the mint-vs-capture
+split above. copilot's own `--session-id` used to only resume; as of 1.0.83 it mints a new
+session exactly like claude's flag of the same name ("or set the UUID for a new session"),
+so copilot moved onto the identical injection+resume path claude already used — it no
+longer needs `--share`'s transcript export as a fallback capture mechanism, and that flag
+is not used anywhere in this codebase any more.
 
 ## Read-only enforcement
 
@@ -237,14 +283,29 @@ A `writes: false` step (plan, review) gets two independent layers, because a pro
 the model not to edit files is a request, not a control:
 
 1. **CLI-native tool denial** — `--disallowedTools "Write Edit NotebookEdit"` (claude) /
-   `--deny-tool` plus a restricted `--available-tools` (copilot).
+   `--deny-tool` plus a restricted `--available-tools` (copilot) / opencode's `permission`
+   config, which takes a different shape again: rather than a flag, the agent config sent
+   through `OPENCODE_CONFIG_CONTENT` sets `edit: {"*": "deny"}` for a read-only step and
+   `{"*": "allow"}` for a writing one. Bash stays allowed either way, same as claude and
+   copilot — the guidance forbids shell writes, and layer 2 backs that up regardless of tool.
+   Unlike the other two adapters, this permission map carries **no run-directory carve-out**:
+   testing against the installed 1.17.13 binary found that a per-path `edit` override never
+   matches a path outside the project root once a competing `"*"` rule is also present in
+   the same map, regardless of whether the override is more specific — the opposite of the
+   documented "last matching rule wins". A scoped exception for the run directory would
+   therefore silently fail to unlock harvest's write whenever the run directory sits outside
+   the project. opencode's `harvest()` sidesteps the whole problem the same way claude's
+   `--allowedTools=Write` and copilot's `--allow-all-tools` harvest already do: unconditional
+   trust for that one dedicated, single-purpose spawn, never a path-scoped rule.
 2. **Git working-tree assertion** — `whiphand` snapshots the working tree before the step runs;
    if anything changed outside the run's own artifact directory, the step fails and names
    what changed. This is the same idea as Archon's `mutates_checkout` field (see "Background"
    above), implemented independently rather than adopted wholesale.
 
 Layer 2 exists precisely because layer 1 can be bypassed by a model that ignores its tool
-policy, or by a future adapter whose `toolDenial` capability turns out to be unreliable.
+policy, or by a future adapter whose `toolDenial` capability turns out to be unreliable —
+and, for opencode specifically, because a permission quirk on any given release could make
+layer 1 quietly weaker than it looks without layer 2 to still catch the result.
 
 ## Workflow format
 

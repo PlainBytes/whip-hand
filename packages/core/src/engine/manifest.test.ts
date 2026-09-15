@@ -8,7 +8,8 @@ import type { RunManifest } from './manifest.ts';
 import { DEFAULT_CONFIG } from '../config.ts';
 import { setRunLocked } from './run-lock.ts';
 import { NAME_MARKER_NAME, setRunName } from './run-name.ts';
-import { RUN_LOG_NAME, parseLogLine } from './run-log.ts';
+import { RUN_LOG_NAME } from './run-log.ts';
+import { parseLogLine } from '../log-rows.ts';
 import type { WhiphandEvent } from '../types.ts';
 
 async function tmpRunDir(): Promise<string> {
@@ -508,6 +509,20 @@ test('reducer: a step that started but never spawned records no session', async 
   journal.close();
 
   assert.equal(journal.manifest.steps.find(s => s.id === 'a')!.sessionStarted, undefined);
+});
+
+test('reducer: step:session folds a captured id into manifest.sessionIds, same as an injected one', async () => {
+  const runDir = await tmpRunDir();
+  const journal = new RunJournal(baseInit(runDir, 'run-sess-capture'));
+  const spec = { argv: ['opencode'], cwd: '/w', env: {}, interactive: true };
+  journal.record({ type: 'step:start', stepId: 'a', kind: 'agent', runner: 'opencode', mode: 'interactive' });
+  journal.record({ type: 'step:spawn', stepId: 'a', spec, phase: 'main' });
+  journal.record({ type: 'step:session', stepId: 'a', sessionId: 'ses_captured' });
+  await journal.flush();
+  journal.close();
+
+  assert.equal(journal.manifest.sessionIds.a, 'ses_captured');
+  assert.equal(journal.manifest.steps.find(s => s.id === 'a')!.sessionStarted, true);
 });
 
 test('reducer: a headless spawn opens no session to resume', async () => {
@@ -1476,7 +1491,7 @@ test('readRunLog pages a finished run.log and reports total/truncated', async ()
 });
 
 test('formatLogLine/parseLogLine round-trip, including a newline in the text and a step:log stream', async () => {
-  const { formatLogLine, parseLogLine } = await import('./run-log.ts');
+  const { formatLogLine, parseLogLine } = await import('../log-rows.ts');
   const original = { seq: 3, ts: '2026-01-01T00:00:00.000Z', kind: 'step:log:stderr', stepId: 'build', text: 'line one\nline two', stream: 'stderr' as const };
   const line = formatLogLine(original);
   const parsed = parseLogLine(line.trimEnd());
@@ -1484,7 +1499,7 @@ test('formatLogLine/parseLogLine round-trip, including a newline in the text and
 });
 
 test('formatLogLine/parseLogLine round-trip a literal backslash-n, distinct from an actual newline', async () => {
-  const { formatLogLine, parseLogLine } = await import('./run-log.ts');
+  const { formatLogLine, parseLogLine } = await import('../log-rows.ts');
   // The two-character sequence a tool's own JSON output prints literally — not
   // an actual newline — must survive unchanged, and not be read back as one.
   const original = { seq: 4, ts: '2026-01-01T00:00:00.000Z', kind: 'step:log:stdout', stepId: 'build', text: 'json: {"msg":"line one\\nline two"}', stream: 'stdout' as const };
@@ -1494,7 +1509,7 @@ test('formatLogLine/parseLogLine round-trip a literal backslash-n, distinct from
 });
 
 test('formatLogLine/parseLogLine round-trip mixed real newlines, literal backslash-n and bare backslashes', async () => {
-  const { formatLogLine, parseLogLine } = await import('./run-log.ts');
+  const { formatLogLine, parseLogLine } = await import('../log-rows.ts');
   const original = { seq: 5, ts: '2026-01-01T00:00:00.000Z', kind: 'run:error', text: 'path C:\\foo\\bar\nnext: literal \\n here', stepId: undefined };
   const line = formatLogLine(original);
   const parsed = parseLogLine(line.trimEnd());

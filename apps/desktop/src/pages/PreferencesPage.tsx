@@ -5,7 +5,9 @@ import {
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { RemoteAccessCard } from '../components/RemoteAccessCard.tsx';
 import { useAppStore } from '../state/store.ts';
+import { spinInteger } from '../lib/spin-value.ts';
 import type { ConfigGetResult } from '../../../../packages/agent/src/protocol.ts';
+import { errorMessage } from '../lib/error-message.ts';
 
 const THEME_OPTIONS = [
   { value: 'system', label: 'System' },
@@ -45,7 +47,7 @@ export function PreferencesPage() {
         if (!cancelled) setGlobalConfig(result);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setRetentionError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) setRetentionError(errorMessage(err));
       });
     return () => {
       cancelled = true;
@@ -85,7 +87,7 @@ export function PreferencesPage() {
           .catch(() => {});
       }
     } catch (err) {
-      setRetentionError(err instanceof Error ? err.message : String(err));
+      setRetentionError(errorMessage(err));
     }
   }
 
@@ -137,8 +139,8 @@ export function PreferencesPage() {
             min={1}
             value={maxRetained}
             onChange={(_e, data) => {
-              const next = data.value ?? (data.displayValue ? Number(data.displayValue) : undefined);
-              if (typeof next === 'number' && Number.isInteger(next) && next >= 1) void setMaxRetained(next);
+              const next = spinInteger(data, { min: 1 });
+              if (next !== undefined) void setMaxRetained(next);
             }}
           />
         )}

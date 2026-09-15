@@ -9,6 +9,7 @@ import { openWorkspace } from '../lib/workspace-switch.ts';
 import { basename } from '../lib/workspace-identity.ts';
 import { WorkspaceDot } from '../components/WorkspaceDot.tsx';
 import { POLL_INTERVAL_MS, runColumns, type RecentRun } from './run-columns.tsx';
+import { errorMessage } from '../lib/error-message.ts';
 
 export interface ActivityPageProps {
   onSelectRun: (runId: string) => void;
@@ -61,7 +62,7 @@ export function ActivityPage({ onSelectRun }: ActivityPageProps) {
           setError(null);
         })
         .catch((err: unknown) => {
-          if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+          if (!cancelled) setError(errorMessage(err));
         });
     }
 

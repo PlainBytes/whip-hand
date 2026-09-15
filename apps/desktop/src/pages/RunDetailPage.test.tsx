@@ -381,6 +381,29 @@ describe('RunDetailPage', () => {
     expect(onBack).not.toHaveBeenCalled();
   });
 
+  it('shows a rejected deleteRun in the dialog and stays on the run', async () => {
+    const onBack = vi.fn();
+    const { transport } = renderRunDetail('job-del3', onBack);
+    emitWhiphandEvent(transport, 'job-del3', 'run-del3', { type: 'step:start', stepId: 'plan', kind: 'agent', runner: 'claude', mode: 'headless' }, 't1');
+    await respondGetRun(transport, { runId: 'run-del3', runDir: '/ws/.whiphand/runs/run-del3', status: 'succeeded', artifacts: [] });
+
+    // Unmounted until asked for: no hidden dialog sits in the tree.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Delete' }));
+
+    const req = await waitFor(() => {
+      const parsed = transport.sentRequest(transport.sent.length - 1);
+      if (parsed.method !== 'deleteRun') throw new Error('deleteRun not sent yet');
+      return parsed;
+    });
+    transport.emitLine({ id: req.id, error: { code: -32000, message: 'EACCES: permission denied' } });
+
+    expect(await screen.findByText(/EACCES: permission denied/)).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' })).toBeEnabled();
+    expect(onBack).not.toHaveBeenCalled();
+  });
+
   it('falls back to the list when a polled run vanishes (deleted or pruned elsewhere)', async () => {
     vi.useFakeTimers();
     try {

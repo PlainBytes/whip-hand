@@ -162,9 +162,16 @@ export interface SpawnSpec {
    * progress.
    */
   progress?: { format: ProgressFormat };
+  /**
+   * Written by core, before this spawn, so adapters stay pure (they never
+   * touch the filesystem themselves). Absolute paths under runDir — the
+   * opencode adapter's guidance and plugin files are delivered this way. A
+   * dry run records `files` on the `step:spawn` event but writes none of them.
+   */
+  files?: Array<{ path: string; content: string }>;
 }
 
-export type ProgressFormat = 'claude-stream-json' | 'copilot-jsonl';
+export type ProgressFormat = 'claude-stream-json' | 'copilot-jsonl' | 'opencode-json';
 
 /**
  * What a headless step is doing right now, normalized across runners.
@@ -181,6 +188,11 @@ export type StepProgress =
    * gives turns and `premiumRequests` — it has no dollar figure to give, and
    * we do not invent one. Elapsed time is deliberately absent: core measures
    * it, so the timer works even for a runner that reports nothing at all.
+   *
+   * Contract: a `usage` report is the running total *for this spawn so far*,
+   * not a delta since the last report. True of claude and copilot already
+   * (their own `result`/turn-end events are cumulative); opencode's parser
+   * keeps its own running totals across `step_finish` events to match.
    */
   | { kind: 'usage'; turns?: number; costUsd?: number; premiumRequests?: number };
 
@@ -309,6 +321,13 @@ export interface RunnerAdapter {
   id: string;
   capabilities: {
     sessionIdInjection: boolean;
+    /**
+     * True for a runner that cannot mint a session id up front (opencode) but
+     * can report the one it minted itself once its session exists — read by
+     * `captureSessionId` after the interactive spawn exits. False for claude
+     * and copilot, which take an injected id instead.
+     */
+    sessionIdCapture: boolean;
     sessionResume: boolean;
     toolDenial: boolean;
     shareTranscript: boolean;
@@ -317,6 +336,14 @@ export interface RunnerAdapter {
   interactive(step: AgentStep, ctx: RunCtx): SpawnSpec;
   headless(step: AgentStep, ctx: RunCtx): SpawnSpec;
   harvest(step: AgentStep, ctx: RunCtx): SpawnSpec;
+  /**
+   * Reads back the session id an interactive spawn minted on its own, once it
+   * has exited 0 — the counterpart to `sessionIdInjection` for a runner whose
+   * capability is `sessionIdCapture` instead. Returning `undefined` means no
+   * id could be determined; the runner then fails the step rather than
+   * attempting a harvest with nothing to resume.
+   */
+  captureSessionId?(step: AgentStep, ctx: RunCtx): Promise<string | undefined>;
   /**
    * One cheap, read-only question whose whole answer is its stdout, captured
    * to `capturePath` — the same `SpawnSpec.capture` plumbing command steps
@@ -433,6 +460,14 @@ export type WhiphandEvent =
    */
   | { type: 'step:skipped'; stepId: string; loopId?: string; iteration?: number; outerLoops?: LoopRef[] }
   | { type: 'step:spawn'; stepId: string; spec: SpawnSpec; phase: 'main' | 'harvest' }
+  /**
+   * A `sessionIdCapture` runner's interactive spawn exited, and the runner
+   * read back the session id it minted on its own — the counterpart to a
+   * `sessionIdInjection` runner already knowing its id up front. Folded into
+   * `manifest.sessionIds`, exactly like an injected id, so resume's existing
+   * `resumedStepIds` logic needs no changes to pick it up.
+   */
+  | { type: 'step:session'; stepId: string; sessionId: string }
   /** `bytes` is the artifact's size once written — the cheapest signal that a step silently stubbed it out. */
   | { type: 'step:artifact'; stepId: string; path: string; bytes?: number }
   /**

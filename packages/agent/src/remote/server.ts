@@ -328,10 +328,8 @@ export function lanAddresses(): string[] {
 }
 
 /**
- * The shareable URL, composed where the token is already known. The token
- * rides in the FRAGMENT: never sent to the server, so it stays out of access
- * logs and Referer headers, and the page strips it from the address bar on load.
+ * Defined in wire.ts, which the desktop webview can import without pulling
+ * this module's node dependencies into its bundle; re-exported so agent-side
+ * callers keep reaching it from the server that serves the page it links to.
  */
-export function remoteUrl(address: string, port: number, token: string): string {
-  return `http://${address}:${port}/#t=${token}`;
-}
+export { remoteUrl } from './wire.ts';

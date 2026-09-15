@@ -5,6 +5,7 @@ import {
 } from '@fluentui/react-components';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import type { Scope } from '../../../../packages/core/src/types.ts';
+import { errorMessage } from '../lib/error-message.ts';
 
 export interface DeleteWorkflowDialogProps {
   /** The list entry's `name` + `source` — the file to delete, never the workflow's own `name:` field. */
@@ -41,7 +42,7 @@ export function DeleteWorkflowDialog({
       });
       onDeleted();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
     } finally {
       setBusy(false);
     }

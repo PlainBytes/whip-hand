@@ -75,22 +75,26 @@ export const DEFAULT_CONFIG: WorkspaceConfig = {
 };
 
 /**
- * Parses one config.yaml into a layer. A missing file is an empty layer —
- * nothing to inherit past.
+ * Reads, parses and validates one hand-written YAML file against `schema` —
+ * the part config.yaml layers and doctor.yaml share. `undefined` means the
+ * file is missing (or unreadable), which every caller treats as "nothing
+ * configured here" rather than an error; an empty file parses as `{}`.
  *
  * Every failure names `path`. That mattered less when the only layer was the
- * workspace's own, but a malformed *global* config.yaml fails the load in
- * every workspace on the machine, and "config: on_findings: invalid" gives no
- * hint which of the two files to go fix. A YAML syntax error is wrapped for
- * the same reason: unwrapped it escaped as a raw YAMLParseError, bypassing
- * every caller that handles WorkflowError.
+ * workspace's own, but a malformed *global* file fails the load in every
+ * workspace on the machine, and "config: on_findings: invalid" gives no hint
+ * which of the files to go fix. A YAML syntax error is wrapped for the same
+ * reason: unwrapped it escaped as a raw YAMLParseError, bypassing every caller
+ * that handles WorkflowError.
  */
-export async function loadConfigLayer(path: string): Promise<PartialConfig> {
+export async function loadYamlLayer<S extends z.ZodType>(
+  path: string, schema: S,
+): Promise<z.output<S> | undefined> {
   let text: string;
   try {
     text = await readFile(path, 'utf8');
   } catch {
-    return {};
+    return undefined;
   }
   let value: unknown;
   try {
@@ -98,16 +102,25 @@ export async function loadConfigLayer(path: string): Promise<PartialConfig> {
   } catch (e) {
     throw new WorkflowError([`${path}: ${(e as Error).message}`]);
   }
-  const parsed = partialConfigSchema.safeParse(value);
+  const parsed = schema.safeParse(value);
   if (!parsed.success) {
     throw new WorkflowError(parsed.error.issues.map(i => {
       const at = i.path.join('.');
       return at.length > 0 ? `${path}: ${at}: ${i.message}` : `${path}: ${i.message}`;
     }));
   }
+  return parsed.data;
+}
+
+/**
+ * Parses one config.yaml into a layer. A missing file is an empty layer —
+ * nothing to inherit past. Failures name `path`; see loadYamlLayer.
+ */
+export async function loadConfigLayer(path: string): Promise<PartialConfig> {
+  const layer = await loadYamlLayer(path, partialConfigSchema);
+  if (layer === undefined) return {};
   // `0` is the retired spelling of "keep everything" — see partialConfigSchema.
   // Normalized at this one choke point so no caller has to know it ever existed.
-  const layer = parsed.data;
   if (layer.runs?.max_retained === 0) return { ...layer, runs: { ...layer.runs, max_retained: null } };
   return layer;
 }

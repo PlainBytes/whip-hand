@@ -23,6 +23,7 @@ import { FileOpsDialog, type FileOpsMode } from '../components/FileOpsDialog.tsx
 import { UnsavedChangesDialog } from '../components/UnsavedChangesDialog.tsx';
 import { resolveInWorkspace } from '../markdown/resolve.ts';
 import { useOpenExternal } from '../lib/open-external.tsx';
+import { errorMessage } from '../lib/error-message.ts';
 
 /**
  * What the dirty guard is holding until the user decides. Every one of these
@@ -229,7 +230,7 @@ export function FilesPage() {
         setSelectedPath(destination);
       }
     } catch (e) {
-      setOpsError(e instanceof Error ? e.message : String(e));
+      setOpsError(errorMessage(e));
     } finally {
       setOpsBusy(false);
     }
@@ -250,7 +251,7 @@ export function FilesPage() {
       if (wasOpen) setSelectedPath(null);
       setDeleting(null);
     } catch (e) {
-      setDeleteError(e instanceof Error ? e.message : String(e));
+      setDeleteError(errorMessage(e));
     } finally {
       setDeleteBusy(false);
     }

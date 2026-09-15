@@ -23,6 +23,8 @@ import {
 import { highlightCode } from '../files/highlight.ts';
 import { useGlobalShortcut } from '../lib/use-global-shortcut.ts';
 import { PdfView } from '../pdf/PdfView.tsx';
+import { formatBytes } from '../../../../packages/core/src/format.ts';
+import { errorMessage } from '../lib/error-message.ts';
 
 interface Loaded {
   path: string;
@@ -71,12 +73,6 @@ const FIND_IN_DOCUMENT = { key: 'f', mod: true } as const;
 /** Test-only: the module-scope view preference otherwise outlives every test. */
 export function resetPreviewViewForTests(): void {
   lastView = 'rendered';
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 /**
@@ -206,7 +202,7 @@ export function FilePreview({
         const text = isTextKind(kind) ? new TextDecoder().decode(bytes) : undefined;
         setLoaded({ path, kind, text, size: info.size, mtimeMs: info.mtimeMs });
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setError(errorMessage(e));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -466,7 +462,7 @@ export function FilePreview({
   const loadImage = useCallback(async (imagePath: string): Promise<Uint8Array> => {
     const info = await fs.stat(imagePath);
     if (info.size > MAX_IMAGE_BYTES) {
-      throw new Error(`Image is too large to display (${formatSize(info.size)}).`);
+      throw new Error(`Image is too large to display (${formatBytes(info.size)}).`);
     }
     return fs.readFile(imagePath);
   }, [fs]);
@@ -503,7 +499,7 @@ export function FilePreview({
       setDiskChanged(false);
       setReloadBlocked(null);
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : String(e));
+      setSaveError(errorMessage(e));
     }
   }, [fs, path]);
 
@@ -519,7 +515,7 @@ export function FilePreview({
         return;
       }
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : String(e));
+      setSaveError(errorMessage(e));
       return;
     }
     await applySave(draft);
@@ -654,7 +650,7 @@ export function FilePreview({
     );
   }
   if (tooLarge !== null) {
-    return <Text style={earlyReturnStyle}>Too large to preview ({formatSize(tooLarge)}).</Text>;
+    return <Text style={earlyReturnStyle}>Too large to preview ({formatBytes(tooLarge)}).</Text>;
   }
   if (loading || !loaded) return <Spinner size="tiny" label="Opening…" style={earlyReturnStyle} />;
 
@@ -668,7 +664,7 @@ export function FilePreview({
       return <PdfView path={loaded.path} bytes={loaded.bytes ?? new Uint8Array()} />;
     }
     if (loaded.kind === 'binary') {
-      return <Text style={earlyReturnStyle}>Binary file — {formatSize(loaded.size)}. {loaded.path}</Text>;
+      return <Text style={earlyReturnStyle}>Binary file — {formatBytes(loaded.size)}. {loaded.path}</Text>;
     }
     return (
       <img

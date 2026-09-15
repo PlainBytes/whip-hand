@@ -4,7 +4,7 @@ import { ModelCatalog } from './model-catalog.ts';
 import { AdapterRegistry } from './registry.ts';
 import type { AgentStep, DetectResult, ModelList, RunCtx, RunnerAdapter, SpawnSpec } from './types.ts';
 
-const CAPS = { sessionIdInjection: false, sessionResume: false, toolDenial: false, shareTranscript: false };
+const CAPS = { sessionIdInjection: false, sessionIdCapture: false, sessionResume: false, toolDenial: false, shareTranscript: false };
 const NOOP_SPEC: SpawnSpec = { argv: [], cwd: '/', env: {}, interactive: false };
 
 function fakeAdapter(

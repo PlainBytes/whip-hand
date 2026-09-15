@@ -95,7 +95,11 @@ export function droppedRefs(workflow: Workflow): DroppedRef[] {
   return out;
 }
 
-function joinNames(names: string[]): string {
+/**
+ * "a", "a and b", "a, b and c" — no Oxford comma. Exported so the desktop's
+ * reader-voiced notes list names exactly as `droppedRefSentence` does.
+ */
+export function joinNames(names: string[]): string {
   if (names.length <= 1) return names.join('');
   if (names.length === 2) return `${names[0]} and ${names[1]}`;
   return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;

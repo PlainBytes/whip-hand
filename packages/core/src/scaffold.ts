@@ -345,9 +345,14 @@ steps:
         capture: review
         output: feedback.md
 
-  - id: stage           # everything but the run artifacts, so the message
-    kind: command       # writer below sees the whole change as one diff
-    run: git add -A -- . ":(exclude).whiphand/runs"
+  # Everything but the run artifacts, so the message writer below sees the whole
+  # change as one diff. [.] rather than . because git rejects an exclude pathspec
+  # whose literal prefix is gitignored, and most repos ignore .whiphand/runs.
+  # The short :! form because cmd.exe cannot carry a quote next to the parens
+  # of :(exclude); without glob magic the * already spans subdirectories.
+  - id: stage
+    kind: command
+    run: git add -A -- . ":![.]whiphand/runs/*"
     output: stage.log
 
   - id: commit-message

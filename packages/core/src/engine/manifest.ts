@@ -7,10 +7,13 @@ import type {
 } from '../types.ts';
 import { isEndMarkerName } from './session-end.ts';
 import { isAwaitStateName } from './await-state.ts';
+import { isSessionCaptureName } from './session-capture.ts';
+import { isOpencodeSupportFileName } from './opencode-files.ts';
 import { LOCK_MARKER_NAME, isRunLocked } from './run-lock.ts';
 import { NAME_MARKER_NAME, SUGGEST_CAPTURE_NAME, readRunName, setRunName } from './run-name.ts';
-import { RUN_LOG_NAME, DEFAULT_RUN_LOG_CAP_BYTES, summarizeEvent, formatLogLine } from './run-log.ts';
-import { executionKey } from '../execution-key.ts';
+import { RUN_LOG_NAME, DEFAULT_RUN_LOG_CAP_BYTES } from './run-log.ts';
+import { summarizeEvent, formatLogLine, mergeUsage, progressActionText } from '../log-rows.ts';
+import { executionKey, sameLoopRefs } from '../execution-key.ts';
 
 const manifestStepSchema = z.object({
   id: z.string().min(1),
@@ -194,13 +197,6 @@ export interface RunJournalInit {
 }
 
 const TERMINAL_EVENTS = new Set<WhiphandEvent['type']>(['run:done', 'run:error', 'run:cancelled']);
-
-/** Order-sensitive equality for a row's `outerLoops`, treating absent as empty. */
-function sameLoopRefs(a: readonly LoopRef[] | undefined, b: readonly LoopRef[]): boolean {
-  const aa = a ?? [];
-  if (aa.length !== b.length) return false;
-  return aa.every((r, i) => r.id === b[i].id && r.iteration === b[i].iteration);
-}
 
 /**
  * Reduces the run's WhiphandEvent stream into an on-disk RunManifest (run.json,
@@ -466,17 +462,9 @@ export class RunJournal {
     if (progress.kind === 'text') return;
     const entry = this.findStep(stepId);
     if (entry === undefined) return;
-    const next = { ...entry.progress };
-    if (progress.kind === 'tool') {
-      next.lastAction = progress.target === undefined
-        ? progress.tool
-        : `${progress.tool} ${progress.target}`;
-    } else {
-      if (progress.turns !== undefined) next.turns = progress.turns;
-      if (progress.costUsd !== undefined) next.costUsd = progress.costUsd;
-      if (progress.premiumRequests !== undefined) next.premiumRequests = progress.premiumRequests;
-    }
-    entry.progress = next;
+    entry.progress = progress.kind === 'tool'
+      ? { ...entry.progress, lastAction: progressActionText(progress) }
+      : mergeUsage(entry.progress ?? {}, progress);
   }
 
   /**
@@ -555,6 +543,13 @@ export class RunJournal {
           this.upsertStep(event.stepId, { sessionStarted: true });
         }
         break; // updatedAt only
+      case 'step:session':
+        // A sessionIdCapture runner's own id, read back after its interactive
+        // spawn exited. Folded into the same map an injected id lives in, so
+        // resume.ts's existing `detail.sessionIds[step.id] !== undefined`
+        // check picks it up with no changes of its own.
+        this.manifest.sessionIds[event.stepId] = event.sessionId;
+        break;
       case 'step:artifact':
         this.upsertStep(event.stepId, { artifact: event.path });
         break;
@@ -943,7 +938,8 @@ function isBookkeepingFile(name: string): boolean {
     || name === LOCK_MARKER_NAME || name === NAME_MARKER_NAME
     || name === SUGGEST_CAPTURE_NAME
     || name === WORKFLOW_SNAPSHOT_NAME
-    || isEndMarkerName(name) || isAwaitStateName(name);
+    || isEndMarkerName(name) || isAwaitStateName(name)
+    || isSessionCaptureName(name) || isOpencodeSupportFileName(name);
 }
 
 export async function getRun(

@@ -44,6 +44,7 @@ import type { WorkingDiff } from '../diff/types.ts';
 import { DIFF_SOURCE_ID, type ReviewRequest } from './model.ts';
 import { RECESSED_SURFACE } from '../components/recessed-surface.ts';
 import type { FileComment, ManualChoice } from '../../../../packages/core/src/types.ts';
+import { errorMessage } from '../lib/error-message.ts';
 
 /** The rail width the Files browser and the Artifacts tab both use. */
 const RAIL_WIDTH = 320;
@@ -317,7 +318,7 @@ function DecisionBar({
         fileComments.length > 0 ? fileComments : undefined,
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
       setBusy(null);
     }
   }

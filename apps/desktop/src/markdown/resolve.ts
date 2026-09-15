@@ -4,24 +4,24 @@
  * Pure on purpose: these are the rules that decide whether a document can
  * reach a file, and they should be testable without mounting anything.
  */
-import { joinPath } from '../files/tree-model.ts';
+import { joinPath, separatorOf } from '../files/tree-model.ts';
+import { isImagePath } from '../files/file-kind.ts';
 import type { DocResolution } from './types.ts';
 
 const EXTERNAL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
-const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico']);
 
 /** True for anything carrying a scheme — those go to the system browser. */
 export function isExternal(target: string): boolean {
   return EXTERNAL_SCHEME.test(target);
 }
 
-function separatorOf(path: string): string {
-  return path.includes('\\') && !path.includes('/') ? '\\' : '/';
-}
-
+/**
+ * Image by the same extension rule the Files preview uses, so a link the
+ * document renders inline is exactly one the preview would render as an
+ * image — including the dotfile rule: `.png` is a file with no extension.
+ */
 function kindOf(path: string): 'link' | 'image' {
-  const ext = path.split(/[\\/]/).pop()?.split('.').pop()?.toLowerCase() ?? '';
-  return IMAGE_EXTENSIONS.has(ext) ? 'image' : 'link';
+  return isImagePath(path) ? 'image' : 'link';
 }
 
 /** Strips the query and fragment, and undoes percent-encoding. */

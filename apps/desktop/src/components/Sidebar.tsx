@@ -1,10 +1,14 @@
-import { Button, CounterBadge, Tooltip } from '@fluentui/react-components';
+import { Button, CounterBadge, Tooltip, type CounterBadgeProps } from '@fluentui/react-components';
 import { pagesInGroup, type NavGroup, type PageDef, type PageId } from '../nav.ts';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher.tsx';
 import { OngoingRuns } from './OngoingRuns.tsx';
 import { RowGlyph, RowTrailing, SIDEBAR_GROUP_GAP, SIDEBAR_ROW_GAP, SIDEBAR_ROW_STYLE } from './sidebar-row.tsx';
+import { WAITING_BADGE_COLOR, STATUS_BADGE_SIZE } from '../lib/status-style.ts';
 import { useAppStore, ongoingJobs, waitingJobs, type JobState } from '../state/store.ts';
 import { useCapabilities } from '../capabilities.tsx';
+
+/** Fluent's CounterBadge restricts `color` in its types only — see NavItem. */
+type CounterBadgeColor = CounterBadgeProps['color'];
 
 /**
  * A navigation list, not a TabList. Fluent's Tab carries role="tab", which
@@ -91,8 +95,11 @@ function NavItem({ def, selected, disabled, badge, badgeUrgent, onSelect }: {
         // The badge is aria-hidden, so the count has to reach the name here.
         aria-label={badge > 0 ? `${def.label} (${badge} running)` : undefined}
         onClick={onSelect}
+        // The same rail geometry every other sidebar row spreads in: with the
+        // 24px badge in the trailing slot, Fluent's own 5px vertical padding
+        // would grow this row to 36px while its neighbours stayed 32px.
         style={{
-          justifyContent: 'flex-start',
+          ...SIDEBAR_ROW_STYLE,
           width: '100%',
           background: selected ? 'var(--colorNeutralBackground2)' : undefined,
         }}
@@ -104,7 +111,11 @@ function NavItem({ def, selected, disabled, badge, badgeUrgent, onSelect }: {
               aria-hidden
               count={badge}
               appearance="filled"
-              color={badgeUrgent ? 'danger' : 'informative'}
+              size={STATUS_BADGE_SIZE}
+              // Fluent's CounterBadge type omits 'warning' from `color`, but
+              // the styles are the shared Badge ones — the yellow fill and its
+              // dark number render exactly like any other filled warning badge.
+              color={(badgeUrgent ? WAITING_BADGE_COLOR : 'informative') as CounterBadgeColor}
             />
           </RowTrailing>
         )}
@@ -160,6 +171,10 @@ export function Sidebar({ page, onSelectPage, onOpenRun }: SidebarProps) {
         // Block separation is stated once via the named spacers below, not
         // silently summed from this gap plus each spacer's own size.
         gap: 0,
+        // A tall middle section must shrink here, never push the app group
+        // (Preferences, …) past the window's bottom edge.
+        minHeight: 0,
+        overflow: 'hidden',
         borderRight: '1px solid var(--colorNeutralStroke2)',
         padding: 8,
         width: 220,
@@ -169,21 +184,37 @@ export function Sidebar({ page, onSelectPage, onOpenRun }: SidebarProps) {
     >
       <WorkspaceSwitcher />
       <div style={{ height: SIDEBAR_GROUP_GAP }} />
-      {group('workspace')}
-      {/* Everything below the spacer is app-scoped: it outlives any one workspace. */}
-      <div style={{ flex: 1, minHeight: SIDEBAR_GROUP_GAP }} />
-      {hasOngoingRuns && (
-        <>
-          <OngoingRuns jobs={ongoing} onOpenRun={onOpenRun} onShowMore={() => onSelectPage('activity')} />
-          <div style={{ height: SIDEBAR_GROUP_GAP }} />
-        </>
-      )}
-      {remoteListening && (
-        <>
-          <RemoteAccessIndicator />
-          <div style={{ height: SIDEBAR_GROUP_GAP }} />
-        </>
-      )}
+      <div
+        data-testid="sidebar-scroll-region"
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          // Fluent's focus ring draws slightly outside the row; this keeps it
+          // visible at the scroll edges while the negative margin keeps rows
+          // aligned with the switcher and the app group.
+          paddingInline: 2,
+          marginInline: -2,
+        }}
+      >
+        {group('workspace')}
+        {/* Everything below the spacer is app-scoped: it outlives any one workspace. */}
+        <div style={{ flex: 1, minHeight: SIDEBAR_GROUP_GAP }} />
+        {hasOngoingRuns && (
+          <>
+            <OngoingRuns jobs={ongoing} onOpenRun={onOpenRun} onShowMore={() => onSelectPage('activity')} />
+            <div style={{ height: SIDEBAR_GROUP_GAP }} />
+          </>
+        )}
+        {remoteListening && (
+          <>
+            <RemoteAccessIndicator />
+            <div style={{ height: SIDEBAR_GROUP_GAP }} />
+          </>
+        )}
+      </div>
       {group('app')}
     </nav>
   );

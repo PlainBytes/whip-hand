@@ -66,9 +66,9 @@ export interface GracefulEndTimings {
 
 /**
  * Asks the runner to quit, then escalates: quit sequence -> SIGTERM -> SIGKILL.
- * The graces are deliberately generous — copilot writes the --share transcript
- * that harvest reads only as it shuts down, and killing it early turns into a
- * baffling "the artifact was never written".
+ * The graces are deliberately generous — claude and copilot both persist the
+ * session harvest later resumes only as they shut down, and killing either
+ * early turns into a baffling "the artifact was never written".
  *
  * Returns a canceller; call it once the pty has exited so no timer outlives it.
  */

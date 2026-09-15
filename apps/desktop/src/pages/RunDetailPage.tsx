@@ -35,7 +35,7 @@ import {
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore, executionKey, type JobState, type StepState } from '../state/store.ts';
 import type { RunDetail as RunDetailResult } from '../agent/client.ts';
-import { summarizeEvent, parseLogLine, type LogRow } from '../lib/log-rows.ts';
+import { summarizeEvent, parseLogLine, type LogRow } from '../../../../packages/core/src/log-rows.ts';
 import { StatusBadge } from '../components/StatusBadge.tsx';
 import { AttentionBadge } from '../components/AttentionBadge.tsx';
 import { PageHeader } from '../components/PageHeader.tsx';
@@ -43,6 +43,7 @@ import { AWAIT_LABEL } from '../lib/await-copy.ts';
 import { TerminalPanel } from '../components/TerminalPanel.tsx';
 import { RunStepper } from '../components/RunStepper.tsx';
 import { PendingDecisionBar } from '../components/PendingDecisionBar.tsx';
+import { DeleteRunDialog } from '../components/DeleteRunDialog.tsx';
 import { ReviewOverlay } from '../review/ReviewOverlay.tsx';
 import { fromManualRequest } from '../review/from-manual.ts';
 import type { WorkingDiff } from '../diff/types.ts';
@@ -54,9 +55,11 @@ import { FileTree } from '../components/FileTree.tsx';
 import { FilePreview } from '../components/FilePreview.tsx';
 import { RECESSED_SURFACE } from '../components/recessed-surface.ts';
 import { resolveInArtifacts } from '../markdown/resolve.ts';
-import { elapsedMs, formatElapsed } from '../lib/duration.ts';
+import { elapsedMs, formatElapsed } from '../../../../packages/core/src/format.ts';
+import { parsePositiveInt } from '../lib/parse-number.ts';
 import { useOpenExternal } from '../lib/open-external.tsx';
 import type { FileComment, ManualChoice, Scope } from '../../../../packages/core/src/types.ts';
+import { errorMessage } from '../lib/error-message.ts';
 
 export interface RunDetailPageProps {
   /** The job whose live event stream to follow, when opened from a just-started run. */
@@ -87,13 +90,6 @@ export interface RunDetailPageProps {
  * running, so at most one unfinished job per run can exist. Store order is
  * first-notification order and jobIds are random, so neither is a tiebreak.
  */
-/** Blank or non-numeric shows the validation error; anything else must be a real count. */
-function parsePositiveInt(raw: string): number | undefined {
-  if (!/^\d+$/.test(raw.trim())) return undefined;
-  const n = Number(raw.trim());
-  return n > 0 ? n : undefined;
-}
-
 function findJobByRunId(jobs: Record<string, JobState>, runId: string): JobState | undefined {
   let finished: JobState | undefined;
   for (const job of Object.values(jobs)) {
@@ -285,8 +281,6 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
   const [endingSession, setEndingSession] = useState(false);
   const [locking, setLocking] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
   const [renaming, setRenaming] = useState(false);
@@ -384,7 +378,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
           setManifestError(null);
         })
         .catch((err: unknown) => {
-          if (!cancelled) setManifestError(err instanceof Error ? err.message : String(err));
+          if (!cancelled) setManifestError(errorMessage(err));
         });
     }
 
@@ -566,7 +560,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
         setFinishedLogError(null);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setFinishedLogError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) setFinishedLogError(errorMessage(err));
       });
     return () => { cancelled = true; };
   }, [client, workspacePath, effectiveRunId, activeTab]);
@@ -594,7 +588,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
       setFinishedLogError(null);
     } catch (err) {
       pendingLogPrependRef.current = null;
-      setFinishedLogError(err instanceof Error ? err.message : String(err));
+      setFinishedLogError(errorMessage(err));
     } finally {
       setLoadingEarlierLogs(false);
     }
@@ -770,7 +764,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
       if (effectiveJobId) setJobRunName(effectiveJobId, result.name);
       setRenameOpen(false);
     } catch (err) {
-      setRenameError(err instanceof Error ? err.message : String(err));
+      setRenameError(errorMessage(err));
     } finally {
       setRenaming(false);
     }
@@ -793,27 +787,6 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
       setManifest(current => (current ? { ...current, locked: result.locked } : current));
     } finally {
       setLocking(false);
-    }
-  }
-
-  async function handleConfirmDelete(): Promise<void> {
-    if (!workspacePath || !effectiveRunId) return;
-    setDeleting(true);
-    setDeleteError(null);
-    try {
-      const result = await client.request('deleteRun', { workdir: workspacePath, runId: effectiveRunId });
-      if (!result.deleted) {
-        setDeleteError(
-          result.reason === 'locked' ? 'This run is locked.'
-            : result.reason === 'running' ? 'This run is still running.'
-              : 'This run no longer exists.',
-        );
-        return;
-      }
-      setDeleteOpen(false);
-      onBack();
-    } finally {
-      setDeleting(false);
     }
   }
 
@@ -969,7 +942,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setDiffError(err instanceof Error ? err.message : String(err));
+        setDiffError(errorMessage(err));
         setDiffLoading(false);
       });
     return () => { cancelled = true; };
@@ -1248,36 +1221,21 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
               </ToggleButton>
             )}
             {effectiveRunId && (
-              <Dialog
-                open={deleteOpen}
-                onOpenChange={(_e, data) => {
-                  // A deleteRun already issued can't be un-issued: dismissal must
-                  // not lie about having stopped it.
-                  if (!data.open && !deleting) setDeleteOpen(false);
-                  else if (data.open) { setDeleteOpen(true); setDeleteError(null); }
+              <Button appearance="secondary" icon={<Delete20Regular />} onClick={() => setDeleteOpen(true)}>
+                Delete
+              </Button>
+            )}
+            {deleteOpen && workspacePath && effectiveRunId && (
+              <DeleteRunDialog
+                workdir={workspacePath}
+                runId={effectiveRunId}
+                name={runName}
+                onDeleted={() => {
+                  setDeleteOpen(false);
+                  onBack();
                 }}
-              >
-                <DialogTrigger disableButtonEnhancement>
-                  <Button appearance="secondary" icon={<Delete20Regular />}>
-                    Delete
-                  </Button>
-                </DialogTrigger>
-                <DialogSurface>
-                  <DialogBody>
-                    <DialogTitle>Delete {runName ?? `run ${effectiveRunId}`}?</DialogTitle>
-                    <DialogContent>
-                      This deletes the run's directory and everything in it. This cannot be undone.
-                      {deleteError ? ` — ${deleteError}` : ''}
-                    </DialogContent>
-                    <DialogActions>
-                      <Button disabled={deleting} onClick={() => setDeleteOpen(false)}>Cancel</Button>
-                      <Button appearance="primary" disabled={deleting} onClick={() => void handleConfirmDelete()}>
-                        {deleting ? <Spinner size="tiny" /> : 'Delete'}
-                      </Button>
-                    </DialogActions>
-                  </DialogBody>
-                </DialogSurface>
-              </Dialog>
+                onDismiss={() => setDeleteOpen(false)}
+              />
             )}
           </div>
         </div>

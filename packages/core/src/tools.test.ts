@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { AdapterRegistry } from './registry.ts';
 import type { DetectResult, RunnerAdapter, SpawnSpec } from './types.ts';
 import {
-  BUILTIN_TOOLS, detectTools, parseToolVersion, probeTool, resolveToolTable,
+  BUILTIN_TOOLS, detectTools, parseToolVersion, probeRunner, probeTool, resolveToolTable,
 } from './tools.ts';
 import type { ToolProbe } from './tools.ts';
 
@@ -11,7 +11,7 @@ function fakeAdapter(id: string, detect: () => Promise<DetectResult>): RunnerAda
   const spec: SpawnSpec = { argv: [id], cwd: '/', env: {}, interactive: false };
   return {
     id,
-    capabilities: { sessionIdInjection: false, sessionResume: false, toolDenial: false, shareTranscript: false },
+    capabilities: { sessionIdInjection: false, sessionIdCapture: false, sessionResume: false, toolDenial: false, shareTranscript: false },
     detect,
     interactive: () => spec, headless: () => spec, harvest: () => spec,
   };
@@ -215,4 +215,27 @@ test('an alias is tried after the primary name, and named when it answers', asyn
   }));
   assert.equal(result.installed, true);
   assert.deepEqual(result.notes, ["found as 'node'"]);
+});
+
+// ---------------------------------------------------------------------------
+// probeRunner — the spawn half of every adapter's detect()
+// ---------------------------------------------------------------------------
+
+test('probeRunner probes the built-in row for an id, returning probeTool\'s exact shape', async () => {
+  // `node` stands in for a runner: it has a built-in row and is certainly installed.
+  const result = await probeRunner('node');
+  assert.equal(result.installed, true);
+  assert.match(result.version ?? '', /^\d+\.\d+\.\d+/);
+  assert.ok(!('notes' in result), 'no alias answered, so no notes key at all — adapters return this as-is');
+});
+
+test('probeRunner falls back to `<id> --version` for an id with no built-in row', async () => {
+  assert.deepEqual(await probeRunner('whiphand-definitely-not-a-real-binary-xyz'), { installed: false });
+});
+
+test('every shipped adapter has a built-in row for probeRunner to find', () => {
+  for (const id of ['claude', 'copilot', 'opencode']) {
+    const row = BUILTIN_TOOLS.find(probe => probe.id === id);
+    assert.deepEqual(row?.argv, [id, '--version'], id);
+  }
 });

@@ -9,6 +9,7 @@ import { openWorkspace } from '../lib/workspace-switch.ts';
 import { basename, filterWorkspaces, sortWorkspaces } from '../lib/workspace-identity.ts';
 import { WorkspaceDot } from './WorkspaceDot.tsx';
 import type { RecentWorkspace } from '../../../../packages/agent/src/app-state.ts';
+import { errorMessage } from '../lib/error-message.ts';
 
 const EMPTY_RECENTS: RecentWorkspace[] = [];
 
@@ -37,7 +38,7 @@ export function WorkspaceQuickSwitch({ onClose }: WorkspaceQuickSwitchProps) {
       // editing" — leave the dialog up rather than closing on a non-switch.
       if (await openWorkspace(client, entry.path)) onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
     }
   }
 
@@ -49,7 +50,7 @@ export function WorkspaceQuickSwitch({ onClose }: WorkspaceQuickSwitchProps) {
       });
       patchAppState({ recentWorkspaces: result.recentWorkspaces });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
     }
   }
 

@@ -23,7 +23,7 @@ function promptRunner(): RunnerAdapter {
   });
   return {
     id: 'fake',
-    capabilities: { sessionIdInjection: false, sessionResume: false, toolDenial: true, shareTranscript: false },
+    capabilities: { sessionIdInjection: false, sessionIdCapture: false, sessionResume: false, toolDenial: true, shareTranscript: false },
     detect: async () => ({ installed: true }),
     interactive: (step, ctx) => spec('interactive', step, ctx),
     headless: (step, ctx) => spec('headless', step, ctx),

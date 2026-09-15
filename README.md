@@ -3,15 +3,15 @@
 <img src="apps/desktop/src-tauri/icons/source.png" alt="" width="96" align="right" />
 
 `whiphand` runs **workflows** against a working folder: an ordered set of steps — an LLM CLI runner
-(`claude`, `copilot`) with its own model and tool policy, a shell command, or a stop to ask
-a human — which can be wrapped in a **cycle** that repeats until a check passes. The
+(`claude`, `copilot`, `opencode`) with its own model and tool policy, a shell command, or a stop to
+ask a human — which can be wrapped in a **cycle** that repeats until a check passes. The
 canonical workflow plans a feature interactively with one model, then implements, tests and
 reviews it in a loop until the review comes back clean.
 
 ## Install
 
 Requires Node ≥ 24 (runs TypeScript natively — no build step) and at least one of
-`claude` / `copilot` on PATH.
+`claude` / `copilot` / `opencode` on PATH.
 
 ```bash
 npm install
@@ -60,7 +60,8 @@ Doctor page renders, so the two can never disagree:
 AI harnesses
 ✔ claude 2.1.263
 ✔ copilot 1.0.83
-  · copilot will not signal when it needs you; set "beep": true in ~/.copilot/config.json
+  · copilot will not signal when it needs you; set "beep": true in ~/.copilot/settings.json
+✔ opencode 1.17.13
 ○ codex not installed [detect only]
 
 Support tools
@@ -107,8 +108,9 @@ hide: [cursor-agent, jq]   # drop built-ins you do not care about
 
 Every key is validated and unknown ones are rejected, so a typo tells you rather than
 silently doing nothing. Overriding a built-in changes its label, group, url and
-`optional`, but detection for `claude` and `copilot` always goes through their adapters
-— that is where their setup advice comes from.
+`optional`, but detection for `claude`, `copilot` and `opencode` always goes through their
+adapters — that is where their setup advice (copilot's `beep` note, opencode's PATH note)
+comes from.
 
 It is a **separate file from `config.yaml` on purpose**: `config.yaml` is rewritten
 wholesale whenever settings are saved, so anything unrecognized in it would be lost.
@@ -305,8 +307,8 @@ npm run reinstall         # Ubuntu: build the .deb, then apt-remove and reinstal
 `dist/whiphand` is an esbuild bundle injected into a copy of this machine's Node binary
 (a [single executable application](https://nodejs.org/api/single-executable-applications.html)),
 so it is ~120 MB — that is the Node runtime, not the app. Copy it anywhere on PATH and
-run `whiphand` as usual. `claude` / `copilot` are still runtime prerequisites; `whiphand doctor`
-reports them, along with everything else this machine needs.
+run `whiphand` as usual. `claude` / `copilot` / `opencode` are still runtime prerequisites;
+`whiphand doctor` reports them, along with everything else this machine needs.
 
 `npm run package:desktop` builds the `@whiphand/agent` sidecar the same way, hands it to
 Tauri's bundler as an `externalBin`, and produces a `.deb` to install and an

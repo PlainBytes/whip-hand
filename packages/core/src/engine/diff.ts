@@ -246,8 +246,9 @@ export async function workingDiffFiles(workdir: string): Promise<WorkingDiff | n
     // plan.md and review.md are themselves untracked and would otherwise
     // dominate the very review they are the subject of. Same rule as
     // diffSnapshots' `.whiphand/` filter, so the write-guard and the review agree
-    // about what counts as a change.
-    await gitStdout(['add', '-A', '--', '.', ':(exclude,glob).whiphand/**'], workdir, env);
+    // about what counts as a change. `[.]` rather than `.`: git refuses an
+    // exclude whose literal prefix is gitignored, and a user may ignore .whiphand/.
+    await gitStdout(['add', '-A', '--', '.', ':(exclude,glob)[.]whiphand/**'], workdir, env);
 
     // Every flag defends against a *user's* gitconfig, not against git's
     // defaults. --find-renames on both passes or the two lists can come back
@@ -263,7 +264,7 @@ export async function workingDiffFiles(workdir: string): Promise<WorkingDiff | n
       '-c', 'diff.mnemonicPrefix=false', '--no-pager', 'diff', '--cached', base,
       '--find-renames', '--no-ext-diff', '--no-color',
     ];
-    const pathspec = ['--', '.', ':(exclude,glob).whiphand/**'];
+    const pathspec = ['--', '.', ':(exclude,glob)[.]whiphand/**'];
 
     const numstat = await gitStdout([...shared, '--numstat', '-z', ...pathspec], workdir, env);
     const all = parseNumstatZ(numstat);

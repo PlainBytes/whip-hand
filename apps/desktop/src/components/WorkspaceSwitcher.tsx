@@ -14,6 +14,7 @@ import { basename, sortWorkspaces } from '../lib/workspace-identity.ts';
 import { WorkspaceDot } from './WorkspaceDot.tsx';
 import { RowGlyph, RowTrailing, SIDEBAR_ROW_STYLE } from './sidebar-row.tsx';
 import type { RecentWorkspace } from '../../../../packages/agent/src/app-state.ts';
+import { errorMessage } from '../lib/error-message.ts';
 
 // Stable reference so the zustand selector doesn't produce a fresh array on
 // every render when appState is null — an inline `?? []` fallback there
@@ -43,7 +44,7 @@ export function WorkspaceSwitcher() {
     try {
       await openWorkspace(client, path);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
     }
   }
 
@@ -59,7 +60,7 @@ export function WorkspaceSwitcher() {
       const result = await client.request('setWorkspacePinned', { path, pinned });
       patchAppState({ recentWorkspaces: result.recentWorkspaces });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
     }
   }
 

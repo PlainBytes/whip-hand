@@ -1,9 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { spawn as nodeSpawn } from 'node:child_process';
+import { pbkdf2 } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { resolveExecutable, msvcrtQuote, cmdInvocation, planLaunch, spawnRunner } from './exec.ts';
+import {
+  resolveExecutable, msvcrtQuote, cmdInvocation, planLaunch, spawnRunner, pipeChild, routeHeadless,
+} from './exec.ts';
+import type { SpawnSpec } from './types.ts';
 
 // The win32 branch resolves with `path.win32` rules wherever it *runs*, so the
 // fixtures are created with the host's `path` (the file has to actually exist)
@@ -375,4 +380,89 @@ test('a native .exe runner is untouched by any of this', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// --- pipeChild / routeHeadless ----------------------------------------------
+
+/** A real piped child: these tests are about stream and settle timing, which a fake cannot model. */
+function nodeChild(script: string) {
+  return nodeSpawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+/** Occupies every libuv threadpool thread (well past the default 4) for a few hundred ms. */
+function saturateThreadpool(): Promise<void> {
+  const jobs = Array.from({ length: 16 }, () =>
+    new Promise<void>(resolve => pbkdf2('k', 's', 200_000, 64, 'sha512', () => resolve())));
+  return Promise.all(jobs).then(() => {});
+}
+
+test('pipeChild resolves only after the capture file is closed, whatever the unit', async () => {
+  // The race the agent frontend lost: fs writes queue on the threadpool while
+  // pipe reads do not, so with the pool busy as the last line arrives, the
+  // child's 'close' comes long before that line reaches disk. A footer
+  // appended synchronously at resolve time must still land after it.
+  const dir = mkdtempSync(path.join(tmpdir(), 'whiphand-pipe-'));
+  try {
+    for (const unit of ['chunk', 'line'] as const) {
+      const file = path.join(dir, `${unit}.log`);
+      let busy: Promise<void> = Promise.resolve();
+      const code = await pipeChild(nodeChild("console.log('first'); setTimeout(() => console.log('last'), 50)"), {
+        onChunk: chunk => { if (chunk.includes('last')) busy = saturateThreadpool(); },
+        onLine: line => { if (line === 'last') busy = saturateThreadpool(); },
+        capture: { path: file, streams: ['stdout'], unit },
+      });
+      assert.equal(code, 0);
+      appendFileSync(file, 'FOOTER\n');
+      assert.equal(readFileSync(file, 'utf8'), 'first\nlast\nFOOTER\n', `unit: ${unit}`);
+      await busy;
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('pipeChild drains a stream nobody listens to, so a chatty child cannot block on a full pipe', async () => {
+  const code = await pipeChild(nodeChild("process.stdout.write('x'.repeat(4 << 20)); process.exit(4)"));
+  assert.equal(code, 4);
+});
+
+test('pipeChild delivers the final unterminated line and tags every line with its stream', async () => {
+  const seen: string[] = [];
+  await pipeChild(nodeChild("process.stdout.write('a\\nb'); process.stderr.write('e')"), {
+    onLine: (line, stream) => seen.push(`${stream}:${line}`),
+  });
+  assert.deepEqual(seen.sort(), ['stderr:e', 'stdout:a', 'stdout:b']);
+});
+
+test('pipeChild runs onAbort at once for an already-aborted signal, and its disposer on settle', async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let disposed = false;
+  const code = await pipeChild(nodeChild('setTimeout(() => {}, 5000)'), {
+    signal: controller.signal,
+    onAbort: child => { child.kill('SIGKILL'); return () => { disposed = true; }; },
+  });
+  assert.notEqual(code, 0);
+  assert.ok(disposed);
+});
+
+test('pipeChild settles a mapped error as an exit code and rejects an unmapped one', async () => {
+  const missing = (): ReturnType<typeof nodeChild> =>
+    nodeSpawn('whiphand-no-such-binary-6120', [], { stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.equal(await pipeChild(missing(), { errorExitCode: err => (err.code === 'ENOENT' ? 127 : undefined) }), 127);
+  await assert.rejects(pipeChild(missing()), { code: 'ENOENT' });
+});
+
+test('routeHeadless keeps a read progress stream out of the capture file, and only then', () => {
+  const base: SpawnSpec = { argv: ['x'], cwd: '/', env: {}, interactive: false, capture: { path: '/c' } };
+  const progress: SpawnSpec = { ...base, progress: { format: 'claude-stream-json' } };
+  assert.deepEqual(routeHeadless(base, true), { progress: false, capture: { path: '/c', streams: ['stdout', 'stderr'] } });
+  assert.deepEqual(routeHeadless(progress, true), { progress: true, capture: { path: '/c', streams: ['stderr'] } });
+  // No reader: stdout is ordinary output again, rather than going nowhere.
+  assert.deepEqual(routeHeadless(progress, false), { progress: false, capture: { path: '/c', streams: ['stdout', 'stderr'] } });
+  assert.deepEqual(
+    routeHeadless({ ...base, capture: { path: '/c', streams: 'stdout' } }, false),
+    { progress: false, capture: { path: '/c', streams: ['stdout'] } },
+  );
+  assert.deepEqual(routeHeadless({ argv: ['x'], cwd: '/', env: {}, interactive: false }, true), { progress: false });
 });

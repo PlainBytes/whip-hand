@@ -30,7 +30,15 @@ export type { ToolGroup } from './tool-groups.ts';
 export { loadDoctorConfig, globalDoctorConfigPath, doctorConfigSchema } from './doctor-config.ts';
 export { claudeAdapter, CLAUDE_WRITE_TOOLS, CLAUDE_QUIT_SEQUENCE } from './adapters/claude.ts';
 export { probeClaudeModels, parseInitializeReply, mergeWithAliases } from './adapters/claude-models.ts';
-export { copilotAdapter, transcriptPath, COPILOT_QUIT_SEQUENCE, parseCopilotModels } from './adapters/copilot.ts';
+export { copilotAdapter, COPILOT_QUIT_SEQUENCE, parseCopilotModels } from './adapters/copilot.ts';
+export { opencodeAdapter, OPENCODE_QUIT_SEQUENCE, parseOpencodeModels } from './adapters/opencode.ts';
+export {
+  opencodeGuidanceName, opencodeGuidancePath, opencodePluginName, opencodePluginPath, isOpencodeSupportFileName,
+} from './engine/opencode-files.ts';
+export { harvestPrompt } from './adapters/common.ts';
+export {
+  sessionCaptureName, sessionCapturePath, isSessionCaptureName, clearSessionCapture, readSessionCapture,
+} from './engine/session-capture.ts';
 export {
   loadWorkspaceConfig, loadConfigLayer, loadGlobalConfig, mergeConfig, diffConfigLayer,
   DEFAULT_CONFIG, workspaceConfigSchema, partialConfigSchema, CONFIG_KEYS, configKeySchema,
@@ -44,11 +52,14 @@ export {
   createRunDir, artifactPath, ensureArtifactDir, assertArtifact, ArtifactError,
 } from './engine/artifacts.ts';
 export { snapshotTree, diffSnapshots, headSha, pathsFromStatusLines } from './engine/git-guard.ts';
+export { RUN_LOG_NAME, DEFAULT_RUN_LOG_CAP_BYTES, readRunLog } from './engine/run-log.ts';
+export type { ReadRunLogParams, ReadRunLogResult } from './engine/run-log.ts';
 export {
-  RUN_LOG_NAME, MAX_LOG_LINE_BYTES, DEFAULT_RUN_LOG_CAP_BYTES,
-  summarizeEvent, formatLogLine, parseLogLine, readRunLog,
-} from './engine/run-log.ts';
-export type { LogRow, ReadRunLogParams, ReadRunLogResult } from './engine/run-log.ts';
+  MAX_LOG_LINE_BYTES, summarizeEvent, formatLogLine, parseLogLine,
+  nestedPrefix, progressActionText, mergeUsage, usageParts,
+} from './log-rows.ts';
+export type { LogRow, UsageCounters } from './log-rows.ts';
+export { elapsedMs, formatElapsed } from './format.ts';
 export {
   workingDiffFiles, parseNumstatZ, splitPatch, pairPatches,
   MAX_DIFF_FILES, MAX_PATCH_BYTES, MAX_TOTAL_PATCH_BYTES,
@@ -60,8 +71,12 @@ export {
 export { commandSpec, captureHeader, captureFooter, DEFAULT_SHELL, shellFlags } from './engine/command.ts';
 export {
   resolveExecutable, spawnRunner, execRunner, planLaunch, cmdInvocation, msvcrtQuote,
+  pipeChild, routeHeadless,
 } from './exec.ts';
-export type { ResolvedExecutable, ResolveExecutableOpts, CmdInvocation, LaunchPlan } from './exec.ts';
+export type {
+  ResolvedExecutable, ResolveExecutableOpts, CmdInvocation, LaunchPlan,
+  ChildStream, HeadlessRouting, PipeChildOptions,
+} from './exec.ts';
 export {
   buildManualRequest, manualChoices, noteArtifact, reviewArtifact, workingDiff, DIFF_LINE_LIMIT,
 } from './engine/manual.ts';

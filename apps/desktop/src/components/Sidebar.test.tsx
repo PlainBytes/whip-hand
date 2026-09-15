@@ -3,6 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { Sidebar } from './Sidebar.tsx';
 import { RunStatusIcon } from './OngoingRuns.tsx';
+import { hasInjectedStyle } from '../test/badge-style.ts';
 import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
 import { AgentClientProvider } from '../agent/agent-context.tsx';
@@ -73,6 +74,37 @@ describe('Sidebar', () => {
     expect(screen.getByRole('button', { name: 'Activity (2 running)' })).toBeInTheDocument();
   });
 
+  it('paints the Activity badge in the waiting colour at the shared status size when urgent', () => {
+    const job = (jobId: string, workdir: string, awaiting = false) => ({
+      jobId, workdir, finished: false, stepOrder: [], steps: {}, currentExecution: {},
+      events: [], logTail: [], logRows: [], activityTail: [], hasNarrated: false, ptyActive: false, ptyDataBuffer: [], ptyDataBaseIndex: 0,
+      ptyDataTrimmed: false, ptyExited: false,
+      ...(awaiting ? { awaiting: { stepId: 's', reason: 'permission' as const } } : {}),
+    });
+    useAppStore.setState({ workspacePath: '/ws/a', jobs: { j1: job('j1', '/ws/a', true) } });
+    renderSidebar();
+    const badge = screen.getByRole('button', { name: /^Activity/ })
+      .querySelector('.fui-CounterBadge') as HTMLElement;
+    // Waiting is the yellow warning fill — not `danger` red, which means
+    // failed — and the marker is the one shared 24px status size.
+    expect(hasInjectedStyle(badge, 'background-color', 'var(--colorPaletteYellowBackground3)')).toBe(true);
+    expect(hasInjectedStyle(badge, 'background-color', 'var(--colorPaletteRedBackground3)')).toBe(false);
+    expect(hasInjectedStyle(badge, 'height', '24px')).toBe(true);
+  });
+
+  it('keeps a merely-running Activity count informative, not the waiting colour', () => {
+    const job = (jobId: string, workdir: string) => ({
+      jobId, workdir, finished: false, stepOrder: [], steps: {}, currentExecution: {},
+      events: [], logTail: [], logRows: [], activityTail: [], hasNarrated: false, ptyActive: false, ptyDataBuffer: [], ptyDataBaseIndex: 0,
+      ptyDataTrimmed: false, ptyExited: false,
+    });
+    useAppStore.setState({ workspacePath: '/ws/a', jobs: { j1: job('j1', '/ws/a') } });
+    renderSidebar();
+    const badge = screen.getByRole('button', { name: /^Activity/ })
+      .querySelector('.fui-CounterBadge') as HTMLElement;
+    expect(hasInjectedStyle(badge, 'background-color', 'var(--colorPaletteYellowBackground3)')).toBe(false);
+  });
+
   it('shows no badge when nothing is running', () => {
     useAppStore.setState({ workspacePath: '/ws', jobs: {} });
     renderSidebar();
@@ -127,6 +159,33 @@ describe('Sidebar', () => {
     for (const label of ['Runs', 'Workflows', 'Settings', 'Activity', 'Doctor', 'Preferences']) {
       expect(screen.getByRole('button', { name: new RegExp(`^${label}$`) })).toBeInTheDocument();
     }
+  });
+
+  describe('Sidebar layout', () => {
+    it('keeps the app group out of the middle scroll region', () => {
+      useAppStore.setState({ workspacePath: '/ws' });
+      renderSidebar();
+      const region = screen.getByTestId('sidebar-scroll-region');
+      // The workspace pages scroll; Preferences and friends don't — the app
+      // group must stay pinned at the bottom of the nav.
+      expect(within(region).getByRole('button', { name: 'Runs' })).toBeInTheDocument();
+      expect(within(region).queryByRole('button', { name: 'Preferences' })).not.toBeInTheDocument();
+      expect(within(region).queryByRole('button', { name: 'Activity' })).not.toBeInTheDocument();
+    });
+
+    it('makes the middle section the only flexible, scrolling part', () => {
+      useAppStore.setState({ workspacePath: '/ws' });
+      renderSidebar();
+      const nav = screen.getByRole('navigation', { name: 'Main' }) as HTMLElement;
+      const region = screen.getByTestId('sidebar-scroll-region') as HTMLElement;
+      // A nav that can't shrink, or a middle section that can't shrink, lets
+      // a tall sidebar push its bottom rows past the window edge again.
+      expect(nav.style.minHeight).toBe('0px');
+      expect(nav.style.overflow).toBe('hidden');
+      expect(region.style.flex).toBe('1 1 0%');
+      expect(region.style.minHeight).toBe('0px');
+      expect(region.style.overflowY).toBe('auto');
+    });
   });
 
   describe('Ongoing runs', () => {
@@ -261,9 +320,8 @@ describe('Sidebar', () => {
     // The regression guard for the sidebar rail: every row built on
     // `SIDEBAR_ROW_STYLE` reports the same leading-glyph width and
     // `paddingLeft`, so a future change to any one of them can't drift
-    // without this test catching it. `NavItem` is out of scope here — its
-    // geometry comes from Fluent's own compiled CSS, not inline `style`,
-    // which jsdom does not resolve.
+    // without this test catching it. `NavItem` spreads the same style in,
+    // so its vertical padding and min-height are checked separately below.
     it('keeps every SIDEBAR_ROW_STYLE row on the same rail', () => {
       useAppStore.setState({
         workspacePath: '/ws',
@@ -291,20 +349,57 @@ describe('Sidebar', () => {
       expect(glyphWidths).toEqual(['20px', '20px', '20px', '20px']);
       expect(paddingLefts).toEqual(['12px', '12px', '12px', '12px']);
     });
+
+    // The 24px status markers only fit the 32px rail because every row — nav
+    // items included — trims its vertical padding to 3px. A nav item that
+    // keeps Fluent's own 5px would grow to 36px while its neighbours stayed
+    // 32px, so the rail's vertical geometry is asserted across both kinds.
+    it('keeps nav items and the other sidebar rows at the same vertical padding and height', () => {
+      useAppStore.setState({
+        workspacePath: '/ws',
+        jobs: { j1: job('j1', { runName: 'Run 0' }) },
+        remoteAccess: {
+          enabled: true, port: 61338, listening: true, error: null,
+          clientCount: 1, addresses: ['192.168.1.20'], webRootPresent: true,
+        },
+      });
+      renderSidebar();
+      const nav = screen.getByRole('navigation', { name: 'Main' });
+
+      const navButton = within(nav).getByRole('button', { name: /^Activity/ });
+      const runRowButton = within(nav).getByRole('button', { name: /Run 0/ });
+      const remoteRow = within(nav).getByText(/remote access on/i).closest('div') as HTMLElement;
+
+      for (const row of [navButton, runRowButton, remoteRow]) {
+        expect(row.style.padding).toBe('3px 12px');
+        expect(row.style.minHeight).toBe('32px');
+      }
+    });
   });
 
   describe('RunStatusIcon', () => {
-    it('renders a spinner for running, an amber pause glyph for waiting, and a red dismiss glyph for failed', () => {
+    it('renders a spinner for running, a yellow pause badge for waiting, and a red badge for failed', () => {
       // `failed` is unreachable from the live sidebar list today (see OngoingRuns.tsx),
       // so this is the only place its branch gets exercised.
       const { rerender } = render(<RunStatusIcon status="running" />);
       expect(screen.getByRole('progressbar')).toBeInTheDocument();
 
+      // Waiting and failed are real filled badges at the shared 24px status
+      // size — the fill and the pause/dismiss symbol inside it come from the
+      // badge itself, so they can't drift apart the way hand-coloured icons
+      // used to.
       rerender(<RunStatusIcon status="waiting" />);
-      expect(document.querySelector('svg')).toHaveStyle({ color: 'var(--colorPaletteDarkOrangeForeground1)' });
+      const waiting = document.querySelector('.fui-Badge') as HTMLElement;
+      expect(waiting).not.toBeNull();
+      expect(hasInjectedStyle(waiting, 'background-color', 'var(--colorPaletteYellowBackground3)')).toBe(true);
+      expect(hasInjectedStyle(waiting, 'color', 'var(--colorNeutralForeground1Static)')).toBe(true);
+      expect(hasInjectedStyle(waiting, 'height', '24px')).toBe(true);
 
       rerender(<RunStatusIcon status="failed" />);
-      expect(document.querySelector('svg')).toHaveStyle({ color: 'var(--colorPaletteRedForeground1)' });
+      const failed = document.querySelector('.fui-Badge') as HTMLElement;
+      expect(failed).not.toBeNull();
+      expect(hasInjectedStyle(failed, 'background-color', 'var(--colorPaletteRedBackground3)')).toBe(true);
+      expect(hasInjectedStyle(failed, 'height', '24px')).toBe(true);
     });
   });
 });

@@ -17,7 +17,7 @@ import {
   pruneRuns as corePruneRuns, renameRun as coreRenameRun, resolveWorkflowPath, runWorkflow,
   setRunLocked as coreSetRunLocked, updateWorkflow as coreUpdateWorkflow, validateAttachments,
 } from '@whiphand/core';
-import type { AttachmentSource, WorkspaceConfig } from '@whiphand/core';
+import type { AttachmentSource, RunDetail, WorkspaceConfig } from '@whiphand/core';
 import type {
   CancelRunParams, CancelRunResult, CloneWorkflowParams, CloneWorkflowResult,
   ConfigGetParams, ConfigGetResult, ConfigSetParams,
@@ -108,6 +108,26 @@ function attachmentSources(params: StartRunParams): AttachmentSource[] {
 }
 
 /**
+ * Looks a run up in a client-named workspace, or throws `unknown run`. For the
+ * handlers that act on one specific run and have nothing sensible to return
+ * without it; getRun (which answers null) and cancelRun (which answers
+ * `ok: false`) report a missing run as a result instead, so they keep their
+ * own lookups. Going through coreGetRun keeps every such handler on the same
+ * containment path (isSafeRunId, a real run directory) rather than joining
+ * `runId` onto the artifacts dir by hand. Hands back the workspace config it
+ * had to load anyway, for the callers whose caps depend on it.
+ */
+async function requireRun(
+  workdir: string, runId: string,
+): Promise<{ detail: RunDetail; config: WorkspaceConfig }> {
+  const resolved = resolve(workdir);
+  const config = await loadWorkspaceConfig(resolved);
+  const detail = await coreGetRun(resolved, config, runId);
+  if (!detail) throw new Error(`unknown run '${runId}'`);
+  return { detail, config };
+}
+
+/**
  * Resolves an artifact *name* to a real path inside its run directory, or
  * throws. The single place readArtifact, writeArtifact and statArtifact get
  * their containment from: hand-written copies of this check would drift, and
@@ -117,10 +137,7 @@ function attachmentSources(params: StartRunParams): AttachmentSource[] {
 async function resolveArtifactPath(
   workdir: string, runId: string, name: string,
 ): Promise<{ path: string; config: WorkspaceConfig }> {
-  const resolved = resolve(workdir);
-  const config = await loadWorkspaceConfig(resolved);
-  const detail = await coreGetRun(resolved, config, runId);
-  if (!detail) throw new Error(`unknown run '${runId}'`);
+  const { detail, config } = await requireRun(workdir, runId);
 
   // `name` is looked up against getRun's own directory listing — never a
   // client-supplied path — so a client can only ever name a file that's
@@ -423,10 +440,7 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
 
   const setRunLocked: Handler = async (params): Promise<SetRunLockedResult> => {
     const { workdir, runId, locked } = params as SetRunLockedParams;
-    const resolved = resolve(workdir);
-    const config = await loadWorkspaceConfig(resolved);
-    const detail = await coreGetRun(resolved, config, runId);
-    if (!detail) throw new Error(`unknown run '${runId}'`);
+    const { detail } = await requireRun(workdir, runId);
     await coreSetRunLocked(detail.runDir, locked);
     return { locked };
   };
@@ -499,10 +513,7 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
    */
   const readRunLog: Handler = async (params): Promise<ReadRunLogResult> => {
     const { workdir, runId, offset, limit = 500, fromEnd, beforeByte } = params as ReadRunLogParams;
-    const resolved = resolve(workdir);
-    const config = await loadWorkspaceConfig(resolved);
-    const detail = await coreGetRun(resolved, config, runId);
-    if (!detail) throw new Error(`unknown run '${runId}'`);
+    const { detail } = await requireRun(workdir, runId);
     return coreReadRunLog(detail.runDir, { offset, limit, fromEnd, beforeByte });
   };
 

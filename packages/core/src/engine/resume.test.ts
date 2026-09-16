@@ -891,7 +891,11 @@ test('a run stopped in triage grants the rejected stage one more attempt; an int
   ]);
   assert.deepEqual(interrupted.stageBudgets, {});
   assert.doesNotMatch(interrupted.warnings.join('\n'), /rejected/);
-  assert.deepEqual(interrupted.stagesInterrupted, { 'build@02-b': 2 }, 'the attempt that was cut short');
+  assert.deepEqual(interrupted.stagesInterrupted, { 'build@02-b': 2 }, 'the attempt that was cut short');  assert.deepEqual(interrupted.closedLoops, {
+    'cycle@01-a#1': { budget: 2, completed: 1 },
+    'cycle@02-b#1': { budget: 2, completed: 1 },
+  }, 'the accepted stage and the rejected attempt replay at what they recorded; the open attempt is not closed');
+  assert.equal(interrupted.loopBudgets['cycle@02-b#2']?.budget, 2);
 });
 
 test("a completed stage's exhausted inner loop gets no iteration grant", async () => {

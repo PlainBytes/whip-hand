@@ -1008,9 +1008,15 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         ...(idn.stage === undefined ? {} : { parentStage: idn.stage }),
         ...(idn.outerLoops.length === 0 ? {} : { outerLoops: idn.outerLoops }),
       };
-      const grant = opts.resume?.loopBudgets[executionKey(loop.id, idn.iteration, idn.outerLoops, idn.stage)];
-      const maxIterations =
-        opts.maxIterations ?? grant?.budget ?? loop.max_iterations ?? config.loop.max_iterations;
+      const key = executionKey(loop.id, idn.iteration, idn.outerLoops, idn.stage);
+      const grant = opts.resume?.loopBudgets[key];
+      // A loop in a closed stage attempt replays at the budget it ran under,
+      // before anything else is consulted: opts.maxIterations overriding it
+      // would send the implementer back into an attempt a gate already
+      // answered, and the declared limit could cut its recorded rounds short.
+      const closed = opts.resume?.closedLoops[key];
+      const maxIterations = closed?.budget
+        ?? opts.maxIterations ?? grant?.budget ?? loop.max_iterations ?? config.loop.max_iterations;
       // opts.maxIterations is absolute, so it can be set below what this loop
       // already ran; without this, that instantly re-fails with nothing else
       // said, and it looks like resume itself is broken rather than the budget.

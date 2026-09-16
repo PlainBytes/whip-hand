@@ -854,6 +854,79 @@ test('an interrupted stage tells its implementer that a previous attempt left wo
   assert.doesNotMatch(prompts(h, 'review').at(-1)!, /previous attempt was interrupted/i, 'only the implementer is told');
 });
 
+/**
+ * Attempt 1's cycle runs out (under `firstMax` iterations, if given) and the
+ * gate rejects it; the run is then cancelled while attempt 2's implementer runs.
+ */
+async function rejectedThenInterrupted(dir: string, firstMax?: number) {
+  const controller = new AbortController();
+  const budget = firstMax ?? 2;
+  const first = harness({
+    review: () => 'FAIL',
+    answers: [{ choice: 'retry' }],
+    onSpawn: (stepId, n) => { if (stepId === 'execute' && n === budget + 1) controller.abort(); },
+  });
+  const broken = await run(dir, first, {
+    signal: controller.signal, ...(firstMax === undefined ? {} : { maxIterations: firstMax }),
+  });
+  assert.equal(broken.cancelled, true);
+  assert.deepEqual(attempts(first), [1, 2]);
+  return broken;
+}
+
+/** Which stage attempt each spawn of `stepId` really started in. */
+function startedAttempts(h: Harness, stepId: string): number[] {
+  return h.events.flatMap(e => e.type === 'step:start' && e.stepId === stepId
+    ? [e.outerLoops?.find(l => l.stage !== undefined)?.iteration ?? -1] : []);
+}
+
+test('--max-iterations on a resume never reopens a loop in an attempt that is already closed', async () => {
+  const dir = await tmpRepoWithPlans(ONE_STAGE);
+  const broken = await rejectedThenInterrupted(dir);
+
+  const plan = await planResume(dir, DEFAULT_CONFIG, broken.runId);
+  const h = harness();
+  const result = await run(dir, h, { resume: plan, workflow: plan.workflow, maxIterations: 4 });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(startedAttempts(h, 'execute'), [2], "nothing spawns in attempt 1, which the gate already rejected");
+  assert.deepEqual(startedAttempts(h, 'review'), [2]);
+  assert.deepEqual(
+    h.events.flatMap(e => e.type === 'loop:start' ? [[e.parentStage, e.maxIterations]] : []),
+    [['01-schema', 2], ['01-schema', 4]], 'attempt 1 replays at its recorded budget; attempt 2 gets the flag');
+});
+
+test('--extra-iterations on a resume never reopens a loop in an attempt that is already closed', async () => {
+  const dir = await tmpRepoWithPlans(ONE_STAGE);
+  const broken = await rejectedThenInterrupted(dir);
+
+  const plan = await planResume(dir, DEFAULT_CONFIG, broken.runId, { extraIterations: 3 });
+  const h = harness();
+  const result = await run(dir, h, { resume: plan, workflow: plan.workflow });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(startedAttempts(h, 'execute'), [2]);
+  assert.equal(h.events.flatMap(e => e.type === 'loop:start' ? [e.maxIterations] : [])[0], 2);
+});
+
+test("a closed attempt's loop replays at the budget it ran under, not the declared one", async () => {
+  const dir = await tmpRepoWithPlans(ONE_STAGE);
+  // The original run allowed 3 iterations; the workflow declares 2.
+  const broken = await rejectedThenInterrupted(dir, 3);
+
+  const plan = await planResume(dir, DEFAULT_CONFIG, broken.runId);
+  const h = harness();
+  const result = await run(dir, h, { resume: plan, workflow: plan.workflow });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(startedAttempts(h, 'execute'), [2]);
+  assert.equal(h.events.filter(e => e.type === 'step:skipped' && e.stepId === 'review').length, 3,
+    'all three recorded reviews replay');
+  const rows = (await manifestOf(result.runDir)).steps.filter(s => s.id === 'cycle');
+  assert.deepEqual(rows.map(r => [r.iteration, r.maxIterations, r.iterations]), [[1, 3, 3], [2, 3, 1]],
+    "attempt 1's row keeps the budget it really ran under");
+});
+
 test('a run that ended in triage resumes with one more attempt at that stage', async () => {
   const dir = await tmpRepoWithPlans(ONE_STAGE);
   // Every cycle exhausts and every gate rejects, so attempts 1-3 each hold a

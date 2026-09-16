@@ -158,6 +158,14 @@ export interface ResumePlan {
   restartAt: { stepId: string; iteration?: number } | undefined;
   /** loopId -> the budget this resume allows it, and what it has already run. */
   loopBudgets: Record<string, LoopBudget>;
+  /**
+   * Loop execution key -> the budget a loop in a closed stage attempt ran
+   * under, and the iterations it recorded. Such a loop is only replayed, to
+   * restore its verdicts, so it runs at exactly that budget whatever
+   * `--max-iterations` or `--extra-iterations` say: a larger one would spawn
+   * the implementer inside work a gate already answered.
+   */
+  closedLoops: Record<string, LoopBudget>;
   /** stages execution key -> stage ids this run already accepted. */
   stagesCompleted: Record<string, string[]>;
   /** '<stagesKey>@<stageId>' -> attempts this resume allows, granted only after triage. */
@@ -189,25 +197,31 @@ const RESUMABLE = new Set(['failed', 'interrupted', 'cancelled']);
 function computeLoopBudgets(
   detail: RunManifest, workflow: Workflow, config: WorkspaceConfig,
   opts: ResumeOptions | undefined, stages: StagesRecord, warnings: string[],
-): Record<string, LoopBudget> {
+): { budgets: Record<string, LoopBudget>; closed: Record<string, LoopBudget> } {
   const extra = opts?.extraIterations ?? 1;
   const explicit = opts?.extraIterations !== undefined;
   const declared = new Map(collectLoops(workflow.steps).map(loop => [loop.id, loop]));
   const budgets: Record<string, LoopBudget> = {};
+  const closed: Record<string, LoopBudget> = {};
   let anyEligible = false;
 
   for (const step of detail.steps) {
-    if (step.kind !== 'loop' || step.status === 'done') continue;
+    if (step.kind !== 'loop') continue;
     const where = stageOfRow(step);
-    // A loop in a stage attempt that is already over is replayed exactly as it
-    // ran, never granted more: an accepted stage is skipped wholesale, and an
-    // attempt a gate already answered (a later attempt exists, or the stage
-    // went to triage) is only walked to restore its verdicts. A grant there
-    // would really spawn the implementer inside work that is finished.
-    if (where !== undefined && stages.closed(where)) continue;
-    anyEligible = true;
     const base = step.maxIterations ?? declared.get(step.id)?.max_iterations ?? config.loop.max_iterations;
     const completed = step.iterations ?? 0;
+    // A loop in a stage attempt that is already over — passed or not — is
+    // replayed exactly as it ran, never granted more: an accepted stage is
+    // skipped wholesale, and an attempt a gate already answered (a later
+    // attempt exists, or the stage went to triage) is only walked to restore
+    // its verdicts. A grant there would really spawn the implementer inside
+    // work that is finished.
+    if (where !== undefined && stages.closed(where)) {
+      closed[rowKey(step.id, step)] = { budget: Math.max(base, completed), completed };
+      continue;
+    }
+    if (step.status === 'done') continue;
+    anyEligible = true;
     // The default +1 only rescues an exhausted ('failed') loop that stopped
     // the run; an explicit count is a deliberate ask and applies to every
     // loop not yet passed, exhausted or merely interrupted mid-run. Inside a
@@ -230,7 +244,7 @@ function computeLoopBudgets(
     warnings.push('no loop in this run has iterations left to raise, so the extra iterations had no effect');
   }
 
-  return budgets;
+  return { budgets, closed };
 }
 
 /**
@@ -384,7 +398,8 @@ export async function planResume(
 
   await healOrphanedDone(detail, workflow, warnings);
   const stages = readStages(detail);
-  const loopBudgets = computeLoopBudgets(detail, workflow, config, opts, stages, warnings);
+  const { budgets: loopBudgets, closed: closedLoops } =
+    computeLoopBudgets(detail, workflow, config, opts, stages, warnings);
   const stageBudgets = computeStageBudgets(detail, stages, warnings);
   const stagesInterrupted = computeStagesInterrupted(detail, stages);
   warnings.push(...stagesResumeWarnings(detail));
@@ -480,6 +495,7 @@ export async function planResume(
     attachments,
     restartAt,
     loopBudgets,
+    closedLoops,
     stagesCompleted: stages.completed,
     stageBudgets,
     stagesInterrupted,

@@ -50,6 +50,12 @@ export interface StepState {
    * identified by *its* enclosing loop exactly as a leaf step's row is.
    */
   outerLoops?: LoopRef[];
+  /**
+   * The stage file this execution ran under, when `loopId` names a `stages`
+   * frame rather than a plain loop. Mirrors the manifest row's own field.
+   * Unused until the `stages` step kind exists.
+   */
+  stage?: string;
   /** On a loop's own row: how many iterations it has run so far. */
   iterations?: number;
   /**

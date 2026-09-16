@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ancestorLoops, executionKey } from './execution-key.ts';
-import type { LoopFrame } from './types.ts';
+import { ancestorLoops, executionKey, frameIdentity, sameLoopRefs } from './execution-key.ts';
+import type { LoopFrame, StageFrame } from './types.ts';
 
 test('a top-level step keeps the original single-level key', () => {
   assert.equal(executionKey('plan'), 'plan');
@@ -49,4 +49,29 @@ test('a three-level nest reports every ancestor, outermost first', () => {
   const y: LoopFrame = { id: 'y', iteration: 3, maxIterations: 3, parent: x };
   const z: LoopFrame = { id: 'z', iteration: 2, maxIterations: 2, parent: y };
   assert.deepEqual(ancestorLoops(z), [{ id: 'x', iteration: 1 }, { id: 'y', iteration: 3 }]);
+});
+
+test('a stage frame keys as step@stage#attempt, and never collides across stages', () => {
+  assert.equal(executionKey('accept', 1, [], 'schema'), 'accept@schema#1');
+  assert.equal(executionKey('accept', 1, [], 'api'), 'accept@api#1');
+  assert.equal(executionKey('accept', 2, [], 'api'), 'accept@api#2');
+});
+
+test('a loop nested in a stage carries the stage in its outer chain', () => {
+  const stage = { index: 2, total: 7, id: '02-api', title: 'Add API routes', path: '/p/02-api.md' };
+  const sf: StageFrame = { kind: 'stages', id: 'build', stage, attempt: 2, maxAttempts: 3 };
+  const lf: LoopFrame = { id: 'cycle', iteration: 3, maxIterations: 3, parent: sf };
+  const idn = frameIdentity(lf);
+  assert.deepEqual(idn.outerLoops, [{ id: 'build', iteration: 2, stage: '02-api' }]);
+  assert.equal(executionKey('execute', idn.iteration, idn.outerLoops, idn.stage), 'build@02-api#2/execute#3');
+});
+
+test('a plain loop key is byte-identical to before stages existed', () => {
+  assert.equal(executionKey('edit', 1), 'edit');
+  assert.equal(executionKey('edit', 2), 'edit#2');
+  assert.equal(executionKey('edit', 1, [{ id: 'outer', iteration: 2 }]), 'outer#2/edit#1');
+});
+
+test('sameLoopRefs separates two stages of the same stages step', () => {
+  assert.equal(sameLoopRefs([{ id: 'b', iteration: 1, stage: 'a' }], [{ id: 'b', iteration: 1, stage: 'c' }]), false);
 });

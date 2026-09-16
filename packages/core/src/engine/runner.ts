@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import type {
-  AgentStep, AttachmentSource, CommandStep, Frontend, LoopFrame, LoopStep, ManualStep, WhiphandEvent,
+  AgentStep, AttachmentSource, CommandStep, Frame, Frontend, LoopFrame, LoopStep, ManualStep, WhiphandEvent,
   OnFindings, RunnerAdapter, Scope, Workflow, RunCtx, SpawnSpec, Step, WorkspaceConfig,
 } from '../types.ts';
 import { AdapterRegistry, validateWorkflowRunners, validateWorkflowFrontend } from '../registry.ts';
@@ -23,7 +23,7 @@ import { clearEndMarker } from './session-end.ts';
 import { clearAwaitState } from './await-state.ts';
 import { clearSessionCapture } from './session-capture.ts';
 import { RunJournal, WORKFLOW_SNAPSHOT_NAME } from './manifest.ts';
-import { ancestorLoops, executionKey } from '../execution-key.ts';
+import { executionKey, frameIdentity, isStageFrame, nearestLoop } from '../execution-key.ts';
 import { pruneRuns } from './retention.ts';
 import { readRunName, runSlugFor, setRunName } from './run-name.ts';
 import { autoNameRun } from './auto-name.ts';
@@ -780,15 +780,18 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
      * `attachments` is dropped the same way, anywhere, when the run has no
      * files attached — a workflow that can use them must not need them.
      */
-    function scopeInputs<T extends AgentStep | CommandStep | ManualStep>(step: T, frame?: LoopFrame): T {
+    function scopeInputs<T extends AgentStep | CommandStep | ManualStep>(step: T, frame?: Frame): T {
       if (step.inputs === undefined) return step;
       const kept = step.inputs.filter(id => {
         if (id === ATTACHMENTS_REF) return (ctx.attachments?.length ?? 0) > 0;
         if (frame !== undefined && isForwardRef(stepLocations, step.id, id)) {
           const loopId = stepLocations.get(id)?.parentLoopId;
-          let owner: LoopFrame | undefined = frame;
-          while (owner !== undefined && owner.id !== loopId) owner = owner.parent;
-          if (owner !== undefined && owner.iteration === 1) return false;
+          // A stage frame is never the loop this walk is hunting for — only a
+          // loop's own body can name a `parentLoopId` — so it is always
+          // skipped on the way up, same as any loop whose id doesn't match.
+          let owner: Frame | undefined = frame;
+          while (owner !== undefined && (isStageFrame(owner) || owner.id !== loopId)) owner = owner.parent;
+          if (owner !== undefined && !isStageFrame(owner) && owner.iteration === 1) return false;
         }
         return frame === undefined || ctx.artifacts[id] !== undefined;
       });
@@ -821,9 +824,13 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       return spawnHeadless;
     }
 
-    async function executeStep(step: Step, frame?: LoopFrame): Promise<StepOutcome> {
-      const enclosing = ctx.loop;
-      ctx.loop = frame;
+    async function executeStep(step: Step, frame?: Frame): Promise<StepOutcome> {
+      const enclosing = ctx.frame;
+      ctx.frame = frame;
+      // ctx.loop is a projection of ctx.frame (the nearest LoopFrame in the
+      // chain), kept in step with it so a consumer that only ever knew about
+      // loops keeps seeing exactly what it always did.
+      ctx.loop = nearestLoop(frame);
       try {
         // Loops are never skipped as a unit, even when the manifest records
         // one as done: descending and skipping inside is what restores every
@@ -831,8 +838,11 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         // spawns because each body step is skipped in turn.
         if (isLoopStep(step)) return await executeLoop(step);
 
-        const outerLoops = ancestorLoops(frame);
-        const key = executionKey(step.id, frame?.iteration, outerLoops);
+        // frameIdentity is the single place that turns a frame into the
+        // loopId/iteration/stage/outerLoops tuple every emit site below
+        // speaks — a stage frame folds into it exactly like a loop would.
+        const idn = frameIdentity(frame);
+        const key = executionKey(step.id, idn.iteration, idn.outerLoops, idn.stage);
         const alreadyDone = skippable.get(key);
         if (alreadyDone !== undefined) {
           skippable.delete(key);
@@ -843,8 +853,8 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
           if (alreadyDone.verdict !== undefined) ctx.verdicts[step.id] = alreadyDone.verdict;
           emit({
             type: 'step:skipped', stepId: step.id,
-            ...(frame === undefined ? {} : { loopId: frame.id, iteration: frame.iteration }),
-            ...(outerLoops.length === 0 ? {} : { outerLoops }),
+            ...(idn.loopId === undefined ? {} : { loopId: idn.loopId, iteration: idn.iteration }),
+            ...(idn.outerLoops.length === 0 ? {} : { outerLoops: idn.outerLoops }),
           });
           if (!step.verdict) return null;
           // Restoring the verdict is not optional: it drives a loop's exit
@@ -857,14 +867,20 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         emit({
           type: 'step:start', stepId: step.id, kind: step.kind,
           ...(isAgentStep(step) ? { runner: step.runner, model: step.model, mode: step.mode } : {}),
-          ...(frame === undefined ? {} : { loopId: frame.id, iteration: frame.iteration }),
-          ...(outerLoops.length === 0 ? {} : { outerLoops }),
+          ...(idn.loopId === undefined ? {} : { loopId: idn.loopId, iteration: idn.iteration }),
+          ...(idn.outerLoops.length === 0 ? {} : { outerLoops: idn.outerLoops }),
         });
-        if (isAgentStep(step)) return await executeAgent(step, frame);
-        if (isCommandStep(step)) return await executeCommand(step, frame);
-        return await executeManual(step, frame);
+        // Per-kind execution only ever runs directly under a loop today — a
+        // stages body's own execution is Task 5-8's concern — so it keeps
+        // seeing a plain LoopFrame here, same as before this frame chain grew
+        // a second kind of link.
+        const loopFrame = nearestLoop(frame);
+        if (isAgentStep(step)) return await executeAgent(step, loopFrame);
+        if (isCommandStep(step)) return await executeCommand(step, loopFrame);
+        return await executeManual(step, loopFrame);
       } finally {
-        ctx.loop = enclosing;
+        ctx.frame = enclosing;
+        ctx.loop = nearestLoop(enclosing);
       }
     }
 
@@ -875,14 +891,14 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     async function executeLoop(loop: LoopStep): Promise<StepOutcome> {
       // The frame this loop invocation runs under — set by executeStep just
       // before it dispatched here — is also this loop's own row identity:
-      // which round of *its* enclosing loop is this, if any.
-      const outer = ctx.loop;
-      const outerLoops = ancestorLoops(outer);
+      // which round of *its* enclosing loop or stage this is, if any.
+      const outer = ctx.frame;
+      const idn = frameIdentity(outer);
       const loopEvent = {
-        ...(outer === undefined ? {} : { parentLoopId: outer.id, parentIteration: outer.iteration }),
-        ...(outerLoops.length === 0 ? {} : { outerLoops }),
+        ...(idn.loopId === undefined ? {} : { parentLoopId: idn.loopId, parentIteration: idn.iteration }),
+        ...(idn.outerLoops.length === 0 ? {} : { outerLoops: idn.outerLoops }),
       };
-      const grant = opts.resume?.loopBudgets[executionKey(loop.id, outer?.iteration, outerLoops)];
+      const grant = opts.resume?.loopBudgets[executionKey(loop.id, idn.iteration, idn.outerLoops, idn.stage)];
       const maxIterations =
         opts.maxIterations ?? grant?.budget ?? loop.max_iterations ?? config.loop.max_iterations;
       // opts.maxIterations is absolute, so it can be set below what this loop
@@ -920,7 +936,8 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
 
       const iterations = passed ? iteration - 1 : maxIterations;
       emit({ type: 'loop:done', loopId: loop.id, iterations, passed, ...loopEvent });
-      ctx.loop = outer;
+      ctx.frame = outer;
+      ctx.loop = nearestLoop(outer);
       if (passed) return null;
 
       const policy = loop.on_exhausted ?? onFindings;

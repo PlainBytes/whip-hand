@@ -200,27 +200,69 @@ export type StepProgress =
 
 /**
  * Where we are inside a loop, when we are inside one. `parent` is the frame
- * of the loop enclosing this one, when this loop is itself nested inside
- * another loop's body — absent for a top-level loop, which is what keeps a
- * single-level frame identical to what it always was.
+ * enclosing this one — another loop's frame, or (once a loop lives inside a
+ * `stages` body) that stage's frame — absent for a top-level loop, which is
+ * what keeps a single-level frame identical to what it always was.
  */
 export interface LoopFrame {
   id: string;
   iteration: number;      // 1-based
   maxIterations: number;
-  parent?: LoopFrame;
+  parent?: Frame;
 }
 
 /**
- * One loop enclosing an execution, named and at the iteration it was on.
- * `WhiphandEvent`'s `outerLoops` and manifest rows use this to record every
- * loop *beyond* the immediate one a `loopId`/`iteration` pair already names —
- * see execution-key.ts's `ancestorLoops`, which derives it from a `LoopFrame`
- * chain.
+ * One pass over a `stages` step's current stage file — an attempt, in the
+ * sense a loop has iterations. `index`/`total` and `title` are recomputed on
+ * every pass (the stage files on disk may change between attempts, and a
+ * resume must not trust a stale count); `id`/`path` are what identify *which*
+ * file this is across those recomputations.
+ */
+export interface Stage {
+  index: number;   // 1-based, recomputed on every pass
+  total: number;
+  id: string;      // basename without extension, e.g. '03a-api' — unique per file
+  title: string;   // first markdown heading, falling back to id
+  path: string;    // absolute
+}
+
+/**
+ * Where we are inside a `stages` step: which stage file, and which attempt at
+ * it. Deliberately shaped like `LoopFrame` (an `id`, a 1-based counter, a
+ * `parent`) — see execution-key.ts's `frameIdentity` for why that shape is
+ * what lets every existing loop-only consumer keep working unchanged.
+ */
+export interface StageFrame {
+  kind: 'stages';
+  id: string;            // the stages step's id
+  stage: Stage;
+  attempt: number;       // 1-based
+  maxAttempts: number;   // 1 + max_retries
+  parent?: Frame;
+}
+
+/**
+ * A step executes under some chain of enclosing constructs — nested loops,
+ * and (once `stages` lands) a stage a loop or a step can itself be nested
+ * inside. `LoopFrame` and `StageFrame` both carry a `parent?: Frame`, so the
+ * chain can freely interleave the two; execution-key.ts's helpers are what
+ * every consumer should use to read it rather than walking `parent` by hand.
+ */
+export type Frame = LoopFrame | StageFrame;
+
+/**
+ * One loop enclosing an execution, named and at the iteration it was on — or,
+ * for a stage frame folded into the same chain, the stage step's id and
+ * attempt plus the stage file's own id in `stage`. `WhiphandEvent`'s
+ * `outerLoops` and manifest rows use this to record every frame *beyond* the
+ * immediate one a `loopId`/`iteration` pair already names — see
+ * execution-key.ts's `ancestorLoops`, which derives it from a `Frame` chain.
  */
 export interface LoopRef {
   id: string;
   iteration: number;
+  /** Present only when this ref describes a stage frame — see `frameRef`. */
+  stage?: string;
 }
 
 export interface RunCtx {
@@ -255,7 +297,15 @@ export interface RunCtx {
    */
   verdicts: Record<string, 'pass' | 'fail'>;
   inputs: Record<string, string>;        // resolved workflow input values
+  /** The nearest enclosing loop, exactly as before `stages` existed — see `frame`. */
   loop?: LoopFrame;
+  /**
+   * The construct this execution actually runs under, loop or stage —
+   * `loop` above stays a projection of it (the nearest `LoopFrame` in the
+   * chain), so every reader that only ever cared about loops keeps working
+   * unchanged. Set by runner.ts's `executeStep` alongside `loop`.
+   */
+  frame?: Frame;
   /**
    * Steps whose recorded session should be resumed rather than minted afresh.
    * Set only on a resumed run; adapters that cannot resume a session ignore it.

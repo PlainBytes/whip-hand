@@ -14,6 +14,8 @@ export const scopeSchema: z.ZodType<Scope> = z.enum(['project', 'global']);
 export const loopRefSchema: z.ZodType<LoopRef> = z.object({
   id: z.string(),
   iteration: z.number().int().positive(),
+  /** Present only when this ref describes a stage frame — see types.ts's `LoopRef`. */
+  stage: z.string().optional(),
 });
 
 export const stepProgressSchema: z.ZodType<StepProgress> = z.discriminatedUnion('kind', [

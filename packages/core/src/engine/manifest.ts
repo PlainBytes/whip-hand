@@ -32,7 +32,16 @@ const manifestStepSchema = z.object({
    * outside nested loops, which is what keeps a single-level row identical to
    * what it always was. Added in v4; see MANIFEST_VERSION.
    */
-  outerLoops: z.array(z.object({ id: z.string(), iteration: z.number().int().positive() })).optional(),
+  outerLoops: z.array(z.object({
+    id: z.string(), iteration: z.number().int().positive(), stage: z.string().optional(),
+  })).optional(),
+  /**
+   * The stage file this execution ran under, when `loopId` names a `stages`
+   * frame rather than a plain loop — a stage frame is loop-shaped (see
+   * execution-key.ts's `frameIdentity`), and this is the one bit that shape
+   * alone can't carry. Unused until the `stages` step kind exists.
+   */
+  stage: z.string().optional(),
   /** On a loop's own entry: how many iterations it ended up running. */
   iterations: z.number().int().nonnegative().optional(),
   /**

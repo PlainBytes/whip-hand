@@ -53,9 +53,33 @@ export interface StepState {
   /**
    * The stage file this execution ran under, when `loopId` names a `stages`
    * frame rather than a plain loop. Mirrors the manifest row's own field.
-   * Unused until the `stages` step kind exists.
    */
   stage?: string;
+  /**
+   * id of the enclosing `stages` step, on a row seeded from the declared plan
+   * (manifest only — no event carries it). What lets a body row that has not
+   * run yet, and so has no `stage`, still sit under its stages step.
+   */
+  stagesId?: string;
+  /** On a `stages` step's own row: how many stage files it found. */
+  total?: number;
+  /** On a `stages` step's own row: how many stages it finished, once it is done. */
+  completed?: number;
+  /** On a `stages` step's own row: the attempt number of `currentStage`. */
+  attempt?: number;
+  /** On a `stages` step's own row: stage ids accepted so far, in order. */
+  completedStages?: string[];
+  /** On a `stages` step's own row: the stage file its body is running against. */
+  currentStage?: { id: string; title: string; index: number };
+  /** On a `stages` step's own row: `currentStage` ran out of retries and went to triage. */
+  exhausted?: boolean;
+  /**
+   * On a `stages` step's own row, live only: every stage a `stages:item` has
+   * named so far, by stage id. The manifest keeps only the current stage's
+   * title, so this is how an earlier stage's group keeps its name while the
+   * job is being watched — see run-tree.ts's stage labels.
+   */
+  seenStages?: Record<string, { index: number; total: number; title: string }>;
   /** On a loop's own row: how many iterations it has run so far. */
   iterations?: number;
   /**
@@ -160,6 +184,13 @@ export interface JobState {
   currentExecution: Record<string, string>;
   /** Set while a manual/approval step is waiting on this human. */
   pendingManual?: ManualRequest;
+  /**
+   * Where the run is among a `stages` step's stage files, from the latest
+   * `stages:item` — what the runs grid and the sidebar say instead of a raw
+   * step count. Cleared by `stages:done`: once the stages step is over, the
+   * run is no longer "in stage 7 of 7".
+   */
+  stageProgress?: { stagesId: string; index: number; total: number; title: string; attempt: number };
   /**
    * Every audit whiphandEvent this job has seen, in arrival order — the Logs
    * tab's audit spine. `step:log` is deliberately excluded (see applyWhiphandEvent):
@@ -336,8 +367,9 @@ function emptyJob(jobId: string): JobState {
  */
 function upsertStep(
   job: JobState, stepId: string, patch: Partial<StepState>, iteration?: number, outerLoops?: LoopRef[],
+  stage?: string,
 ): JobState {
-  const key = executionKey(stepId, iteration, outerLoops);
+  const key = executionKey(stepId, iteration, outerLoops, stage);
   const existing = job.steps[key];
   const step: StepState = existing
     ? { ...existing, ...patch }
@@ -491,9 +523,10 @@ export function reduceJobEvent(job: JobState, params: WhiphandEventNotificationP
         loopId: event.loopId,
         iteration: event.iteration,
         outerLoops: event.outerLoops,
+        stage: event.stage,
         status: 'done',
         inferred: undefined,
-      }, event.iteration, event.outerLoops);
+      }, event.iteration, event.outerLoops, event.stage);
       break;
     case 'step:start':
       // A new step gets a clean feed: the tab narrates the step running now,
@@ -505,6 +538,7 @@ export function reduceJobEvent(job: JobState, params: WhiphandEventNotificationP
         loopId: event.loopId,
         iteration: event.iteration,
         outerLoops: event.outerLoops,
+        stage: event.stage,
         runner: event.runner,
         model: event.model,
         mode: event.mode,
@@ -516,7 +550,7 @@ export function reduceJobEvent(job: JobState, params: WhiphandEventNotificationP
         verdict: undefined,
         phase: undefined,
         inferred: undefined,
-      }, event.iteration, event.outerLoops);
+      }, event.iteration, event.outerLoops, event.stage);
       break;
     case 'step:spawn':
       job = patchCurrent(job, event.stepId, { phase: event.phase });
@@ -553,12 +587,14 @@ export function reduceJobEvent(job: JobState, params: WhiphandEventNotificationP
       // round of *its* enclosing loop this is — so a round of an outer loop
       // gets a fresh row for the inner loop rather than reusing the previous
       // round's, once that one is already 'done'. See core's manifest.ts.
+      // Inside a stages body the parent is a stage frame, and `parentStage`
+      // is what keeps stage 2's loop row off stage 1's.
       job = upsertStep(job, event.loopId, {
         kind: 'loop', status: 'running', startedAt: params.ts, iterations: 0,
         maxIterations: event.maxIterations, endedAt: undefined, verdict: undefined,
         loopId: event.parentLoopId, iteration: event.parentIteration, outerLoops: event.outerLoops,
-        inferred: undefined,
-      }, event.parentIteration, event.outerLoops);
+        stage: event.parentStage, inferred: undefined,
+      }, event.parentIteration, event.outerLoops, event.parentStage);
       break;
     case 'loop:iteration':
       job = patchCurrent(job, event.loopId, {
@@ -573,6 +609,59 @@ export function reduceJobEvent(job: JobState, params: WhiphandEventNotificationP
         endedAt: params.ts,
         inferred: undefined,
       });
+      break;
+    // Kept in lockstep with RunJournal.record's stages cases. A stages step
+    // never nests inside a loop (schema.ts refuses it), so its own row is
+    // always keyed by its bare id.
+    case 'stages:start':
+      // No `completedStages` here: a resumed run's job starts empty while its
+      // manifest row already lists what earlier attempts accepted, and
+      // RunDetailPage's mergeSteps unions the two rather than letting either win.
+      job = upsertStep(job, event.id, {
+        kind: 'stages', status: 'running', startedAt: params.ts, endedAt: undefined, total: event.total,
+        inferred: undefined,
+      });
+      break;
+    case 'stages:item': {
+      const key = job.currentExecution[event.id] ?? findLatestExecutionKey(job, event.id);
+      const seen = key === undefined ? undefined : job.steps[key]?.seenStages;
+      job = patchCurrent(job, event.id, {
+        currentStage: { id: event.stageId, title: event.title, index: event.index },
+        attempt: event.attempt, total: event.total,
+        seenStages: { ...seen, [event.stageId]: { index: event.index, total: event.total, title: event.title } },
+      });
+      job = {
+        ...job,
+        stageProgress: {
+          stagesId: event.id, index: event.index, total: event.total, title: event.title, attempt: event.attempt,
+        },
+      };
+      break;
+    }
+    case 'stages:accepted': {
+      const key = job.currentExecution[event.id] ?? findLatestExecutionKey(job, event.id);
+      const row = key === undefined ? undefined : job.steps[key];
+      if (key === undefined || row === undefined) break;
+      const accepted = row.completedStages ?? [];
+      const next: StepState = {
+        ...row,
+        ...(accepted.includes(event.stageId) ? {} : { completedStages: [...accepted, event.stageId] }),
+        // The stage that went to triage has now been accepted — nothing is
+        // exhausted any more. Set explicitly, so the overlay onto the manifest
+        // row clears the disk's copy too until the next poll agrees.
+        ...(row.currentStage?.id === event.stageId ? { exhausted: undefined } : {}),
+      };
+      job = { ...job, steps: { ...job.steps, [key]: next } };
+      break;
+    }
+    case 'stages:exhausted':
+      job = patchCurrent(job, event.id, { exhausted: true });
+      break;
+    case 'stages:done':
+      job = patchCurrent(job, event.id, {
+        status: 'done', completed: event.completed, endedAt: params.ts, inferred: undefined,
+      });
+      if (job.stageProgress?.stagesId === event.id) job = { ...job, stageProgress: undefined };
       break;
     case 'guard:warning':
       break;
@@ -1133,6 +1222,25 @@ export function ongoingJobs(jobs: Record<string, JobState>): JobState[] {
   return Object.values(jobs)
     .filter(job => !job.finished)
     .sort((a, b) => Number(isWaitingJob(b)) - Number(isWaitingJob(a)));
+}
+
+/**
+ * runId -> where a live run is among its stages, for the run grids: a job
+ * hears `stages:item` the moment a stage starts, well before the grid's next
+ * manifest poll. Only unfinished jobs — a finished job's copy is stale, and
+ * the manifest is authoritative for it. `workdir`, when given, keeps another
+ * workspace's run from decorating this one's rows, as in `waitingRunIds`.
+ */
+export function liveStageProgress(
+  jobs: Record<string, JobState>, workdir?: string,
+): Map<string, { index: number; total: number }> {
+  const progress = new Map<string, { index: number; total: number }>();
+  for (const job of Object.values(jobs)) {
+    if (job.finished || job.runId === undefined || job.stageProgress === undefined) continue;
+    if (workdir !== undefined && job.workdir !== workdir) continue;
+    progress.set(job.runId, { index: job.stageProgress.index, total: job.stageProgress.total });
+  }
+  return progress;
 }
 
 /** runIds of runs blocked on the human — the runs list renders disk rows keyed by runId. */

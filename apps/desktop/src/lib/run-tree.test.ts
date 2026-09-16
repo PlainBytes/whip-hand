@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildRunTree, flattenNodes, type LoopNode, type StepNode } from './run-tree.ts';
+import { buildRunTree, flattenNodes, type LoopNode, type StagesNode, type StepNode } from './run-tree.ts';
 import { executionKey, type StepState } from '../state/store.ts';
 
 function step(partial: Partial<StepState> & { id: string }): StepState {
   return {
-    key: executionKey(partial.id, partial.iteration, partial.outerLoops),
+    key: executionKey(partial.id, partial.iteration, partial.outerLoops, partial.stage),
     status: 'pending',
     ...partial,
   } as StepState;
@@ -149,6 +149,109 @@ describe('buildRunTree', () => {
 
   it('has nothing to build from an empty run', () => {
     expect(buildRunTree([])).toEqual([]);
+  });
+});
+
+/**
+ * A `stages` step 'build' over two stage files, each running the same body — a
+ * `cycle` loop holding `execute`, then an `accept` gate — in the row shapes
+ * the runner writes (see core's manifest.ts): a body step directly under a
+ * stage carries the stages id as its `loopId`, the attempt as its `iteration`
+ * and the stage file as `stage`; a step inside the stage's loop carries that
+ * same stage frame in `outerLoops`. Stage 2's cycle has run twice.
+ */
+function staged(): StepState[] {
+  const stage1 = [{ id: 'build', iteration: 1, stage: '01-a' }];
+  const stage2 = [{ id: 'build', iteration: 1, stage: '02-b' }];
+  return [
+    step({
+      id: 'build', kind: 'stages', status: 'running', total: 2, attempt: 1,
+      currentStage: { id: '02-b', title: 'Add API routes', index: 2 },
+    }),
+    step({ id: 'cycle', kind: 'loop', stagesId: 'build', loopId: 'build', iteration: 1, stage: '01-a', status: 'done' }),
+    step({ id: 'execute', stagesId: 'build', loopId: 'cycle', iteration: 1, outerLoops: stage1, status: 'done' }),
+    step({ id: 'accept', kind: 'approval', stagesId: 'build', loopId: 'build', iteration: 1, stage: '01-a', status: 'done' }),
+    step({ id: 'cycle', kind: 'loop', loopId: 'build', iteration: 1, stage: '02-b', status: 'running' }),
+    step({ id: 'execute', loopId: 'cycle', iteration: 1, outerLoops: stage2, status: 'done' }),
+    step({ id: 'execute', loopId: 'cycle', iteration: 2, outerLoops: stage2, status: 'running' }),
+  ];
+}
+
+describe('buildRunTree: stages', () => {
+  it('turns rows from two stages of one stages step into two stage groups, not one folded step', () => {
+    const tree = buildRunTree(staged());
+    expect(ids(tree)).toEqual(['build']);
+    const stages = tree[0] as StagesNode;
+    expect(stages.kind).toBe('stages');
+    expect(stages.children.map(c => c.stage)).toEqual(['01-a', '02-b']);
+    expect(ids(stages.children[0].children)).toEqual(['cycle', 'accept']);
+    expect(ids(stages.children[1].children)).toEqual(['cycle']);
+  });
+
+  it('keeps a loop inside a stage under that stage, folding its iterations as it would outside one', () => {
+    const stages = buildRunTree(staged())[0] as StagesNode;
+    const first = stages.children[0].children.find(n => n.kind === 'loop') as LoopNode;
+    const second = stages.children[1].children.find(n => n.kind === 'loop') as LoopNode;
+    // Stage 1's cycle must not absorb stage 2's executions, nor the reverse.
+    expect(first.children[0].kind === 'step' && first.children[0].executions).toHaveLength(1);
+    expect(second.children[0].kind === 'step' && second.children[0].executions).toHaveLength(2);
+    expect(first.key).not.toBe(second.key);
+  });
+
+  it('names each group by its stage: the current one from the stages row, the rest by position', () => {
+    const stages = buildRunTree(staged())[0] as StagesNode;
+    expect(stages.children.map(g => [g.index, g.total, g.title])).toEqual([
+      [1, 2, '01-a'],
+      [2, 2, 'Add API routes'],
+    ]);
+  });
+
+  it('prefers a title the live job saw on stages:item over the stage id', () => {
+    const rows = staged();
+    rows[0] = { ...rows[0], seenStages: { '01-a': { index: 1, total: 2, title: 'Schema' } } };
+    const stages = buildRunTree(rows)[0] as StagesNode;
+    expect(stages.children[0].title).toBe('Schema');
+  });
+
+  it('splits a stage retried after a rejection into one group per attempt', () => {
+    const tree = buildRunTree([
+      step({ id: 'build', kind: 'stages', status: 'running', total: 1, attempt: 2 }),
+      step({ id: 'implement', loopId: 'build', iteration: 1, stage: '01-a', status: 'done' }),
+      step({ id: 'accept', kind: 'approval', loopId: 'build', iteration: 1, stage: '01-a', status: 'done', verdict: 'fail' }),
+      step({ id: 'implement', loopId: 'build', iteration: 2, stage: '01-a', status: 'running' }),
+    ]);
+    const stages = tree[0] as StagesNode;
+    expect(stages.children.map(g => [g.stage, g.attempt, g.attempts])).toEqual([
+      ['01-a', 1, 2],
+      ['01-a', 2, 2],
+    ]);
+    expect(ids(stages.children[0].children)).toEqual(['implement', 'accept']);
+    expect(ids(stages.children[1].children)).toEqual(['implement']);
+    expect(stages.children[0].key).not.toBe(stages.children[1].key);
+  });
+
+  it('holds the declared body under the stages step before any stage has started', () => {
+    // Seeded plan rows know their stages step (stagesId) but no stage yet —
+    // they belong under it, not loose at the top level.
+    const tree = buildRunTree([
+      step({ id: 'plan', status: 'done' }),
+      step({ id: 'build', kind: 'stages', status: 'pending' }),
+      step({ id: 'cycle', kind: 'loop', stagesId: 'build' }),
+      step({ id: 'execute', loopId: 'cycle', stagesId: 'build' }),
+      step({ id: 'accept', kind: 'approval', stagesId: 'build' }),
+    ]);
+    expect(ids(tree)).toEqual(['plan', 'build']);
+    const stages = tree[1] as StagesNode;
+    expect(stages.children).toHaveLength(1);
+    expect(stages.children[0].stage).toBeUndefined();
+    expect(ids(stages.children[0].children)).toEqual(['cycle', 'accept']);
+    expect(ids((stages.children[0].children[0] as LoopNode).children)).toEqual(['execute']);
+  });
+
+  it('numbers through a stage body and walks into it when flattened', () => {
+    const flat = flattenNodes(buildRunTree(staged()));
+    expect(ids(flat)).toEqual(['build', 'cycle', 'execute', 'accept', 'cycle', 'execute']);
+    expect(flat.map(n => n.ordinal)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 });
 

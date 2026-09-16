@@ -149,6 +149,11 @@ export function ReviewOverlay({
           </span>
         </Tooltip>
         <Text weight="semibold" size={400}>{request.title}</Text>
+        {request.subtitle !== undefined && (
+          <Text size={300} data-testid="review-subtitle" style={{ color: 'var(--colorNeutralForeground3)' }}>
+            {request.subtitle}
+          </Text>
+        )}
       </div>
 
       <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 8 }}>

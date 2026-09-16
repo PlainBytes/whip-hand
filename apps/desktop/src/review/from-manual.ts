@@ -7,6 +7,7 @@
  */
 import type { CaptureSpec, ManualChoice, ManualRequest } from '../../../../packages/core/src/types.ts';
 import { ancestorLoops, executionKey } from '../../../../packages/core/src/execution-key.ts';
+import { stageLabel } from '../../../../packages/core/src/format.ts';
 import { manualLabel } from '../lib/await-copy.ts';
 import { DIFF_SOURCE_ID, type ReviewChoice, type ReviewRequest, type ReviewSource } from './model.ts';
 
@@ -67,13 +68,26 @@ export function fromManualRequest(request: ManualRequest): ReviewRequest {
   }));
 
   const loop = request.loop;
+  const execution = request.execution;
+  const stage = request.stage;
   return {
     // The iteration is part of the identity: the same step id comes round
     // again inside a loop, and its second asking is a different question —
     // and once loops nest, so is which round of any *enclosing* loop it's in.
-    key: executionKey(request.stepId, loop?.iteration, ancestorLoops(loop)),
+    // Inside a `stages` step the stage file is part of it too, which only
+    // `execution` carries: `loop` is the nearest *loop* frame, and a gate
+    // directly under a stage has none. Older agents send no `execution`.
+    key: execution === undefined
+      ? executionKey(request.stepId, loop?.iteration, ancestorLoops(loop))
+      : executionKey(request.stepId, execution.iteration, execution.outerLoops, execution.stage),
     badge: manualLabel(request.kind),
     title: request.title,
+    ...(stage === undefined ? {} : {
+      subtitle: [
+        stageLabel(stage.index, stage.total, stage.title),
+        ...(stage.attempt > 1 ? [`attempt ${stage.attempt}`] : []),
+      ].join(' · '),
+    }),
     instructions: request.instructions,
     sources,
     choices,

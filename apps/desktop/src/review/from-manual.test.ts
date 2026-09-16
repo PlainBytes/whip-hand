@@ -114,4 +114,41 @@ describe('fromManualRequest', () => {
     expect(retry?.label).toBe('Request changes');
     expect(retry?.hint).toBe('Send it back to the agent with your comments.');
   });
+
+  describe('inside a stage', () => {
+    /** The gate `accept` directly under stage `stageId` of stages step 'build', as core's manual.ts builds it. */
+    const reqFor = (stageId: string, attempt = 1): ManualRequest => request({
+      stepId: 'accept',
+      choices: ['continue', 'retry', 'abort'],
+      stage: { stagesId: 'build', id: stageId, title: 'Add API routes', index: 2, total: 7, attempt },
+      execution: { loopId: 'build', iteration: attempt, stage: stageId },
+    });
+
+    it('keys on its stage, so two stages do not share one review', () => {
+      expect(fromManualRequest(reqFor('01-a')).key).not.toEqual(fromManualRequest(reqFor('02-b')).key);
+      expect(fromManualRequest(reqFor('02-b')).key).toBe('accept@02-b#1');
+    });
+
+    it('keys a retried attempt of the same stage as a fresh question', () => {
+      expect(fromManualRequest(reqFor('02-b', 2)).key).toBe('accept@02-b#2');
+    });
+
+    it('keys a gate inside a loop inside a stage by the whole frame chain', () => {
+      const result = fromManualRequest(request({
+        stepId: 'check',
+        loop: { id: 'cycle', iteration: 2, maxIterations: 3 },
+        execution: { loopId: 'cycle', iteration: 2, outerLoops: [{ id: 'build', iteration: 1, stage: '02-b' }] },
+      }));
+      expect(result.key).toBe('build@02-b#1/check#2');
+    });
+
+    it('names the stage beneath the question', () => {
+      expect(fromManualRequest(reqFor('02-b')).subtitle).toBe('stage 2 of 7 · Add API routes');
+      expect(fromManualRequest(reqFor('02-b', 2)).subtitle).toBe('stage 2 of 7 · Add API routes · attempt 2');
+    });
+
+    it('has no subtitle outside a stage', () => {
+      expect(fromManualRequest(request()).subtitle).toBeUndefined();
+    });
+  });
 });

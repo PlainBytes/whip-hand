@@ -16,7 +16,7 @@ import {
 } from '@fluentui/react-components';
 import { Add20Regular, Delete16Regular, LockClosed16Regular, LockOpen16Regular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
-import { useAppStore, waitingRunIds } from '../state/store.ts';
+import { liveStageProgress, useAppStore, waitingRunIds } from '../state/store.ts';
 import type { RunSummary } from '../agent/client.ts';
 import { POLL_INTERVAL_MS, runColumns, runLabel } from './run-columns.tsx';
 import { NewRunDialog } from '../components/NewRunDialog.tsx';
@@ -41,6 +41,10 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
   // unrelated store write.
   const waiting = useMemo(
     () => waitingRunIds(jobs, workspacePath ?? undefined),
+    [jobs, workspacePath],
+  );
+  const stages = useMemo(
+    () => liveStageProgress(jobs, workspacePath ?? undefined),
     [jobs, workspacePath],
   );
   const [error, setError] = useState<string | null>(null);
@@ -126,8 +130,8 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
   }), [lockingId, workspacePath]);
 
   const columns = useMemo(
-    () => [...runColumns<RunSummary>(waiting), actionsColumn],
-    [waiting, actionsColumn],
+    () => [...runColumns<RunSummary>(waiting, stages), actionsColumn],
+    [waiting, stages, actionsColumn],
   );
 
   if (!workspacePath) {

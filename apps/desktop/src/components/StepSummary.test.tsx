@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { StepSummary } from './StepSummary.tsx';
-import type { AgentStep, CommandStep, LoopStep } from '../../../../packages/core/src/types.ts';
+import type { AgentStep, CommandStep, LoopStep, StagesStep } from '../../../../packages/core/src/types.ts';
 
 const agentStep: AgentStep = {
   kind: 'agent', id: 'execute', runner: 'claude', model: 'sonnet', mode: 'headless',
@@ -44,6 +44,13 @@ describe('StepSummary', () => {
     const step: CommandStep = { kind: 'command', id: 'triage', run: 'ls "$WHIPHAND_RUN_DIR/attachments"', inputs: ['attachments'] };
     render(<StepSummary step={step} ordinal={1} />);
     expect(screen.getByText('reads: attachments')).toBeInTheDocument();
+  });
+
+  it('a stages step shows the glob its stage files come from, not reads/writes chips', () => {
+    const step: StagesStep = { kind: 'stages', id: 'build', items: 'docs/plan/*.md', steps: [] };
+    render(<StepSummary step={step} ordinal={2} />);
+    expect(screen.getByText('over docs/plan/*.md')).toBeInTheDocument();
+    expect(screen.queryByTestId('reads-chip-build')).not.toBeInTheDocument();
   });
 
   it('a loop shows its until:, not reads/writes chips', () => {

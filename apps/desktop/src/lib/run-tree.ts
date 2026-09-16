@@ -46,7 +46,42 @@ export interface LoopNode extends NodeCommon {
   children: StepNode[];
 }
 
-export type StepNode = LeafNode | LoopNode;
+/**
+ * A `stages` step and its body, grouped by the stage file each execution ran
+ * under. Unlike a loop, its body is *not* folded across passes: stage 2's
+ * `implement` is a different piece of work from stage 1's, so each stage
+ * keeps its own pills — only a loop inside one stage folds its iterations.
+ */
+export interface StagesNode extends NodeCommon {
+  kind: 'stages';
+  /** The stages step's own entry: its status, `total`, `currentStage` and timings. */
+  stages: StepState;
+  children: StageGroup[];
+}
+
+/**
+ * One stage's rows — or, for a stage sent back after a rejection, one
+ * *attempt's* rows, so a retry sits beside the attempt it replaces rather
+ * than folding into it. Not a pill of its own, so it takes no ordinal.
+ */
+export interface StageGroup {
+  /** Unique across the tree: the stages node's key, the stage id and the attempt. */
+  key: string;
+  /** The stage file's id; absent for the declared body before any stage has run. */
+  stage?: string;
+  /** 1-based attempt these rows belong to; absent before any stage has run. */
+  attempt?: number;
+  /** How many attempts this stage has rows for — the group is split per attempt only when this is above 1. */
+  attempts: number;
+  /** 1-based position among the stage files, and how many there are — what `stageLabel` reads. */
+  index: number;
+  total: number;
+  /** The stage's title, falling back to its id where no event or manifest field named it. */
+  title: string;
+  children: StepNode[];
+}
+
+export type StepNode = LeafNode | LoopNode | StagesNode;
 
 export function buildRunTree(steps: StepState[]): StepNode[] {
   // Once loops nest, the same bare loop id can own several *rounds* — round 2
@@ -55,19 +90,30 @@ export function buildRunTree(steps: StepState[]): StepNode[] {
   // not an array like LeafNode.executions). So a step's parent is a specific
   // loop *row*, not just an id: `belongsTo` matches on the full loop chain a
   // row's `outerLoops` records, exactly as the manifest identifies it.
-  const loopRows = steps.filter(s => s.kind === 'loop');
+  //
+  // A `stages` step is a container too — its body rows name it as their
+  // `loopId`, a stage frame being loop-shaped (see core's execution-key.ts) —
+  // so it counts among the ids that make a row "not top-level".
+  const loopRows = steps.filter(s => s.kind === 'loop' || s.kind === 'stages');
   const loopIds = new Set(loopRows.map(s => s.id));
 
-  const build = (parent: StepState | undefined): StepNode[] => {
+  const build = (parent: StepState | undefined): StepNode[] =>
+    fold(steps.filter(step => belongsTo(step, parent, loopIds, loopRows)));
+
+  const fold = (members: StepState[]): StepNode[] => {
     const nodes: StepNode[] = [];
     // Folded steps are found by id so repeat executions land on the node that
     // already exists rather than appending a sibling.
     const leaves = new Map<string, LeafNode>();
 
-    for (const step of steps) {
-      if (!belongsTo(step, parent, loopIds, loopRows)) continue;
+    for (const step of members) {
       if (step.kind === 'loop') {
         nodes.push({ kind: 'loop', id: step.id, key: step.key, ordinal: 0, loop: step, children: build(step) });
+        continue;
+      }
+      if (step.kind === 'stages') {
+        const body = steps.filter(row => belongsTo(row, step, loopIds, loopRows));
+        nodes.push({ kind: 'stages', id: step.id, key: step.key, ordinal: 0, stages: step, children: stageGroups(step, body, fold) });
         continue;
       }
       const existing = leaves.get(step.id);
@@ -86,9 +132,69 @@ export function buildRunTree(steps: StepState[]): StepNode[] {
   return number(build(undefined));
 }
 
-/** The `outerLoops` a body of `node`'s own loop would carry: its `(id, iteration)`, prepended onto whatever is beyond it. */
+/**
+ * The `outerLoops` a body of `node`'s own loop would carry: its `(id, iteration)`
+ * — and its `stage`, when the frame it sits in is a stage — prepended onto
+ * whatever is beyond it.
+ */
 function loopContextOf(node: StepState): LoopRef[] {
-  return node.loopId === undefined ? [] : [...(node.outerLoops ?? []), { id: node.loopId, iteration: node.iteration ?? 1 }];
+  if (node.loopId === undefined) return [];
+  const ref: LoopRef = { id: node.loopId, iteration: node.iteration ?? 1 };
+  if (node.stage !== undefined) ref.stage = node.stage;
+  return [...(node.outerLoops ?? []), ref];
+}
+
+/**
+ * Buckets a stages step's direct body rows by stage file, then by attempt
+ * where a stage has more than one, and folds each bucket with the same
+ * recursion the rest of the tree uses — so a loop inside a stage still folds
+ * its iterations. Rows that never ran under any stage (the declared body,
+ * before the stages step reaches it) form one trailing group of their own.
+ *
+ * Each group's label comes from, in order: the title a live `stages:item`
+ * gave it (`seenStages`), the stages row's `currentStage`, and failing both
+ * — a stage finished before this window opened, whose title the manifest
+ * does not keep — its position among the stages seen and its bare id.
+ */
+function stageGroups(
+  stages: StepState, body: StepState[], fold: (members: StepState[]) => StepNode[],
+): StageGroup[] {
+  const byStage = new Map<string | undefined, StepState[]>();
+  for (const row of body) {
+    const bucket = byStage.get(row.stage);
+    if (bucket === undefined) byStage.set(row.stage, [row]);
+    else bucket.push(row);
+  }
+  const stageIds = [...byStage.keys()].filter((id): id is string => id !== undefined);
+  const groups: StageGroup[] = [];
+  const total = stages.total ?? stageIds.length;
+
+  stageIds.forEach((stageId, position) => {
+    const rows = byStage.get(stageId)!;
+    const seen = stages.seenStages?.[stageId];
+    const current = stages.currentStage?.id === stageId ? stages.currentStage : undefined;
+    const label = {
+      index: seen?.index ?? current?.index ?? position + 1,
+      total: seen?.total ?? total,
+      title: seen?.title ?? current?.title ?? stageId,
+    };
+    const attempts = [...new Set(rows.map(row => row.iteration ?? 1))];
+    for (const attempt of attempts) {
+      const members = attempts.length === 1 ? rows : rows.filter(row => (row.iteration ?? 1) === attempt);
+      groups.push({
+        key: `${stages.key}@${stageId}#${attempt}`, stage: stageId, attempt, attempts: attempts.length,
+        ...label, children: fold(members),
+      });
+    }
+  });
+
+  const unstaged = byStage.get(undefined);
+  if (unstaged !== undefined) {
+    groups.push({
+      key: `${stages.key}@`, attempts: 0, index: stageIds.length + 1, total, title: '', children: fold(unstaged),
+    });
+  }
+  return groups;
 }
 
 /**
@@ -113,7 +219,13 @@ function belongsTo(
   step: StepState, parent: StepState | undefined, loopIds: ReadonlySet<string>, loopRows: readonly StepState[],
 ): boolean {
   if (parent === undefined) {
+    // A declared body row that never ran has no `loopId` of its own, only the
+    // stages step it was seeded under.
+    if (step.loopId === undefined && step.stagesId !== undefined && loopIds.has(step.stagesId)) return false;
     return step.loopId === undefined || !loopIds.has(step.loopId);
+  }
+  if (parent.kind === 'stages' && step.loopId === undefined) {
+    return step.stagesId === parent.id && step.stage === undefined;
   }
   if (step.loopId !== parent.id) return false;
   if (sameLoopRefs(step.outerLoops, loopContextOf(parent))) return true;
@@ -131,6 +243,7 @@ function number(nodes: StepNode[]): StepNode[] {
     for (const node of list) {
       node.ordinal = next++;
       if (node.kind === 'loop') walk(node.children);
+      if (node.kind === 'stages') node.children.forEach(group => walk(group.children));
     }
   };
   walk(nodes);
@@ -147,6 +260,7 @@ export function flattenNodes(nodes: StepNode[]): StepNode[] {
     for (const node of list) {
       out.push(node);
       if (node.kind === 'loop') walk(node.children);
+      if (node.kind === 'stages') node.children.forEach(group => walk(group.children));
     }
   };
   walk(nodes);

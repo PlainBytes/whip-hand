@@ -41,8 +41,37 @@ function formatDuration(run: RunSummary): string {
   return ms === null ? '—' : formatElapsed(ms);
 }
 
-/** The columns every run grid shares. */
-export function runColumns<T extends RunSummary>(waiting: ReadonlySet<string>): TableColumnDefinition<T>[] {
+/** Where a run is among a `stages` step's stage files — `stage 3/7` in the status cell. */
+export interface StageProgress { index: number; total: number }
+
+/**
+ * A run's stage progress as its manifest records it: the stages step it
+ * stopped in (or is still in) — one that is not done and has named a current
+ * stage. A stages step that finished is no longer where the run is. The
+ * summary is the manifest itself (see core's RunSummaryKnown), so `steps` is
+ * there to read; anything malformed just reads as no progress.
+ */
+export function manifestStageProgress(run: RunSummary): StageProgress | undefined {
+  if (!Array.isArray(run.steps)) return undefined;
+  for (const step of run.steps as Array<Record<string, unknown>>) {
+    if (step?.kind !== 'stages' || step.status === 'done' || step.status === 'disabled') continue;
+    const current = step.currentStage as { index?: unknown } | undefined;
+    if (typeof current?.index === 'number' && typeof step.total === 'number') {
+      return { index: current.index, total: step.total };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The columns every run grid shares. `stages` is live stage progress by
+ * runId (see the store's `liveStageProgress`), which wins over the manifest's
+ * copy for a run this app is watching: a job hears a stage start at once, the
+ * grid's poll only every few seconds.
+ */
+export function runColumns<T extends RunSummary>(
+  waiting: ReadonlySet<string>, stages: ReadonlyMap<string, StageProgress> = new Map(),
+): TableColumnDefinition<T>[] {
   return [
     createTableColumn<T>({
       columnId: 'workflow',
@@ -84,7 +113,23 @@ export function runColumns<T extends RunSummary>(waiting: ReadonlySet<string>): 
       renderHeaderCell: () => 'Status',
       // A live run blocked on the human still reads 'running' on disk. Swap the
       // pill people already scan rather than adding a column the grid must carry.
-      renderCell: run => <StatusBadge status={waiting.has(run.runId) ? 'waiting' : run.status} />,
+      //
+      // A run inside a stages step reports progress in stages beside it —
+      // `running · stage 3/7` — rather than leaving a long staged run a bare
+      // 'running' for an hour.
+      renderCell: run => {
+        const progress = stages.get(run.runId) ?? manifestStageProgress(run);
+        return (
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <StatusBadge status={waiting.has(run.runId) ? 'waiting' : run.status} />
+            {progress !== undefined && (
+              <span data-testid={`run-stage-progress-${run.runId}`}>
+                {` · stage ${progress.index}/${progress.total}`}
+              </span>
+            )}
+          </span>
+        );
+      },
     }),
     createTableColumn<T>({
       columnId: 'started',

@@ -4,18 +4,20 @@ import {
   DataGridHeaderCell, DataGridRow, Text, type TableColumnDefinition,
 } from '@fluentui/react-components';
 import { useAgentClient } from '../agent/agent-context.tsx';
-import { useAppStore, waitingRunIds } from '../state/store.ts';
+import { liveStageProgress, useAppStore, waitingRunIds } from '../state/store.ts';
 import { openWorkspace } from '../lib/workspace-switch.ts';
 import { basename } from '../lib/workspace-identity.ts';
 import { WorkspaceDot } from '../components/WorkspaceDot.tsx';
-import { POLL_INTERVAL_MS, runColumns, type RecentRun } from './run-columns.tsx';
+import { POLL_INTERVAL_MS, runColumns, type RecentRun, type StageProgress } from './run-columns.tsx';
 import { errorMessage } from '../lib/error-message.ts';
 
 export interface ActivityPageProps {
   onSelectRun: (runId: string) => void;
 }
 
-const makeColumns = (waiting: ReadonlySet<string>): TableColumnDefinition<RecentRun>[] => [
+const makeColumns = (
+  waiting: ReadonlySet<string>, stages: ReadonlyMap<string, StageProgress>,
+): TableColumnDefinition<RecentRun>[] => [
   createTableColumn<RecentRun>({
     columnId: 'workspace',
     renderHeaderCell: () => 'Workspace',
@@ -26,7 +28,7 @@ const makeColumns = (waiting: ReadonlySet<string>): TableColumnDefinition<Recent
       </span>
     ),
   }),
-  ...runColumns<RecentRun>(waiting),
+  ...runColumns<RecentRun>(waiting, stages),
 ];
 
 /**
@@ -48,7 +50,8 @@ export function ActivityPage({ onSelectRun }: ActivityPageProps) {
   // Unfiltered: every workspace's waiting jobs are relevant here, which is
   // exactly what this page is for.
   const waiting = useMemo(() => waitingRunIds(jobs), [jobs]);
-  const columns = useMemo(() => makeColumns(waiting), [waiting]);
+  const stages = useMemo(() => liveStageProgress(jobs), [jobs]);
+  const columns = useMemo(() => makeColumns(waiting, stages), [waiting, stages]);
 
   useEffect(() => {
     let cancelled = false;

@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { Badge, Button, Text } from '@fluentui/react-components';
 import type { Step } from '../../../../packages/core/src/types.ts';
-import { isCommandStep, isContainerStep, isLoopStep } from '../../../../packages/core/src/steps.ts';
+import { isCommandStep, isContainerStep, isLoopStep, isStagesStep } from '../../../../packages/core/src/steps.ts';
 import { ATTACHMENTS_REF } from '../../../../packages/core/src/attachments.ts';
 
 const KIND_COLOR = {
@@ -77,6 +77,10 @@ export function StepSummary({
       {isLoopStep(step) ? (
         <Text size={200} style={{ marginLeft: 'auto', color: 'var(--colorNeutralForeground3)' }}>
           until {step.until || '—'}
+        </Text>
+      ) : isStagesStep(step) ? (
+        <Text size={200} style={{ marginLeft: 'auto', color: 'var(--colorNeutralForeground3)' }}>
+          over {step.items || '—'}
         </Text>
       ) : isCommandStep(step) ? (
         <>

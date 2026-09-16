@@ -112,6 +112,56 @@ describe('RunsPage', () => {
     expect(screen.getByText('running')).toBeInTheDocument();
   });
 
+  it('reports a run inside a stages step by stage, from the manifest', async () => {
+    const { transport } = renderRunsPage();
+
+    await respondListRuns(transport, [
+      {
+        runId: 'r1', runDir: '/ws/.whiphand/runs/r1', status: 'failed', workflow: 'staged', startedAt: '2026-01-01T00:00:00Z',
+        steps: [{
+          id: 'build', kind: 'stages', status: 'failed', total: 7, attempt: 3, exhausted: true,
+          currentStage: { id: '03-c', title: 'Add API routes', index: 3 },
+        }],
+      },
+      {
+        runId: 'r2', runDir: '/ws/.whiphand/runs/r2', status: 'succeeded', workflow: 'staged', startedAt: '2026-01-01T00:00:00Z',
+        steps: [{
+          id: 'build', kind: 'stages', status: 'done', total: 7, completed: 7,
+          currentStage: { id: '07-g', title: 'Docs', index: 7 },
+        }],
+      },
+    ]);
+
+    expect(await screen.findByTestId('run-stage-progress-r1')).toHaveTextContent('· stage 3/7');
+    // A stages step that finished is no longer where the run is.
+    expect(screen.queryByTestId('run-stage-progress-r2')).not.toBeInTheDocument();
+  });
+
+  it('reports a live run\'s stage from its job, ahead of the slower manifest poll', async () => {
+    useAppStore.setState({
+      jobs: {
+        j1: {
+          jobId: 'j1', runId: 'r1', workdir: '/ws', finished: false, stepOrder: [], steps: {}, currentExecution: {}, events: [], logTail: [], logRows: [], activityTail: [], hasNarrated: false,
+          ptyActive: false, ptyDataBuffer: [], ptyDataBaseIndex: 0, ptyDataTrimmed: false, ptyExited: false,
+          stageProgress: { stagesId: 'build', index: 4, total: 7, title: 'Wire UI', attempt: 1 },
+        },
+      },
+    });
+    const { transport } = renderRunsPage();
+
+    await respondListRuns(transport, [{
+      runId: 'r1', runDir: '/ws/.whiphand/runs/r1', status: 'running', workflow: 'staged', startedAt: '2026-01-01T00:00:00Z',
+      steps: [{
+        id: 'build', kind: 'stages', status: 'running', total: 7, attempt: 1,
+        currentStage: { id: '03-c', title: 'Add API routes', index: 3 },
+      }],
+    }]);
+
+    const cell = await screen.findByTestId('run-stage-progress-r1');
+    expect(cell).toHaveTextContent('· stage 4/7');
+    expect(cell.parentElement).toHaveTextContent('running · stage 4/7');
+  });
+
   it('does not mark a row waiting for a job blocked in another workspace', async () => {
     // Run ids are a timestamp plus two random bytes, so two workspaces can
     // mint the same one within a second — the job's workdir is what decides.

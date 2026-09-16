@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { parse as parseYaml } from 'yaml';
 import type { LoopStep, StagesStep, Workflow, Step, StepKind } from './types.ts';
 import { STAGE_REF } from './types.ts';
-import { flattenSteps, isContainerStep, isLoopStep, isManualStep, isStagesStep } from './steps.ts';
+import { childSteps, flattenSteps, isContainerStep, isLoopStep, isManualStep, isStagesStep } from './steps.ts';
 import { ATTACHMENTS_REF } from './attachments.ts';
 import { disabledIds } from './enabled.ts';
 
@@ -501,14 +501,18 @@ function validateLoop(loop: LoopStep, problems: string[]): void {
 // Non-fatal diagnostics: a step that still runs, just uselessly.
 // ---------------------------------------------------------------------------
 
-function collectManualWarnings(steps: Step[], insideLoop: boolean, warnings: string[]): void {
+function collectManualWarnings(steps: Step[], retryOffered: boolean, warnings: string[]): void {
   for (const step of steps) {
-    if (isLoopStep(step)) {
-      collectManualWarnings(step.steps, true, warnings);
+    // A loop retries its own body on rejection; a stages step retries the
+    // whole stage from the top on rejection at any of its gates (see
+    // runStage) — both make 'retry' a real answer from here down, however
+    // deeply this step is nested inside further loops within that body.
+    if (isContainerStep(step)) {
+      collectManualWarnings(childSteps(step), true, warnings);
       continue;
     }
     if (!isManualStep(step) || step.capture !== 'review') continue;
-    if (!insideLoop) {
+    if (!retryOffered) {
       warnings.push(
         `step '${step.id}': capture 'review' outside a loop can never offer 'retry', `
         + 'so it only approves with notes');

@@ -9,10 +9,11 @@ import { execRunner } from './exec.ts';
 import { DEFAULT_SHELL, shellFlags } from './engine/command.ts';
 import {
   createWorkflow, deleteWorkflow, cloneWorkflow, initWorkspace, workflowTemplate, specDrivenTemplate, featureDevelopmentTemplate,
-  updateWorkflow,
+  stagedFeatureDevelopmentTemplate, updateWorkflow,
 } from './scaffold.ts';
 import { parseWorkflow, validateWorkflowWarnings, validateWorkflowSemantics, WorkflowError } from './schema.ts';
 import { loadWorkspaceConfig } from './config.ts';
+import { findStep } from './steps.ts';
 import type { Workflow } from './types.ts';
 
 async function withConfigHome<T>(fn: (configHome: string) => Promise<T>): Promise<T> {
@@ -167,6 +168,22 @@ test('featureDevelopmentTemplate produces a parseable workflow, including the ba
   assert.equal(workflow.name, 'feature-development');
 });
 
+test('stagedFeatureDevelopmentTemplate parses, stages the plan dir, and gates every stage', () => {
+  const wf = parseWorkflow(stagedFeatureDevelopmentTemplate());
+  assert.deepEqual(validateWorkflowSemantics(wf), []);
+  assert.deepEqual(validateWorkflowWarnings(wf), []);
+  const build = wf.steps.find(s => s.id === 'build');
+  assert.ok(build && build.kind === 'stages');
+  if (!build || build.kind !== 'stages') return;
+  assert.equal(build.items, '{{ inputs.plan_dir }}/*.md');
+  const gate = findStep(wf.steps, 'accept');
+  assert.ok(gate && gate.kind === 'approval');
+  if (!gate || gate.kind !== 'approval') return;
+  assert.equal(gate.show_diff, true);
+  assert.equal(gate.capture, 'review');
+  assert.ok(findStep(wf.steps, 'commit'), 'each stage commits');
+});
+
 test('featureDevelopmentTemplate stage step works when the runs dir is gitignored and files are already staged', async () => {
   const stage = parseWorkflow(featureDevelopmentTemplate()).steps.find(s => s.id === 'stage');
   assert.ok(stage && stage.kind === 'command');
@@ -209,6 +226,7 @@ test('initWorkspace creates config + starter workflows once, then is a no-op', a
     join('.whiphand', 'workflows', 'feature-development.yaml'),
     join('.whiphand', 'workflows', 'feature.yaml'),
     join('.whiphand', 'workflows', 'spec-driven.yaml'),
+    join('.whiphand', 'workflows', 'staged-feature-development.yaml'),
   ]);
   await loadWorkspaceConfig(ws); // parses
   const second = await initWorkspace(ws);

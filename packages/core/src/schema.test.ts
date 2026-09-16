@@ -358,6 +358,62 @@ test('validateWorkflowWarnings does not fail parsing — these are warnings, not
   assert.doesNotThrow(() => parseWorkflow(REVIEW_OUTSIDE_LOOP));
 });
 
+const REVIEW_IN_STAGES_BODY = `
+name: x
+steps:
+  - id: build
+    kind: stages
+    items: "plans/*.md"
+    steps:
+      - id: implement
+        runner: claude
+        mode: headless
+        writes: true
+        output: report.md
+        prompt: "Implement."
+      - id: accept
+        kind: approval
+        title: "Ship it?"
+        instructions: "Look."
+        show_diff: true
+        capture: review
+        output: feedback.md
+`;
+
+test("does not warn when capture: 'review' sits directly in a stages body — rejecting it retries the stage", () => {
+  const workflow = parseWorkflow(REVIEW_IN_STAGES_BODY);
+  assert.deepEqual(validateWorkflowWarnings(workflow), []);
+});
+
+test(
+  "capture: 'review' inside a stages body still gets the show_diff warning but never the "
+  + "'outside a loop' one — proves the body is actually walked, not skipped wholesale",
+  () => {
+    const workflow = parseWorkflow(REVIEW_IN_STAGES_BODY.replace('        show_diff: true\n', ''));
+    assert.deepEqual(validateWorkflowWarnings(workflow), [
+      "step 'accept': capture 'review' without 'show_diff: true' has no files to comment on, "
+      + 'so it only takes an overall comment',
+    ]);
+  },
+);
+
+test("still warns when capture: 'review' sits outside any loop or stages body, even in a workflow that has stages elsewhere", () => {
+  const workflow = parseWorkflow(REVIEW_IN_STAGES_BODY.replace(
+    '  - id: build\n',
+    `  - id: sign
+    kind: approval
+    title: "Ship it?"
+    instructions: "Look."
+    show_diff: true
+    capture: review
+    output: feedback.md
+  - id: build
+`,
+  ));
+  const warnings = validateWorkflowWarnings(workflow);
+  assert.deepEqual(warnings, ["step 'sign': capture 'review' outside a loop can never offer 'retry', so it only approves with notes"]);
+});
+
 test('a step nested inside an inner loop may reference a later step of an outer loop', () => {
   // The pattern `.whiphand/workflows/feature-development.yaml` uses: an
   // automated review loop nested inside an outer loop that converges on a

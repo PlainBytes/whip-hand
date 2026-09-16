@@ -309,11 +309,13 @@ test('initWorkspace then createWorkflow scaffold a usable workspace', async () =
   const ws = await mkdtemp(join(tmpdir(), 'whiphand-init-'));
 
   const init = await handlers.initWorkspace({ workdir: ws }, { notify: () => {} }) as { created: string[] };
-  assert.equal(init.created.length, 4);
+  assert.equal(init.created.length, 5);
 
   const rec = await handlers.createWorkflow({ workdir: ws, name: 'review-pr' }, { notify: () => {} }) as { path: string };
   const listed = await handlers.listWorkflows({ workdir: ws }, { notify: () => {} }) as { name: string }[];
-  assert.deepEqual(listed.map(r => r.name).sort(), ['feature', 'feature-development', 'review-pr', 'spec-driven']);
+  assert.deepEqual(listed.map(r => r.name).sort(), [
+    'feature', 'feature-development', 'review-pr', 'spec-driven', 'staged-feature-development',
+  ]);
   assert.ok(rec.path.endsWith(join('.whiphand', 'workflows', 'review-pr.yaml')));
 });
 

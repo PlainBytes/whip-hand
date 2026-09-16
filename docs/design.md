@@ -699,6 +699,17 @@ stage is authoritative**: it restores the run's own verdict to whatever it was b
 stage started, so a review the human waved through does not also fail the run — but a
 genuine failure from before the `stages` step began is not erased by it either.
 
+**A stage with no diff is a normal stage.** A stage whose work turned out to need no change
+to the tree — a no-op refactor stage, a stage that was already satisfied by earlier work —
+still goes through `accept` like any other: the diff the gate shows is simply empty, and
+accepting it says "correct, move on" rather than "here is a change". The shipped workflow's
+per-stage `commit` step accounts for this: a bare `git commit` would exit 1 ("nothing to
+commit") and fail the run right there, so it checks the index first (`git diff --cached
+--quiet && echo … || git commit -F …`) and exits 0 without committing when there is nothing
+staged. A real commit failure — a rejecting hook, a bad message file — still exits non-zero
+and fails the run loudly, exactly as every later stage's assumption that history is clean
+requires; nothing here blanket-forgives a failing commit the way `expect_exit: [0, 1]` would.
+
 **Nesting.** A `stages` step cannot sit inside a loop, and cannot sit inside another `stages`
 step. A loop's `until` can never name a `stages` step either — `until` needs a non-container
 step with a verdict to watch, and a `stages` step is a container. All three are refused at

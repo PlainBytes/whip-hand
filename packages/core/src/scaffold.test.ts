@@ -208,6 +208,51 @@ test('featureDevelopmentTemplate stage step works when the runs dir is gitignore
   assert.deepEqual(stdout.trim().split('\n'), ['a.txt', 'b.txt']);
 });
 
+test("the staged workflow's stage-body commit step exits 0 on an empty index instead of "
+  + "failing the run, and still commits — and still fails — for real", async () => {
+  const commit = findStep(parseWorkflow(stagedFeatureDevelopmentTemplate()).steps, 'commit');
+  assert.ok(commit && commit.kind === 'command');
+  if (!commit || commit.kind !== 'command') return;
+
+  const ws = await mkdtemp(join(tmpdir(), 'whiphand-stage-commit-'));
+  const git = (...args: string[]) => promisify(execFile)('git', args, { cwd: ws });
+  await git('init', '-b', 'main');
+  await writeFile(join(ws, 'a.txt'), 'a\n');
+  await git('add', '-A');
+  await git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-m', 'init');
+  const head = async () => (await git('rev-parse', 'HEAD')).stdout.trim();
+  const before = await head();
+
+  // A stage with no diff is a normal stage (product spec's own edge case):
+  // an empty index must exit 0, not fail the run the way a bare `git commit`
+  // would (exit 1, "nothing to commit").
+  await execRunner([DEFAULT_SHELL, ...shellFlags(DEFAULT_SHELL), commit.run], { cwd: ws });
+  assert.equal(await head(), before, 'nothing was committed');
+
+  // Something staged: a real commit is made from the message artifact env
+  // var the way a running stage would export it.
+  await writeFile(join(ws, 'a.txt'), 'changed\n');
+  await git('add', 'a.txt');
+  const msgPath = join(ws, 'msg.txt');
+  await writeFile(msgPath, 'do the thing\n');
+  await execRunner(
+    [DEFAULT_SHELL, ...shellFlags(DEFAULT_SHELL), commit.run],
+    { cwd: ws, env: { ...process.env, WHIPHAND_ARTIFACT_COMMIT_MESSAGE: msgPath } },
+  );
+  assert.notEqual(await head(), before, 'a real commit was made');
+  assert.equal((await git('log', '-1', '--pretty=%s')).stdout.trim(), 'do the thing');
+
+  // A real failure (a bad -F path here, standing in for e.g. a rejecting
+  // hook) still exits non-zero — the whole point of not blanket-forgiving
+  // exit 1 the way commit-plan's expect_exit does.
+  await writeFile(join(ws, 'a.txt'), 'changed again\n');
+  await git('add', 'a.txt');
+  await assert.rejects(() => execRunner(
+    [DEFAULT_SHELL, ...shellFlags(DEFAULT_SHELL), commit.run],
+    { cwd: ws, env: { ...process.env, WHIPHAND_ARTIFACT_COMMIT_MESSAGE: join(ws, 'no-such-file.txt') } },
+  ));
+});
+
 test('createWorkflow writes the file, refuses overwrite, validates the name', async () => {
   const ws = await mkdtemp(join(tmpdir(), 'whiphand-scaffold-'));
   const { path } = await createWorkflow(ws, 'my-flow');

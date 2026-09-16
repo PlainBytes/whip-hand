@@ -141,7 +141,14 @@ steps:
       - id: commit
         inputs: [commit-message]
         kind: command
-        run: git commit -F "$WHIPHAND_ARTIFACT_COMMIT_MESSAGE"
+        # A stage with no diff is a normal stage (the human saw that at
+        # 'accept' and took it anyway) — 'git commit' alone would exit 1 for
+        # "nothing to commit" and fail the run right here, since there is no
+        # expect_exit to forgive it. Checking the index first turns that case
+        # into a clean exit 0 with no commit made; a real commit failure (a
+        # hook, a bad message file) still exits non-zero and fails the run
+        # loudly, exactly as every later stage's clean-history assumption needs.
+        run: git diff --cached --quiet && echo "nothing to commit for this stage" || git commit -F "$WHIPHAND_ARTIFACT_COMMIT_MESSAGE"
         output: commit.log
 
   - id: push

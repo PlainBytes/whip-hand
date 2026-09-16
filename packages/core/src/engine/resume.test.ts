@@ -858,6 +858,8 @@ test('a resumed staged run skips the stages it already accepted', async () => {
   assert.match(plan.warnings.join('\n'), /stages step 'build' resumes in stage 3 \('C'\); 2 accepted stage\(s\) will not run again/);
   assert.deepEqual(plan.stageBudgets, {});
   assert.deepEqual(plan.stagesInterrupted, { 'build@03-c': 1 });
+  assert.deepEqual(plan.stagesStarted, ['build@01-a', 'build@02-b', 'build@03-c'],
+    'every stage with a recorded row, so none of their gates claims "no changes"');
 });
 
 test('a run stopped in triage grants the rejected stage one more attempt; an interrupted one does not', async () => {

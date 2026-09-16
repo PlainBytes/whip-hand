@@ -658,6 +658,75 @@ test("a retry that re-edits the same file is still a change, not 'no changes'", 
     'measured from the stage entry, not the attempt entry');
 });
 
+test("a resumed gate does not claim the stage produced no changes", async () => {
+  const dir = await tmpRepoWithPlans(ONE_STAGE);
+  gitInit(dir);
+  const controller = new AbortController();
+  // The implementer edits the tree; the run is cancelled at the gate prompt.
+  const first = harness({
+    onSpawn: stepId => { if (stepId === 'execute') writeFileSync(join(dir, 'api.ts'), 'export {};\n'); },
+    onAsk: () => controller.abort(),
+  });
+  const broken = await run(dir, first, { signal: controller.signal });
+  assert.equal(broken.cancelled, true);
+  assert.doesNotMatch(first.asked[0].instructions, /produced no changes/i);
+
+  const plan = await planResume(dir, DEFAULT_CONFIG, broken.runId);
+  const h = harness();
+  const result = await run(dir, h, { resume: plan, workflow: plan.workflow });
+
+  assert.equal(result.ok, true);
+  assert.equal(h.asked.length, 1);
+  assert.doesNotMatch(h.asked[0].instructions, /produced no changes/i,
+    "the stage's edits predate this process's snapshot");
+});
+
+test("a resumed stage whose only record is a finished attempt does not claim 'no changes' either", async () => {
+  const dir = await tmpRepoWithPlans(ONE_STAGE);
+  gitInit(dir);
+  const controller = new AbortController();
+  // Attempt 1 edits the tree and is rejected; cancelled before attempt 2 runs anything.
+  const first = harness({
+    answers: [{ choice: 'retry' }],
+    onSpawn: stepId => { if (stepId === 'execute') writeFileSync(join(dir, 'api.ts'), 'export {};\n'); },
+    onEvent: e => { if (e.type === 'stages:item' && e.attempt === 2) controller.abort(); },
+  });
+  const broken = await run(dir, first, { signal: controller.signal });
+  assert.equal(broken.cancelled, true);
+
+  const plan = await planResume(dir, DEFAULT_CONFIG, broken.runId);
+  assert.deepEqual(plan.stagesInterrupted, {}, 'nothing was left unfinished');
+  const h = harness();
+  const result = await run(dir, h, { resume: plan, workflow: plan.workflow });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(attempts(h), [1, 2]);
+  assert.equal(h.asked.length, 1);
+  assert.doesNotMatch(h.asked[0].instructions, /produced no changes/i);
+});
+
+test("a stage a resume reaches fresh still says it produced no changes", async () => {
+  const dir = await tmpRepoWithPlans(TWO_STAGES);
+  gitInit(dir);
+  const controller = new AbortController();
+  // Stage 1 edits the tree and is cancelled at its gate; stage 2 changes nothing.
+  const first = harness({
+    onSpawn: (stepId, n) => { if (stepId === 'execute' && n === 1) writeFileSync(join(dir, 'api.ts'), 'export {};\n'); },
+    onAsk: () => controller.abort(),
+  });
+  const broken = await run(dir, first, { signal: controller.signal });
+  assert.equal(broken.cancelled, true);
+
+  const plan = await planResume(dir, DEFAULT_CONFIG, broken.runId);
+  const h = harness();
+  const result = await run(dir, h, { resume: plan, workflow: plan.workflow });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(items(h), ['01-schema', '02-api']);
+  assert.doesNotMatch(h.asked[0].instructions, /produced no changes/i);
+  assert.match(h.asked[1].instructions, /produced no changes/i, 'stage 2 never ran before this resume');
+});
+
 test('abort at a stage gate fails the run immediately', async () => {
   const dir = await tmpRepoWithPlans(TWO_STAGES);
   const h = harness({ answers: [{ choice: 'abort' }] });

@@ -167,6 +167,13 @@ export interface ResumePlan {
    * whose implementer is told to reconcile what that attempt left in the tree.
    */
   stagesInterrupted: Record<string, number>;
+  /**
+   * '<stagesKey>@<stageId>' of every stage the manifest records anything
+   * under: a stage this resume re-enters rather than starts. Its tree already
+   * holds whatever the earlier process did, so a snapshot taken now cannot
+   * tell the gate the stage "produced no changes".
+   */
+  stagesStarted: string[];
   warnings: string[];
 }
 
@@ -239,6 +246,8 @@ interface StagesRecord {
   accepted(where: RowStage): boolean;
   /** The highest attempt any row of this stage recorded. */
   attemptsUsed(stagesKey: string, stageId: string): number;
+  /** Every stage with at least one recorded row, as '<stagesKey>@<stageId>'. */
+  started: string[];
   /**
    * The stage is still where triage left it: its row says `exhausted` and its
    * highest attempt really ended in a rejection. A granted attempt that was
@@ -292,6 +301,7 @@ function readStages(detail: RunManifest): StagesRecord {
     completed,
     accepted,
     attemptsUsed,
+    started: [...used.keys()],
     inTriage,
     closed: where => accepted(where)
       || where.attempt < attemptsUsed(where.stagesKey, where.stageId)
@@ -473,6 +483,7 @@ export async function planResume(
     stagesCompleted: stages.completed,
     stageBudgets,
     stagesInterrupted,
+    stagesStarted: stages.started,
     warnings,
   };
 }

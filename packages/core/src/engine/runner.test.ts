@@ -1202,7 +1202,7 @@ async function resumePlan(
     runId: 'run-x', runDir, manifest, workflow,
     inputs: {}, sessionIds: {}, artifacts: {}, attempts: {},
     done, resumedStepIds: new Set(), attachments: [], restartAt: undefined, loopBudgets: {},
-    stagesCompleted: {}, stageBudgets: {}, stagesInterrupted: {}, warnings: [],
+    stagesCompleted: {}, stageBudgets: {}, stagesInterrupted: {}, stagesStarted: [], warnings: [],
   };
 }
 

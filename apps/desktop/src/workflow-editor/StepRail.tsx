@@ -3,9 +3,9 @@ import {
   Combobox, Dropdown, Field, Input, Link, Option, Switch, Text, Tooltip,
 } from '@fluentui/react-components';
 import type {
-  AgentStep, CommandStep, EffortLevel, ManualStep, Step, StepKind, StepMode,
+  AgentStep, CommandStep, EffortLevel, ManualStep, StagesStep, Step, StepKind, StepMode,
 } from '../../../../packages/core/src/types.ts';
-import { isAgentStep, isManualStep } from '../../../../packages/core/src/steps.ts';
+import { childSteps, isAgentStep, isManualStep } from '../../../../packages/core/src/steps.ts';
 import { ATTACHMENTS_REF } from '../../../../packages/core/src/attachments.ts';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
@@ -355,15 +355,17 @@ export function StepRail({ step, earlierStepIds, guardedByLoopId, onUpdate, fiel
  */
 export function convertStep(step: Step, kind: StepKind): Step {
   if (step.kind === kind) return step;
-  const isLoop = step.kind === 'loop';
+  // A container (`loop` or `stages`) carries no StepCommon field at all — no
+  // `inputs`, `verdict` or `output` to read here, only `id`/`enabled`/`steps`.
+  const isContainer = step.kind === 'loop' || step.kind === 'stages';
   const carried = {
     id: step.id,
-    ...(isLoop ? {} : { inputs: step.inputs, verdict: step.verdict, enabled: step.enabled }),
+    ...(isContainer ? {} : { inputs: step.inputs, verdict: step.verdict, enabled: step.enabled }),
   };
   // Output is optional on every kind but 'agent': carried only when it is
   // non-blank, so a blank or absent output never survives a kind switch as
   // the very `''` core now rejects (or, for 'agent', requires and will flag).
-  const output = !isLoop && step.output && step.output.trim() !== '' ? step.output : undefined;
+  const output = !isContainer && step.output && step.output.trim() !== '' ? step.output : undefined;
   switch (kind) {
     case 'agent':
       return {
@@ -385,7 +387,16 @@ export function convertStep(step: Step, kind: StepKind): Step {
     case 'loop':
       return {
         kind, id: step.id, until: '', enabled: step.enabled,
-        steps: isLoop ? step.steps : [],
+        steps: childSteps(step),
       };
+    case 'stages':
+      // No editor fields yet (a StagesFields card is later work) — this only
+      // has to keep the step id, enabled flag and body alive across a
+      // round trip through the Kind dropdown, the same as switching to
+      // 'loop' already does.
+      return {
+        kind, id: step.id, items: '', enabled: step.enabled,
+        steps: childSteps(step),
+      } as StagesStep;
   }
 }

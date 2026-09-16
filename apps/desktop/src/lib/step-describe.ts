@@ -8,7 +8,7 @@
  */
 import type { AgentStep, CommandStep, LoopStep, ManualStep, Step } from '../../../../packages/core/src/types.ts';
 import {
-  findStep, flattenSteps, isCommandStep, isLoopStep, isManualStep,
+  findStep, flattenSteps, isCommandStep, isContainerStep, isLoopStep, isManualStep,
 } from '../../../../packages/core/src/steps.ts';
 import { ATTACHMENTS_REF } from '../../../../packages/core/src/attachments.ts';
 
@@ -142,11 +142,11 @@ export function dataFlow(steps: Step[]): Map<string, DataFlowEntry> {
 
   const out = new Map<string, DataFlowEntry>();
   for (const { step } of flattenSteps(steps)) {
-    if (!isLoopStep(step)) out.set(step.id, { sources: [], dependents: [], previousIteration: [] });
+    if (!isContainerStep(step)) out.set(step.id, { sources: [], dependents: [], previousIteration: [] });
   }
 
   for (const { step } of flattenSteps(steps)) {
-    if (isLoopStep(step)) continue;
+    if (isContainerStep(step)) continue;
     const entry = out.get(step.id);
     if (!entry) continue;
     for (const sourceId of step.inputs ?? []) {

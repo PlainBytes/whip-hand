@@ -18,13 +18,24 @@ import { executionKey, sameLoopRefs } from '../execution-key.ts';
 const manifestStepSchema = z.object({
   id: z.string().min(1),
   // Optional since v2: only agent steps have a runner and a mode. Manifests
-  // written by v1 always carried both, so they still parse.
-  kind: z.enum(['agent', 'command', 'manual', 'approval', 'loop']).default('agent'),
+  // written by v1 always carried both, so they still parse. 'stages' added
+  // alongside the step kind itself: a seeded row with an unknown kind would
+  // make the whole manifest unparseable, and an unparseable manifest is both
+  // unlistable and unresumable.
+  kind: z.enum(['agent', 'command', 'manual', 'approval', 'loop', 'stages']).default('agent'),
   runner: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
   mode: z.enum(['interactive', 'headless']).optional(),
   /** id of the enclosing loop, when this execution happened inside one. */
   loopId: z.string().min(1).optional(),
+  /**
+   * id of the enclosing `stages` step, at any depth (through any number of
+   * nested loops) — the declared-plan counterpart to `loopId`, seeded from
+   * `flattenSteps`'s own `stagesId` so a reader can group a stages step's
+   * body rows under it the same way a loop's body rows already group under
+   * `loopId`. Unused until the `stages` step kind exists.
+   */
+  stagesId: z.string().min(1).optional(),
   /** 1-based iteration this execution belongs to; absent outside a loop. */
   iteration: z.number().int().positive().optional(),
   /**
@@ -194,7 +205,7 @@ export interface RunJournalInit {
   attachments?: RunAttachment[];
   sessionIds: Record<string, string>;
   steps: Array<{
-    id: string; kind: StepKind; loopId?: string;
+    id: string; kind: StepKind; loopId?: string; stagesId?: string;
     runner?: string; model?: string; mode?: StepMode;
     /** Seeds this entry as `status: 'disabled'` instead of `'pending'`. */
     disabled?: boolean;
@@ -310,7 +321,7 @@ export class RunJournal {
           // records an empty map.
           sessionIds: init.sessionIds,
           steps: init.steps.map(s => ({
-            id: s.id, kind: s.kind, loopId: s.loopId, runner: s.runner, model: s.model,
+            id: s.id, kind: s.kind, loopId: s.loopId, stagesId: s.stagesId, runner: s.runner, model: s.model,
             mode: s.mode, status: s.disabled ? 'disabled' as const : 'pending' as const,
           })),
         }

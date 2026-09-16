@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { parse as parseYaml } from 'yaml';
-import type { LoopStep, Workflow, Step, StepKind } from './types.ts';
-import { isLoopStep, isManualStep } from './steps.ts';
+import type { LoopStep, StagesStep, Workflow, Step, StepKind } from './types.ts';
+import { STAGE_REF } from './types.ts';
+import { flattenSteps, isContainerStep, isLoopStep, isManualStep, isStagesStep } from './steps.ts';
 import { ATTACHMENTS_REF } from './attachments.ts';
 
 export class WorkflowError extends Error {
@@ -113,6 +114,15 @@ const loopStepSchema = z.object({
   enabled: z.boolean().optional(),
 });
 
+const stagesStepSchema = z.object({
+  kind: z.literal('stages'),
+  id: requiredText(),
+  items: requiredText(),
+  steps: z.array(stepSchema).min(1),
+  max_retries: z.number().int().nonnegative().optional(),
+  enabled: z.boolean().optional(),
+});
+
 /** A step object with no `kind:` defaults to an `agent` step. */
 function withDefaultKind(raw: unknown): unknown {
   if (raw !== null && typeof raw === 'object' && !Array.isArray(raw) && !('kind' in raw)) {
@@ -129,6 +139,7 @@ const stepUnion = z.preprocess(
     manualShape('manual'),
     manualShape('approval'),
     loopStepSchema,
+    stagesStepSchema,
   ]),
 );
 
@@ -178,10 +189,21 @@ const FIELD_OWNER: Record<string, StepKind> = {
   run: 'command', shell: 'command', expect_exit: 'command', timeout_ms: 'command',
   title: 'manual', instructions: 'manual', capture: 'manual', show_diff: 'manual',
   steps: 'loop', until: 'loop', max_iterations: 'loop', on_exhausted: 'loop',
+  items: 'stages', max_retries: 'stages',
 };
 
+/**
+ * `steps:` is the one field `loop` and `stages` both own — recorded above
+ * against `'loop'` only (so a misplaced `until` on a `stages` step still
+ * names `loop`, the kind that actually has `until`), with this the escape
+ * that keeps a `stages` step's own `steps:` from being flagged as belonging
+ * to the wrong kind.
+ */
+const SHARED_FIELDS = new Set(['steps']);
+
 /** 'approval' shares every field with 'manual'. */
-function ownerMatches(owner: StepKind, kind: StepKind): boolean {
+function ownerMatches(owner: StepKind, kind: StepKind, key: string): boolean {
+  if (SHARED_FIELDS.has(key) && (kind === 'loop' || kind === 'stages')) return true;
   return owner === kind || (owner === 'manual' && kind === 'approval');
 }
 
@@ -194,7 +216,7 @@ function checkMisplacedFields(raw: unknown, problems: string[]): void {
 
   for (const key of Object.keys(obj)) {
     const owner = FIELD_OWNER[key];
-    if (owner === undefined || ownerMatches(owner, kind)) continue;
+    if (owner === undefined || ownerMatches(owner, kind, key)) continue;
     problems.push(
       declared === undefined
         ? `step '${id}': has '${key}', which belongs to kind '${owner}' — add 'kind: ${owner}'`
@@ -234,13 +256,28 @@ interface Located {
   parentLoopId?: string;
   /** ids of every loop this step is nested inside, directly or transitively, outermost first. */
   loopChain: string[];
+  /** id of the nearest enclosing `stages` step, when there is one. */
+  stagesId?: string;
+  /**
+   * ids of every `stages` step this step is nested inside, outermost first —
+   * kept apart from `loopChain` rather than merged into one "container chain":
+   * a loop body member can legally forward-reference a later sibling in the
+   * *same* loop (see the forward-reference rule below), but a cross-stage
+   * forward reference must stay a validation error, so nothing here may ever
+   * be consulted the way `loopChain` is for that check.
+   */
+  stagesChain: string[];
 }
 
-function locate(steps: Step[], prefix: number[], loopChain: string[], out: Located[]): void {
+function locate(steps: Step[], prefix: number[], loopChain: string[], stagesChain: string[], out: Located[]): void {
   steps.forEach((step, idx) => {
     const path = [...prefix, idx];
-    out.push({ step, path, parentLoopId: loopChain.at(-1), loopChain });
-    if (isLoopStep(step)) locate(step.steps, path, [...loopChain, step.id], out);
+    out.push({
+      step, path, parentLoopId: loopChain.at(-1), loopChain,
+      stagesId: stagesChain.at(-1), stagesChain,
+    });
+    if (isLoopStep(step)) locate(step.steps, path, [...loopChain, step.id], stagesChain, out);
+    else if (isStagesStep(step)) locate(step.steps, path, loopChain, [...stagesChain, step.id], out);
   });
 }
 
@@ -260,15 +297,22 @@ export interface StepTreeLocation {
   parentLoopId?: string;
   /** ids of every loop this step is nested inside, directly or transitively, outermost first. */
   loopChain: string[];
+  /** id of the nearest enclosing `stages` step, when there is one. */
+  stagesId?: string;
+  /** ids of every `stages` step this step is nested inside, outermost first. */
+  stagesChain: string[];
 }
 
 /** Every step's location, keyed by id — built once per run (or per validation pass) and read by id from there on. */
 export function locateSteps(steps: Step[]): Map<string, StepTreeLocation> {
   const located: Located[] = [];
-  locate(steps, [], [], located);
+  locate(steps, [], [], [], located);
   const byId = new Map<string, StepTreeLocation>();
   for (const entry of located) {
-    byId.set(entry.step.id, { path: entry.path, parentLoopId: entry.parentLoopId, loopChain: entry.loopChain });
+    byId.set(entry.step.id, {
+      path: entry.path, parentLoopId: entry.parentLoopId, loopChain: entry.loopChain,
+      stagesId: entry.stagesId, stagesChain: entry.stagesChain,
+    });
   }
   return byId;
 }
@@ -289,7 +333,12 @@ export function validateWorkflowSemantics(workflow: Workflow): string[] {
   const problems: string[] = [];
 
   const located: Located[] = [];
-  locate(workflow.steps, [], [], located);
+  locate(workflow.steps, [], [], [], located);
+
+  // Whether `stage` may appear in any step's `inputs:` at all — see the loop
+  // below. Computed once rather than per-reference: it depends on the whole
+  // tree, not on where the reader sits in it.
+  const hasStages = located.some(entry => isStagesStep(entry.step));
 
   const byId = new Map<string, Located>();
   for (const entry of located) {
@@ -298,6 +347,15 @@ export function validateWorkflowSemantics(workflow: Workflow): string[] {
       // copied into; as a step id, `inputs: [attachments]` would be ambiguous.
       problems.push(`${isLoopStep(entry.step) ? 'loop' : 'step'} id '${ATTACHMENTS_REF}' is reserved `
         + `for the files attached to a run; rename it`);
+    }
+    // Only a problem once the workflow actually has a `stages` step: nothing
+    // makes `stage` special otherwise, and the shipped feature-development
+    // template's command step is named exactly this (see scaffold.ts) —
+    // every workspace `whiphand init` ever ran has that file, so a blanket
+    // reservation would stop it (and every workspace built from it) from
+    // parsing at all.
+    if (hasStages && entry.step.id === STAGE_REF) {
+      problems.push(`step id '${STAGE_REF}' is reserved for the current stage file; rename it`);
     }
     if (byId.has(entry.step.id)) problems.push(`duplicate step id '${entry.step.id}'`);
     else byId.set(entry.step.id, entry);
@@ -311,6 +369,11 @@ export function validateWorkflowSemantics(workflow: Workflow): string[] {
       continue;
     }
 
+    if (isStagesStep(step)) {
+      validateStages(step, src, problems);
+      continue;
+    }
+
     if (isManualStep(step) && step.capture !== undefined && !step.output) {
       problems.push(`step '${step.id}': capture '${step.capture}' needs an 'output' to write it to`);
     }
@@ -319,13 +382,26 @@ export function validateWorkflowSemantics(workflow: Workflow): string[] {
       // Not a step: the files attached to the run, which exist before step
       // one, so there is no ordering or artifact to check.
       if (ref === ATTACHMENTS_REF) continue;
+      // Not a step either: the current stage file's own fields, readable via
+      // {{ stage.* }} — real only inside a stages body, exactly like `loop`
+      // is only real inside a loop, so a reader outside one is refused here
+      // rather than left to fail later at render time. Outside a stages body
+      // a real step called `stage` still wins: the feature-development
+      // template has one, and its readers must keep resolving to it.
+      if (ref === STAGE_REF && (src.stagesId !== undefined || !byId.has(ref))) {
+        if (src.stagesId === undefined) {
+          problems.push(`step '${step.id}' reads '${STAGE_REF}', which only exists inside a stages step`);
+        }
+        continue;
+      }
       const tgt = byId.get(ref);
       if (tgt === undefined) {
         problems.push(`step '${step.id}' references unknown step '${ref}'`);
         continue;
       }
-      if (isLoopStep(tgt.step)) {
-        problems.push(`step '${step.id}' references loop '${ref}', which produces no artifact`);
+      if (isContainerStep(tgt.step)) {
+        const label = isLoopStep(tgt.step) ? `loop '${ref}'` : `stages step '${ref}'`;
+        problems.push(`step '${step.id}' references ${label}, which produces no artifact`);
         continue;
       }
       if (!tgt.step.output) {
@@ -339,7 +415,10 @@ export function validateWorkflowSemantics(workflow: Workflow): string[] {
         // A later step is only referenceable when it belongs to a loop that
         // encloses the referencing step — however deeply nested the
         // referencer is inside it, the reference means "that step's artifact
-        // from that loop's previous iteration".
+        // from that loop's previous iteration". Deliberately loopChain only,
+        // never stagesChain: a cross-stage forward reference has no "previous
+        // iteration" to mean (each stage is a fresh pass over fresh input),
+        // so it stays an ordinary forward-reference error.
         const sameBody = tgt.parentLoopId !== undefined && src.loopChain.includes(tgt.parentLoopId);
         if (!sameBody) problems.push(`step '${step.id}' references later step '${ref}'`);
       }
@@ -347,6 +426,44 @@ export function validateWorkflowSemantics(workflow: Workflow): string[] {
   }
 
   return problems;
+}
+
+/**
+ * A `stages` step's own two rules, beyond the shape zod already checked:
+ * where it may sit in the tree, and what its body must contain.
+ */
+function validateStages(step: StagesStep, src: Located, problems: string[]): void {
+  // Nesting is refused outright rather than "supported, but here's what
+  // breaks": a stage frame is folded into the same loop-shaped chain a
+  // `LoopFrame` is (see execution-key.ts), and letting either wrap the other
+  // would need every consumer of that chain to reason about two containers
+  // occupying one link instead of one.
+  if (src.loopChain.length > 0) {
+    problems.push(`stages step '${step.id}' cannot run inside a loop`);
+  }
+  if (src.stagesChain.length > 0) {
+    problems.push(`stages step '${step.id}' cannot run inside another stages step`);
+  }
+
+  // A loop inside a stages body that exhausts its budget has to send its
+  // failure *somewhere* — a later task makes that "up to the human gate"
+  // rather than "kill the run". Requiring the gate in the body's own document
+  // order, at parse time, is what keeps the runner from ever needing
+  // end-of-body reconciliation logic to invent one.
+  const body = flattenSteps(step.steps);
+  body.forEach((entry, i) => {
+    if (!isLoopStep(entry.step)) return;
+    // The loop's own body follows it in the flattened list and must not
+    // count: a gate inside the loop (e.g. its `until`) is not *after* it.
+    const later = body.slice(i + 1);
+    const end = later.findIndex(e => e.depth <= entry.depth);
+    const after = end === -1 ? [] : later.slice(end);
+    const gated = after.some(e => isManualStep(e.step));
+    if (!gated) {
+      problems.push(`stages step '${step.id}': loop '${entry.step.id}' needs a manual or approval `
+        + 'step after it, or an exhausted cycle has no one to accept it');
+    }
+  });
 }
 
 function validateLoop(loop: LoopStep, problems: string[]): void {
@@ -358,8 +475,9 @@ function validateLoop(loop: LoopStep, problems: string[]): void {
     problems.push(`loop '${loop.id}': until '${loop.until}' is not a step in its body`);
     return;
   }
-  if (isLoopStep(target)) {
-    problems.push(`loop '${loop.id}': until step '${loop.until}' is a loop `
+  if (isContainerStep(target)) {
+    const kind = isLoopStep(target) ? 'loop' : 'stages step';
+    problems.push(`loop '${loop.id}': until step '${loop.until}' is a ${kind} `
       + '— it must name a non-loop step with verdict on');
   } else if (!target.verdict) {
     problems.push(`loop '${loop.id}': until step '${loop.until}' must set 'verdict: true'`);
@@ -424,6 +542,8 @@ const FIELD_LABELS: Record<string, string> = {
   allow_paths: 'Allowed paths',
   inputs: 'Reads from',
   steps: 'Steps',
+  items: 'Stage files',
+  max_retries: 'Max retries',
 };
 
 function fieldLabel(key: unknown): string {

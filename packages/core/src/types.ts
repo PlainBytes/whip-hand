@@ -18,7 +18,19 @@ export type Scope = 'project' | 'global';
  * What a step *is*. `agent` is the original (and only) kind and stays the
  * default, so every workflow written before kinds existed parses unchanged.
  */
-export type StepKind = 'agent' | 'command' | 'manual' | 'approval' | 'loop';
+export type StepKind = 'agent' | 'command' | 'manual' | 'approval' | 'loop' | 'stages';
+
+/**
+ * The reserved pseudo-artifact id a step's `inputs:` names to read the
+ * current stage file's own `Stage` fields via `{{ stage.* }}` — see
+ * template.ts. Only meaningful, and only accepted, inside a `stages` body
+ * (schema.ts rejects it everywhere else): outside one there is no current
+ * stage to read. Also why a step id (or a loop id, alongside `attachments`)
+ * cannot be named `stage` in a workflow that has any `stages` step at all —
+ * see schema.ts's `STAGE_REF` reservation for why that rule is conditional
+ * rather than blanket.
+ */
+export const STAGE_REF = 'stage';
 
 export interface WorkflowInput {
   required: boolean;
@@ -108,7 +120,30 @@ export interface LoopStep {
   enabled?: boolean;
 }
 
-export type Step = AgentStep | CommandStep | ManualStep | LoopStep;
+/**
+ * Runs `steps` once per file matched by `items`, in order, one stage at a
+ * time — the counterpart to `loop`'s "repeat until" for "once per plan file".
+ * Shaped like `LoopStep` (no `StepCommon`: it produces no artifact of its own
+ * and cannot be referenced — see schema.ts's "produces no artifact" check),
+ * plus `items` for the glob and `max_retries` for how many extra attempts a
+ * failing stage gets before its failure reaches the enclosing gate.
+ *
+ * `max_retries` is deliberately its own field, not folded into a body loop's
+ * `max_iterations`: `--max-iterations` (an operator's blanket override) must
+ * not silently change how many attempts a stage gets, since a stage's retry
+ * budget is a property of the plan, not of any one run.
+ */
+export interface StagesStep {
+  kind: 'stages';
+  id: string;
+  items: string;          // templated glob, relative to the workdir
+  steps: Step[];
+  max_retries?: number;   // default 2; deliberately NOT overridden by --max-iterations
+  /** Disabling a stages step takes its whole body with it — see StepCommon.enabled. */
+  enabled?: boolean;
+}
+
+export type Step = AgentStep | CommandStep | ManualStep | LoopStep | StagesStep;
 
 export interface Workflow {
   name: string;

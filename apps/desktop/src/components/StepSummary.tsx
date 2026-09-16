@@ -1,12 +1,12 @@
 import type { ReactNode } from 'react';
 import { Badge, Button, Text } from '@fluentui/react-components';
 import type { Step } from '../../../../packages/core/src/types.ts';
-import { isAgentStep, isCommandStep, isLoopStep } from '../../../../packages/core/src/steps.ts';
+import { isCommandStep, isContainerStep, isLoopStep } from '../../../../packages/core/src/steps.ts';
 import { ATTACHMENTS_REF } from '../../../../packages/core/src/attachments.ts';
 
 const KIND_COLOR = {
   agent: 'informative', command: 'severe', manual: 'important',
-  approval: 'important', loop: 'brand',
+  approval: 'important', loop: 'brand', stages: 'brand',
 } as const;
 
 export interface StepSummaryProps {
@@ -28,7 +28,7 @@ export interface StepSummaryProps {
 }
 
 function readsIds(step: Step): string[] {
-  if (isLoopStep(step) || isCommandStep(step)) return [];
+  if (isContainerStep(step) || isCommandStep(step)) return [];
   return step.inputs ?? [];
 }
 
@@ -47,7 +47,7 @@ const HIGHLIGHT_BACKGROUND: Record<'source' | 'dependent', string> = {
 export function StepSummary({
   step, ordinal, endsLoop, disabled, onReadsClick, onWritesClick, highlight, problemCount,
 }: StepSummaryProps) {
-  const writes = isLoopStep(step) ? undefined : step.output;
+  const writes = isContainerStep(step) ? undefined : step.output;
   const reads = readsIds(step);
 
   return (
@@ -66,7 +66,7 @@ export function StepSummary({
       </Text>
       <Text weight="semibold" data-testid="step-summary-step-id">{step.id}</Text>
       <Badge appearance="tint" color={KIND_COLOR[step.kind]} size="small">{step.kind}</Badge>
-      {!isLoopStep(step) && step.verdict && <Badge appearance="tint" color="success" size="small">verdict</Badge>}
+      {!isContainerStep(step) && step.verdict && <Badge appearance="tint" color="success" size="small">verdict</Badge>}
       {endsLoop && <Badge appearance="tint" color="brand" size="small">ends loop</Badge>}
       {disabled && <Badge appearance="tint" color="subtle" size="small">disabled</Badge>}
       {!!problemCount && (

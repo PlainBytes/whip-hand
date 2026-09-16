@@ -95,7 +95,7 @@ export const whiphandEventSchema: z.ZodType<WhiphandEvent> = z.discriminatedUnio
   }),
   z.object({
     type: z.literal('step:start'), stepId: z.string(),
-    kind: z.enum(['agent', 'command', 'manual', 'approval', 'loop']),
+    kind: z.enum(['agent', 'command', 'manual', 'approval', 'loop', 'stages']),
     runner: z.string().optional(), model: z.string().optional(),
     mode: z.enum(['interactive', 'headless']).optional(),
     loopId: z.string().optional(), iteration: z.number().int().positive().optional(),

@@ -4,7 +4,7 @@
  * desktop New Run dialog agree on what counts as consuming attachments.
  */
 import type { Workflow } from './types.ts';
-import { flattenSteps, isLoopStep } from './steps.ts';
+import { flattenSteps, isContainerStep } from './steps.ts';
 import { disabledIds } from './enabled.ts';
 
 /**
@@ -24,7 +24,7 @@ export const ATTACHMENTS_REF = 'attachments';
 export function consumesAttachments(workflow: Workflow): boolean {
   const disabled = disabledIds(workflow.steps);
   return flattenSteps(workflow.steps).some(({ step }) =>
-    !isLoopStep(step) && !disabled.has(step.id) && (step.inputs ?? []).includes(ATTACHMENTS_REF));
+    !isContainerStep(step) && !disabled.has(step.id) && (step.inputs ?? []).includes(ATTACHMENTS_REF));
 }
 
 /** The refusal when files are attached and nothing reads them — it names the fix. */

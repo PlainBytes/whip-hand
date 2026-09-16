@@ -6,8 +6,8 @@
  * second top-level step's body. Kept out of WorkflowsPage so the tree
  * arithmetic is testable on its own.
  */
-import type { LoopStep, Step } from '../../../../packages/core/src/types.ts';
-import { isLoopStep } from '../../../../packages/core/src/steps.ts';
+import type { LoopStep, StagesStep, Step } from '../../../../packages/core/src/types.ts';
+import { isLoopStep, isStagesStep } from '../../../../packages/core/src/steps.ts';
 import { ATTACHMENTS_REF } from '../../../../packages/core/src/attachments.ts';
 
 export type StepPath = number[];
@@ -89,6 +89,16 @@ export function renameStep(steps: Step[], oldId: string, newId: string): Step[] 
         steps: renameStep(step.steps, oldId, newId),
       } satisfies LoopStep;
     }
+    if (isStagesStep(step)) {
+      // A `stages` step has no `inputs`/`until` of its own to fix up, but its
+      // body can still read steps outside it — and the editor can't open the
+      // body to repair a dangling reference, so it must be rewritten here.
+      return {
+        ...step,
+        id: step.id === oldId ? newId : step.id,
+        steps: renameStep(step.steps, oldId, newId),
+      } satisfies StagesStep;
+    }
     return {
       ...step,
       id: step.id === oldId ? newId : step.id,
@@ -113,11 +123,13 @@ export function removeStep(steps: Step[], id: string): Step[] {
     list.flatMap((step): Step[] => {
       if (step.id === id) return [];
       if (isLoopStep(step)) return [{ ...step, steps: withoutId(step.steps) }];
+      if (isStagesStep(step)) return [{ ...step, steps: withoutId(step.steps) }];
       return [step];
     });
   const stripInputs = (list: Step[]): Step[] =>
     list.map(step => {
       if (isLoopStep(step)) return { ...step, steps: stripInputs(step.steps) };
+      if (isStagesStep(step)) return { ...step, steps: stripInputs(step.steps) }; // no inputs of its own
       if (id === ATTACHMENTS_REF || !step.inputs?.includes(id)) return step;
       return { ...step, inputs: step.inputs.filter(i => i !== id) };
     });
@@ -162,6 +174,7 @@ export function referenceableIds(steps: Step[], path: StepPath): string[] {
         collect(step.steps, here);
         return;
       }
+      if (isStagesStep(step)) return; // produces no artifact — see schema.ts's "produces no artifact" check
       if (!step.output) return;
       if (before(here, path) || inSameLoopBody) ids.push(step.id);
     });

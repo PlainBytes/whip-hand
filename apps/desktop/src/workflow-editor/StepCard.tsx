@@ -1,19 +1,19 @@
 import {
-  Button, Dropdown, Field, Input, MessageBar, MessageBarBody, Option, Textarea, Tooltip,
+  Button, Dropdown, Field, Input, MessageBar, MessageBarBody, Option, Text, Textarea, Tooltip,
 } from '@fluentui/react-components';
 import {
   ArrowDown20Regular, ArrowUp20Regular, ChevronDown20Regular, ChevronRight20Regular,
   Delete20Regular, FolderArrowRight20Regular, Pause20Regular, Play20Regular,
 } from '@fluentui/react-icons';
 import type { LoopStep, Step, StepKind } from '../../../../packages/core/src/types.ts';
-import { isLoopStep } from '../../../../packages/core/src/steps.ts';
+import { isContainerStep, isLoopStep, isStagesStep } from '../../../../packages/core/src/steps.ts';
 import { StepSummary } from '../components/StepSummary.tsx';
 import { StepIdField } from './StepIdField.tsx';
 import { convertStep, StepRail } from './StepRail.tsx';
 import { useStepLayoutStyles } from './step-layout.ts';
 import { numberOrUndefined } from './number-field.ts';
 
-const KIND_OPTIONS: StepKind[] = ['agent', 'command', 'manual', 'approval', 'loop'];
+const KIND_OPTIONS: StepKind[] = ['agent', 'command', 'manual', 'approval', 'loop', 'stages'];
 
 export interface StepCardProps {
   step: Step;
@@ -201,14 +201,24 @@ export function StepCard({
                     <Textarea value={step.instructions} rows={12} onChange={(_e, data) => patch({ instructions: data.value })} />
                   </Field>
                 )}
+                {isStagesStep(step) && (
+                  // No StagesFields card yet (later work: a proper items/max_retries
+                  // editor, plus recursing into its body) — this only has to keep
+                  // the card from silently looking like an empty agent step.
+                  <Text size={200} style={{ color: 'var(--colorNeutralForeground3)' }}>
+                    Stage files editing isn&apos;t available here yet — edit this step&apos;s YAML directly.
+                  </Text>
+                )}
               </div>
-              <StepRail
-                step={step}
-                earlierStepIds={earlierStepIds}
-                guardedByLoopId={guardedByLoopId}
-                onUpdate={onUpdate}
-                fieldErrors={fieldErrors}
-              />
+              {!isStagesStep(step) && (
+                <StepRail
+                  step={step}
+                  earlierStepIds={earlierStepIds}
+                  guardedByLoopId={guardedByLoopId}
+                  onUpdate={onUpdate}
+                  fieldErrors={fieldErrors}
+                />
+              )}
             </div>
           )}
         </div>
@@ -229,7 +239,7 @@ function LoopFields({
   // current value stays selectable even once it no longer qualifies (e.g.
   // Verdict got turned off), so the resulting field error stays visible
   // instead of silently reverting to something the user never picked.
-  const verdictOptions = step.steps.filter(s => !isLoopStep(s) && s.verdict);
+  const verdictOptions = step.steps.filter(s => !isContainerStep(s) && s.verdict);
   const options = step.until && !verdictOptions.some(s => s.id === step.until)
     ? [...verdictOptions, ...step.steps.filter(s => s.id === step.until)]
     : verdictOptions;

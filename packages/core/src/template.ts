@@ -1,5 +1,6 @@
-import type { LoopFrame, RunCtx } from './types.ts';
+import type { Frame, LoopFrame, RunCtx } from './types.ts';
 import { ATTACHMENTS_REF } from './attachments.ts';
+import { nearestLoop, nearestStage } from './execution-key.ts';
 
 export class TemplateError extends Error {
   constructor(message: string) { super(message); this.name = 'TemplateError'; }
@@ -9,6 +10,12 @@ export class TemplateError extends Error {
  * Everything a template can see. `RunCtx` satisfies it structurally, so every
  * call site just passes the ctx it already has; tests can pass a literal
  * without building a whole run context.
+ *
+ * `frame` is the execution's actual construct chain (loop, stage, or both
+ * nested); `loop` stays alongside it — rather than being derived and
+ * discarded — for a caller with no frame of its own to build (a bare literal
+ * in a test, `ManualRequest.loop`), which is why `loop.*` below prefers
+ * `nearestLoop(scope.frame)` but still falls back to it.
  */
 export interface TemplateScope {
   inputs: Record<string, string>;
@@ -17,21 +24,29 @@ export interface TemplateScope {
   runSlug: string;
   runName?: string;
   loop?: LoopFrame;
+  frame?: Frame;
 }
 
 const PLACEHOLDER =
-  /\{\{\s*(inputs\.[A-Za-z0-9_-]+|loop\.(?:iteration|max_iterations)|run\.(?:name|slug|id))\s*\}\}/g;
+  /\{\{\s*(inputs\.[A-Za-z0-9_-]+|loop\.(?:iteration|max_iterations)|stage\.(?:index|total|id|title)|run\.(?:name|slug|id))\s*\}\}/g;
 
 export function renderTemplate(tpl: string, scope: TemplateScope): string {
   return tpl.replace(PLACEHOLDER, (_m, ref: string) => {
     if (ref.startsWith('loop.')) {
-      const loop = scope.loop;
+      const loop = nearestLoop(scope.frame) ?? scope.loop;
       if (loop === undefined) throw new TemplateError(`'${ref}' is only available inside a loop`);
       return String(ref === 'loop.iteration' ? loop.iteration : loop.maxIterations);
     }
-    // Unlike loop.*, run.* is always available — every template is rendered
-    // inside a run — so there is no "not here" error case. An unnamed run
-    // reads as its id, which is what every display site falls back to too.
+    if (ref.startsWith('stage.')) {
+      const stageFrame = nearestStage(scope.frame);
+      if (stageFrame === undefined) throw new TemplateError(`'${ref}' is only available inside a stages step`);
+      const field = ref.slice('stage.'.length) as 'index' | 'total' | 'id' | 'title';
+      return String(stageFrame.stage[field]);
+    }
+    // Unlike loop.*/stage.*, run.* is always available — every template is
+    // rendered inside a run — so there is no "not here" error case. An
+    // unnamed run reads as its id, which is what every display site falls
+    // back to too.
     if (ref.startsWith('run.')) {
       if (ref === 'run.id') return scope.runId;
       if (ref === 'run.slug') return scope.runSlug;

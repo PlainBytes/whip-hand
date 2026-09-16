@@ -4,6 +4,7 @@ import {
   parseWorkflow, validateWorkflowWarnings, validateWorkflowDraft, formatWorkflowIssues, formatWorkflowFieldIssues,
   workflowSchema, WorkflowError, locateSteps, isForwardRef,
 } from './schema.ts';
+import { featureDevelopmentTemplate } from './scaffold.ts';
 import type { Step } from './types.ts';
 
 const VALID = `
@@ -779,4 +780,293 @@ test('isForwardRef is true for a later sibling, false for an earlier one or an u
   assert.equal(isForwardRef(located, 'execute', 'execute'), false);
   assert.equal(isForwardRef(located, 'nonexistent', 'tests'), false);
   assert.equal(isForwardRef(located, 'execute', 'nonexistent'), false);
+});
+
+// ---------------------------------------------------------------------------
+// `kind: stages` — parse, validate, flatten. No runner support yet.
+// ---------------------------------------------------------------------------
+
+const STAGED_YAML = `
+name: staged
+inputs:
+  plan_dir: { required: true }
+steps:
+  - id: plan
+    runner: claude
+    mode: interactive
+    writes: false
+    output: plan.md
+    prompt: "Plan it."
+  - id: build
+    kind: stages
+    items: "{{ inputs.plan_dir }}/*.md"
+    steps:
+      - id: implement
+        runner: claude
+        mode: headless
+        writes: true
+        inputs: [stage]
+        output: report.md
+        prompt: "Implement {{ stage.title }}."
+      - id: review
+        runner: claude
+        mode: headless
+        writes: false
+        verdict: true
+        inputs: [implement]
+        output: review.md
+        prompt: "Review."
+`;
+
+const STAGES_IN_LOOP = `
+name: x
+steps:
+  - kind: loop
+    id: cycle
+    until: gate
+    steps:
+      - id: build
+        kind: stages
+        items: "plans/*.md"
+        steps:
+          - id: implement
+            runner: claude
+            mode: headless
+            writes: true
+            output: report.md
+            prompt: "Do it."
+      - id: gate
+        kind: approval
+        verdict: true
+        title: "Ship it?"
+        instructions: "Look."
+`;
+
+const STAGES_IN_STAGES = `
+name: x
+steps:
+  - id: outer
+    kind: stages
+    items: "plans/*.md"
+    steps:
+      - id: inner
+        kind: stages
+        items: "sub/*.md"
+        steps:
+          - id: leaf
+            runner: claude
+            mode: headless
+            writes: true
+            output: report.md
+            prompt: "Do it."
+`;
+
+const UNTIL_STAGES = `
+name: x
+steps:
+  - kind: loop
+    id: cycle
+    until: build
+    steps:
+      - id: build
+        kind: stages
+        items: "plans/*.md"
+        steps:
+          - id: implement
+            runner: claude
+            mode: headless
+            writes: true
+            output: report.md
+            prompt: "Do it."
+      - id: gate
+        kind: approval
+        verdict: true
+        title: "Ship it?"
+        instructions: "Look."
+`;
+
+const STAGES_LOOP_NO_GATE = `
+name: x
+steps:
+  - id: build
+    kind: stages
+    items: "plans/*.md"
+    steps:
+      - kind: loop
+        id: cycle
+        until: review
+        steps:
+          - id: implement
+            runner: claude
+            mode: headless
+            writes: true
+            inputs: [stage]
+            output: report.md
+            prompt: "Implement {{ stage.title }}."
+          - id: review
+            runner: claude
+            mode: headless
+            writes: false
+            verdict: true
+            inputs: [implement]
+            output: review.md
+            prompt: "Review."
+`;
+
+const STAGES_GATE_ONLY_INSIDE_LOOP = `
+name: x
+steps:
+  - id: build
+    kind: stages
+    items: "plans/*.md"
+    steps:
+      - kind: loop
+        id: cycle
+        until: gate
+        steps:
+          - id: implement
+            runner: claude
+            mode: headless
+            writes: true
+            output: report.md
+            prompt: "Implement."
+          - id: gate
+            kind: approval
+            verdict: true
+            title: "Ship it?"
+            instructions: "Look."
+`;
+
+const STAGE_STEP_READ_WITHOUT_STAGES = `
+name: x
+steps:
+  - id: stage
+    kind: command
+    run: "git add -A"
+    output: stage.log
+  - id: after
+    runner: claude
+    mode: headless
+    writes: false
+    inputs: [stage]
+    output: after.md
+    prompt: "Look."
+`;
+
+const STAGED_WITH_STAGE_ID = `
+name: x
+steps:
+  - id: stage
+    runner: claude
+    mode: headless
+    writes: false
+    output: x.md
+    prompt: "Hi."
+  - id: build
+    kind: stages
+    items: "plans/*.md"
+    steps:
+      - id: implement
+        runner: claude
+        mode: headless
+        writes: true
+        output: report.md
+        prompt: "Implement."
+`;
+
+const STAGE_REF_OUTSIDE = `
+name: x
+steps:
+  - id: plan
+    runner: claude
+    mode: headless
+    writes: false
+    inputs: [stage]
+    output: plan.md
+    prompt: "Plan."
+`;
+
+const REF_TO_STAGES = `
+name: x
+steps:
+  - id: build
+    kind: stages
+    items: "plans/*.md"
+    steps:
+      - id: implement
+        runner: claude
+        mode: headless
+        writes: true
+        output: report.md
+        prompt: "Implement."
+  - id: summarize
+    runner: claude
+    mode: headless
+    writes: false
+    inputs: [build]
+    output: summary.md
+    prompt: "Summarize."
+`;
+
+const ITEMS_ON_AGENT = `
+name: x
+steps:
+  - id: a
+    kind: agent
+    runner: claude
+    mode: headless
+    writes: false
+    output: a.md
+    prompt: "Hi"
+    items: "plans/*.md"
+`;
+
+test('a stages step parses with its glob, body and default retries', () => {
+  const stages = parseWorkflow(STAGED_YAML).steps[1];
+  assert.equal(stages.kind, 'stages');
+  assert.equal(stages.kind === 'stages' && stages.items, '{{ inputs.plan_dir }}/*.md');
+});
+
+test('a stages step inside a loop or inside another stages step is refused', () => {
+  assert.throws(() => parseWorkflow(STAGES_IN_LOOP), /stages step 'build' cannot run inside a loop/);
+  assert.throws(() => parseWorkflow(STAGES_IN_STAGES), /stages step 'inner' cannot run inside another stages step/);
+});
+
+test("a loop's until cannot name a stages step", () => {
+  assert.throws(() => parseWorkflow(UNTIL_STAGES), /until step 'build' is a stages step/);
+});
+
+test('a loop inside a stages body must be followed by a human step', () => {
+  assert.throws(() => parseWorkflow(STAGES_LOOP_NO_GATE),
+    /stages step 'build': loop 'cycle' needs a manual or approval step after it, or an exhausted cycle has no one to accept it/);
+});
+
+test("a gate inside the loop's own body does not count as a gate after it", () => {
+  assert.throws(() => parseWorkflow(STAGES_GATE_ONLY_INSIDE_LOOP),
+    /stages step 'build': loop 'cycle' needs a manual or approval step after it/);
+});
+
+test("without a stages step, inputs: [stage] still resolves to a real step named 'stage'", () => {
+  parseWorkflow(STAGE_STEP_READ_WITHOUT_STAGES);
+});
+
+test("'stage' is only reserved in a workflow that has a stages step", () => {
+  parseWorkflow(featureDevelopmentTemplate());          // has `id: stage`, no stages step — still parses
+  assert.throws(() => parseWorkflow(STAGED_WITH_STAGE_ID),
+    /step id 'stage' is reserved for the current stage file; rename it/);
+});
+
+test('inputs: [stage] is allowed inside a stages body and refused outside one', () => {
+  parseWorkflow(STAGED_YAML);
+  assert.throws(() => parseWorkflow(STAGE_REF_OUTSIDE),
+    /step 'plan' reads 'stage', which only exists inside a stages step/);
+});
+
+test('a step referencing the stages step itself is refused — it produces no artifact', () => {
+  assert.throws(() => parseWorkflow(REF_TO_STAGES), /references stages step 'build', which produces no artifact/);
+});
+
+test("misplaced 'items' names the kind it belongs to", () => {
+  assert.throws(() => parseWorkflow(ITEMS_ON_AGENT),
+    /kind 'agent' has no 'items' field \(it belongs to kind 'stages'\)/);
 });

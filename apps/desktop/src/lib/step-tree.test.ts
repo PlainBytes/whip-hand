@@ -2,10 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
   appendAt, insertAfter, moveAt, referenceableIds, removeAt, removeStep, renameStep, siblingsAt, stepAt, updateAt,
 } from './step-tree.ts';
-import type { CommandStep, LoopStep, Step } from '../../../../packages/core/src/types.ts';
+import type { CommandStep, LoopStep, StagesStep, Step } from '../../../../packages/core/src/types.ts';
 
 const cmd = (id: string, output?: string): CommandStep =>
   ({ kind: 'command', id, run: `echo ${id}`, ...(output ? { output } : {}) });
+
+const staged = (): Step[] => [
+  cmd('plan', 'plan.md'),
+  { kind: 'stages', id: 'build', items: 'plans/*.md', steps: [{ ...cmd('impl', 'impl.log'), inputs: ['stage', 'plan'] }] } as StagesStep,
+];
 
 const tree = (): Step[] => [
   cmd('a', 'a.log'),
@@ -116,6 +121,10 @@ describe('renameStep', () => {
     expect(next[0].id).toBe('fetch');
     expect((next[1] as Step & { inputs?: string[] }).inputs).toEqual(['attachments']);
   });
+  it('rewrites inputs: inside a stages body', () => {
+    const next = renameStep(staged(), 'plan', 'design');
+    expect((next[1] as StagesStep).steps[0]).toMatchObject({ inputs: ['stage', 'design'] });
+  });
 });
 
 describe('removeStep', () => {
@@ -138,6 +147,10 @@ describe('removeStep', () => {
       { ...cmd('d', 'd.log'), inputs: ['attachments'] },
     ];
     expect((removeStep(withRefs, 'attachments')[0] as Step & { inputs?: string[] }).inputs).toEqual(['attachments']);
+  });
+  it('removes from and strips inputs inside a stages body', () => {
+    expect((removeStep(staged(), 'plan')[0] as StagesStep).steps[0]).toMatchObject({ inputs: ['stage'] });
+    expect((removeStep(staged(), 'impl')[1] as StagesStep).steps).toEqual([]);
   });
 });
 

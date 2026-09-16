@@ -5,8 +5,8 @@
  * highlight. Free of React, like `step-tree.ts` and `run-tree.ts` — this is
  * where the bulk of the editor's assertions live.
  */
-import type { LoopStep, Step, Workflow } from '../../../../packages/core/src/types.ts';
-import { isCommandStep, isLoopStep } from '../../../../packages/core/src/steps.ts';
+import type { LoopStep, StagesStep, Step, Workflow } from '../../../../packages/core/src/types.ts';
+import { isCommandStep, isContainerStep, isLoopStep } from '../../../../packages/core/src/steps.ts';
 import { disabledIds, untilTargetOf } from '../../../../packages/core/src/enabled.ts';
 import { ATTACHMENTS_REF } from '../../../../packages/core/src/attachments.ts';
 import type { StepPath } from './step-tree.ts';
@@ -64,11 +64,11 @@ export function wiring(workflow: Workflow): Wiring {
   // `attachments` names the run's attached files, not a card: there is
   // nothing for it to light up, and a step wrongly *called* `attachments`
   // must not light up every reader of the files.
-  const stepRefs = (step: Exclude<Step, LoopStep>): string[] =>
+  const stepRefs = (step: Exclude<Step, LoopStep | StagesStep>): string[] =>
     (step.inputs ?? []).filter(ref => ref !== ATTACHMENTS_REF);
   const dependents = new Map<string, string[]>();
   for (const step of flat) {
-    if (isLoopStep(step) || isCommandStep(step)) continue; // a command's inputs: is a runtime no-op
+    if (isContainerStep(step) || isCommandStep(step)) continue; // a command's inputs: is a runtime no-op
     for (const src of stepRefs(step)) {
       const list = dependents.get(src) ?? [];
       list.push(step.id);
@@ -79,7 +79,7 @@ export function wiring(workflow: Workflow): Wiring {
   return {
     sources(id: string): string[] {
       const step = byId.get(id);
-      if (step === undefined || isLoopStep(step) || isCommandStep(step)) return [];
+      if (step === undefined || isContainerStep(step) || isCommandStep(step)) return [];
       return stepRefs(step);
     },
     dependents(id: string): string[] {

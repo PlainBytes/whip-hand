@@ -8,7 +8,9 @@ import type {
 } from '../types.ts';
 import { AdapterRegistry, validateWorkflowRunners, validateWorkflowFrontend } from '../registry.ts';
 import { WorkflowError, locateSteps, isForwardRef } from '../schema.ts';
-import { collectLoops, flattenSteps, isAgentStep, isCommandStep, isLoopStep, isManualStep } from '../steps.ts';
+import {
+  collectLoops, flattenSteps, isAgentStep, isCommandStep, isContainerStep, isLoopStep, isManualStep, isStagesStep,
+} from '../steps.ts';
 import { disabledIds, droppedRefs, droppedRefSentence, pruneDisabled } from '../enabled.ts';
 import { ATTACHMENTS_REF } from '../attachments.ts';
 import { copyAttachments, recordOf, validateAttachments } from './attachments.ts';
@@ -180,7 +182,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     // Only top-level verdict steps fall back to on_findings; one inside an
     // explicit loop is governed by that loop instead.
     effective.steps.forEach((step, idx) => {
-      if (!isLoopStep(step) && step.verdict && loopTargetIndex(effective.steps, idx) === -1) {
+      if (!isContainerStep(step) && step.verdict && loopTargetIndex(effective.steps, idx) === -1) {
         throw new WorkflowError(
           [`on_findings 'loop' requires a writes:true step before verdict step '${step.id}'`]);
       }
@@ -244,10 +246,11 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         runDir, runId, workflow: workflow.name, workdir, dryRun: !!opts.dryRun,
         workflowSource: opts.workflowSource,
         inputs, attachments: attachments.map(recordOf),
-        sessionIds: ctx.sessionIds, steps: planned.map(({ step, loopId }) => ({
+        sessionIds: ctx.sessionIds, steps: planned.map(({ step, loopId, stagesId }) => ({
           id: step.id,
           kind: step.kind,
           loopId,
+          stagesId,
           runner: isAgentStep(step) ? step.runner : undefined,
           model: isAgentStep(step) ? step.model : undefined,
           mode: isAgentStep(step) ? step.mode : undefined,
@@ -853,6 +856,15 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         // body artifact into ctx in the right order, and the replay costs no
         // spawns because each body step is skipped in turn.
         if (isLoopStep(step)) return await executeLoop(step);
+
+        // A `stages` step has no runner support yet (see engine/stages.ts's
+        // own header) — a later task adds executeStages. Refusing here,
+        // rather than falling through into the leaf-step dispatch below, is
+        // what keeps that dispatch narrowed to the three kinds that actually
+        // know how to run, with nothing else to change once execution lands.
+        if (isStagesStep(step)) {
+          throw new Error(`stages step '${step.id}': running a stages step is not implemented yet`);
+        }
 
         // frameIdentity is the single place that turns a frame into the
         // loopId/iteration/stage/outerLoops tuple every emit site below

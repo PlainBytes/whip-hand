@@ -1,6 +1,6 @@
 import { Text } from '@fluentui/react-components';
 import type { LoopStep, Step } from '../../../../../packages/core/src/types.ts';
-import { isLoopStep } from '../../../../../packages/core/src/steps.ts';
+import { isLoopStep, isStagesStep } from '../../../../../packages/core/src/steps.ts';
 import { endsLoop, type DataFlowEntry } from '../../lib/step-describe.ts';
 import { StepTile } from './StepTile.tsx';
 import { LoopGroup } from './LoopGroup.tsx';
@@ -69,6 +69,25 @@ export function StepTrack({
               onHoverStep={onHoverStep}
               nestLevel={nestLevel}
             />
+          ) : isStagesStep(step) ? (
+            // No lane visualization yet — a `StagesGroup` alongside `LoopGroup`
+            // is later work (the editor gets the same treatment: no
+            // StagesFields card, no container recursion, until then). This
+            // placeholder only has to exist so the lane keeps rendering every
+            // other kind while a stages step's own body stays unlaid-out.
+            <div
+              data-testid={`stages-placeholder-${step.id}`}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px',
+                border: '1px dashed var(--colorNeutralStroke2)', borderRadius: 8,
+                opacity: step.enabled === false ? 0.55 : 1,
+              }}
+            >
+              <Text size={100} style={{ color: 'var(--colorNeutralForeground3)' }}>
+                {ordinals.get(step.id) ?? ''}
+              </Text>
+              <Text size={200}>{`${step.id} — stages`}</Text>
+            </div>
           ) : (
             <StepTile
               step={step}

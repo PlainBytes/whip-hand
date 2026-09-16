@@ -4,7 +4,7 @@
  * risk of drifting apart.
  */
 import type { Step, Workflow } from './types.ts';
-import { flattenSteps, isCommandStep, isLoopStep } from './steps.ts';
+import { flattenSteps, isLoopStep } from './steps.ts';
 
 /** Absent means enabled. */
 export function isEnabled(step: Step): boolean {
@@ -76,10 +76,11 @@ export interface DroppedRef {
 }
 
 /**
- * Enabled, non-command steps naming a disabled id in `inputs:`. Command steps
- * never appear here: their `inputs:` is a runtime no-op. Evaluated against the
- * full `disabledIds` set (not just the roots), so a step that reads two of a
- * disabled loop's body steps is warned about both.
+ * Enabled steps naming a disabled id in `inputs:` — a command step included,
+ * now that its `inputs:` resolves to real `WHIPHAND_ARTIFACT_*` env vars
+ * rather than being a runtime no-op. Evaluated against the full `disabledIds`
+ * set (not just the roots), so a step that reads two of a disabled loop's
+ * body steps is warned about both.
  */
 export function droppedRefs(workflow: Workflow): DroppedRef[] {
   const disabled = disabledIds(workflow.steps);
@@ -88,7 +89,7 @@ export function droppedRefs(workflow: Workflow): DroppedRef[] {
     // A reader inside a disabled loop is itself in `disabled` even though it
     // carries no `enabled: false` of its own — `isEnabled` alone would miss
     // that and warn about a step that will not run either.
-    if (isLoopStep(step) || disabled.has(step.id) || isCommandStep(step)) continue;
+    if (isLoopStep(step) || disabled.has(step.id)) continue;
     const missing = (step.inputs ?? []).filter(id => disabled.has(id));
     if (missing.length > 0) out.push({ reader: step.id, missing });
   }

@@ -675,7 +675,10 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         recordArtifact(step.id, capture);
         await ensureArtifactDir(capture);
       }
-      const spec = commandSpec(step, ctx, capture);
+      // Scoped exactly like an agent's: a forward reference into a loop that
+      // hasn't gone round yet is dropped rather than exported as an artifact
+      // env var pointing at a stale (or nonexistent) path.
+      const spec = commandSpec(scopeInputs(step, frame), ctx, capture);
 
       if (opts.dryRun) {
         emit({ type: 'step:spawn', stepId: step.id, spec, phase: 'main' });

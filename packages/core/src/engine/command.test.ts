@@ -115,6 +115,37 @@ test('the capture header names the command, so the artifact explains itself', ()
   assert.ok(captureFooter(1).includes('exit code: 1'));
 });
 
+test('a command step exports each input artifact as an environment variable', () => {
+  const withArtifacts: RunCtx = { ...ctx, artifacts: { 'execute-report': '/run/exec.md', plan: '/run/plan.md' } };
+  const spec = commandSpec(
+    { kind: 'command', id: 'commit', run: 'git commit', inputs: ['execute-report', 'plan'] }, withArtifacts);
+  assert.equal(spec.env.WHIPHAND_ARTIFACT_EXECUTE_REPORT, '/run/exec.md');
+  assert.equal(spec.env.WHIPHAND_ARTIFACT_PLAN, '/run/plan.md');
+});
+
+test('inside a stage, a command step is told which stage it is in', () => {
+  const stage = { index: 2, total: 7, id: '02-api', title: 'Add API routes', path: '/p/02-api.md' };
+  const framed: RunCtx = { ...ctx, frame: { kind: 'stages', id: 'build', stage, attempt: 1, maxAttempts: 3 } };
+  const spec = commandSpec({ kind: 'command', id: 'commit', run: 'git commit' }, framed);
+  assert.equal(spec.env.WHIPHAND_STAGE_TITLE, 'Add API routes');
+  assert.equal(spec.env.WHIPHAND_STAGE_INDEX, '2');
+  assert.equal(spec.env.WHIPHAND_STAGE_TOTAL, '7');
+  assert.equal(spec.env.WHIPHAND_STAGE_PATH, '/p/02-api.md');
+  assert.equal(spec.env.WHIPHAND_STAGE_ID, '02-api');
+});
+
+test("a command step's own env values are templated", () => {
+  const withInput: RunCtx = { ...ctx, inputs: { plan_dir: 'docs/plans/oauth' } };
+  const spec = commandSpec(
+    { kind: 'command', id: 'c', run: 'true', env: { WHIPHAND_PLAN_DIR: '{{ inputs.plan_dir }}' } }, withInput);
+  assert.equal(spec.env.WHIPHAND_PLAN_DIR, 'docs/plans/oauth');
+});
+
+test('an input with no recorded artifact exports nothing rather than an empty variable', () => {
+  const spec = commandSpec({ kind: 'command', id: 'c', run: 'true', inputs: ['nope'] }, ctx);
+  assert.equal('WHIPHAND_ARTIFACT_NOPE' in spec.env, false);
+});
+
 test('a command verdict is its exit code measured against expect_exit', () => {
   assert.equal(verdictFromExit(0), 'pass');
   assert.equal(verdictFromExit(1), 'fail');

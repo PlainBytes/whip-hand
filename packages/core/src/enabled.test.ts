@@ -124,7 +124,7 @@ test('droppedRefs: a reader inside a disabled loop never appears, even though it
   assert.equal(refs.some(r => r.reader === 'review'), false);
 });
 
-test('droppedRefs: a command step\'s inputs are a runtime no-op and never appear', () => {
+test('droppedRefs: a command step\'s inputs: are a real reference now, so it is warned about like any other reader', () => {
   const wf: Workflow = {
     name: 'w',
     steps: [
@@ -132,7 +132,8 @@ test('droppedRefs: a command step\'s inputs are a runtime no-op and never appear
       { kind: 'command', id: 'stage', run: 'echo hi', inputs: ['plan'], output: 'stage.log' },
     ],
   };
-  assert.deepEqual(droppedRefs(wf), []);
+  const refs = droppedRefs(wf);
+  assert.deepEqual(refs, [{ reader: 'stage', missing: ['plan'] }]);
 });
 
 test('droppedRefSentence: groups every reader that lost the same id into one sentence', () => {

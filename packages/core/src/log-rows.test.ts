@@ -91,3 +91,21 @@ test('summarizeEvent: an artifact row names its size in the shared byte format',
   const row = summarizeEvent({ type: 'step:artifact', stepId: 'a', path: 'plan.md', bytes: 340 * 1024 });
   assert.equal(row.text, 'wrote artifact plan.md (340 KB)');
 });
+
+// ---------------------------------------------------------------------------
+// summarizeEvent: stages
+// ---------------------------------------------------------------------------
+
+test('stages events summarize as stage lines', () => {
+  assert.match(summarizeEvent({
+    type: 'stages:item', id: 'build', index: 3, total: 7,
+    stageId: '03-api', title: 'Add API routes', attempt: 1,
+  })!.text, /stage 3 of 7 · Add API routes/);
+});
+
+test('summarizeEvent: stages:start/accepted/done each name the stages step by id', () => {
+  assert.equal(summarizeEvent({ type: 'stages:start', id: 'build', total: 2 }).stepId, 'build');
+  assert.match(summarizeEvent({ type: 'stages:start', id: 'build', total: 2 }).text, /2 stage/);
+  assert.equal(summarizeEvent({ type: 'stages:accepted', id: 'build', stageId: '01-a' }).text, 'stage accepted: 01-a');
+  assert.match(summarizeEvent({ type: 'stages:done', id: 'build', completed: 2 }).text, /2 completed/);
+});

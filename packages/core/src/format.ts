@@ -51,3 +51,12 @@ export function formatElapsed(ms: number): string {
   if (totalMinutes < 60) return `${totalMinutes}m ${totalSeconds % 60}s`;
   return `${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m`;
 }
+
+/**
+ * `stage 2 of 7 · Add API routes` — the one spelling for a `stages` step's
+ * current position, shared by run.log's `stages:item` line, the CLI and the
+ * desktop's stepper.
+ */
+export function stageLabel(index: number, total: number, title: string): string {
+  return `stage ${index} of ${total} · ${title}`;
+}

@@ -15,7 +15,7 @@ import { resolveWorkflowPath } from '../workspace.ts';
 import { artifactPath, assertArtifact } from './artifacts.ts';
 import { executionKey } from '../execution-key.ts';
 import { diffSnapshots, snapshotTree } from './git-guard.ts';
-import { getRun, isSafeRunId, MANIFEST_VERSION, WORKFLOW_SNAPSHOT_NAME } from './manifest.ts';
+import { getRun, isSafeRunId, NESTED_LOOP_TRACKING_VERSION, WORKFLOW_SNAPSHOT_NAME } from './manifest.ts';
 import type { RunManifest } from './manifest.ts';
 
 type ManifestStepLoopFields = { loopId?: string; iteration?: number; outerLoops?: LoopRef[] };
@@ -170,7 +170,7 @@ export async function planResume(
   const warnings: string[] = [];
   const workflow = await loadWorkflow(detail, workdir, warnings);
 
-  if (detail.version < MANIFEST_VERSION && hasNestedLoops(workflow.steps)) {
+  if (detail.version < NESTED_LOOP_TRACKING_VERSION && hasNestedLoops(workflow.steps)) {
     throw new ResumeError(
       `run '${runId}' was recorded before whiphand tracked nested-loop rounds separately (manifest `
       + `v${detail.version}), and workflow '${workflow.name}' now has a loop nested inside another loop; `

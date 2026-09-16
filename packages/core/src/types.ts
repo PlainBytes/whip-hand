@@ -498,6 +498,10 @@ export interface ManualRequest {
   /** What a non-interactive frontend should pick under `--yes`. */
   defaultChoice: 'continue' | 'abort';
   loop?: LoopFrame;
+  /** Present when this step runs inside a `stages` body — which stage file, and where it sits among the others. */
+  stage?: { stagesId: string; id: string; title: string; index: number; total: number; attempt: number };
+  /** The frame identity of this execution, so a frontend can key the request to its manifest row. */
+  execution?: { loopId?: string; iteration?: number; stage?: string; outerLoops?: LoopRef[] };
 }
 
 /** What core hands a frontend so it knows how to ask for, and require, text. */
@@ -547,12 +551,17 @@ export type WhiphandEvent =
       model?: string; mode?: StepMode; loopId?: string; iteration?: number;
       /** Loops enclosing `loopId` itself, outermost first — empty/absent outside nested loops. */
       outerLoops?: LoopRef[];
+      /** The stage file this execution ran under, when `loopId` names a `stages` frame rather than a plain loop. */
+      stage?: string;
     }
   /**
    * This execution completed in an earlier attempt, so a resumed run did not
    * run it again. Its artifact is restored; nothing was spawned.
    */
-  | { type: 'step:skipped'; stepId: string; loopId?: string; iteration?: number; outerLoops?: LoopRef[] }
+  | {
+      type: 'step:skipped'; stepId: string; loopId?: string; iteration?: number; outerLoops?: LoopRef[];
+      stage?: string;
+    }
   | { type: 'step:spawn'; stepId: string; spec: SpawnSpec; phase: 'main' | 'harvest' }
   /**
    * A `sessionIdCapture` runner's interactive spawn exited, and the runner
@@ -619,6 +628,13 @@ export type WhiphandEvent =
       type: 'loop:done'; loopId: string; iterations: number; passed: boolean;
       parentLoopId?: string; parentIteration?: number; outerLoops?: LoopRef[];
     }
+  /** A `stages` step began: `id` is the stages step's own id, `total` how many stage files it found. */
+  | { type: 'stages:start'; id: string; total: number }
+  /** The stages step is about to run its body against one stage file — `attempt` is 1-based, counting retries. */
+  | { type: 'stages:item'; id: string; index: number; total: number; stageId: string; title: string; attempt: number }
+  /** This stage was accepted and is finished — what a resume reads to skip it entirely. */
+  | { type: 'stages:accepted'; id: string; stageId: string }
+  | { type: 'stages:done'; id: string; completed: number }
   /** `stepId` is absent for a workflow-level warning (a dropped ref, an exhausted loop) — present when one step's own guard tripped. */
   | { type: 'guard:warning'; message: string; stepId?: string }
   /**

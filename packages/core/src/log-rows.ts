@@ -18,7 +18,7 @@
  * manifest fold, the desktop store and step pills) can already import it.
  */
 import type { LoopRef, StepProgress, WhiphandEvent } from './types.ts';
-import { formatBytes } from './format.ts';
+import { formatBytes, stageLabel } from './format.ts';
 
 /** One line's budget, after which it is truncated with a marker — one giant blob must not own the file. */
 export const MAX_LOG_LINE_BYTES = 8 * 1024;
@@ -231,6 +231,17 @@ export function summarizeEvent(event: WhiphandEvent): Omit<LogRow, 'seq' | 'ts'>
         text: `loop '${nestedPrefix(event.loopId, event.parentLoopId, event.parentIteration, event.outerLoops)}' `
           + `${event.passed ? 'passed' : 'did not pass'} after ${event.iterations} iteration(s)`,
       };
+    case 'stages:start':
+      return { kind: event.type, stepId: event.id, text: `stages started, ${event.total} stage(s)` };
+    case 'stages:item':
+      return {
+        kind: event.type, stepId: event.id,
+        text: `${stageLabel(event.index, event.total, event.title)} (attempt ${event.attempt})`,
+      };
+    case 'stages:accepted':
+      return { kind: event.type, stepId: event.id, text: `stage accepted: ${event.stageId}` };
+    case 'stages:done':
+      return { kind: event.type, stepId: event.id, text: `stages done, ${event.completed} completed` };
     case 'guard:warning':
       return { kind: event.type, stepId: event.stepId, text: event.message };
     case 'run:done':

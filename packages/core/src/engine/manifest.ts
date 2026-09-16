@@ -98,6 +98,24 @@ const manifestStepSchema = z.object({
     premiumRequests: z.number().optional(),
     lastAction: z.string().optional(),
   }).optional(),
+  /**
+   * On a `stages` step's own entry: how many stage files it found, and how
+   * many it has finished (a stage that fails and exhausts its retries still
+   * ends the run, so `completed` can be less than `total`). Added in v5; see
+   * MANIFEST_VERSION.
+   */
+  total: z.number().int().nonnegative().optional(),
+  completed: z.number().int().nonnegative().optional(),
+  /** On a `stages` step's own entry: the attempt number of `currentStage`. */
+  attempt: z.number().int().positive().optional(),
+  /** On a `stages` step's own entry: stage ids accepted so far, in order — what a resume grants against. */
+  completedStages: z.array(z.string()).optional(),
+  /** On a `stages` step's own entry: the stage file its body is currently running against. */
+  currentStage: z.object({
+    id: z.string(), title: z.string(), index: z.number().int().positive(),
+  }).optional(),
+  /** On a `stages` step's own entry: its retry budget ran out and triage ran — what resume grants against. */
+  exhausted: z.boolean().optional(),
 });
 
 /**
@@ -107,11 +125,22 @@ const manifestStepSchema = z.object({
  * older run would look like one whose sessions never opened. v4 added
  * `outerLoops`, so a row's identity survives a loop nested inside another
  * loop — a run recorded before it existed cannot be resumed if its workflow
- * turns out to have nested loops (see resume.ts's refusal). Earlier manifests
+ * turns out to have nested loops (see resume.ts's refusal). v5 added `stage`/
+ * `stagesId` to a body row and `total`/`completed`/`attempt`/`completedStages`/
+ * `currentStage`/`exhausted` to a `stages` step's own row. Earlier manifests
  * still parse: the union is what keeps `listRuns` from going blind on runs
- * recorded before cycles existed.
+ * recorded before cycles (or stages) existed.
  */
-export const MANIFEST_VERSION = 4;
+export const MANIFEST_VERSION = 5;
+
+/**
+ * The version that added `outerLoops` — fixed, unlike MANIFEST_VERSION, which
+ * keeps moving as later fields land. resume.ts's nested-loop refusal cares
+ * about exactly this one milestone: a manifest recorded before it cannot tell
+ * one round of an outer loop from another, whatever the *current*
+ * MANIFEST_VERSION happens to be by the time that resume runs.
+ */
+export const NESTED_LOOP_TRACKING_VERSION = 4;
 
 /**
  * The run's own copy of the workflow it executed. A resume reads this rather
@@ -124,8 +153,8 @@ export const WORKFLOW_SNAPSHOT_NAME = 'workflow.yaml';
 // bundle can import it at runtime) and re-exported here for existing importers.
 export { executionKey };
 
-const runManifestSchema = z.object({
-  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
+export const runManifestSchema = z.object({
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
   runId: z.string().min(1),
   workflow: z.string().min(1),
   workdir: z.string().min(1),
@@ -430,18 +459,28 @@ export class RunJournal {
    * its own, never started — is still eligible to become *that* execution,
    * whatever `outerLoops` it turns out to want, provided this is genuinely the
    * first execution of this id (no other row for it exists yet).
+   *
+   * `stage` is a fourth axis, alongside `outerLoops`: a `stages` body can run
+   * the same step id once per stage file, each at the same iteration (its own
+   * attempt number) with no outer loop at all, so without `stage` in the match
+   * two different stages' first executions would collide onto one row. The
+   * seeded plan entry has the same blind spot as it does for `outerLoops` —
+   * it cannot know which stage its first execution belongs to — so the virgin
+   * takeover checks the *candidate row's own* `stage` is still unset, not
+   * which stage is wanted, exactly like it already does for `outerLoops`.
    */
   private beginStep(
     stepId: string, iteration: number | undefined, outerLoops: readonly LoopRef[] | undefined,
-    patch: Partial<ManifestStep>,
+    stage: string | undefined, patch: Partial<ManifestStep>,
   ): void {
     const wanted = iteration ?? 1;
     const wantedOuter = outerLoops ?? [];
     let entry = this.manifest.steps.find(s =>
-      s.id === stepId && (s.iteration ?? 1) === wanted && sameLoopRefs(s.outerLoops, wantedOuter));
+      s.id === stepId && (s.iteration ?? 1) === wanted && sameLoopRefs(s.outerLoops, wantedOuter)
+      && s.stage === stage);
     if (entry === undefined && wanted === 1) {
       entry = this.manifest.steps.find(s =>
-        s.id === stepId && (s.iteration ?? 1) === 1 && s.outerLoops === undefined
+        s.id === stepId && (s.iteration ?? 1) === 1 && s.outerLoops === undefined && s.stage === undefined
         && s.status === 'pending' && s.attempted !== true);
     }
     if (entry === undefined) {
@@ -548,9 +587,9 @@ export class RunJournal {
         // fact that this execution was reused rather than re-run.
         break;
       case 'step:start':
-        this.beginStep(event.stepId, event.iteration, event.outerLoops, {
+        this.beginStep(event.stepId, event.iteration, event.outerLoops, event.stage, {
           kind: event.kind, runner: event.runner, model: event.model, mode: event.mode,
-          loopId: event.loopId, iteration: event.iteration, outerLoops: event.outerLoops,
+          loopId: event.loopId, iteration: event.iteration, outerLoops: event.outerLoops, stage: event.stage,
           status: 'running', startedAt: now, endedAt: undefined, exitCode: undefined,
           artifact: undefined, verdict: undefined,
         });
@@ -617,7 +656,7 @@ export class RunJournal {
         // id plus which round of *its* enclosing loop this is — so a round of
         // an outer loop gets a fresh row for the inner loop rather than
         // overwriting the previous round's, once it's already 'done'.
-        this.beginStep(event.loopId, event.parentIteration, event.outerLoops, {
+        this.beginStep(event.loopId, event.parentIteration, event.outerLoops, undefined, {
           kind: 'loop', status: 'running', startedAt: now, iterations: 0,
           maxIterations: event.maxIterations, endedAt: undefined, verdict: undefined,
           loopId: event.parentLoopId, iteration: event.parentIteration, outerLoops: event.outerLoops,
@@ -636,6 +675,32 @@ export class RunJournal {
           verdict: event.passed ? 'pass' : 'fail',
           endedAt: now,
         });
+        break;
+      case 'stages:start':
+        // A `stages` step's own row, identified exactly like a top-level
+        // loop's: it never nests inside a loop (schema.ts refuses it), so it
+        // is always its own iteration 1 with no outer loops and no stage.
+        this.beginStep(event.id, undefined, undefined, undefined, {
+          kind: 'stages', status: 'running', startedAt: now, total: event.total, completedStages: [],
+        });
+        break;
+      case 'stages:item':
+        this.upsertStep(event.id, {
+          currentStage: { id: event.stageId, title: event.title, index: event.index }, attempt: event.attempt,
+        });
+        break;
+      case 'stages:accepted': {
+        // Idempotent: a resume that replays an already-accepted stage must
+        // not append its id a second time.
+        const entry = this.findStep(event.id);
+        if (entry !== undefined && !(entry.completedStages ?? []).includes(event.stageId)) {
+          entry.completedStages = [...(entry.completedStages ?? []), event.stageId];
+        }
+        break;
+      }
+      case 'stages:done':
+        this.current.delete(event.id);
+        this.upsertStep(event.id, { status: 'done', completed: event.completed, endedAt: now });
         break;
       case 'guard:warning':
         break; // updatedAt only

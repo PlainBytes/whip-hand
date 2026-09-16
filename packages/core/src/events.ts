@@ -74,6 +74,14 @@ export const manualRequestSchema: z.ZodType<ManualRequest> = z.object({
   }),
   defaultChoice: z.enum(['continue', 'abort']),
   loop: loopFrameSchema.optional(),
+  stage: z.object({
+    stagesId: z.string(), id: z.string(), title: z.string(),
+    index: z.number().int().positive(), total: z.number().int().positive(), attempt: z.number().int().positive(),
+  }).optional(),
+  execution: z.object({
+    loopId: z.string().optional(), iteration: z.number().int().positive().optional(),
+    stage: z.string().optional(), outerLoops: z.array(loopRefSchema).optional(),
+  }).optional(),
 });
 
 export const fileCommentSchema = z.object({ path: z.string(), body: z.string() });
@@ -87,11 +95,13 @@ export const whiphandEventSchema: z.ZodType<WhiphandEvent> = z.discriminatedUnio
   z.object({
     type: z.literal('run:resume'), runId: z.string(), workflow: z.string(),
     from: z.string().optional(), name: z.string().optional(),
+    /** Which iteration of `from`'s loop this resume is about to run — the field the CLI prints. */
+    iteration: z.number().int().positive().optional(),
   }),
   z.object({
     type: z.literal('step:skipped'), stepId: z.string(),
     loopId: z.string().optional(), iteration: z.number().int().positive().optional(),
-    outerLoops: z.array(loopRefSchema).optional(),
+    outerLoops: z.array(loopRefSchema).optional(), stage: z.string().optional(),
   }),
   z.object({
     type: z.literal('step:start'), stepId: z.string(),
@@ -99,7 +109,7 @@ export const whiphandEventSchema: z.ZodType<WhiphandEvent> = z.discriminatedUnio
     runner: z.string().optional(), model: z.string().optional(),
     mode: z.enum(['interactive', 'headless']).optional(),
     loopId: z.string().optional(), iteration: z.number().int().positive().optional(),
-    outerLoops: z.array(loopRefSchema).optional(),
+    outerLoops: z.array(loopRefSchema).optional(), stage: z.string().optional(),
   }),
   z.object({
     type: z.literal('step:spawn'), stepId: z.string(), spec: spawnSpecSchema,
@@ -166,6 +176,14 @@ export const whiphandEventSchema: z.ZodType<WhiphandEvent> = z.discriminatedUnio
     parentLoopId: z.string().optional(), parentIteration: z.number().int().positive().optional(),
     outerLoops: z.array(loopRefSchema).optional(),
   }),
+  z.object({ type: z.literal('stages:start'), id: z.string(), total: z.number().int().nonnegative() }),
+  z.object({
+    type: z.literal('stages:item'), id: z.string(),
+    index: z.number().int().positive(), total: z.number().int().positive(),
+    stageId: z.string(), title: z.string(), attempt: z.number().int().positive(),
+  }),
+  z.object({ type: z.literal('stages:accepted'), id: z.string(), stageId: z.string() }),
+  z.object({ type: z.literal('stages:done'), id: z.string(), completed: z.number().int().nonnegative() }),
   z.object({ type: z.literal('guard:warning'), message: z.string(), stepId: z.string().optional() }),
   z.object({ type: z.literal('run:done'), runId: z.string(), ok: z.boolean() }),
   z.object({ type: z.literal('run:error'), stepId: z.string().optional(), message: z.string() }),

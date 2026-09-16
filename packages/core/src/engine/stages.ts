@@ -10,6 +10,9 @@ import type { Stage } from '../types.ts';
 
 export class StageError extends Error {}
 
+/** Extra attempts a failing stage gets when its `stages` step sets no `max_retries`. */
+export const DEFAULT_STAGE_RETRIES = 2;
+
 /** Characters that would corrupt a `stage:<id>` execution key or a path segment. */
 const UNSAFE_ID_CHARS = /[@#/\\]/;
 

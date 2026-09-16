@@ -656,10 +656,11 @@ export class RunJournal {
         // id plus which round of *its* enclosing loop this is — so a round of
         // an outer loop gets a fresh row for the inner loop rather than
         // overwriting the previous round's, once it's already 'done'.
-        this.beginStep(event.loopId, event.parentIteration, event.outerLoops, undefined, {
+        this.beginStep(event.loopId, event.parentIteration, event.outerLoops, event.parentStage, {
           kind: 'loop', status: 'running', startedAt: now, iterations: 0,
           maxIterations: event.maxIterations, endedAt: undefined, verdict: undefined,
           loopId: event.parentLoopId, iteration: event.parentIteration, outerLoops: event.outerLoops,
+          stage: event.parentStage,
         });
         break;
       case 'loop:iteration':

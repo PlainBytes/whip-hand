@@ -615,18 +615,21 @@ export type WhiphandEvent =
    * when it is nested — a second `loopId` field would clash with this loop's
    * own, which is why the enclosing one gets a different name. `outerLoops`
    * carries anything nested deeper still, beyond the immediate parent.
+   * `parentStage` is the stage file, when that immediate parent is a `stages`
+   * frame rather than a loop — the loop-shaped counterpart of `step:start`'s
+   * `stage`, without which a loop's row for stage 2 would overwrite stage 1's.
    */
   | {
       type: 'loop:start'; loopId: string; maxIterations: number;
-      parentLoopId?: string; parentIteration?: number; outerLoops?: LoopRef[];
+      parentLoopId?: string; parentIteration?: number; parentStage?: string; outerLoops?: LoopRef[];
     }
   | {
       type: 'loop:iteration'; loopId: string; iteration: number; maxIterations: number;
-      parentLoopId?: string; parentIteration?: number; outerLoops?: LoopRef[];
+      parentLoopId?: string; parentIteration?: number; parentStage?: string; outerLoops?: LoopRef[];
     }
   | {
       type: 'loop:done'; loopId: string; iterations: number; passed: boolean;
-      parentLoopId?: string; parentIteration?: number; outerLoops?: LoopRef[];
+      parentLoopId?: string; parentIteration?: number; parentStage?: string; outerLoops?: LoopRef[];
     }
   /** A `stages` step began: `id` is the stages step's own id, `total` how many stage files it found. */
   | { type: 'stages:start'; id: string; total: number }

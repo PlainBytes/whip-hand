@@ -112,6 +112,11 @@ test('the capture header names the command, so the artifact explains itself', ()
   const header = captureHeader(step, spec.argv, { id: 'fix', iteration: 2, maxIterations: 3 });
   assert.ok(header.includes('$ npm test'));
   assert.ok(header.includes('iteration 2/3'));
+  const staged = captureHeader(step, spec.argv, {
+    kind: 'stages', id: 'build', attempt: 2, maxAttempts: 3,
+    stage: { index: 1, total: 4, id: '01-schema', title: 'Schema', path: '/w/plans/01-schema.md' },
+  });
+  assert.ok(staged.includes("stage 1/4 '01-schema', attempt 2/3"));
   assert.ok(captureFooter(1).includes('exit code: 1'));
 });
 

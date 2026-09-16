@@ -1,11 +1,12 @@
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import type {
   AgentStep, AttachmentSource, CommandStep, Frame, Frontend, LoopFrame, LoopStep, ManualStep, WhiphandEvent,
-  OnFindings, RunnerAdapter, Scope, Workflow, RunCtx, SpawnSpec, Step, WorkspaceConfig,
+  OnFindings, RunnerAdapter, Scope, Stage, StageFrame, StagesStep, Workflow, RunCtx, SpawnSpec, Step, WorkspaceConfig,
 } from '../types.ts';
+import { STAGE_REF } from '../types.ts';
 import { AdapterRegistry, validateWorkflowRunners, validateWorkflowFrontend } from '../registry.ts';
 import { WorkflowError, locateSteps, isForwardRef } from '../schema.ts';
 import {
@@ -28,6 +29,7 @@ import { clearSessionCapture } from './session-capture.ts';
 import { RunJournal, WORKFLOW_SNAPSHOT_NAME } from './manifest.ts';
 import { executionKey, frameIdentity, isStageFrame, nearestLoop } from '../execution-key.ts';
 import { pruneRuns } from './retention.ts';
+import { DEFAULT_STAGE_RETRIES, discoverStages, nextStage, oddStageNames } from './stages.ts';
 import { readRunName, runSlugFor, setRunName } from './run-name.ts';
 import { autoNameRun } from './auto-name.ts';
 import type { ResumePlan } from './resume.ts';
@@ -125,6 +127,25 @@ async function writeSpecFiles(spec: SpawnSpec): Promise<void> {
 function effectiveStep(step: AgentStep): AgentStep {
   if (!step.verdict) return step;
   return { ...step, prompt: `${step.prompt}\n\n${VERDICT_INSTRUCTION}` };
+}
+
+/**
+ * The execution identity `step:start` and `step:skipped` carry, spread from
+ * frameIdentity's tuple with every absent part left out — so a top-level
+ * step's event stays exactly as it always was.
+ */
+function executionFields(idn: ReturnType<typeof frameIdentity>) {
+  return {
+    ...(idn.loopId === undefined ? {} : { loopId: idn.loopId, iteration: idn.iteration }),
+    ...(idn.stage === undefined ? {} : { stage: idn.stage }),
+    ...(idn.outerLoops.length === 0 ? {} : { outerLoops: idn.outerLoops }),
+  };
+}
+
+/** Makes `target` hold exactly `source`'s entries, in place — other holders of `target` see the change. */
+function replaceRecord<V>(target: Record<string, V>, source: Record<string, V>): void {
+  for (const key of Object.keys(target)) delete target[key];
+  Object.assign(target, source);
 }
 
 /** Index of the nearest step before `verdictIdx` with writes: true, or -1. */
@@ -584,7 +605,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     // Per-kind execution
     // -----------------------------------------------------------------------
 
-    async function executeAgent(step: AgentStep, frame?: LoopFrame): Promise<StepOutcome> {
+    async function executeAgent(step: AgentStep, frame?: Frame): Promise<StepOutcome> {
       const adapter = registry.get(step.runner);
       recordArtifact(step.id, artifactPath(runDir, step, frame));
       await ensureArtifactDir(ctx.artifacts[step.id]);
@@ -683,7 +704,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       return finishStep(step, before);
     }
 
-    async function executeCommand(step: CommandStep, frame?: LoopFrame): Promise<StepOutcome> {
+    async function executeCommand(step: CommandStep, frame?: Frame): Promise<StepOutcome> {
       const capture = step.output === undefined
         ? undefined
         : artifactPath(runDir, { output: step.output }, frame);
@@ -733,7 +754,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       return finishStep(step, before, v);
     }
 
-    async function executeManual(step: ManualStep, frame?: LoopFrame): Promise<StepOutcome> {
+    async function executeManual(step: ManualStep, frame?: Frame): Promise<StepOutcome> {
       const request = await buildManualRequest(scopeInputs(step, frame), ctx);
 
       if (opts.dryRun) {
@@ -851,20 +872,12 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       // loops keeps seeing exactly what it always did.
       ctx.loop = nearestLoop(frame);
       try {
+        if (isStagesStep(step)) return await executeStages(step);
         // Loops are never skipped as a unit, even when the manifest records
         // one as done: descending and skipping inside is what restores every
         // body artifact into ctx in the right order, and the replay costs no
         // spawns because each body step is skipped in turn.
         if (isLoopStep(step)) return await executeLoop(step);
-
-        // A `stages` step has no runner support yet (see engine/stages.ts's
-        // own header) — a later task adds executeStages. Refusing here,
-        // rather than falling through into the leaf-step dispatch below, is
-        // what keeps that dispatch narrowed to the three kinds that actually
-        // know how to run, with nothing else to change once execution lands.
-        if (isStagesStep(step)) {
-          throw new Error(`stages step '${step.id}': running a stages step is not implemented yet`);
-        }
 
         // frameIdentity is the single place that turns a frame into the
         // loopId/iteration/stage/outerLoops tuple every emit site below
@@ -879,11 +892,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
           // a replayed step's prompt label must see the verdict it actually
           // produced, exactly like a fresh execution's finishStep would set.
           if (alreadyDone.verdict !== undefined) ctx.verdicts[step.id] = alreadyDone.verdict;
-          emit({
-            type: 'step:skipped', stepId: step.id,
-            ...(idn.loopId === undefined ? {} : { loopId: idn.loopId, iteration: idn.iteration }),
-            ...(idn.outerLoops.length === 0 ? {} : { outerLoops: idn.outerLoops }),
-          });
+          emit({ type: 'step:skipped', stepId: step.id, ...executionFields(idn) });
           if (!step.verdict) return null;
           // Restoring the verdict is not optional: it drives a loop's exit
           // check and the top-level on_findings jump. Returning null here would
@@ -895,17 +904,14 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         emit({
           type: 'step:start', stepId: step.id, kind: step.kind,
           ...(isAgentStep(step) ? { runner: step.runner, model: step.model, mode: step.mode } : {}),
-          ...(idn.loopId === undefined ? {} : { loopId: idn.loopId, iteration: idn.iteration }),
-          ...(idn.outerLoops.length === 0 ? {} : { outerLoops: idn.outerLoops }),
+          ...executionFields(idn),
         });
-        // Per-kind execution only ever runs directly under a loop today — a
-        // stages body's own execution is Task 5-8's concern — so it keeps
-        // seeing a plain LoopFrame here, same as before this frame chain grew
-        // a second kind of link.
-        const loopFrame = nearestLoop(frame);
-        if (isAgentStep(step)) return await executeAgent(step, loopFrame);
-        if (isCommandStep(step)) return await executeCommand(step, loopFrame);
-        return await executeManual(step, loopFrame);
+        // The whole frame, not just its nearest loop: a step directly inside a
+        // stage must write under that stage's directory, or every stage's
+        // artifact would land on the same flat top-level path.
+        if (isAgentStep(step)) return await executeAgent(step, frame);
+        if (isCommandStep(step)) return await executeCommand(step, frame);
+        return await executeManual(step, frame);
       } finally {
         ctx.frame = enclosing;
         ctx.loop = nearestLoop(enclosing);
@@ -924,6 +930,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       const idn = frameIdentity(outer);
       const loopEvent = {
         ...(idn.loopId === undefined ? {} : { parentLoopId: idn.loopId, parentIteration: idn.iteration }),
+        ...(idn.stage === undefined ? {} : { parentStage: idn.stage }),
         ...(idn.outerLoops.length === 0 ? {} : { outerLoops: idn.outerLoops }),
       };
       const grant = opts.resume?.loopBudgets[executionKey(loop.id, idn.iteration, idn.outerLoops, idn.stage)];
@@ -992,6 +999,125 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       return fail(
         `loop '${loop.id}' did not pass '${loop.until}' within ${maxIterations} iterations`,
         loop.id);
+    }
+
+    // -----------------------------------------------------------------------
+    // Stages
+    // -----------------------------------------------------------------------
+
+    /**
+     * Ids of the stages a resumed run already accepted, which it must not run
+     * again. Always empty for now: Task 9 fills it from the resume plan.
+     */
+    function resumedCompletedStages(stages: StagesStep, frame: Frame | undefined): Set<string> {
+      return new Set();
+    }
+
+    // Never 'verdict-fail': a stages step has no artifact, so the top-level
+    // on_findings: 'loop' jump would build "Read the findings at undefined".
+    async function executeStages(stages: StagesStep): Promise<RunResult | null> {
+      const outer = ctx.frame;
+      const pattern = renderTemplate(stages.items, ctx);
+      const completed = resumedCompletedStages(stages, outer);
+      const maxAttempts = 1 + (stages.max_retries ?? DEFAULT_STAGE_RETRIES);
+      let started = false;
+
+      // Re-globbed before every stage, so a stage added or removed while an
+      // earlier one ran is seen; `completed` (matched on stage.id) is what
+      // keeps an edited, already-finished stage from running again.
+      for (;;) {
+        if (opts.signal?.aborted) return cancelled();
+        const list = await discoverStages(workdir, pattern);
+        if (!started) {
+          // Only the first pass: a list that empties later means the plan's
+          // remaining stages were removed, which ends the step cleanly.
+          if (list.length === 0) {
+            return fail(`stages step '${stages.id}' matched no stage files (${pattern})`, stages.id);
+          }
+          const odd = new Set(oddStageNames(list));
+          for (const stage of list.filter(s => odd.has(s.id))) {
+            emit({
+              type: 'guard:warning', stepId: stages.id,
+              message: `stage file '${basename(stage.path)}' is not named NN-slug, `
+                + 'so its position in the order is not obvious',
+            });
+          }
+          emit({ type: 'stages:start', id: stages.id, total: list.length });
+          started = true;
+        }
+        const stage = nextStage(list, completed);
+        if (stage === undefined) break;
+        const outcome = await runStage(stages, stage, maxAttempts, outer, completed);
+        if (outcome !== null) return outcome;
+      }
+      emit({ type: 'stages:done', id: stages.id, completed: completed.size });
+      return null;
+    }
+
+    /**
+     * One stage file, start to accepted. Its body sees this stage's work plus
+     * whatever existed before the stages step began — never an earlier
+     * stage's artifacts, verdicts or findings, which is what makes each
+     * stage's minimal context real.
+     */
+    async function runStage(
+      stages: StagesStep, stage: Stage, maxAttempts: number, outer: Frame | undefined, completed: Set<string>,
+    ): Promise<RunResult | null> {
+      // The file was read once, for its title; if it is gone now, say so
+      // rather than handing the body an empty stage.
+      try {
+        await assertArtifact(stage.path);
+      } catch (e) {
+        return fail(`stages step '${stages.id}': stage file '${basename(stage.path)}' `
+          + `cannot be used: ${(e as Error).message}`, stages.id);
+      }
+
+      // Not ctx.attempts: that is an append-only audit list, never scoped.
+      const saved = {
+        artifacts: { ...ctx.artifacts }, verdicts: { ...ctx.verdicts },
+        findings: new Map([...extraFindings]), verdict,
+      };
+      const restore = (): void => {
+        replaceRecord(ctx.artifacts, saved.artifacts);
+        replaceRecord(ctx.verdicts, saved.verdicts);
+        extraFindings.clear();
+        for (const [id, ids] of saved.findings) extraFindings.set(id, ids);
+        verdict = saved.verdict;
+      };
+      // Every id declared anywhere in the body — on a resumed run the resume
+      // plan seeds the newest artifact per id across *all* stages.
+      const bodyIds = flattenSteps(stages.steps).map(f => f.step.id);
+      const scrub = (): void => {
+        for (const id of bodyIds) {
+          delete ctx.artifacts[id];
+          delete ctx.verdicts[id];
+        }
+      };
+
+      // A single attempt: retrying a failed stage is Task 8's, and each retry
+      // restores `saved` and scrubs again before its own pass.
+      const attempt = 1;
+      scrub();
+      // A pseudo-artifact, deliberately not recordArtifact: it has no
+      // attempt history and no verdict of its own.
+      ctx.artifacts[STAGE_REF] = stage.path;
+      emit({
+        type: 'stages:item', id: stages.id, index: stage.index, total: stage.total,
+        stageId: stage.id, title: stage.title, attempt,
+      });
+      const frame: StageFrame = { kind: 'stages', id: stages.id, stage, attempt, maxAttempts, parent: outer };
+      for (const body of stages.steps) {
+        if (opts.signal?.aborted) return cancelled();
+        const outcome = await executeStep(body, frame);
+        // 'verdict-fail' carries on for now: Task 8 decides what a failing
+        // gate, loop or step means for the stage.
+        if (outcome !== null && outcome !== 'verdict-fail') return outcome;
+      }
+
+      completed.add(stage.id);
+      emit({ type: 'stages:accepted', id: stages.id, stageId: stage.id });
+      restore();
+      return null;
     }
 
     /**

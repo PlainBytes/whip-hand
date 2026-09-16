@@ -11,6 +11,7 @@ import type {
   CaptureSpec, ManualChoice, ManualRequest, ManualResponse, ManualStep, RunCtx,
 } from '../types.ts';
 import { inputArtifacts, renderTemplate } from '../template.ts';
+import { frameIdentity, isStageFrame, nearestStage } from '../execution-key.ts';
 
 const run = promisify(execFile);
 
@@ -50,8 +51,9 @@ export async function workingDiff(
   return `${lines.slice(0, limit).join('\n')}\n… ${lines.length - limit} more lines (see the working tree)`;
 }
 
-export function manualChoices(inLoop: boolean): ManualChoice[] {
-  return inLoop ? ['continue', 'retry', 'abort'] : ['continue', 'abort'];
+/** `retry` is offered wherever there is something to go round again: a loop, or a stage's attempt. */
+export function manualChoices(canRetry: boolean): ManualChoice[] {
+  return canRetry ? ['continue', 'retry', 'abort'] : ['continue', 'abort'];
 }
 
 /**
@@ -74,17 +76,34 @@ export async function buildManualRequest(
     .filter((a): a is { id: string; path: string } => a.path !== undefined);
 
   const diff = step.show_diff ? await workingDiff(ctx.workdir) : null;
+  const stage = nearestStage(ctx.frame);
+  const idn = frameIdentity(ctx.frame);
 
   return {
     stepId: step.id,
     kind: step.kind,
     title: renderTemplate(step.title, ctx),
     instructions: renderTemplate(step.instructions, ctx),
-    choices: manualChoices(ctx.loop !== undefined),
+    choices: manualChoices(isStageFrame(ctx.frame) || ctx.loop !== undefined),
     ...(step.capture === undefined ? {} : { capture: captureSpecFor(step.capture) }),
     context: { artifacts, ...(diff === null ? {} : { diff }) },
     defaultChoice: step.default ?? 'continue',
     ...(ctx.loop === undefined ? {} : { loop: ctx.loop }),
+    ...(stage === undefined ? {} : {
+      stage: {
+        stagesId: stage.id, id: stage.stage.id, title: stage.stage.title,
+        index: stage.stage.index, total: stage.stage.total, attempt: stage.attempt,
+      },
+    }),
+    // Which execution this is, so a frontend can key the request to its
+    // manifest row — the same identity step:start carries.
+    ...(idn.loopId === undefined ? {} : {
+      execution: {
+        loopId: idn.loopId, iteration: idn.iteration,
+        ...(idn.stage === undefined ? {} : { stage: idn.stage }),
+        ...(idn.outerLoops.length === 0 ? {} : { outerLoops: idn.outerLoops }),
+      },
+    }),
   };
 }
 

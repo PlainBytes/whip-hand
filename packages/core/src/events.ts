@@ -162,19 +162,19 @@ export const whiphandEventSchema: z.ZodType<WhiphandEvent> = z.discriminatedUnio
   z.object({
     type: z.literal('loop:start'), loopId: z.string(), maxIterations: z.number().int(),
     parentLoopId: z.string().optional(), parentIteration: z.number().int().positive().optional(),
-    outerLoops: z.array(loopRefSchema).optional(),
+    parentStage: z.string().optional(), outerLoops: z.array(loopRefSchema).optional(),
   }),
   z.object({
     type: z.literal('loop:iteration'), loopId: z.string(),
     iteration: z.number().int(), maxIterations: z.number().int(),
     parentLoopId: z.string().optional(), parentIteration: z.number().int().positive().optional(),
-    outerLoops: z.array(loopRefSchema).optional(),
+    parentStage: z.string().optional(), outerLoops: z.array(loopRefSchema).optional(),
   }),
   z.object({
     type: z.literal('loop:done'), loopId: z.string(),
     iterations: z.number().int(), passed: z.boolean(),
     parentLoopId: z.string().optional(), parentIteration: z.number().int().positive().optional(),
-    outerLoops: z.array(loopRefSchema).optional(),
+    parentStage: z.string().optional(), outerLoops: z.array(loopRefSchema).optional(),
   }),
   z.object({ type: z.literal('stages:start'), id: z.string(), total: z.number().int().nonnegative() }),
   z.object({

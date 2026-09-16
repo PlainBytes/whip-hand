@@ -7,9 +7,9 @@
  * parity suite compares it exactly like an agent spawn.
  */
 import { isAbsolute, resolve } from 'node:path';
-import type { CommandStep, LoopFrame, RunCtx, SpawnSpec } from '../types.ts';
+import type { CommandStep, Frame, RunCtx, SpawnSpec } from '../types.ts';
 import { inputArtifacts, renderTemplate } from '../template.ts';
-import { nearestStage } from '../execution-key.ts';
+import { isStageFrame, nearestStage } from '../execution-key.ts';
 import { ATTACHMENTS_REF } from '../attachments.ts';
 
 export const DEFAULT_SHELL = process.platform === 'win32' ? 'cmd.exe' : '/bin/sh';
@@ -117,9 +117,14 @@ export function commandSpec(step: CommandStep, ctx: RunCtx, capturePath?: string
  * the spawn so the artifact says which command produced it, and so a silent
  * command still leaves a non-empty (and therefore valid) artifact behind.
  */
-export function captureHeader(step: CommandStep, argv: string[], frame?: LoopFrame): string {
-  const iter = frame ? ` (iteration ${frame.iteration}/${frame.maxIterations})` : '';
-  return `$ ${argv[argv.length - 1]}\n# step '${step.id}'${iter}\n\n`;
+/** `frame` is the innermost construct the command runs under — a loop's iteration, or a stage and its attempt. */
+export function captureHeader(step: CommandStep, argv: string[], frame?: Frame): string {
+  const where = frame === undefined
+    ? ''
+    : isStageFrame(frame)
+      ? ` (stage ${frame.stage.index}/${frame.stage.total} '${frame.stage.id}', attempt ${frame.attempt}/${frame.maxAttempts})`
+      : ` (iteration ${frame.iteration}/${frame.maxIterations})`;
+  return `$ ${argv[argv.length - 1]}\n# step '${step.id}'${where}\n\n`;
 }
 
 export function captureFooter(exitCode: number): string {

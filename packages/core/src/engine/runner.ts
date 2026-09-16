@@ -1236,7 +1236,10 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         if (attempt === interruptedAttempt) {
           tellImplementers('A previous attempt was interrupted; reconcile whatever it left in the tree.');
         }
-        if (granted !== undefined && attempt === granted) {
+        // Not when that granted attempt is the one being resumed after an
+        // interruption: the triage was before it, and what the tree holds now
+        // is that attempt's own partial work.
+        if (granted !== undefined && attempt === granted && attempt !== interruptedAttempt) {
           tellImplementers(`A human has just been through the tree in a triage session after this stage was `
             + `rejected ${granted - 1} times; build on the tree as it is now.`);
         }

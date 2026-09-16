@@ -239,6 +239,13 @@ interface StagesRecord {
   accepted(where: RowStage): boolean;
   /** The highest attempt any row of this stage recorded. */
   attemptsUsed(stagesKey: string, stageId: string): number;
+  /**
+   * The stage is still where triage left it: its row says `exhausted` and its
+   * highest attempt really ended in a rejection. A granted attempt that was
+   * then cut short leaves `exhausted` set, but that attempt is open, not a
+   * second triage.
+   */
+  inTriage(stagesKey: string, stageId: string): boolean;
 }
 
 function readStages(detail: RunManifest): StagesRecord {
@@ -259,6 +266,25 @@ function readStages(detail: RunManifest): StagesRecord {
     const key = stageBudgetKey(where.stagesKey, where.stageId);
     used.set(key, Math.max(used.get(key) ?? 0, where.attempt));
   }
+  // What each stage's highest attempt came to: a gate directly under the
+  // stage answered with a rejection, and whether anything in it is unfinished.
+  // A loop's own row is left out — an exhausted cycle is 'failed' in an
+  // attempt that still ran to its gate.
+  const rejected = new Set<string>();
+  const unfinished = new Set<string>();
+  for (const step of detail.steps) {
+    const where = stageOfRow(step);
+    if (where === undefined || step.kind === 'loop') continue;
+    const key = stageBudgetKey(where.stagesKey, where.stageId);
+    if (where.attempt !== used.get(key)) continue;
+    if (step.status !== 'done') unfinished.add(key);
+    else if ((step.kind === 'manual' || step.kind === 'approval') && step.stage !== undefined
+      && step.verdict === 'fail') rejected.add(key);
+  }
+  const inTriage = (stagesKey: string, stageId: string): boolean => {
+    const key = stageBudgetKey(stagesKey, stageId);
+    return exhausted.has(key) && rejected.has(key) && !unfinished.has(key);
+  };
   const attemptsUsed = (stagesKey: string, stageId: string): number =>
     used.get(stageBudgetKey(stagesKey, stageId)) ?? 0;
   const accepted = (where: RowStage): boolean => (completed[where.stagesKey] ?? []).includes(where.stageId);
@@ -266,9 +292,10 @@ function readStages(detail: RunManifest): StagesRecord {
     completed,
     accepted,
     attemptsUsed,
+    inTriage,
     closed: where => accepted(where)
       || where.attempt < attemptsUsed(where.stagesKey, where.stageId)
-      || exhausted.has(stageBudgetKey(where.stagesKey, where.stageId)),
+      || inTriage(where.stagesKey, where.stageId),
   };
 }
 
@@ -276,6 +303,11 @@ function readStages(detail: RunManifest): StagesRecord {
  * The attempts each stage that went to triage gets on this resume: one more
  * than it used. "Used" is the highest attempt among the stage's own rows, not
  * the stages row's `attempt` scalar, which a crash can leave stale.
+ *
+ * A stage whose row still says `exhausted` but whose highest attempt did not
+ * end in a rejection is a granted attempt that was cut short: it keeps the
+ * grant it already had (that attempt, re-run and told to reconcile) and gets
+ * no further one — nothing new was rejected.
  */
 function computeStageBudgets(detail: RunManifest, stages: StagesRecord, warnings: string[]): Record<string, number> {
   const budgets: Record<string, number> = {};
@@ -284,6 +316,10 @@ function computeStageBudgets(detail: RunManifest, stages: StagesRecord, warnings
     const key = rowKey(step.id, step);
     const stageId = step.currentStage.id;
     const used = stages.attemptsUsed(key, stageId);
+    if (!stages.inTriage(key, stageId)) {
+      if (used > 0) budgets[stageBudgetKey(key, stageId)] = used;
+      continue;
+    }
     budgets[stageBudgetKey(key, stageId)] = used + 1;
     warnings.push(`stage '${stageId}' was rejected ${used} times; this resume allows one more attempt`);
   }

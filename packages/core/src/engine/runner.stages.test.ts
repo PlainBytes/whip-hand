@@ -715,3 +715,30 @@ test('a run that ended in triage resumes with one more attempt at that stage', a
   assert.deepEqual(row.completedStages, ['01-schema']);
   assert.notEqual(row.exhausted, true, 'an accepted stage is no longer exhausted');
 });
+
+test('a granted attempt interrupted in its turn is reconciled on the next resume, not triaged again', async () => {
+  const dir = await tmpRepoWithPlans(ONE_STAGE);
+  const first = harness({ answers: [{ choice: 'retry' }, { choice: 'retry' }, { choice: 'retry' }] });
+  const broken = await run(dir, first);
+  assert.equal(broken.ok, false);
+
+  const controller = new AbortController();
+  const second = harness({ onSpawn: stepId => { if (stepId === 'execute') controller.abort(); } });
+  const plan = await planResume(dir, DEFAULT_CONFIG, broken.runId);
+  const cut = await run(dir, second, { resume: plan, workflow: plan.workflow, signal: controller.signal });
+  assert.equal(cut.cancelled, true);
+  assert.deepEqual(attempts(second), [1, 2, 3, 4]);
+
+  const again = await planResume(dir, DEFAULT_CONFIG, broken.runId);
+  assert.equal(again.stageBudgets['build@01-schema'], 4);
+  const h = harness();
+  const result = await run(dir, h, { resume: again, workflow: again.workflow });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(attempts(h), [1, 2, 3, 4], 'attempt 4 again, not a fifth');
+  const execute = prompts(h, 'execute');
+  assert.equal(execute.length, 1);
+  assert.match(execute[0], /a previous attempt was interrupted; reconcile whatever it left in the tree/i);
+  assert.doesNotMatch(execute[0], /triage session/i);
+  assert.equal(h.interactive.length, 0);
+});

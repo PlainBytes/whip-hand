@@ -981,3 +981,27 @@ test('an exhausted cycle that chose on_exhausted: interactive stopped the run it
   assert.deepEqual(plan.loopBudgets['cycle@01-a#1'], { budget: 3, completed: 2 });
   assert.match(plan.warnings.join('\n'), /loop 'cycle' ran out of iterations at 2; this resume allows 3/);
 });
+
+test('a granted attempt that was itself interrupted resumes that attempt, not a second triage', async () => {
+  // Triage after three rejections, a resume granted attempt 4, and attempt 4
+  // was cut short: `exhausted` is still set, but nothing new was rejected.
+  const plan = await stagedFixture([
+    stagesRow({ completedStages: [], currentStage: { id: '01-a', title: 'A', index: 1 }, attempt: 4,
+      exhausted: true }),
+    ...stageAttemptRows('01-a', 1, { gate: 'fail' }),
+    ...stageAttemptRows('01-a', 2, { gate: 'fail' }),
+    ...stageAttemptRows('01-a', 3, { gate: 'fail' }),
+    { id: 'cycle', kind: 'loop', status: 'interrupted', loopId: 'build', iteration: 4, stage: '01-a',
+      iterations: 1, maxIterations: 2 },
+    { id: 'execute', kind: 'agent', status: 'interrupted', loopId: 'cycle', iteration: 1,
+      outerLoops: [{ id: 'build', iteration: 4, stage: '01-a' }] },
+  ], { extraIterations: 1 });
+
+  assert.equal(plan.stageBudgets['build@01-a'], 4, 'the grant already given, not a fifth attempt');
+  assert.doesNotMatch(plan.warnings.join('\n'), /rejected 4 times/);
+  assert.doesNotMatch(plan.warnings.join('\n'), /this resume allows one more attempt/);
+  assert.deepEqual(plan.stagesInterrupted, { 'build@01-a': 4 });
+  assert.deepEqual(plan.loopBudgets['cycle@01-a#4'], { budget: 3, completed: 1 },
+    "attempt 4's cycle is open, so the explicit grant reaches it");
+  assert.doesNotMatch(plan.warnings.join('\n'), /had no effect/);
+});

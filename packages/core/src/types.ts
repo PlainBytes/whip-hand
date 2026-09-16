@@ -637,6 +637,8 @@ export type WhiphandEvent =
   | { type: 'stages:item'; id: string; index: number; total: number; stageId: string; title: string; attempt: number }
   /** This stage was accepted and is finished — what a resume reads to skip it entirely. */
   | { type: 'stages:accepted'; id: string; stageId: string }
+  /** A stage was rejected on every one of its `attempts` and is being handed to a triage session — the run stops at it. */
+  | { type: 'stages:exhausted'; id: string; stageId: string; attempts: number }
   | { type: 'stages:done'; id: string; completed: number }
   /** `stepId` is absent for a workflow-level warning (a dropped ref, an exhausted loop) — present when one step's own guard tripped. */
   | { type: 'guard:warning'; message: string; stepId?: string }

@@ -103,9 +103,12 @@ test('stages events summarize as stage lines', () => {
   })!.text, /stage 3 of 7 · Add API routes/);
 });
 
-test('summarizeEvent: stages:start/accepted/done each name the stages step by id', () => {
+test('summarizeEvent: stages:start/accepted/exhausted/done each name the stages step by id', () => {
   assert.equal(summarizeEvent({ type: 'stages:start', id: 'build', total: 2 }).stepId, 'build');
   assert.match(summarizeEvent({ type: 'stages:start', id: 'build', total: 2 }).text, /2 stage/);
   assert.equal(summarizeEvent({ type: 'stages:accepted', id: 'build', stageId: '01-a' }).text, 'stage accepted: 01-a');
   assert.match(summarizeEvent({ type: 'stages:done', id: 'build', completed: 2 }).text, /2 completed/);
+  const exhausted = summarizeEvent({ type: 'stages:exhausted', id: 'build', stageId: '01-a', attempts: 3 });
+  assert.equal(exhausted.stepId, 'build');
+  assert.equal(exhausted.text, 'stage 01-a rejected 3 time(s), handed to triage');
 });

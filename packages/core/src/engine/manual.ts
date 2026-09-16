@@ -67,12 +67,24 @@ function captureSpecFor(kind: 'note' | 'review'): CaptureSpec {
     : { kind: 'review', label: 'Feedback', requiredFor: ['retry'], perFile: true };
 }
 
+/**
+ * What the runner knows about this question that the step itself does not
+ * say — decided there, so this stays a pure question-builder.
+ */
+export interface ManualExtras {
+  /** Sentences appended to the rendered instructions, each its own paragraph. */
+  notes?: string[];
+  /** Step ids put on the artifact rail even when the step's own `inputs:` does not list them. */
+  forceInputs?: string[];
+}
+
 export async function buildManualRequest(
-  step: ManualStep, ctx: RunCtx,
+  step: ManualStep, ctx: RunCtx, extras: ManualExtras = {},
 ): Promise<ManualRequest> {
   // `attachments` expands to one entry per attached file, so a review screen
   // offers each of them on its own.
-  const artifacts = inputArtifacts(step.inputs ?? [], ctx)
+  const ids = [...new Set([...(step.inputs ?? []), ...(extras.forceInputs ?? [])])];
+  const artifacts = inputArtifacts(ids, ctx)
     .filter((a): a is { id: string; path: string } => a.path !== undefined);
 
   const diff = step.show_diff ? await workingDiff(ctx.workdir) : null;
@@ -83,7 +95,7 @@ export async function buildManualRequest(
     stepId: step.id,
     kind: step.kind,
     title: renderTemplate(step.title, ctx),
-    instructions: renderTemplate(step.instructions, ctx),
+    instructions: [renderTemplate(step.instructions, ctx), ...(extras.notes ?? [])].join('\n\n'),
     choices: manualChoices(isStageFrame(ctx.frame) || ctx.loop !== undefined),
     ...(step.capture === undefined ? {} : { capture: captureSpecFor(step.capture) }),
     context: { artifacts, ...(diff === null ? {} : { diff }) },

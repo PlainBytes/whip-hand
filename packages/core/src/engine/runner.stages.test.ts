@@ -2,15 +2,19 @@
  * `kind: stages` — a workflow body run once per stage file, in order, with
  * per-stage context. The happy path: discovery, order, per-stage scope and
  * artifact layout, cancellation, and what a manual step inside a stage is
- * told. Retries, exhaustion and resume live with the tasks that add them.
+ * told — then a rejected stage's retries, an exhausted review cycle reaching
+ * the gate, and the triage handover when retries run out. Resume lives with
+ * the task that adds it.
  */
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { existsSync, unlinkSync } from 'node:fs';
+import { existsSync, unlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runWorkflow } from './runner.ts';
+import { planResume } from './resume.ts';
 import type { RunOptions } from './runner.ts';
 import { buildPrompt } from '../template.ts';
 import { parseWorkflow } from '../schema.ts';
@@ -47,6 +51,8 @@ function registry(): AdapterRegistry {
 interface Harness {
   events: WhiphandEvent[];
   asked: ManualRequest[];
+  /** Every live session handed to the frontend — triage, in these tests. */
+  interactive: SpawnSpec[];
   frontend: Frontend;
   /** Every agent spawn, in order: which step and the prompt it was handed. */
   spawns: Array<{ stepId: string; prompt: string }>;
@@ -62,15 +68,18 @@ function harness(opts: {
   onSpawn?: (stepId: string, n: number) => void;
   onEvent?: (e: WhiphandEvent) => void;
   answers?: ManualResponse[];
+  /** What the n-th review spawn (1-based, across the whole run) concludes; PASS when absent. */
+  review?: (n: number) => 'PASS' | 'FAIL';
 } = {}): Harness {
   const events: WhiphandEvent[] = [];
   const asked: ManualRequest[] = [];
   const spawns: Array<{ stepId: string; prompt: string }> = [];
+  const interactive: SpawnSpec[] = [];
   const queue = [...(opts.answers ?? [])];
   return {
-    events, asked, spawns,
+    events, asked, spawns, interactive,
     frontend: {
-      runInteractive: async () => 0,
+      runInteractive: async spec => { interactive.push(spec); return 0; },
       runManual: async request => {
         asked.push(request);
         await opts.onAsk?.(request, asked.length);
@@ -82,8 +91,10 @@ function harness(opts: {
       if (spec.argv[0] !== 'fake') return 0;
       const [, , stepId, artifact, prompt] = spec.argv;
       spawns.push({ stepId, prompt });
-      opts.onSpawn?.(stepId, spawns.filter(s => s.stepId === stepId).length);
-      await writeFile(artifact, stepId === 'review' ? 'VERDICT: PASS\n' : `${stepId} done\n`);
+      const n = spawns.filter(s => s.stepId === stepId).length;
+      opts.onSpawn?.(stepId, n);
+      await writeFile(artifact, stepId === 'review' || stepId === 'lint'
+        ? `VERDICT: ${opts.review?.(n) ?? 'PASS'}\n` : `${stepId} done\n`);
       return 0;
     },
   };
@@ -93,10 +104,13 @@ function harness(opts: {
  * A realistic staged plan: a fix cycle per stage (execute, then a review that
  * ends the cycle), and a human gate after it — the schema insists on the gate.
  */
-function stagedWorkflow(items = 'plans/*.md'): Workflow {
+function stagedWorkflow(items = 'plans/*.md', over: {
+  onExhausted?: 'report' | 'interactive'; gateInputs?: string; before?: string;
+} = {}): Workflow {
   return parseWorkflow(`
 name: staged
 steps:
+${over.before ?? ''}
   - kind: stages
     id: build
     items: "${items}"
@@ -104,7 +118,7 @@ steps:
       - kind: loop
         id: cycle
         until: review
-        max_iterations: 2
+        max_iterations: 2${over.onExhausted === undefined ? '' : `\n        on_exhausted: ${over.onExhausted}`}
         steps:
           - id: execute
             runner: fake
@@ -125,7 +139,7 @@ steps:
         id: accept
         title: "Accept {{ stage.title }}?"
         instructions: Look at the work.
-        inputs: [stage, review]
+        inputs: ${over.gateInputs ?? '[stage, review]'}
         output: accept.md
 `);
 }
@@ -372,4 +386,209 @@ test('an oddly named stage file warns but still runs', async () => {
   assert.equal(result.ok, true);
   assert.ok(h.events.some(e => e.type === 'guard:warning' && /notes\.md/.test(e.message)));
   assert.deepEqual(items(h), ['01-schema', '02-api', 'notes']);
+});
+
+// ---------------------------------------------------------------------------
+// Rejection, exhaustion and the human handover
+// ---------------------------------------------------------------------------
+
+const ONE_STAGE = { '01-schema.md': '# Schema\n' };
+
+function attempts(h: Harness): number[] {
+  return h.events.flatMap(e => e.type === 'stages:item' ? [e.attempt] : []);
+}
+
+function gitInit(dir: string): void {
+  execFileSync('git', ['init', '-q'], { cwd: dir });
+}
+
+test('a rejected stage runs again from the top with the rejection attached, then is accepted', async () => {
+  const dir = await tmpRepoWithPlans(ONE_STAGE);
+  const h = harness({ answers: [{ choice: 'retry', note: 'wrong table name' }, { choice: 'continue' }] });
+  const result = await run(dir, h);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(attempts(h), [1, 2]);
+  const execute = prompts(h, 'execute');
+  assert.equal(execute.length, 2);
+  assert.doesNotMatch(execute[0], /A previous review found problems/);
+  assert.match(execute[1], /A previous review found problems/);
+  assert.match(execute[1], /attempt-1[/\\]accept\.md/, "the rejection is attempt 1's gate artifact");
+  assert.equal(h.asked[1].stage?.attempt, 2);
+  assert.ok(existsSync(join(result.runDir, 'build', '01-schema', 'attempt-2', 'cycle', 'iter-1', 'execute-report.md')));
+  assert.deepEqual(h.events.flatMap(e => e.type === 'step:verdict' && e.stepId === 'accept' ? [e.verdict] : []),
+    ['fail', 'pass'], 'a gate inside a stage carries its verdict without verdict: true');
+  assert.deepEqual(h.events.flatMap(e => e.type === 'stages:accepted' ? [e.stageId] : []), ['01-schema']);
+});
+
+test('a rejection is scoped to its stage: the next stage starts clean', async () => {
+  const dir = await tmpRepoWithPlans(TWO_STAGES);
+  const h = harness({ answers: [{ choice: 'retry' }, { choice: 'continue' }, { choice: 'continue' }] });
+  const result = await run(dir, h);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(items(h), ['01-schema', '01-schema', '02-api']);
+  const last = prompts(h, 'execute').at(-1)!;
+  assert.match(last, /Implement API/);
+  assert.doesNotMatch(last, /A previous review found problems/);
+  assert.doesNotMatch(last, /accept\.md/);
+  assert.equal(h.asked[2].stage?.attempt, 1, 'the next stage is its own attempt 1');
+});
+
+test('retries run out into a triage session, and the run stops naming the stage', async () => {
+  const dir = await tmpRepoWithPlans(TWO_STAGES);
+  const h = harness({ answers: [{ choice: 'retry' }, { choice: 'retry' }, { choice: 'retry' }] });
+  const result = await run(dir, h);
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(attempts(h), [1, 2, 3], 'max_retries defaults to 2: three attempts');
+  assert.equal(h.interactive.length, 1, 'one triage session');
+  const triage = h.interactive[0].argv.join(' ');
+  assert.match(triage, /execute-triage/, 'seeded from the writes: true agent before the gate');
+  assert.match(triage, /01-schema\.md/);
+  assert.match(triage, /attempt-3[/\\]accept\.md/, 'the last rejection note');
+  assert.match(triage, /attempt-3[/\\]cycle[/\\]iter-1[/\\]review\.md/, 'the last review findings');
+  assert.match(triage, /previous attempt's work is in the working tree/);
+  assert.match(errorMessage(h), /^stages step 'build': stage 1 of 2 \('Schema'\) was rejected 3 times$/);
+  assert.ok(!items(h).includes('02-api'), 'the run stops at the stage');
+
+  const manifest = await manifestOf(result.runDir);
+  const row = manifest.steps.find(s => s.id === 'build')!;
+  assert.equal(row.exhausted, true);
+  assert.equal(row.attempt, 3);
+  assert.equal(manifest.error?.stepId, 'build');
+});
+
+test('an inner review cycle that never passes reaches the gate instead of killing the run', async () => {
+  const dir = await tmpRepoWithPlans(ONE_STAGE);
+  const h = harness({ review: () => 'FAIL' });
+  const result = await run(dir, h, { workflow: stagedWorkflow('plans/*.md', { gateInputs: '[stage]' }) });
+
+  assert.equal(result.ok, true);
+  assert.equal(h.asked.length, 1, 'the human was asked');
+  assert.equal(prompts(h, 'review').length, 2, 'the cycle spent its whole budget first');
+  assert.match(h.asked[0].instructions, /^Look at the work\./);
+  assert.match(h.asked[0].instructions,
+    /The review cycle 'cycle' never passed within 2 iterations — its findings are attached\./);
+  assert.ok(h.asked[0].context.artifacts.some(a => a.id === 'review'),
+    'the findings are forced onto the rail even though the gate did not list them');
+  assert.ok(h.asked[0].context.artifacts.some(a => a.id === 'stage'));
+  assert.ok(!h.events.some(e => e.type === 'run:error'));
+  const done = h.events.find(e => e.type === 'loop:done');
+  assert.equal(done?.type === 'loop:done' && done.passed, false);
+});
+
+test('outside a stages step, an exhausted loop still fails the run exactly as before', async () => {
+  // The plain case — no stages step anywhere — is runner.loops.test.ts's
+  // 'an exhausted loop fails the run and names what never passed'. This is
+  // the stage-adjacent one: a loop *before* a stages step is not inside a
+  // stage frame, so it never reaches that stage's gate.
+  const dir = await tmpRepoWithPlans(TWO_STAGES);
+  const h = harness({ review: () => 'FAIL' });
+  const before = `
+  - kind: loop
+    id: precheck
+    until: lint
+    max_iterations: 2
+    steps:
+      - id: lint
+        runner: fake
+        mode: headless
+        writes: false
+        verdict: true
+        prompt: Lint it
+        output: lint.md`;
+  const result = await run(dir, h, { workflow: stagedWorkflow('plans/*.md', { before }) });
+
+  assert.equal(result.ok, false);
+  assert.match(errorMessage(h), /^loop 'precheck' did not pass 'lint' within 2 iterations$/);
+  assert.ok(!h.events.some(e => e.type === 'stages:start'), 'the stages step never started');
+  assert.equal(h.asked.length, 0);
+});
+
+test('on_exhausted: interactive inside a stage still opens triage rather than reaching the gate', async () => {
+  const dir = await tmpRepoWithPlans(ONE_STAGE);
+  const h = harness({ review: () => 'FAIL' });
+  const result = await run(dir, h, { workflow: stagedWorkflow('plans/*.md', { onExhausted: 'interactive' }) });
+
+  assert.equal(result.ok, false);
+  assert.equal(h.asked.length, 0, 'the gate is never reached');
+  assert.equal(h.interactive.length, 1);
+  assert.match(h.interactive[0].argv.join(' '), /review-triage/);
+  assert.match(errorMessage(h), /^loop 'cycle' did not pass 'review' within 2 iterations$/);
+  assert.notEqual((await manifestOf(result.runDir)).steps.find(s => s.id === 'build')!.exhausted, true,
+    'an exhausted loop is not an exhausted stage');
+});
+
+test('a stage that changed nothing says so at the gate rather than being skipped', async () => {
+  const dir = await tmpRepoWithPlans(TWO_STAGES);
+  gitInit(dir);
+  // Stage 2's implementer really edits the tree; stage 1's does not.
+  const h = harness({
+    onSpawn: (stepId, n) => { if (stepId === 'execute' && n === 2) writeFileSync(join(dir, 'api.ts'), 'export {};\n'); },
+  });
+  const result = await run(dir, h);
+
+  assert.equal(result.ok, true);
+  assert.equal(h.asked.length, 2, 'the gate is never skipped');
+  assert.match(h.asked[0].instructions, /this stage produced no changes/i);
+  assert.doesNotMatch(h.asked[1].instructions, /produced no changes/i);
+});
+
+test('abort at a stage gate fails the run immediately', async () => {
+  const dir = await tmpRepoWithPlans(TWO_STAGES);
+  const h = harness({ answers: [{ choice: 'abort' }] });
+  const result = await run(dir, h);
+
+  assert.equal(result.ok, false);
+  assert.match(errorMessage(h), /approval step 'accept' was declined/);
+  assert.deepEqual(attempts(h), [1], 'no retry');
+  assert.deepEqual(items(h), ['01-schema']);
+  assert.equal(h.interactive.length, 0, 'no triage');
+});
+
+test('accepting is authoritative: a run whose every stage was accepted ends ok', async () => {
+  const dir = await tmpRepoWithPlans(TWO_STAGES);
+  // Stage 1's cycle FAILs both iterations and is accepted anyway; stage 2 passes.
+  const h = harness({ review: n => n <= 2 ? 'FAIL' : 'PASS' });
+  const result = await run(dir, h);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.verdict, undefined, "an accepted stage's failing review does not become the run's verdict");
+  assert.deepEqual(items(h), ['01-schema', '02-api']);
+  const manifest = await manifestOf(result.runDir);
+  assert.equal(manifest.status, 'succeeded');
+  assert.notEqual(manifest.status, 'failed');
+});
+
+test("a replayed rejected gate sends the stage round again rather than reading as accepted", async () => {
+  const dir = await tmpRepoWithPlans(ONE_STAGE);
+  const controller = new AbortController();
+  // Rejected at attempt 1, then cancelled while attempt 2's implementer runs.
+  const first = harness({
+    answers: [{ choice: 'retry' }],
+    onSpawn: (stepId, n) => { if (stepId === 'execute' && n === 2) controller.abort(); },
+  });
+  const broken = await run(dir, first, { signal: controller.signal });
+  assert.equal(broken.cancelled, true);
+
+  // Only the runner's skip path is under test here. planResume does not yet
+  // key a row directly under a stage by its stage (Task 9), so attempt 1's
+  // gate is handed over under the key executeStep looks it up by.
+  const plan = await planResume(dir, DEFAULT_CONFIG, broken.runId);
+  const gate = plan.done.get('accept');
+  assert.equal(gate?.verdict, 'fail', 'the implicit verdict reached the manifest');
+  const done = new Map([...plan.done].filter(([key]) => key !== 'accept'));
+  done.set('accept@01-schema#1', gate!);
+
+  const resumed = harness();
+  const result = await run(dir, resumed, { resume: { ...plan, done }, workflow: plan.workflow });
+
+  assert.equal(result.ok, true);
+  assert.ok(resumed.events.some(e => e.type === 'step:skipped' && e.stepId === 'accept' && e.stage === '01-schema'),
+    "attempt 1's gate is replayed, not asked again");
+  assert.deepEqual(attempts(resumed), [1, 2], 'the replayed rejection sends the stage round again');
+  assert.equal(prompts(resumed, 'execute').length, 1, 'attempt 2 really runs');
+  assert.match(prompts(resumed, 'execute')[0], /A previous review found problems/);
+  assert.equal(resumed.asked.length, 1, "only attempt 2's gate asks");
 });

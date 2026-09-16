@@ -240,6 +240,11 @@ export function summarizeEvent(event: WhiphandEvent): Omit<LogRow, 'seq' | 'ts'>
       };
     case 'stages:accepted':
       return { kind: event.type, stepId: event.id, text: `stage accepted: ${event.stageId}` };
+    case 'stages:exhausted':
+      return {
+        kind: event.type, stepId: event.id,
+        text: `stage ${event.stageId} rejected ${event.attempts} time(s), handed to triage`,
+      };
     case 'stages:done':
       return { kind: event.type, stepId: event.id, text: `stages done, ${event.completed} completed` };
     case 'guard:warning':

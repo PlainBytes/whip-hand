@@ -1582,6 +1582,20 @@ test('a retried stage gets its own row rather than overwriting attempt 1', () =>
   assert.deepEqual(manifestOf(j).steps.find(s => s.id === 'build')!.completedStages, ['01-a']);
 });
 
+test('an exhausted stage marks the stages row, and the mark survives the schema', () => {
+  const j = journalFor([{ id: 'build', kind: 'stages' }]);
+  j.record({ type: 'stages:start', id: 'build', total: 2 });
+  j.record({ type: 'stages:item', id: 'build', index: 1, total: 2, stageId: '01-a', title: 'A', attempt: 3 });
+  j.record({ type: 'stages:exhausted', id: 'build', stageId: '01-a', attempts: 3 });
+  j.record({ type: 'run:error', stepId: 'build', message: "stages step 'build': stage 1 of 2 ('A') was rejected 3 times" });
+
+  const parsed = runManifestSchema.parse(JSON.parse(JSON.stringify(manifestOf(j))));
+  const build = parsed.steps.find(s => s.id === 'build')!;
+  assert.equal(build.exhausted, true);
+  assert.deepEqual(build.currentStage, { id: '01-a', title: 'A', index: 1 });
+  assert.equal(build.attempt, 3);
+});
+
 test('a manifest with stage rows round-trips through the schema', () => {
   const j = journalFor([{ id: 'build', kind: 'stages' }, { id: 'accept', kind: 'approval', stagesId: 'build' }]);
   j.record({ type: 'stages:start', id: 'build', total: 1 });

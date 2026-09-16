@@ -183,6 +183,10 @@ export const whiphandEventSchema: z.ZodType<WhiphandEvent> = z.discriminatedUnio
     stageId: z.string(), title: z.string(), attempt: z.number().int().positive(),
   }),
   z.object({ type: z.literal('stages:accepted'), id: z.string(), stageId: z.string() }),
+  z.object({
+    type: z.literal('stages:exhausted'), id: z.string(), stageId: z.string(),
+    attempts: z.number().int().positive(),
+  }),
   z.object({ type: z.literal('stages:done'), id: z.string(), completed: z.number().int().nonnegative() }),
   z.object({ type: z.literal('guard:warning'), message: z.string(), stepId: z.string().optional() }),
   z.object({ type: z.literal('run:done'), runId: z.string(), ok: z.boolean() }),

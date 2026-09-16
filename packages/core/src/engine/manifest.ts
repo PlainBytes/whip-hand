@@ -114,7 +114,12 @@ const manifestStepSchema = z.object({
   currentStage: z.object({
     id: z.string(), title: z.string(), index: z.number().int().positive(),
   }).optional(),
-  /** On a `stages` step's own entry: its retry budget ran out and triage ran — what resume grants against. */
+  /**
+   * On a `stages` step's own entry: `currentStage`'s retry budget ran out and
+   * the run handed it to triage — what resume grants against. Set as the
+   * handover begins, so a triage session that is itself cancelled still
+   * leaves it.
+   */
   exhausted: z.boolean().optional(),
 });
 
@@ -699,6 +704,9 @@ export class RunJournal {
         }
         break;
       }
+      case 'stages:exhausted':
+        this.upsertStep(event.id, { exhausted: true });
+        break;
       case 'stages:done':
         this.current.delete(event.id);
         this.upsertStep(event.id, { status: 'done', completed: event.completed, endedAt: now });

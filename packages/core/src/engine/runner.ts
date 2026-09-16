@@ -97,8 +97,12 @@ export interface RunResult {
  * What one step produced. `null` means "carried on"; 'verdict-fail' is a
  * signal the caller decides what to do with (a loop iterates, an un-looped
  * verdict step consults on_findings); a RunResult stops the run outright.
+ * 'stage-exhausted' is a loop inside a stage running out: unlike a failing
+ * verdict, which an enclosing loop ignores unless it is that loop's `until`,
+ * it ends every enclosing loop on its way up to the stages body, where
+ * runStage carries on to the gate.
  */
-type StepOutcome = RunResult | 'verdict-fail' | null;
+type StepOutcome = RunResult | 'verdict-fail' | 'stage-exhausted' | null;
 
 function resolveInputs(workflow: Workflow, given: Record<string, string>): Record<string, string> {
   const problems: string[] = [];
@@ -190,8 +194,8 @@ function stageFindingsId(body: Step[], gateId: string): string | undefined {
 
 /** What one attempt at a stage has learned that its gate must be told. */
 interface StageAttemptNotes {
-  /** Review cycles that ran out of iterations and handed their failure to the gate. */
-  exhausted: Array<{ loopId: string; untilId: string; iterations: number }>;
+  /** Review cycles that ran out of iterations and handed their failure to the gate, keyed by loop id. */
+  exhausted: Map<string, { untilId: string; iterations: number }>;
   /** The tree as the stage (not this attempt) began, or null outside git (or on a dry run): no "no changes" note then. */
   entrySnapshot: string | null;
 }
@@ -863,13 +867,14 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       const stage = nearestStage(frame);
       const known = stage === undefined ? undefined : stageNotes.get(stage);
       if (known === undefined) return { notes: [], forceInputs: [] };
-      const notes = known.exhausted.map(x =>
-        `The review cycle '${x.loopId}' never passed within ${x.iterations} iterations — its findings are attached.`);
+      const exhausted = [...known.exhausted];
+      const notes = exhausted.map(([loopId, x]) =>
+        `The review cycle '${loopId}' never passed within ${x.iterations} iterations — its findings are attached.`);
       if (known.entrySnapshot !== null
         && diffSnapshots(known.entrySnapshot, await snapshotTree(workdir) ?? '').length === 0) {
         notes.push('This stage produced no changes.');
       }
-      return { notes, forceInputs: known.exhausted.map(x => x.untilId) };
+      return { notes, forceInputs: exhausted.map(([, x]) => x.untilId) };
     }
 
     /**
@@ -1029,6 +1034,12 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         for (const body of loop.steps) {
           if (opts.signal?.aborted) return cancelled();
           const outcome = await executeStep(body, frame);
+          if (outcome === 'stage-exhausted') {
+            // A loop nested in this one ran out inside a stage: this loop is
+            // over too, at the round it was in, and the gate decides.
+            emit({ type: 'loop:done', loopId: loop.id, iterations: iteration, passed: false, ...loopEvent });
+            return outcome;
+          }
           if (outcome !== null && outcome !== 'verdict-fail') return outcome;
           if (body.id === loop.until) {
             // The exit check decides the iteration: pass ends the loop right
@@ -1043,16 +1054,22 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       emit({ type: 'loop:done', loopId: loop.id, iterations, passed, ...loopEvent });
       ctx.frame = outer;
       ctx.loop = nearestLoop(outer);
-      if (passed) return null;
-
-      // Inside a stage the human gate after this loop (schema.ts guarantees
-      // one) decides instead: the run must not end before anyone has seen the
-      // work. An author who explicitly chose on_exhausted: interactive still
-      // gets triage.
       const stage = nearestStage(outer);
+      if (passed) {
+        // Cannot happen today — an exhaustion ends every enclosing loop, so a
+        // loop that ran out never gets another round to pass in — but a note
+        // about a cycle that did pass in the end must never reach the gate.
+        if (stage !== undefined) stageNotes.get(stage)?.exhausted.delete(loop.id);
+        return null;
+      }
+
+      // Inside a stage the human gate in the stages body (schema.ts guarantees
+      // one) decides instead: the run must not end before anyone has seen the
+      // work, and no enclosing loop may spend more rounds before that. An
+      // author who explicitly chose on_exhausted: interactive still gets triage.
       if (stage !== undefined && loop.on_exhausted !== 'interactive') {
-        stageNotes.get(stage)?.exhausted.push({ loopId: loop.id, untilId: loop.until, iterations: maxIterations });
-        return 'verdict-fail';
+        stageNotes.get(stage)?.exhausted.set(loop.id, { untilId: loop.until, iterations: maxIterations });
+        return 'stage-exhausted';
       }
 
       const policy = loop.on_exhausted ?? onFindings;
@@ -1248,17 +1265,21 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
           stageId: stage.id, title: stage.title, attempt, maxAttempts: allowed,
         });
         const frame: StageFrame = { kind: 'stages', id: stages.id, stage, attempt, maxAttempts: allowed, parent: outer };
-        stageNotes.set(frame, { exhausted: [], entrySnapshot });
+        stageNotes.set(frame, { exhausted: new Map(), entrySnapshot });
 
         let rejected = false;
         for (const body of stages.steps) {
           if (opts.signal?.aborted) return cancelled();
           const outcome = await executeStep(body, frame);
+          // An exhausted loop (its cycle recorded for the gate by executeLoop,
+          // every enclosing loop already ended) carries on to the next body
+          // step, which schema.ts guarantees includes a gate.
+          if (outcome === 'stage-exhausted') continue;
           if (outcome === 'verdict-fail') {
             // A gate answering retry sends the stage round again from the
-            // top. An exhausted loop (its cycle recorded for the gate by
-            // executeLoop) and any other failing verdict carry on to the next
-            // body step, exactly as a loop treats a non-`until` verdict.
+            // top. Any other failing verdict carries on to the next body step,
+            // exactly as a loop treats a non-`until` verdict; schema.ts
+            // guarantees a gate after it.
             if (isManualStep(body)) {
               rejection = { gateId: body.id, path: ctx.artifacts[body.id] };
               rejected = true;
@@ -1399,6 +1420,8 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         // report (and exhausted loop / finished interactive triage): findings stood.
         return endWith(false);
       }
+      // Only a loop inside a stage says this, and runStage always absorbs it.
+      if (outcome === 'stage-exhausted') throw new Error(`step '${step.id}': a stage exhaustion escaped its stage`);
       if (outcome !== null) return outcome;
       i += 1;
     }

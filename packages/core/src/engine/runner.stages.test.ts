@@ -70,6 +70,8 @@ function harness(opts: {
   answers?: ManualResponse[];
   /** What the n-th review spawn (1-based, across the whole run) concludes; PASS when absent. */
   review?: (n: number) => 'PASS' | 'FAIL';
+  /** The same for the n-th 'tests' spawn. */
+  tests?: (n: number) => 'PASS' | 'FAIL';
 } = {}): Harness {
   const events: WhiphandEvent[] = [];
   const asked: ManualRequest[] = [];
@@ -93,8 +95,8 @@ function harness(opts: {
       spawns.push({ stepId, prompt });
       const n = spawns.filter(s => s.stepId === stepId).length;
       opts.onSpawn?.(stepId, n);
-      await writeFile(artifact, stepId === 'review' || stepId === 'lint'
-        ? `VERDICT: ${opts.review?.(n) ?? 'PASS'}\n` : `${stepId} done\n`);
+      await writeFile(artifact, stepId === 'review' || stepId === 'lint' || stepId === 'tests'
+        ? `VERDICT: ${(stepId === 'tests' ? opts.tests : opts.review)?.(n) ?? 'PASS'}\n` : `${stepId} done\n`);
       return 0;
     },
   };
@@ -484,6 +486,99 @@ test('an inner review cycle that never passes reaches the gate instead of killin
   assert.ok(!h.events.some(e => e.type === 'run:error'));
   const done = h.events.find(e => e.type === 'loop:done');
   assert.equal(done?.type === 'loop:done' && done.passed, false);
+});
+
+/**
+ * The shipped staged-feature-development shape: a test-fix loop nested in a
+ * do-review loop, inside a stage, with the gate after both.
+ */
+function nestedStagedWorkflow(outerMax = 3, innerMax = 2): Workflow {
+  return parseWorkflow(`
+name: staged-nested
+steps:
+  - kind: stages
+    id: build
+    items: "plans/*.md"
+    steps:
+      - kind: loop
+        id: do-review
+        until: review
+        max_iterations: ${outerMax}
+        steps:
+          - kind: loop
+            id: test-fix
+            until: tests
+            max_iterations: ${innerMax}
+            steps:
+              - id: execute
+                runner: fake
+                mode: headless
+                writes: true
+                prompt: "Implement {{ stage.title }}"
+                inputs: [stage, tests, review]
+                output: execute-report.md
+              - id: tests
+                runner: fake
+                mode: headless
+                writes: false
+                verdict: true
+                prompt: Test it
+                output: tests.log
+          - id: review
+            runner: fake
+            mode: headless
+            writes: false
+            verdict: true
+            prompt: Review it
+            inputs: [stage, execute, tests]
+            output: review.md
+      - kind: approval
+        id: accept
+        title: "Accept {{ stage.title }}?"
+        instructions: Look at the work.
+        inputs: [stage, review]
+        output: accept.md
+`);
+}
+
+test('an inner loop exhausting inside a stage ends its enclosing loops and reaches the gate once', async () => {
+  const dir = await tmpRepoWithPlans(ONE_STAGE);
+  const h = harness({ tests: () => 'FAIL', review: () => 'FAIL' });
+  const result = await run(dir, h, { workflow: nestedStagedWorkflow(3, 2) });
+
+  assert.equal(result.ok, true, 'the human accepted it');
+  assert.equal(prompts(h, 'execute').length, 2, "only the inner loop's own budget is spent");
+  assert.equal(prompts(h, 'tests').length, 2);
+  assert.equal(prompts(h, 'review').length, 0, 'the outer loop does not go on to review or round again');
+  assert.equal(h.asked.length, 1);
+  const notes = h.asked[0].instructions.match(/never passed within/g) ?? [];
+  assert.equal(notes.length, 1, 'one note, not one per outer round');
+  assert.match(h.asked[0].instructions,
+    /The review cycle 'test-fix' never passed within 2 iterations — its findings are attached\./);
+  assert.doesNotMatch(h.asked[0].instructions, /'do-review' never passed/,
+    'the outer loop was ended, it did not run out');
+  assert.ok(h.asked[0].context.artifacts.some(a => a.id === 'tests'), "the inner loop's findings are forced on");
+  assert.deepEqual(
+    h.events.flatMap(e => e.type === 'loop:done' ? [[e.loopId, e.iterations, e.passed]] : []),
+    [['test-fix', 2, false], ['do-review', 1, false]],
+    'both loops close, the outer one at the round it was in');
+  const manifest = await manifestOf(result.runDir);
+  assert.deepEqual(manifest.steps.filter(s => s.kind === 'loop').map(s => [s.id, s.status]),
+    [['do-review', 'failed'], ['test-fix', 'failed']]);
+});
+
+test('an inner exhaustion in a later outer round still ends the outer loop there', async () => {
+  const dir = await tmpRepoWithPlans(ONE_STAGE);
+  // Round 1: tests pass, review fails. Round 2: tests never pass.
+  const h = harness({ tests: n => n === 1 ? 'PASS' : 'FAIL', review: () => 'FAIL' });
+  const result = await run(dir, h, { workflow: nestedStagedWorkflow(3, 2) });
+
+  assert.equal(result.ok, true);
+  assert.equal(prompts(h, 'execute').length, 3);
+  assert.equal(prompts(h, 'review').length, 1);
+  assert.equal(h.asked.length, 1);
+  assert.equal((h.asked[0].instructions.match(/never passed within/g) ?? []).length, 1);
+  assert.match(h.asked[0].instructions, /'test-fix' never passed within 2 iterations/);
 });
 
 test('outside a stages step, an exhausted loop still fails the run exactly as before', async () => {

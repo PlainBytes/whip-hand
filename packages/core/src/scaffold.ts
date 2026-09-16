@@ -521,7 +521,7 @@ steps:
 
   - id: commit-plan
     kind: command
-    run: 'git add -A -- "$WHIPHAND_PLAN_DIR" && git commit -m "plan: $WHIPHAND_RUN_NAME"'
+    run: 'git add -A -- "$WHIPHAND_PLAN_DIR" && git commit -m "plan: \${WHIPHAND_RUN_NAME:-$WHIPHAND_RUN_SLUG}"'
     env: { WHIPHAND_PLAN_DIR: "{{ inputs.plan_dir }}" }
     expect_exit: [0, 1]                # 1 is git's "nothing to commit"
     output: commit-plan.log

@@ -533,9 +533,12 @@ async function runAgentBudget(dir: string, params: Record<string, unknown> = {})
   return runAgentToCompletion(dir, 'budget', params);
 }
 
-/** Mirrors the CLI's `--yes`: answers every gate with its own declared `default`. */
-async function runAgentStaged(dir: string, opts: { yes?: boolean } = {}): Promise<string> {
-  if (!opts.yes) throw new Error('runAgentStaged only supports the unattended (yes: true) path');
+/**
+ * The client-side stand-in for the CLI's `--yes`: nothing `--yes`-shaped is
+ * sent to the agent (the protocol has no such parameter); this client simply
+ * answers every gate with its own declared `default`.
+ */
+async function runAgentStagedAnsweringDefaults(dir: string): Promise<string> {
   return runAgentToCompletion(dir, 'staged', {}, request => request.defaultChoice ?? 'continue');
 }
 
@@ -740,7 +743,7 @@ test('stages parity: CLI and agent walk the same stages and write the same manif
   const cliDir = await copyFixtureWorkspace();
   const agentDir = await copyFixtureWorkspace();
   const cliRunId = await runCliStaged(cliDir, ['--yes']);        // the fixture's gate declares default: continue
-  const agentRunId = await runAgentStaged(agentDir, { yes: true });
+  const agentRunId = await runAgentStagedAnsweringDefaults(agentDir);
   const cliManifest = await readManifest(cliDir, cliRunId) as {
     steps: Array<{ id: string; stage?: string; completedStages?: string[] }>;
   };

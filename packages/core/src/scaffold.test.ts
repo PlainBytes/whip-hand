@@ -208,6 +208,34 @@ test('featureDevelopmentTemplate stage step works when the runs dir is gitignore
   assert.deepEqual(stdout.trim().split('\n'), ['a.txt', 'b.txt']);
 });
 
+test("the staged workflow's commit-plan subject names the run, or its slug when the run is unnamed", async () => {
+  const step = findStep(parseWorkflow(stagedFeatureDevelopmentTemplate()).steps, 'commit-plan');
+  assert.ok(step && step.kind === 'command');
+  if (!step || step.kind !== 'command') return;
+
+  const ws = await mkdtemp(join(tmpdir(), 'whiphand-commit-plan-'));
+  const git = (...args: string[]) => promisify(execFile)('git', args, { cwd: ws });
+  await git('init', '-b', 'main');
+  await writeFile(join(ws, 'a.txt'), 'a\n');
+  await git('add', '-A');
+  await git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-m', 'init');
+  const subject = async () => (await git('log', '-1', '--pretty=%s')).stdout.trim();
+  // command.ts exports WHIPHAND_RUN_NAME only for a named run, so the
+  // unnamed case must not inherit one from whatever runs this test.
+  const { WHIPHAND_RUN_NAME: _inherited, ...baseEnv } = process.env;
+  const commitPlan = async (file: string, env: Record<string, string>) => {
+    await mkdir(join(ws, 'plans'), { recursive: true });
+    await writeFile(join(ws, 'plans', file), '# Stage\n');
+    await execRunner([DEFAULT_SHELL, ...shellFlags(DEFAULT_SHELL), step.run],
+      { cwd: ws, env: { ...baseEnv, WHIPHAND_PLAN_DIR: 'plans', WHIPHAND_RUN_SLUG: 'oauth-login', ...env } });
+  };
+
+  await commitPlan('01-a.md', {});
+  assert.equal(await subject(), 'plan: oauth-login', 'not a bare "plan: "');
+  await commitPlan('02-b.md', { WHIPHAND_RUN_NAME: 'OAuth login' });
+  assert.equal(await subject(), 'plan: OAuth login');
+});
+
 test("the staged workflow's stage-body commit step exits 0 on an empty index instead of "
   + "failing the run, and still commits — and still fails — for real", async () => {
   const commit = findStep(parseWorkflow(stagedFeatureDevelopmentTemplate()).steps, 'commit');

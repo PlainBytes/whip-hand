@@ -115,6 +115,32 @@ describe('fromManualRequest', () => {
     expect(retry?.hint).toBe('Send it back to the agent with your comments.');
   });
 
+  describe('with execution but no stage', () => {
+    // Core now sends `execution` for every framed gate, so a plain or nested
+    // loop takes the `execution` path — it must key exactly as the old
+    // `loop`-only path did, or a draft saved before would be orphaned.
+    const keys = (loop: NonNullable<ManualRequest['loop']>, execution: NonNullable<ManualRequest['execution']>) => ({
+      viaLoop: fromManualRequest(request({ loop })).key,
+      viaExecution: fromManualRequest(request({ loop, execution })).key,
+    });
+
+    it('keys a plain loop iteration as the loop path did', () => {
+      expect(keys({ id: 'cycle', iteration: 1, maxIterations: 10 }, { loopId: 'cycle', iteration: 1 }))
+        .toEqual({ viaLoop: 'sign-off', viaExecution: 'sign-off' });
+      expect(keys({ id: 'cycle', iteration: 2, maxIterations: 10 }, { loopId: 'cycle', iteration: 2 }))
+        .toEqual({ viaLoop: 'sign-off#2', viaExecution: 'sign-off#2' });
+    });
+
+    it('keys a nested loop round as the loop path did', () => {
+      const loop = {
+        id: 'inner', iteration: 2, maxIterations: 3,
+        parent: { id: 'outer', iteration: 3, maxIterations: 5 },
+      };
+      const execution = { loopId: 'inner', iteration: 2, outerLoops: [{ id: 'outer', iteration: 3 }] };
+      expect(keys(loop, execution)).toEqual({ viaLoop: 'outer#3/sign-off#2', viaExecution: 'outer#3/sign-off#2' });
+    });
+  });
+
   describe('inside a stage', () => {
     /** The gate `accept` directly under stage `stageId` of stages step 'build', as core's manual.ts builds it. */
     const reqFor = (stageId: string, attempt = 1, maxAttempts: number | null = 3): ManualRequest => request({

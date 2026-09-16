@@ -220,8 +220,10 @@ without extension, and renaming or renumbering an already-completed stage file m
 again under its new id. `{{ stage.index }}`, `{{ stage.total }}`, `{{ stage.id }}`,
 `{{ stage.title }}` (and `$WHIPHAND_STAGE_ID`/`_TITLE`/`_INDEX`/`_TOTAL`/`_PATH` for a
 `command` step) read the stage currently running, and `inputs: [stage]` attaches its file —
-all four only exist inside a `stages` body. A loop in a stage's body must be followed by a
-gate: rejecting it re-runs the whole stage, with the rejection handed to the last
+all four only exist inside a `stages` body. Every `verdict: true` step in a stage's body
+(a loop's `until` included) must be followed by a gate placed directly in the body, not
+inside a loop. A loop that runs out inside a stage ends there and hands over to that gate.
+Rejecting at the gate re-runs the whole stage, with the rejection handed to the last
 `writes: true` step before the gate, up to `max_retries` (default 2) before it hands the
 stage to you in a live session. `allow_paths` on a `writes: true` step fails it, naming the
 file, if it touched anything outside the given globs. See the shipped

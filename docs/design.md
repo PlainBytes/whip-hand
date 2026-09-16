@@ -682,21 +682,44 @@ the step, naming the file. The shipped `staged-feature-development` workflow's p
 uses `allow_paths: ["{{ inputs.plan_dir }}/**"]` to keep the planning phase from writing
 anywhere outside the plan directory it exists to fill.
 
-**Gating a stage.** The schema requires an enabled `manual` or `approval` step somewhere
-after every loop in a `stages` body, in the body's own document order (not merely inside the
-loop) — an exhausted cycle has to have someone to hand its failure to, and requiring the gate
-at parse time is what keeps the runner from ever needing to invent one. That gate's verdict
-is implicit: *continue* passes and *retry* fails, exactly like a loop's `until` step, but
-without writing `verdict: true` — accepting or rejecting a stage already says which. `retry`
-re-runs the stage from the top, with the rejection note injected into the stage's retry
-target — the last `writes: true` agent step before the gate — as findings, the same mechanism
-a top-level `on_findings: loop` re-run uses; an inner review loop that runs out of iterations
-reaches the gate instead of failing the run outright, unless it sets its own
-`on_exhausted: interactive`. This can happen up to `max_retries` times (default 2, so 3
-attempts total); once exhausted, the stage opens a live triage session seeded with the last
-rejection and the run stops — resumable at that stage with one more attempt. **Accepting a
-stage is authoritative**: it restores the run's own verdict to whatever it was before the
-stage started, so a review the human waved through does not also fail the run — but a
+**Gating a stage.** The schema requires every enabled step with `verdict: true` in a
+`stages` body — at any depth, including a loop's `until` and a verdict step nested two loops
+deep — to be followed, later in document order, by an enabled `manual` or `approval` step
+placed directly in the stages body, not inside any loop. The error names the verdict step, the
+stages step, and the gate to add. Without one, a failing verdict inside a stage would be carried
+past to the end of the body and restored away when the stage was accepted: the run would end
+ok without anyone having seen the failure. So a gate only inside the loop, a gate inside a
+later loop, a disabled gate, and a verdict step (say a `tests` command) placed after the last
+gate are all refused at parse time, and the runner never needs to invent a gate.
+
+Only a gate directly in the body carries the stage's verdict. It needs no `verdict: true`:
+*continue* passes and *retry* fails, exactly like a loop's `until` step, because accepting or
+rejecting a stage already says which. A gate inside a loop in the body is an ordinary step of
+that loop, and its `retry` does not re-run the stage. `retry` at a body-level gate re-runs the
+stage from the top. The rejection note is injected as findings into the stage's retry target,
+the last `writes: true` agent step before the gate, by the same mechanism a top-level
+`on_findings: loop` re-run uses. This can happen up to `max_retries` times (default 2, so 3
+attempts total). Once they run out, the stage opens a live triage session seeded with the last
+rejection and the run stops, resumable at that stage with one more attempt.
+
+**A loop that runs out inside a stage** does not fail the run. It ends the attempt's work at
+that point: the loop and every loop enclosing it inside the stages body stop there, at
+whatever round they were in, so an outer review loop does not go round again spending its
+budget before a human sees anything. The stage carries on to its next body-level step, which
+the rule above guarantees includes a gate. The gate is told once per loop that ran out
+("The review cycle 'test-fix' never passed within 3 iterations — its findings are attached."),
+and that loop's `until` artifact is put in front of the human even if the gate did not list
+it. A loop that sets its own `on_exhausted: interactive` still opens triage and stops the run,
+as it does outside a stage. Outside a `stages` step, loop exhaustion is unchanged.
+
+A gate also says "This stage produced no changes." when the tree is exactly as it was when
+the stage began, so the human accepts an empty stage knowingly rather than having it skipped.
+A resumed run leaves that note off for any stage it re-enters: the process can only snapshot
+the tree after the earlier process's edits, so an unchanged tree since then proves nothing.
+A stage the resume reaches for the first time still gets the note.
+
+**Accepting a stage is authoritative**: it restores the run's own verdict to whatever it was
+before the stage started, so a review the human waved through does not also fail the run. A
 genuine failure from before the `stages` step began is not erased by it either.
 
 **A stage with no diff is a normal stage.** A stage whose work turned out to need no change
@@ -727,7 +750,11 @@ interrupted (the process died mid-attempt) rather than rejected at the gate, its
 is told a previous attempt was interrupted and to reconcile whatever it left in the tree,
 rather than starting from a clean slate that is a lie. A stage that went all the way to a
 triage session after exhausting `max_retries` is granted one attempt beyond what it used,
-replacing `max_retries`' count for that stage only.
+replacing `max_retries`' count for that stage only. Attempts that are already over (an accepted stage, an attempt a
+gate already rejected, a stage handed to triage) are only replayed to restore their verdicts.
+Their loops replay at exactly the budget and rounds the manifest recorded, whatever
+`--max-iterations` or `--extra-iterations` say, so a resume never spawns an implementer inside
+work a human has already answered.
 
 ## Disabling a step
 

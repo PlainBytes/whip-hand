@@ -821,6 +821,19 @@ describe('WorkflowEditor: a stages step', () => {
     });
   });
 
+  it('Max retries takes 0 — no retries — keeps it in the field, and saves it', async () => {
+    const { transport } = renderEditor(STAGED_WORKFLOW);
+    fireEvent.click(screen.getByTestId('step-collapse-build'));
+    const field = within(screen.getByTestId('step-card-build')).getByLabelText(/^Max retries/);
+    fireEvent.change(field, { target: { value: '0' } });
+    expect(field).toHaveValue('0');
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    const req = await lastRequest(transport, 'updateWorkflow');
+    const wf = (req.params as { workflow: Workflow }).workflow;
+    expect(wf.steps[1]).toMatchObject({ kind: 'stages', max_retries: 0 });
+  });
+
   it('a blank Stage files is flagged on the field at Save', async () => {
     const { transport } = renderEditor(STAGED_WORKFLOW);
     fireEvent.click(screen.getByTestId('step-collapse-build'));

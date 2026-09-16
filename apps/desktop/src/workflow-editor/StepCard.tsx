@@ -11,7 +11,7 @@ import { StepSummary } from '../components/StepSummary.tsx';
 import { StepIdField } from './StepIdField.tsx';
 import { convertStep, StepRail } from './StepRail.tsx';
 import { useStepLayoutStyles } from './step-layout.ts';
-import { numberOrUndefined } from './number-field.ts';
+import { nonNegativeOrUndefined, numberOrUndefined } from './number-field.ts';
 
 const KIND_OPTIONS: StepKind[] = ['agent', 'command', 'manual', 'approval', 'loop', 'stages'];
 
@@ -252,13 +252,13 @@ function StagesFields({
       </Field>
       <Field
         label="Max retries"
-        hint="Extra attempts a failing stage gets. Blank = 2."
+        hint="Extra attempts a failing stage gets. 0 = none; blank = 2."
         validationState={fieldErrors?.max_retries ? 'error' : 'none'}
         validationMessage={fieldErrors?.max_retries}
       >
         <Input
           value={step.max_retries === undefined ? '' : String(step.max_retries)}
-          onChange={(_e, data) => patch({ max_retries: numberOrUndefined(data.value) })}
+          onChange={(_e, data) => patch({ max_retries: nonNegativeOrUndefined(data.value) })}
         />
       </Field>
     </div>

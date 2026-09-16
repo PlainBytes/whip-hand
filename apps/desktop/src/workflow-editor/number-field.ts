@@ -17,3 +17,14 @@ export function numberOrUndefined(raw: string): number | undefined {
   const n = Number.parseInt(raw, 10);
   return Number.isInteger(n) && n > 0 ? n : undefined;
 }
+
+/**
+ * A non-negative integer, or undefined for blank/negative/garbage — for the
+ * one field where 0 is a real setting rather than a slip: a stages step's
+ * Max retries, where 0 means "no retries, a failing stage goes straight to
+ * its gate" (schema.ts allows it). Same `parseInt` leniency as above.
+ */
+export function nonNegativeOrUndefined(raw: string): number | undefined {
+  const n = Number.parseInt(raw, 10);
+  return Number.isInteger(n) && n >= 0 ? n : undefined;
+}

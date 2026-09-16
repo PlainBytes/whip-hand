@@ -686,8 +686,11 @@ export class RunJournal {
         // A `stages` step's own row, identified exactly like a top-level
         // loop's: it never nests inside a loop (schema.ts refuses it), so it
         // is always its own iteration 1 with no outer loops and no stage.
+        // A resumed run starts the step again over the same row: what it had
+        // already accepted is exactly what that resume skips, so it stays.
         this.beginStep(event.id, undefined, undefined, undefined, {
-          kind: 'stages', status: 'running', startedAt: now, total: event.total, completedStages: [],
+          kind: 'stages', status: 'running', startedAt: now, total: event.total,
+          completedStages: this.findStep(event.id)?.completedStages ?? [],
         });
         break;
       case 'stages:item':
@@ -702,6 +705,10 @@ export class RunJournal {
         if (entry !== undefined && !(entry.completedStages ?? []).includes(event.stageId)) {
           entry.completedStages = [...(entry.completedStages ?? []), event.stageId];
         }
+        // The stage that went to triage has now been accepted: nothing is
+        // exhausted any more, and a later resume must not grant the next
+        // stage an attempt on its behalf.
+        if (entry !== undefined && entry.currentStage?.id === event.stageId) delete entry.exhausted;
         break;
       }
       case 'stages:exhausted':

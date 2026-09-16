@@ -33,6 +33,7 @@ import { DEFAULT_STAGE_RETRIES, discoverStages, nextStage, oddStageNames, StageE
 import { readRunName, runSlugFor, setRunName } from './run-name.ts';
 import { autoNameRun } from './auto-name.ts';
 import type { ResumePlan } from './resume.ts';
+import { stageBudgetKey } from './resume.ts';
 
 export interface RunOptions {
   workflow: Workflow;
@@ -566,6 +567,8 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
 
     /** Findings-driven prompt/input injection for legacy on_findings re-runs. */
     const extraFindings = new Map<string, string[]>();
+    /** Plain sentences for a step's prompt, injected beside its findings and scoped the same way. */
+    const extraNotes = new Map<string, string[]>();
     let loopsUsed = 0;
     /** Per stage attempt, keyed by its frame: what executeLoop found out and executeManual tells the human. */
     const stageNotes = new WeakMap<StageFrame, StageAttemptNotes>();
@@ -582,15 +585,18 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     const skippable = new Map(opts.resume?.done ?? []);
 
     const withFindings = (step: AgentStep): AgentStep => {
-      const findingIds = extraFindings.get(step.id);
-      if (!findingIds || findingIds.length === 0) return step;
-      const note = findingIds
-        .map(id => `A previous review found problems. Read the findings at ${ctx.artifacts[id]} and address every one of them.`)
-        .join('\n');
+      const findingIds = extraFindings.get(step.id) ?? [];
+      const notes = extraNotes.get(step.id) ?? [];
+      if (findingIds.length === 0 && notes.length === 0) return step;
+      const note = [
+        ...findingIds.map(id =>
+          `A previous review found problems. Read the findings at ${ctx.artifacts[id]} and address every one of them.`),
+        ...notes,
+      ].join('\n');
       return {
         ...step,
         prompt: `${step.prompt}\n\n${note}`,
-        inputs: [...new Set([...(step.inputs ?? []), ...findingIds])],
+        ...(findingIds.length === 0 ? {} : { inputs: [...new Set([...(step.inputs ?? []), ...findingIds])] }),
       };
     };
 
@@ -1079,12 +1085,19 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     // Stages
     // -----------------------------------------------------------------------
 
+    /** The stages step's own execution key — what the resume plan's stage records are keyed by. */
+    function stagesKey(stages: StagesStep, frame: Frame | undefined): string {
+      const idn = frameIdentity(frame);
+      return executionKey(stages.id, idn.iteration, idn.outerLoops, idn.stage);
+    }
+
     /**
      * Ids of the stages a resumed run already accepted, which it must not run
-     * again. Always empty for now: Task 9 fills it from the resume plan.
+     * again — skipped wholesale rather than replayed, since an accepted stage
+     * can hold a loop that is `failed` for good.
      */
     function resumedCompletedStages(stages: StagesStep, frame: Frame | undefined): Set<string> {
-      return new Set();
+      return new Set(opts.resume?.stagesCompleted[stagesKey(stages, frame)] ?? []);
     }
 
     // Never 'verdict-fail': a stages step has no artifact, so the top-level
@@ -1157,17 +1170,32 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
           + `cannot be used: ${(e as Error).message}`, stages.id);
       }
 
+      // A stage that went to triage is granted one attempt more than it used;
+      // the grant replaces max_retries' count for this stage only.
+      const resumeKey = stageBudgetKey(stagesKey(stages, outer), stage.id);
+      const granted = opts.resume?.stageBudgets[resumeKey];
+      const allowed = granted ?? maxAttempts;
+      const interruptedAttempt = opts.resume?.stagesInterrupted[resumeKey];
+
       // Not ctx.attempts: that is an append-only audit list, never scoped.
       const saved = {
         artifacts: { ...ctx.artifacts }, verdicts: { ...ctx.verdicts },
-        findings: new Map([...extraFindings]), verdict,
+        findings: new Map([...extraFindings]), notes: new Map([...extraNotes]), verdict,
       };
       const restore = (): void => {
         replaceRecord(ctx.artifacts, saved.artifacts);
         replaceRecord(ctx.verdicts, saved.verdicts);
         extraFindings.clear();
         for (const [id, ids] of saved.findings) extraFindings.set(id, ids);
+        extraNotes.clear();
+        for (const [id, notes] of saved.notes) extraNotes.set(id, notes);
         verdict = saved.verdict;
+      };
+      // Whoever writes to the tree in this body — the steps a note about the
+      // tree's state is addressed to.
+      const implementers = flattenSteps(stages.steps).map(f => f.step).filter(isAgentStep).filter(s => s.writes);
+      const tellImplementers = (note: string): void => {
+        for (const step of implementers) extraNotes.set(step.id, [...(extraNotes.get(step.id) ?? []), note]);
       };
       // Every id declared anywhere in the body — on a resumed run the resume
       // plan seeds the newest artifact per id across *all* stages.
@@ -1185,7 +1213,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       const entrySnapshot = opts.dryRun ? null : await snapshotTree(workdir);
       // The gate that sent the last attempt back, and the note it wrote.
       let rejection: { gateId: string; path: string | undefined } | undefined;
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      for (let attempt = 1; attempt <= allowed; attempt++) {
         if (attempt > 1) restore();
         scrub();
         // A pseudo-artifact, deliberately not recordArtifact: it has no
@@ -1202,11 +1230,21 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
             if (target !== undefined) extraFindings.set(target.id, [rejection.gateId]);
           }
         }
+        // A resume re-runs a cut-short attempt from the top, against a tree
+        // that already holds its partial edits: the engine never discards work
+        // it was not asked to, so the implementer is told to reconcile it.
+        if (attempt === interruptedAttempt) {
+          tellImplementers('A previous attempt was interrupted; reconcile whatever it left in the tree.');
+        }
+        if (granted !== undefined && attempt === granted) {
+          tellImplementers(`A human has just been through the tree in a triage session after this stage was `
+            + `rejected ${granted - 1} times; build on the tree as it is now.`);
+        }
         emit({
           type: 'stages:item', id: stages.id, index: stage.index, total: stage.total,
           stageId: stage.id, title: stage.title, attempt,
         });
-        const frame: StageFrame = { kind: 'stages', id: stages.id, stage, attempt, maxAttempts, parent: outer };
+        const frame: StageFrame = { kind: 'stages', id: stages.id, stage, attempt, maxAttempts: allowed, parent: outer };
         stageNotes.set(frame, { exhausted: [], entrySnapshot });
 
         let rejected = false;
@@ -1244,7 +1282,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       // stop. Marked first, so a triage that is itself cancelled still
       // leaves the record a resume grants its extra attempt against.
       const last = rejection!;
-      emit({ type: 'stages:exhausted', id: stages.id, stageId: stage.id, attempts: maxAttempts });
+      emit({ type: 'stages:exhausted', id: stages.id, stageId: stage.id, attempts: allowed });
       const target = stageRetryTarget(stages.steps, last.gateId);
       if (target === undefined) {
         emit({
@@ -1256,7 +1294,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         const findingsId = stageFindingsId(stages.steps, last.gateId);
         const findings = findingsId === undefined ? undefined : ctx.artifacts[findingsId];
         const prompt = [
-          `Stage ${stage.index} of ${stage.total} ('${stage.title}') was rejected ${maxAttempts} times, `
+          `Stage ${stage.index} of ${stage.total} ('${stage.title}') was rejected ${allowed} times, `
             + `so its retries have run out. The stage file is ${stage.path}.`,
           "A previous attempt's work is in the working tree.",
           ...(findings === undefined ? [] : [`The last review's findings are in ${findings}.`]),
@@ -1267,7 +1305,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         if (triage !== null) return triage;
       }
       return fail(`stages step '${stages.id}': stage ${stage.index} of ${stage.total} ('${stage.title}') `
-        + `was rejected ${maxAttempts} times`, stages.id);
+        + `was rejected ${allowed} times`, stages.id);
     }
 
     /**

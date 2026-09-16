@@ -13,7 +13,8 @@ import { disabledIds, droppedRefs, droppedRefSentence, pruneDisabled } from '../
 import { ATTACHMENTS_REF } from '../attachments.ts';
 import { copyAttachments, recordOf, validateAttachments } from './attachments.ts';
 import { artifactPath, assertArtifact, ArtifactError, ensureArtifactDir } from './artifacts.ts';
-import { snapshotTree, diffSnapshots, headSha, pathsFromStatusLines } from './git-guard.ts';
+import { snapshotTree, diffSnapshots, headSha, pathsFromStatusLines, pathsOutside } from './git-guard.ts';
+import { renderTemplate } from '../template.ts';
 import { CORE_VERSION } from '../version.ts';
 import { parseVerdict, verdictFromExit, verdictFromChoice, VERDICT_INSTRUCTION } from './verdict.ts';
 import { createProgressParser, progressErrorMessage } from './progress.ts';
@@ -454,6 +455,18 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         }
         if (isAgentStep(step) && !step.writes && changed.length > 0) {
           return fail(`read-only step '${step.id}' modified the tree: ${changed.join(', ')}`, step.id);
+        }
+        // The only thing that can still prove a `writes: true` step touched
+        // nothing else. Inherits the guard's own blind spot: a file already
+        // dirty before the step and modified again produces the same
+        // porcelain line, so it never shows up in `changed` — this sees
+        // status transitions, not content edits.
+        if (isAgentStep(step) && step.writes && (step.allow_paths?.length ?? 0) > 0) {
+          const globs = step.allow_paths!.map(g => renderTemplate(g, ctx));
+          const outside = pathsOutside(pathsFromStatusLines(changed), globs);
+          if (outside.length > 0) {
+            return fail(`step '${step.id}' wrote outside allow_paths: ${outside.join(', ')}`, step.id);
+          }
         }
       }
 

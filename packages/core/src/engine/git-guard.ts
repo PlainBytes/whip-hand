@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { matchesGlob } from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -51,4 +52,14 @@ export function pathsFromStatusLines(lines: string[]): string[] {
     else out.push(rest.slice(0, arrow), rest.slice(arrow + 4));
   }
   return out;
+}
+
+/**
+ * `allow_paths` enforcement: which of a `writes: true` step's changed paths
+ * (already the bare paths from `pathsFromStatusLines`) no declared glob
+ * covers. Order-preserving, so the failure message lists them the same way
+ * `step:tree-delta` did.
+ */
+export function pathsOutside(paths: string[], globs: string[]): string[] {
+  return paths.filter(p => !globs.some(g => matchesGlob(p, g)));
 }

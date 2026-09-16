@@ -872,6 +872,10 @@ steps:
         inputs: [implement]
         output: review.md
         prompt: "Review."
+      - id: accept
+        kind: approval
+        title: "Accept {{ stage.title }}?"
+        instructions: "Look."
 `;
 
 const STAGES_IN_LOOP = `
@@ -1092,14 +1096,120 @@ test("a loop's until cannot name a stages step", () => {
   assert.throws(() => parseWorkflow(UNTIL_STAGES), /until step 'build' is a stages step/);
 });
 
-test('a loop inside a stages body must be followed by a human step', () => {
-  assert.throws(() => parseWorkflow(STAGES_LOOP_NO_GATE),
-    /stages step 'build': loop 'cycle' needs a manual or approval step after it, or an exhausted cycle has no one to accept it/);
+const GATE_NEEDED = (verdictId: string): RegExp => new RegExp(
+  `stages step 'build': verdict step '${verdictId}' needs an enabled manual or approval step after it, `
+  + 'directly in the stages body \\(not inside a loop\\), or a failing verdict there passes without anyone seeing it');
+
+test("a loop's until inside a stages body must be followed by a human step", () => {
+  assert.throws(() => parseWorkflow(STAGES_LOOP_NO_GATE), GATE_NEEDED('review'));
 });
 
 test("a gate inside the loop's own body does not count as a gate after it", () => {
-  assert.throws(() => parseWorkflow(STAGES_GATE_ONLY_INSIDE_LOOP),
-    /stages step 'build': loop 'cycle' needs a manual or approval step after it/);
+  assert.throws(() => parseWorkflow(STAGES_GATE_ONLY_INSIDE_LOOP), GATE_NEEDED('gate'));
+});
+
+/** A stages body with `body` in it, indented for the body level. */
+function stagesWith(body: string): string {
+  return `
+name: x
+steps:
+  - id: build
+    kind: stages
+    items: "plans/*.md"
+    steps:
+${body}`;
+}
+
+const IMPLEMENT = `
+      - id: implement
+        runner: claude
+        mode: headless
+        writes: true
+        output: report.md
+        prompt: "Implement."`;
+
+const REVIEW = `
+      - id: review
+        runner: claude
+        mode: headless
+        writes: false
+        verdict: true
+        output: review.md
+        prompt: "Review."`;
+
+const GATE = `
+      - id: accept
+        kind: approval
+        title: "Accept?"
+        instructions: "Look."`;
+
+test('a verdict step directly in a stages body with no gate after it is refused', () => {
+  assert.throws(() => parseWorkflow(stagesWith(IMPLEMENT + REVIEW)), GATE_NEEDED('review'));
+  parseWorkflow(stagesWith(IMPLEMENT + REVIEW + GATE));
+});
+
+test('a verdict step after the gate is refused — only a later gate sees it', () => {
+  const tests = `
+      - id: tests
+        kind: command
+        run: "npm test"
+        verdict: true
+        output: tests.log`;
+  assert.throws(() => parseWorkflow(stagesWith(IMPLEMENT + REVIEW + GATE + tests)), GATE_NEEDED('tests'));
+  assert.doesNotMatch(
+    (() => { try { parseWorkflow(stagesWith(IMPLEMENT + REVIEW + GATE + tests)); return ''; } catch (e) { return (e as Error).message; } })(),
+    /verdict step 'review'/, 'the gate after review still counts for review');
+});
+
+test('a gate inside a later loop does not count: only a gate directly in the body carries the stage verdict', () => {
+  const laterLoop = `
+      - kind: loop
+        id: sign-off
+        until: approve
+        steps:
+          - id: approve
+            kind: approval
+            verdict: true
+            title: "Ship it?"
+            instructions: "Look."`;
+  assert.throws(() => parseWorkflow(stagesWith(IMPLEMENT + REVIEW + laterLoop)), GATE_NEEDED('review'));
+});
+
+test('a verdict step nested two loops deep needs the body-level gate too, and is satisfied by it', () => {
+  const nested = (gate: string) => stagesWith(`
+      - kind: loop
+        id: do-review
+        until: review
+        steps:
+          - kind: loop
+            id: test-fix
+            until: tests
+            steps:
+              - id: implement
+                runner: claude
+                mode: headless
+                writes: true
+                output: report.md
+                prompt: "Implement."
+              - id: tests
+                kind: command
+                run: "npm test"
+                verdict: true
+                output: tests.log
+          - id: review
+            runner: claude
+            mode: headless
+            writes: false
+            verdict: true
+            output: review.md
+            prompt: "Review."${gate}`);
+  assert.throws(() => parseWorkflow(nested('')), GATE_NEEDED('tests'));
+  parseWorkflow(nested(GATE));
+});
+
+test('a manual step directly in the body is the gate itself, verdict: true or not', () => {
+  parseWorkflow(stagesWith(IMPLEMENT + GATE.replace('kind: approval', 'kind: approval\n        verdict: true')));
+  parseWorkflow(stagesWith(IMPLEMENT + GATE));
 });
 
 const STAGES_ONLY_GATE_DISABLED = `
@@ -1134,9 +1244,8 @@ steps:
         instructions: Look.
 `;
 
-test('a disabled gate does not count as the human step after a loop — it never runs', () => {
-  assert.throws(() => parseWorkflow(STAGES_ONLY_GATE_DISABLED),
-    /stages step 'build': loop 'cycle' needs a manual or approval step after it/);
+test('a disabled gate does not count as the human step after a verdict — it never runs', () => {
+  assert.throws(() => parseWorkflow(STAGES_ONLY_GATE_DISABLED), GATE_NEEDED('review'));
   // The same workflow with that gate enabled is fine: the disable is what fails it.
   parseWorkflow(STAGES_ONLY_GATE_DISABLED.replace('        enabled: false\n', ''));
 });

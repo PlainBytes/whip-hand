@@ -454,27 +454,31 @@ function validateStages(step: StagesStep, src: Located, problems: string[]): voi
     problems.push(`stages step '${step.id}' cannot run inside another stages step`);
   }
 
-  // A loop inside a stages body that exhausts its budget has to send its
-  // failure *somewhere* — a later task makes that "up to the human gate"
-  // rather than "kill the run". Requiring the gate in the body's own document
-  // order, at parse time, is what keeps the runner from ever needing
-  // end-of-body reconciliation logic to invent one.
+  // A failing verdict inside a stages body does not stop the run: an exhausted
+  // loop hands over to the stage's gate, and any other failing verdict is
+  // simply carried past, like a loop's non-`until` verdict. Only a manual or
+  // approval step directly in the body turns a verdict into the stage's
+  // accept or retry (see carriesVerdict), and the stage's acceptance restores
+  // the run's verdict. So without such a gate after it, a failing verdict
+  // would pass without anyone seeing it. Requiring the gate here, in document
+  // order, is what keeps the runner from needing end-of-body reconciliation.
   const body = flattenSteps(step.steps);
   const disabled = disabledIds(step.steps);
   body.forEach((entry, i) => {
-    if (!isLoopStep(entry.step)) return;
-    // The loop's own body follows it in the flattened list and must not
-    // count: a gate inside the loop (e.g. its `until`) is not *after* it.
-    const later = body.slice(i + 1);
-    const end = later.findIndex(e => e.depth <= entry.depth);
-    const after = end === -1 ? [] : later.slice(end);
-    // A disabled gate is pruned before the run, so it cannot be the one
-    // that accepts an exhausted cycle — and neither can one inside a
-    // disabled container.
-    const gated = after.some(e => isManualStep(e.step) && !disabled.has(e.step.id));
+    const s = entry.step;
+    if (isContainerStep(s) || s.verdict !== true || disabled.has(s.id)) return;
+    // A gate directly in the body is itself the stage's verdict.
+    if (entry.depth === 0 && isManualStep(s)) return;
+    // Any body-level entry later in document order is past the end of every
+    // loop enclosing this one, so a gate among them sees its outcome. A
+    // disabled gate is pruned before the run, so it cannot be that gate —
+    // and neither can one inside a disabled container.
+    const gated = body.slice(i + 1)
+      .some(e => e.depth === 0 && isManualStep(e.step) && !disabled.has(e.step.id));
     if (!gated) {
-      problems.push(`stages step '${step.id}': loop '${entry.step.id}' needs a manual or approval `
-        + 'step after it, or an exhausted cycle has no one to accept it');
+      problems.push(`stages step '${step.id}': verdict step '${s.id}' needs an enabled manual or approval `
+        + 'step after it, directly in the stages body (not inside a loop), or a failing verdict there '
+        + 'passes without anyone seeing it');
     }
   });
 }

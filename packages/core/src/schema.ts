@@ -533,6 +533,30 @@ export function validateWorkflowWarnings(workflow: Workflow): string[] {
   return warnings;
 }
 
+/**
+ * Gates inside a `stages` step that `--yes` would answer without the author
+ * having said so. `defaultChoice` is `continue`, so an unattended run would
+ * silently accept every stage — "implement all seven stages unattended", the
+ * exact thing `stages` exists to prevent. A gate opts in explicitly by
+ * writing `default: continue` (or `abort`) itself; only that is trusted, not
+ * the mere presence of a gate. `flattenSteps` already threads `stagesId`
+ * through a nested loop, so a gate after a stage's retry loop is covered the
+ * same as one sitting directly in the stage body. A disabled gate is pruned
+ * before the run and can never be reached, so it is not a problem — matching
+ * `disabledIds`, which also drops it from `validateStages`'s own gate check.
+ */
+export function unattendedProblems(workflow: Workflow): string[] {
+  const disabled = disabledIds(workflow.steps);
+  const problems: string[] = [];
+  for (const { step, stagesId } of flattenSteps(workflow.steps)) {
+    if (stagesId === undefined || !isManualStep(step) || step.default !== undefined) continue;
+    if (disabled.has(step.id)) continue;
+    problems.push(
+      `step '${step.id}': a gate inside stages step '${stagesId}' must set an explicit 'default' to run under --yes`);
+  }
+  return problems;
+}
+
 // ---------------------------------------------------------------------------
 // Turning a zod issue list into the editor's and the CLI's wording
 // ---------------------------------------------------------------------------

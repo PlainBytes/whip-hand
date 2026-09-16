@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatLogLine, mergeUsage, parseLogLine, summarizeEvent, usageParts } from './log-rows.ts';
+import { formatLogLine, mergeUsage, nestedPrefix, parseLogLine, summarizeEvent, usageParts } from './log-rows.ts';
 import type { LogRow } from './log-rows.ts';
 import type { StepProgress, WhiphandEvent } from './types.ts';
 
@@ -111,4 +111,35 @@ test('summarizeEvent: stages:start/accepted/exhausted/done each name the stages 
   const exhausted = summarizeEvent({ type: 'stages:exhausted', id: 'build', stageId: '01-a', attempts: 3 });
   assert.equal(exhausted.stepId, 'build');
   assert.equal(exhausted.text, 'stage 01-a rejected 3 time(s), handed to triage');
+});
+
+// ---------------------------------------------------------------------------
+// nestedPrefix / summarizeEvent: a loop nested inside a stage
+// ---------------------------------------------------------------------------
+
+test('a plain nested loop (no stage) keeps its existing label', () => {
+  assert.equal(nestedPrefix('fix', 'human-review', 2), 'human-review 2 › fix');
+});
+
+test('a loop nested directly inside a stage names the stage, not just the stages step', () => {
+  assert.equal(nestedPrefix('cycle', 'build', 1, undefined, '01-schema'), 'build/01-schema 1 › cycle');
+});
+
+test('two different stages of the same stages step no longer collapse onto one label', () => {
+  const a = nestedPrefix('cycle', 'build', 1, undefined, '01-schema');
+  const b = nestedPrefix('cycle', 'build', 1, undefined, '02-api');
+  assert.notEqual(a, b, 'stage 1 and stage 2 must read as different loops even at the same attempt number');
+});
+
+test('summarizeEvent carries the stage into loop:start/iteration/done text', () => {
+  const start = summarizeEvent({
+    type: 'loop:start', loopId: 'cycle', maxIterations: 3,
+    parentLoopId: 'build', parentIteration: 1, parentStage: '02-api',
+  });
+  assert.match(start.text, /'build\/02-api 1 › cycle'/);
+  const done = summarizeEvent({
+    type: 'loop:done', loopId: 'cycle', iterations: 2, passed: true,
+    parentLoopId: 'build', parentIteration: 1, parentStage: '02-api',
+  });
+  assert.match(done.text, /'build\/02-api 1 › cycle'/);
 });

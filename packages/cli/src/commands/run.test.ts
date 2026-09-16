@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_CONFIG, listRuns } from '@whiphand/core';
+import { DEFAULT_CONFIG, listRuns, WORKFLOW_SNAPSHOT_NAME, MANIFEST_VERSION } from '@whiphand/core';
 import { runCommand } from './run.ts';
 
 /** Runs `fn` with console.error captured, so the message itself is asserted. */
@@ -232,4 +232,102 @@ test('a dry run with --attach records the list and copies nothing', async () => 
   assert.equal(code, 0);
   const [run] = await listRuns(cwd, DEFAULT_CONFIG);
   assert.ok(!(await readdir(run.runDir)).includes('attachments'));
+});
+
+// ---------------------------------------------------------------------------
+// --yes must be declared, not assumed: a gate inside a `stages` step refuses
+// to run unattended unless it opts in with `default: continue` (or `abort`)
+// itself. See docs/superpowers/specs/2026-09-08-staged-plans-design.md.
+// ---------------------------------------------------------------------------
+
+function stagedWorkflowYaml(gateDefault: string): string {
+  return `
+name: staged
+steps:
+  - id: build
+    kind: stages
+    items: "plans/*.md"
+    steps:
+      - id: implement
+        kind: command
+        run: "true"
+        output: report.log
+      - id: accept
+        kind: approval
+        title: "Ship it?"
+        instructions: "Look."
+${gateDefault}
+`;
+}
+
+/** A workspace with one `stages` workflow and one plan file for it to iterate. */
+async function stagedWorkspace(gateDefault: string): Promise<string> {
+  const cwd = await mkdtemp(join(tmpdir(), 'whiphand-cli-'));
+  await mkdir(join(cwd, '.whiphand', 'workflows'), { recursive: true });
+  await mkdir(join(cwd, 'plans'), { recursive: true });
+  await writeFile(join(cwd, 'plans', '01-a.md'), '# A\n');
+  await writeFile(join(cwd, '.whiphand', 'workflows', 'staged.yaml'), stagedWorkflowYaml(gateDefault));
+  return cwd;
+}
+
+test('--yes refuses a staged workflow whose gate has no explicit default', async () => {
+  const cwd = await stagedWorkspace('');
+  const { code, err } = await withStderr(() => runCommand('staged', {
+    dryRun: true, input: [], cwd, yes: true,
+  }));
+
+  assert.equal(code, 2);
+  assert.match(err, /step 'accept': a gate inside stages step 'build' must set an explicit 'default'/);
+  assert.match(err, /default: continue/, 'the refusal names the fix');
+  assert.equal(existsSync(join(cwd, '.whiphand', 'runs')), false, 'refused before any step ran');
+});
+
+test('--yes runs a staged workflow whose gate opted in with default: continue', async () => {
+  const cwd = await stagedWorkspace('        default: continue');
+  const { code } = await withStderr(() => runCommand('staged', {
+    dryRun: true, json: true, input: [], cwd, yes: true,
+  }));
+
+  assert.equal(code, 0);
+});
+
+test('a plain workflow with an ordinary gate is unaffected by --yes: it has always been allowed to answer it', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'whiphand-cli-'));
+  await mkdir(join(cwd, '.whiphand', 'workflows'), { recursive: true });
+  await writeFile(join(cwd, '.whiphand', 'workflows', 'plain.yaml'), `
+name: plain
+steps:
+  - id: sign
+    kind: approval
+    title: "Ship it?"
+    instructions: "Look."
+`);
+
+  const { code } = await withStderr(() => runCommand('plain', {
+    dryRun: true, json: true, input: [], cwd, yes: true,
+  }));
+
+  assert.equal(code, 0);
+});
+
+test('--resume --yes is refused the same way as a fresh run, before the resumed run continues', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'whiphand-cli-'));
+  const runId = '20260101-000000-aaaa';
+  const runDir = join(cwd, DEFAULT_CONFIG.artifacts_dir, runId);
+  await mkdir(runDir, { recursive: true });
+  const manifest = {
+    version: MANIFEST_VERSION, runId, workflow: 'staged', workdir: cwd, dryRun: false,
+    pid: 999_999, startedAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+    endedAt: '2026-01-01T00:00:00Z', status: 'failed', ok: false,
+    inputs: {}, sessionIds: {}, steps: [],
+  };
+  await writeFile(join(runDir, 'run.json'), JSON.stringify(manifest), 'utf8');
+  await writeFile(join(runDir, WORKFLOW_SNAPSHOT_NAME), stagedWorkflowYaml(''), 'utf8');
+
+  const { code, err } = await withStderr(() => runCommand(undefined, {
+    dryRun: false, input: [], cwd, resume: runId, yes: true,
+  }));
+
+  assert.equal(code, 2);
+  assert.match(err, /step 'accept': a gate inside stages step 'build' must set an explicit 'default'/);
 });

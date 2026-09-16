@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseWorkflow, validateWorkflowWarnings, validateWorkflowDraft, formatWorkflowIssues, formatWorkflowFieldIssues,
-  workflowSchema, WorkflowError, locateSteps, isForwardRef,
+  workflowSchema, WorkflowError, locateSteps, isForwardRef, unattendedProblems,
 } from './schema.ts';
 import { featureDevelopmentTemplate } from './scaffold.ts';
 import type { Step } from './types.ts';
@@ -1135,4 +1135,114 @@ test('a step referencing the stages step itself is refused — it produces no ar
 test("misplaced 'items' names the kind it belongs to", () => {
   assert.throws(() => parseWorkflow(ITEMS_ON_AGENT),
     /kind 'agent' has no 'items' field \(it belongs to kind 'stages'\)/);
+});
+
+// ---------------------------------------------------------------------------
+// unattendedProblems
+// ---------------------------------------------------------------------------
+
+const STAGED_WORKFLOW = `
+name: x
+steps:
+  - id: build
+    kind: stages
+    items: "plans/*.md"
+    steps:
+      - id: implement
+        runner: claude
+        mode: headless
+        writes: true
+        output: report.md
+        prompt: "Implement."
+      - id: accept
+        kind: approval
+        title: "Ship it?"
+        instructions: "Look."
+`;
+
+const STAGED_WORKFLOW_WITH_DEFAULT = STAGED_WORKFLOW.replace(
+  '        instructions: "Look."\n', '        instructions: "Look."\n        default: continue\n');
+
+test('--yes refuses a staged workflow whose gate has no explicit default', () => {
+  assert.deepEqual(unattendedProblems(parseWorkflow(STAGED_WORKFLOW)), [
+    "step 'accept': a gate inside stages step 'build' must set an explicit 'default' to run under --yes",
+  ]);
+  assert.deepEqual(unattendedProblems(parseWorkflow(STAGED_WORKFLOW_WITH_DEFAULT)), []);
+});
+
+test('a gate outside any stages step is left alone: --yes has always been allowed to answer it', () => {
+  const workflow = `
+name: x
+steps:
+  - id: sign
+    kind: approval
+    title: "Ship it?"
+    instructions: "Look."
+`;
+  assert.deepEqual(unattendedProblems(parseWorkflow(workflow)), []);
+});
+
+test('a gate nested inside a loop inside a stages body is still caught', () => {
+  const workflow = `
+name: x
+steps:
+  - id: build
+    kind: stages
+    items: "plans/*.md"
+    steps:
+      - kind: loop
+        id: cycle
+        until: review
+        steps:
+          - id: implement
+            runner: claude
+            mode: headless
+            writes: true
+            inputs: [stage]
+            output: report.md
+            prompt: "Implement {{ stage.title }}."
+          - id: review
+            runner: claude
+            mode: headless
+            writes: false
+            verdict: true
+            inputs: [implement]
+            output: review.md
+            prompt: "Review."
+      - id: accept
+        kind: approval
+        title: "Ship it?"
+        instructions: "Look."
+`;
+  assert.deepEqual(unattendedProblems(parseWorkflow(workflow)), [
+    "step 'accept': a gate inside stages step 'build' must set an explicit 'default' to run under --yes",
+  ]);
+});
+
+test('a disabled gate inside a stages step is never reached, so it is not a --yes problem', () => {
+  const workflow = `
+name: x
+steps:
+  - id: build
+    kind: stages
+    items: "plans/*.md"
+    steps:
+      - id: implement
+        runner: claude
+        mode: headless
+        writes: true
+        output: report.md
+        prompt: "Implement."
+      - id: accept
+        kind: approval
+        enabled: false
+        title: "Ship it?"
+        instructions: "Look."
+      - id: fallback
+        kind: approval
+        default: continue
+        title: "Ship it anyway?"
+        instructions: "Look."
+`;
+  assert.deepEqual(unattendedProblems(parseWorkflow(workflow)), []);
 });

@@ -2,7 +2,7 @@ export { CORE_VERSION } from './version.ts';
 export * from './types.ts';
 export {
   parseWorkflow, validateWorkflowSemantics, validateWorkflowWarnings, validateWorkflowDraft, formatWorkflowIssues,
-  formatWorkflowFieldIssues, WorkflowError, stepSchema, workflowSchema,
+  formatWorkflowFieldIssues, unattendedProblems, WorkflowError, stepSchema, workflowSchema,
 } from './schema.ts';
 export type { WorkflowFieldProblem } from './schema.ts';
 export {

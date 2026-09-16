@@ -63,7 +63,10 @@ async function withReadline<T>(opts: PromptOptions, body: (ask: Ask) => Promise<
 
 function renderRequest(request: ManualRequest, write: (s: string) => void): void {
   write(`\n── ${request.kind === 'approval' ? 'Decision' : 'Manual step'}: ${request.title}\n`);
-  if (request.loop) {
+  if (request.stage) {
+    const { index, total, title, stagesId, attempt } = request.stage;
+    write(`   stage ${index}/${total} '${title}' of '${stagesId}'${attempt > 1 ? ` (attempt ${attempt})` : ''}\n`);
+  } else if (request.loop) {
     write(`   iteration ${request.loop.iteration}/${request.loop.maxIterations} of '${request.loop.id}'\n`);
   }
   write(`\n${request.instructions.trimEnd()}\n`);

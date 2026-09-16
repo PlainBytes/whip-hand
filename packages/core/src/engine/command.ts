@@ -10,6 +10,7 @@ import { isAbsolute, resolve } from 'node:path';
 import type { CommandStep, LoopFrame, RunCtx, SpawnSpec } from '../types.ts';
 import { inputArtifacts, renderTemplate } from '../template.ts';
 import { nearestStage } from '../execution-key.ts';
+import { ATTACHMENTS_REF } from '../attachments.ts';
 
 export const DEFAULT_SHELL = process.platform === 'win32' ? 'cmd.exe' : '/bin/sh';
 
@@ -38,9 +39,7 @@ export function shellFlags(shell: string): string[] {
 
 /**
  * `stepId` -> the env var a command reaches its artifact through, e.g.
- * 'execute-report' -> 'WHIPHAND_ARTIFACT_EXECUTE_REPORT'. Also what an
- * `attachments/foo.png` ref (see `inputArtifacts`) turns into, since a slash
- * is just another character this collapses to `_`.
+ * 'execute-report' -> 'WHIPHAND_ARTIFACT_EXECUTE_REPORT'.
  */
 export function artifactEnvName(stepId: string): string {
   return `WHIPHAND_ARTIFACT_${stepId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
@@ -59,13 +58,20 @@ export function commandSpec(step: CommandStep, ctx: RunCtx, capturePath?: string
   // Each `inputs:` entry with a recorded artifact becomes a path a command
   // can read straight off the environment — `inputArtifacts` is the same
   // resolver `buildPrompt` uses, so a command and an agent agree on what an
-  // input ref, including `attachments`, resolves to. An id with nothing
-  // recorded (never run, or a dropped forward reference) exports nothing:
-  // an empty env var would read as "the artifact is the empty string", which
-  // is a lie a missing var can't tell.
+  // input ref resolves to. An id with nothing recorded (never run, or a
+  // dropped forward reference) exports nothing: an empty env var would read
+  // as "the artifact is the empty string", which is a lie a missing var
+  // can't tell. `attachments` expansions are skipped outright: they name a
+  // file, not a step, and a command already reaches them at
+  // `$WHIPHAND_RUN_DIR/attachments` — turning each into its own
+  // `WHIPHAND_ARTIFACT_ATTACHMENTS_*` would just be a second, redundant way
+  // to spell the same path. Two distinct step ids that happen to collapse to
+  // the same env name (`a-b` and `a_b` both become `A_B`) collide silently
+  // here; the later one in `inputs:` wins.
   const artifactEnv = Object.fromEntries(
     inputArtifacts(step.inputs ?? [], ctx)
-      .filter((input): input is { id: string; path: string } => input.path !== undefined)
+      .filter((input): input is { id: string; path: string } =>
+        input.path !== undefined && !input.id.startsWith(`${ATTACHMENTS_REF}/`))
       .map(({ id, path }) => [artifactEnvName(id), path]),
   );
   // A stage's title is a markdown heading pulled off disk — exactly the

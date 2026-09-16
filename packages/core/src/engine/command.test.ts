@@ -123,6 +123,18 @@ test('a command step exports each input artifact as an environment variable', ()
   assert.equal(spec.env.WHIPHAND_ARTIFACT_PLAN, '/run/plan.md');
 });
 
+test('an `attachments` input never becomes a WHIPHAND_ARTIFACT_* variable — a command reads those from the run dir', () => {
+  const withAttachments: RunCtx = {
+    ...ctx,
+    artifacts: { plan: '/run/plan.md' },
+    attachments: ['/w/.whiphand/runs/r1/attachments/bug.png', '/w/.whiphand/runs/r1/attachments/log.txt'],
+  };
+  const spec = commandSpec(
+    { kind: 'command', id: 'c', run: 'true', inputs: ['attachments', 'plan'] }, withAttachments);
+  assert.equal(spec.env.WHIPHAND_ARTIFACT_PLAN, '/run/plan.md');
+  assert.equal(Object.keys(spec.env).some(k => k.startsWith('WHIPHAND_ARTIFACT_ATTACHMENTS')), false);
+});
+
 test('inside a stage, a command step is told which stage it is in', () => {
   const stage = { index: 2, total: 7, id: '02-api', title: 'Add API routes', path: '/p/02-api.md' };
   const framed: RunCtx = { ...ctx, frame: { kind: 'stages', id: 'build', stage, attempt: 1, maxAttempts: 3 } };

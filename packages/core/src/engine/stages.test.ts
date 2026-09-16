@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { discoverStages, nextStage, oddStageNames, stageTitleOf } from './stages.ts';
+import { discoverStages, nextStage, oddStageNames, StageError, stageTitleOf } from './stages.ts';
 import type { Stage } from '../types.ts';
 
 async function tmpPlanDir(files: Record<string, string>): Promise<string> {
@@ -18,6 +18,13 @@ async function tmpPlanDir(files: Record<string, string>): Promise<string> {
 function stage(id: string, index: number): Stage {
   return { index, total: 0, id, title: id, path: `/plans/${id}.md` };
 }
+
+test('a match that is a directory is a StageError naming it, not a raw EISDIR', async () => {
+  const dir = await tmpPlanDir({ '01-schema.md': '# Schema\n' });
+  await mkdir(join(dir, 'plans', '02-assets'));
+  await assert.rejects(discoverStages(dir, 'plans/*'),
+    (e: Error) => e instanceof StageError && e.message === "stage file 'plans/02-assets' is a directory, not a stage file");
+});
 
 test('stages are ordered by path, and an inserted 03a sorts between 03 and 04', async () => {
   const dir = await tmpPlanDir({

@@ -4,7 +4,7 @@
  * artifact layout, cancellation, and what a manual step inside a stage is
  * told. Retries, exhaustion and resume live with the tasks that add them.
  */
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync, unlinkSync } from 'node:fs';
@@ -130,8 +130,14 @@ steps:
 `);
 }
 
+const tmpDirs: string[] = [];
+after(async () => {
+  await Promise.all(tmpDirs.map(dir => rm(dir, { recursive: true, force: true })));
+});
+
 async function tmpRepoWithPlans(files: Record<string, string>): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'whiphand-stages-'));
+  tmpDirs.push(dir);
   await mkdir(join(dir, 'plans'));
   for (const [name, text] of Object.entries(files)) await writeFile(join(dir, 'plans', name), text);
   return dir;
@@ -270,6 +276,37 @@ test('a stage file that vanishes between discovery and use fails that stage, not
   assert.match(errorMessage(h), /stage file/);
   assert.match(errorMessage(h), /expected artifact was not written/);
   assert.equal(h.spawns.length, 0, 'no body step ran with an empty stage');
+});
+
+test('a badly named stage file added mid-run fails the stages step instead of throwing', async () => {
+  const dir = await tmpRepoWithPlans(TWO_STAGES);
+  const h = harness({
+    onAsk: async (_request, n) => {
+      if (n === 1) await writeFile(join(dir, 'plans', '02a-a@b.md'), '# Bad\n');
+    },
+  });
+  const result = await run(dir, h);
+
+  assert.equal(result.ok, false, 'runWorkflow resolves with a failure rather than rejecting');
+  assert.deepEqual(items(h), ['01-schema']);
+  const error = h.events.find(e => e.type === 'run:error');
+  assert.ok(error !== undefined && error.type === 'run:error');
+  assert.equal(error.stepId, 'build');
+  assert.match(error.message, /^stages step 'build': stage file '02a-a@b\.md': a stage name cannot contain/);
+  assert.equal((await manifestOf(result.runDir)).status, 'failed');
+});
+
+test('a glob that matches a directory fails the stages step, naming the match', async () => {
+  const dir = await tmpRepoWithPlans(TWO_STAGES);
+  await mkdir(join(dir, 'plans', '03-assets'));
+  const h = harness();
+  const result = await run(dir, h, { workflow: stagedWorkflow('plans/*') });
+
+  assert.equal(result.ok, false);
+  assert.match(errorMessage(h), /^stages step 'build': stage file 'plans\/03-assets' is a directory, not a stage file$/);
+  const error = h.events.find(e => e.type === 'run:error');
+  assert.equal(error?.type === 'run:error' ? error.stepId : undefined, 'build');
+  assert.equal(h.spawns.length, 0);
 });
 
 test('a loop inside a stage writes its artifacts under that stage', async () => {

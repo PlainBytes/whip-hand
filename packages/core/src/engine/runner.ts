@@ -29,7 +29,7 @@ import { clearSessionCapture } from './session-capture.ts';
 import { RunJournal, WORKFLOW_SNAPSHOT_NAME } from './manifest.ts';
 import { executionKey, frameIdentity, isStageFrame, nearestLoop } from '../execution-key.ts';
 import { pruneRuns } from './retention.ts';
-import { DEFAULT_STAGE_RETRIES, discoverStages, nextStage, oddStageNames } from './stages.ts';
+import { DEFAULT_STAGE_RETRIES, discoverStages, nextStage, oddStageNames, StageError } from './stages.ts';
 import { readRunName, runSlugFor, setRunName } from './run-name.ts';
 import { autoNameRun } from './auto-name.ts';
 import type { ResumePlan } from './resume.ts';
@@ -1027,7 +1027,14 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       // keeps an edited, already-finished stage from running again.
       for (;;) {
         if (opts.signal?.aborted) return cancelled();
-        const list = await discoverStages(workdir, pattern);
+        let list: Stage[];
+        try {
+          list = await discoverStages(workdir, pattern);
+        } catch (e) {
+          // A bad plan directory is this step's failure; anything else is a bug.
+          if (!(e instanceof StageError)) throw e;
+          return fail(`stages step '${stages.id}': ${e.message}`, stages.id);
+        }
         if (!started) {
           // Only the first pass: a list that empties later means the plan's
           // remaining stages were removed, which ends the step cleanly.

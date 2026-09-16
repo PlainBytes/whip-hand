@@ -60,7 +60,20 @@ export async function discoverStages(workdir: string, pattern: string): Promise<
       throw new StageError(
         `stage file '${file}': a stage name cannot contain '@', '#', '/' or '\\'`);
     }
-    const text = await readFile(path, 'utf8');
+    // The plan directory is the author's, and it may change mid-run: a match
+    // that is a directory, or a file removed between the glob and this read,
+    // is a problem with the plan to name, not a crash.
+    let text: string;
+    try {
+      text = await readFile(path, 'utf8');
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code === undefined) throw e;
+      const why = code === 'EISDIR' ? 'is a directory, not a stage file'
+        : code === 'ENOENT' ? 'disappeared before it could be read'
+          : `could not be read (${code})`;
+      throw new StageError(`stage file '${relPath}' ${why}`);
+    }
     return { id, title: stageTitleOf(text, id), path };
   }));
 

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   isEnabled, disabledRoots, disabledIds, pruneDisabled, droppedRefs, droppedRefSentence, joinNames, untilTargetOf,
 } from './enabled.ts';
-import type { AgentStep, LoopStep, Workflow } from './types.ts';
+import type { AgentStep, LoopStep, StagesStep, Workflow } from './types.ts';
 
 const agent = (over: Partial<AgentStep> & { id: string }): AgentStep => ({
   kind: 'agent', runner: 'claude', mode: 'headless', writes: false,
@@ -39,6 +39,29 @@ function nested(overrides: { humanReviewDisabled?: boolean; planDisabled?: boole
       agent({ id: 'plan', mode: 'interactive', ...(overrides.planDisabled ? { enabled: false } : {}) }),
       humanReview,
       agent({ id: 'commit-message', inputs: ['plan', 'review', 'sign-off'] }),
+    ],
+  };
+}
+
+/**
+ * A `stages` step ('build') with a two-step body, alongside an outside
+ * reader ('summarize') that names one of the body steps directly — the
+ * shape `droppedRefs` has to warn about once the stages step is disabled.
+ */
+function withStages(overrides: { stagesDisabled?: boolean } = {}): Workflow {
+  const build: StagesStep = {
+    kind: 'stages', id: 'build', items: '{{ inputs.plan_dir }}/*.md',
+    ...(overrides.stagesDisabled ? { enabled: false } : {}),
+    steps: [
+      agent({ id: 'implement', writes: true }),
+      { kind: 'manual', id: 'review', title: 'Stage sign-off', instructions: 'go', verdict: true, inputs: ['implement'] },
+    ],
+  };
+  return {
+    name: 'staged-plan',
+    steps: [
+      build,
+      agent({ id: 'summarize', inputs: ['implement'] }),
     ],
   };
 }
@@ -96,6 +119,26 @@ test('pruneDisabled: an untouched step\'s inputs array is the same reference (no
   const original = (wf.steps[0] as AgentStep);
   const kept = effective.steps.find(s => s.id === 'plan') as AgentStep;
   assert.equal(kept, original);
+});
+
+test('disabledIds: a disabled stages step takes every body id with it, like a disabled loop', () => {
+  const wf = withStages({ stagesDisabled: true });
+  assert.deepEqual(disabledRoots(wf.steps), new Set(['build']));
+  assert.deepEqual(disabledIds(wf.steps), new Set(['build', 'implement', 'review']));
+});
+
+test('pruneDisabled: a disabled stages step is removed whole, body and all', () => {
+  const wf = withStages({ stagesDisabled: true });
+  const effective = pruneDisabled(wf);
+  assert.deepEqual(effective.steps.map(s => s.id), ['summarize']);
+  const summarize = effective.steps.find(s => s.id === 'summarize') as AgentStep;
+  assert.deepEqual(summarize.inputs, [], "'implement' left with its enclosing stages step");
+});
+
+test("droppedRefs: a reader outside a disabled stages step is warned about one of its body steps", () => {
+  const wf = withStages({ stagesDisabled: true });
+  const refs = droppedRefs(wf);
+  assert.deepEqual(refs, [{ reader: 'summarize', missing: ['implement'] }]);
 });
 
 test('droppedRefs: enabled non-command readers of a disabled id, command readers excluded', () => {

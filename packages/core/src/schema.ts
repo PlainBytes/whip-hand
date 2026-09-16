@@ -4,6 +4,7 @@ import type { LoopStep, StagesStep, Workflow, Step, StepKind } from './types.ts'
 import { STAGE_REF } from './types.ts';
 import { flattenSteps, isContainerStep, isLoopStep, isManualStep, isStagesStep } from './steps.ts';
 import { ATTACHMENTS_REF } from './attachments.ts';
+import { disabledIds } from './enabled.ts';
 
 export class WorkflowError extends Error {
   problems: string[];
@@ -408,6 +409,14 @@ export function validateWorkflowSemantics(workflow: Workflow): string[] {
         problems.push(`step '${step.id}' references step '${ref}', which produces no artifact`);
         continue;
       }
+      // A stage's artifacts are scoped to it and restored away when the
+      // stages step ends (see runStage), so a reader outside that stages
+      // step would find nothing recorded at run time. Said here instead.
+      if (tgt.stagesId !== undefined && !src.stagesChain.includes(tgt.stagesId)) {
+        problems.push(`step '${step.id}' references step '${ref}' inside stages step '${tgt.stagesId}', `
+          + 'whose artifacts do not outlive a stage');
+        continue;
+      }
       const order = comparePaths(tgt.path, src.path);
       if (order === 0) {
         problems.push(`step '${step.id}' references itself`);
@@ -451,6 +460,7 @@ function validateStages(step: StagesStep, src: Located, problems: string[]): voi
   // order, at parse time, is what keeps the runner from ever needing
   // end-of-body reconciliation logic to invent one.
   const body = flattenSteps(step.steps);
+  const disabled = disabledIds(step.steps);
   body.forEach((entry, i) => {
     if (!isLoopStep(entry.step)) return;
     // The loop's own body follows it in the flattened list and must not
@@ -458,7 +468,10 @@ function validateStages(step: StagesStep, src: Located, problems: string[]): voi
     const later = body.slice(i + 1);
     const end = later.findIndex(e => e.depth <= entry.depth);
     const after = end === -1 ? [] : later.slice(end);
-    const gated = after.some(e => isManualStep(e.step));
+    // A disabled gate is pruned before the run, so it cannot be the one
+    // that accepts an exhausted cycle — and neither can one inside a
+    // disabled container.
+    const gated = after.some(e => isManualStep(e.step) && !disabled.has(e.step.id));
     if (!gated) {
       problems.push(`stages step '${step.id}': loop '${entry.step.id}' needs a manual or approval `
         + 'step after it, or an exhausted cycle has no one to accept it');

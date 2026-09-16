@@ -1046,6 +1046,72 @@ test("a gate inside the loop's own body does not count as a gate after it", () =
     /stages step 'build': loop 'cycle' needs a manual or approval step after it/);
 });
 
+const STAGES_ONLY_GATE_DISABLED = `
+name: x
+steps:
+  - id: build
+    kind: stages
+    items: "plans/*.md"
+    steps:
+      - kind: loop
+        id: cycle
+        until: review
+        steps:
+          - id: implement
+            runner: claude
+            mode: headless
+            writes: true
+            output: report.md
+            prompt: "Implement."
+          - id: review
+            runner: claude
+            mode: headless
+            writes: false
+            verdict: true
+            inputs: [implement]
+            output: review.md
+            prompt: "Review."
+      - kind: approval
+        id: accept
+        enabled: false
+        title: Accept?
+        instructions: Look.
+`;
+
+test('a disabled gate does not count as the human step after a loop — it never runs', () => {
+  assert.throws(() => parseWorkflow(STAGES_ONLY_GATE_DISABLED),
+    /stages step 'build': loop 'cycle' needs a manual or approval step after it/);
+  // The same workflow with that gate enabled is fine: the disable is what fails it.
+  parseWorkflow(STAGES_ONLY_GATE_DISABLED.replace('        enabled: false\n', ''));
+});
+
+const STAGE_ARTIFACT_READ_OUTSIDE = `
+name: x
+steps:
+  - id: build
+    kind: stages
+    items: "plans/*.md"
+    steps:
+      - id: implement
+        runner: claude
+        mode: headless
+        writes: true
+        output: report.md
+        prompt: "Implement."
+  - id: summarize
+    runner: claude
+    mode: headless
+    writes: false
+    inputs: [implement]
+    output: summary.md
+    prompt: "Summarize."
+`;
+
+test('a step outside a stages step cannot read a step declared inside its body', () => {
+  assert.throws(() => parseWorkflow(STAGE_ARTIFACT_READ_OUTSIDE),
+    /step 'summarize' references step 'implement' inside stages step 'build', whose artifacts do not outlive a stage/);
+});
+
 test("without a stages step, inputs: [stage] still resolves to a real step named 'stage'", () => {
   parseWorkflow(STAGE_STEP_READ_WITHOUT_STAGES);
 });

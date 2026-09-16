@@ -774,3 +774,123 @@ describe('WorkflowEditor: the Model combobox', () => {
     expect(req.params).toEqual({ refresh: true });
   });
 });
+
+describe('WorkflowEditor: a stages step', () => {
+  const STAGED_WORKFLOW: Workflow = {
+    name: 'staged',
+    inputs: { plan_dir: { required: true } },
+    steps: [
+      { id: 'plan', kind: 'command', run: 'ls', output: 'plan.md' },
+      {
+        id: 'build', kind: 'stages', items: 'plans/*.md', max_retries: 2,
+        steps: [
+          { id: 'impl', kind: 'agent', runner: 'claude', mode: 'headless', writes: true, prompt: 'build', inputs: ['stage', 'plan'], output: 'impl.md' },
+          { id: 'gate', kind: 'approval', title: 'Good?', instructions: 'Look.' },
+        ],
+      },
+      { id: 'after', kind: 'agent', runner: 'claude', mode: 'headless', writes: false, prompt: 'wrap up', inputs: ['plan'], output: 'after.md' },
+    ],
+  };
+
+  async function readsFromOptions(id: string): Promise<string[]> {
+    fireEvent.click(screen.getByTestId(`step-collapse-${id}`));
+    fireEvent.click(within(screen.getByTestId(`step-card-${id}`)).getByRole('combobox', { name: 'Reads from' }));
+    const options = await screen.findAllByRole('menuitemcheckbox');
+    return options.map(o => o.textContent ?? '');
+  }
+
+  it('a stages step edits its glob and retries, and holds a body', async () => {
+    const { transport } = renderEditor(STAGED_WORKFLOW);
+    // Its body is cards in the list, one level in, like a loop's.
+    expect(screen.getByTestId('step-card-impl')).toBeInTheDocument();
+    expect(screen.getByTestId('step-card-gate')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('step-collapse-build'));
+    const card = screen.getByTestId('step-card-build');
+    expect(within(card).getByLabelText(/^Stage files/)).toHaveValue('plans/*.md');
+    expect(within(card).queryByLabelText('Repeat until')).not.toBeInTheDocument();
+    fireEvent.change(within(card).getByLabelText(/^Stage files/), { target: { value: '{{ inputs.plan_dir }}/*.md' } });
+    fireEvent.change(within(card).getByLabelText(/^Max retries/), { target: { value: '4' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    const req = await lastRequest(transport, 'updateWorkflow');
+    const wf = (req.params as { workflow: Workflow }).workflow;
+    expect(wf.steps[1]).toMatchObject({
+      kind: 'stages', items: '{{ inputs.plan_dir }}/*.md', max_retries: 4,
+      steps: [{ id: 'impl' }, { id: 'gate' }],
+    });
+  });
+
+  it('a blank Stage files is flagged on the field at Save', async () => {
+    const { transport } = renderEditor(STAGED_WORKFLOW);
+    fireEvent.click(screen.getByTestId('step-collapse-build'));
+    fireEvent.change(screen.getByLabelText(/^Stage files/), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(transport.sent.some(l => (JSON.parse(l) as { method: string }).method === 'updateWorkflow')).toBe(false);
+    await waitFor(() => expect(screen.getByLabelText(/^Stage files/)).toHaveAttribute('aria-invalid', 'true'));
+  });
+
+  it('folds its body, and insert below adds the new step as its first body child', () => {
+    renderEditor(STAGED_WORKFLOW);
+    fireEvent.click(screen.getByTestId('body-fold-build'));
+    expect(screen.queryByTestId('step-card-impl')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('body-fold-build'));
+
+    fireEvent.click(within(screen.getByTestId('step-card-build')).getByLabelText('Insert step below'));
+    const ids = screen.getAllByTestId(/^step-card-/).map(c => c.dataset.testid);
+    expect(ids).toEqual(['step-card-plan', 'step-card-build', 'step-card-step-6', 'step-card-impl', 'step-card-gate', 'step-card-after']);
+  });
+
+  it('moves a body step within the body', async () => {
+    const { transport } = renderEditor(STAGED_WORKFLOW);
+    fireEvent.click(within(screen.getByTestId('step-card-gate')).getByLabelText('Move up'));
+    expect(within(screen.getByTestId('step-card-gate')).getByLabelText('Move up')).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    const req = await lastRequest(transport, 'updateWorkflow');
+    const wf = (req.params as { workflow: Workflow }).workflow;
+    expect(wf.steps[1]).toMatchObject({ steps: [{ id: 'gate' }, { id: 'impl' }] });
+  });
+
+  it('inside a body, Reads from offers the stage file and earlier steps outside it', async () => {
+    renderEditor(STAGED_WORKFLOW);
+    expect(await readsFromOptions('gate')).toEqual([
+      'attachments — files attached to the run', 'stage — the current stage file', 'plan', 'impl',
+    ]);
+  });
+
+  it('outside a body, Reads from offers neither the stage file nor any body step', async () => {
+    renderEditor(STAGED_WORKFLOW);
+    expect(await readsFromOptions('after')).toEqual(['attachments — files attached to the run', 'plan']);
+  });
+
+  it('does not offer stages as a kind inside a stages body — it cannot nest', async () => {
+    renderEditor(STAGED_WORKFLOW);
+    fireEvent.click(screen.getByTestId('step-collapse-impl'));
+    fireEvent.click(within(screen.getByTestId('step-card-impl')).getByRole('combobox', { name: 'Kind' }));
+    const options = (await screen.findAllByRole('option')).map(o => o.textContent);
+    expect(options).toEqual(['agent', 'command', 'manual', 'approval', 'loop']);
+  });
+
+  it('offers stages as a kind at the top level; picking it turns the card into a stages card', async () => {
+    renderEditor(STAGED_WORKFLOW);
+    fireEvent.click(screen.getByTestId('step-collapse-after'));
+    fireEvent.click(within(screen.getByTestId('step-card-after')).getByRole('combobox', { name: 'Kind' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'stages' }));
+    const card = screen.getByTestId('step-card-after');
+    expect(within(card).getByLabelText(/^Stage files/)).toHaveValue('');
+    expect(within(card).queryByLabelText(/^Prompt/)).not.toBeInTheDocument();
+    expect(within(card).getByTestId('body-fold-after')).toBeInTheDocument();
+  });
+
+  it('converting a loop to stages keeps its body', () => {
+    const stepA: AgentStep = { kind: 'agent', id: 'a', runner: 'claude', mode: 'headless', writes: false, prompt: 'p', output: 'a.md' };
+    expect(convertStep({ kind: 'loop', id: 'x', until: 'a', steps: [stepA] }, 'stages'))
+      .toMatchObject({ kind: 'stages', id: 'x', steps: [stepA] });
+  });
+
+  it('converting stages to a loop keeps its body, with until left for the author to pick', () => {
+    const stepA: AgentStep = { kind: 'agent', id: 'a', runner: 'claude', mode: 'headless', writes: false, prompt: 'p', output: 'a.md' };
+    const loop = convertStep({ kind: 'stages', id: 'x', items: 'p/*.md', max_retries: 3, steps: [stepA] }, 'loop');
+    expect(loop).toEqual({ kind: 'loop', id: 'x', until: '', enabled: undefined, steps: [stepA] });
+  });
+});

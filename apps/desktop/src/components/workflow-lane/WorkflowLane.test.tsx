@@ -289,3 +289,47 @@ describe('WorkflowLane hover highlighting', () => {
     expect(screen.getByTestId('step-tile-plan')).not.toHaveAttribute('data-highlight', 'source');
   });
 });
+
+describe('WorkflowLane: a stages step', () => {
+  const STAGED: WorkflowEntry = {
+    name: 'staged',
+    path: '/ws/.whiphand/workflows/staged.yaml',
+    source: 'project',
+    workflow: {
+      name: 'staged',
+      steps: [
+        { id: 'plan', kind: 'agent', runner: 'claude', mode: 'interactive', writes: false, prompt: 'Plan it.', output: 'plan.md' },
+        {
+          id: 'build', kind: 'stages', items: 'docs/plan/*.md', max_retries: 3,
+          steps: [
+            { id: 'impl', kind: 'agent', runner: 'claude', mode: 'headless', writes: true, prompt: 'Build it.', output: 'impl.md', inputs: ['stage', 'plan'] },
+            { id: 'gate', kind: 'approval', title: 'Good?', instructions: 'Look.' },
+          ],
+        },
+      ],
+    },
+  };
+
+  it('lays its body out inside a group labelled with how often it runs', () => {
+    renderLane(STAGED);
+    expect(screen.getByTestId('stages-label-build')).toHaveTextContent('build · once per stage file · docs/plan/*.md · up to 3 retries');
+    const group = screen.getByTestId('stages-group-build');
+    expect(within(group).getByTestId('step-tile-impl')).toBeInTheDocument();
+    expect(within(screen.getByTestId('step-tile-gate')).getByText('2.2')).toBeInTheDocument();
+  });
+
+  it('counts the stages step apart from the steps it holds', () => {
+    renderLane(STAGED);
+    expect(screen.getByText('3 steps · 1 stages step')).toBeInTheDocument();
+  });
+
+  it('collapses a disabled stages step to a single tile', () => {
+    const disabled: WorkflowEntry = {
+      ...STAGED,
+      workflow: { ...STAGED.workflow!, steps: STAGED.workflow!.steps.map(s => (s.id === 'build' ? { ...s, enabled: false } : s)) },
+    };
+    renderLane(disabled);
+    expect(screen.getByTestId('stages-disabled-build')).toHaveTextContent('stages disabled — 2 steps');
+    expect(screen.queryByTestId('step-tile-impl')).not.toBeInTheDocument();
+  });
+});

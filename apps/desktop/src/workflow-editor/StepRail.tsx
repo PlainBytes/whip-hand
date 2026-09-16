@@ -7,6 +7,7 @@ import type {
 } from '../../../../packages/core/src/types.ts';
 import { childSteps, isAgentStep, isManualStep } from '../../../../packages/core/src/steps.ts';
 import { ATTACHMENTS_REF } from '../../../../packages/core/src/attachments.ts';
+import { STAGE_REF } from '../../../../packages/core/src/types.ts';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
 import { useStepLayoutStyles } from './step-layout.ts';
@@ -26,6 +27,8 @@ const CAPTURE_OPTIONS: Array<{ value: string; label: string }> = [
 export interface StepRailProps {
   step: AgentStep | CommandStep | ManualStep;
   earlierStepIds: string[];
+  /** Sits in a `stages` body — Reads from offers `stage`, the current stage file. */
+  inStages?: boolean;
   /** Set when this step is a loop's `until:` target — Verdict is locked on, naming the loop. */
   guardedByLoopId?: string;
   onUpdate: (next: Step) => void;
@@ -40,7 +43,7 @@ export interface StepRailProps {
  * prose sits beside, none of it stacked beneath a textarea any more. Each
  * field is a direct child, so each is its own cell of the rail's grid.
  */
-export function StepRail({ step, earlierStepIds, guardedByLoopId, onUpdate, fieldErrors }: StepRailProps) {
+export function StepRail({ step, earlierStepIds, inStages, guardedByLoopId, onUpdate, fieldErrors }: StepRailProps) {
   const styles = useStepLayoutStyles();
   const guardTooltip = guardedByLoopId
     ? `'${step.id}' ends loop '${guardedByLoopId}' — it must keep Verdict on`
@@ -335,8 +338,17 @@ export function StepRail({ step, earlierStepIds, guardedByLoopId, onUpdate, fiel
             {ATTACHMENTS_REF}{' '}
             <Text size={200} style={{ color: 'var(--colorNeutralForeground3)' }}>— files attached to the run</Text>
           </Option>
+          {/* Not a step either: the current stage file, readable only inside a
+              stages body — schema.ts refuses it anywhere else. There it always
+              means the stage file, even if a step is (invalidly) named it. */}
+          {inStages && (
+            <Option value={STAGE_REF} text={STAGE_REF}>
+              {STAGE_REF}{' '}
+              <Text size={200} style={{ color: 'var(--colorNeutralForeground3)' }}>— the current stage file</Text>
+            </Option>
+          )}
           {earlierStepIds
-            .filter(id => id !== ATTACHMENTS_REF)
+            .filter(id => id !== ATTACHMENTS_REF && !(inStages && id === STAGE_REF))
             .map(id => <Option key={id} value={id}>{id}</Option>)}
         </Dropdown>
       </Field>
@@ -385,15 +397,14 @@ export function convertStep(step: Step, kind: StepKind): Step {
         ...(output !== undefined ? { output } : {}),
       } as ManualStep;
     case 'loop':
+      // A container keeps its body across the switch; `until` starts blank,
+      // as a fresh loop's does, for Repeat until to fill in.
       return {
         kind, id: step.id, until: '', enabled: step.enabled,
         steps: childSteps(step),
       };
     case 'stages':
-      // No editor fields yet (a StagesFields card is later work) — this only
-      // has to keep the step id, enabled flag and body alive across a
-      // round trip through the Kind dropdown, the same as switching to
-      // 'loop' already does.
+      // Same as 'loop': the body survives, and Stage files starts blank.
       return {
         kind, id: step.id, items: '', enabled: step.enabled,
         steps: childSteps(step),

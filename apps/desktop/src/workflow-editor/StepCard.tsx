@@ -1,11 +1,11 @@
 import {
-  Button, Dropdown, Field, Input, MessageBar, MessageBarBody, Option, Text, Textarea, Tooltip,
+  Button, Dropdown, Field, Input, MessageBar, MessageBarBody, Option, Textarea, Tooltip,
 } from '@fluentui/react-components';
 import {
   ArrowDown20Regular, ArrowUp20Regular, ChevronDown20Regular, ChevronRight20Regular,
   Delete20Regular, FolderArrowRight20Regular, Pause20Regular, Play20Regular,
 } from '@fluentui/react-icons';
-import type { LoopStep, Step, StepKind } from '../../../../packages/core/src/types.ts';
+import type { LoopStep, StagesStep, Step, StepKind } from '../../../../packages/core/src/types.ts';
 import { isContainerStep, isLoopStep, isStagesStep } from '../../../../packages/core/src/steps.ts';
 import { StepSummary } from '../components/StepSummary.tsx';
 import { StepIdField } from './StepIdField.tsx';
@@ -21,11 +21,15 @@ export interface StepCardProps {
   earlierStepIds: string[];
   idsInTree: ReadonlySet<string>;
   endsLoop: boolean;
-  /** Will not run: itself disabled, or inside a disabled loop. */
+  /** Will not run: itself disabled, or inside a disabled container. */
   dimmed: boolean;
+  /** Sits in some container's body — a `stages` step cannot go here (schema.ts refuses it inside a loop or another stages step). */
+  nested?: boolean;
+  /** Sits in a `stages` body, at any depth — `stage` (the current stage file) is readable here. */
+  inStages?: boolean;
   collapsed: boolean;
   onToggleCollapsed: () => void;
-  /** Only meaningful for a loop; undefined body-fold props hide the chevron. */
+  /** Only meaningful for a container (loop or stages); undefined body-fold props hide the chevron. */
   bodyFolded?: boolean;
   onToggleBodyFolded?: () => void;
   isFirst: boolean;
@@ -59,7 +63,7 @@ export interface StepCardProps {
  * nested card.
  */
 export function StepCard({
-  step, ordinal, earlierStepIds, idsInTree, endsLoop, dimmed, collapsed, onToggleCollapsed,
+  step, ordinal, earlierStepIds, idsInTree, endsLoop, dimmed, nested, inStages, collapsed, onToggleCollapsed,
   bodyFolded, onToggleBodyFolded, isFirst, isLast, onMove, onInsertBelow, guardedByLoopId,
   onToggleEnabled, onRemove, onUpdate, onRename, onIdError, readerNote, highlight, onReadsClick, onWritesClick,
   problemCount, fieldErrors,
@@ -67,6 +71,9 @@ export function StepCard({
   const styles = useStepLayoutStyles();
   const isEnabled = step.enabled !== false;
   const guardTooltip = guardedByLoopId ? `'${step.id}' ends loop '${guardedByLoopId}' — it cannot be disabled` : undefined;
+  // Offering `stages` inside a container would only invite a save-time error
+  // the dropdown can prevent — the same reasoning as Repeat until's options.
+  const kindOptions = nested ? KIND_OPTIONS.filter(k => k !== 'stages') : KIND_OPTIONS;
 
   function patch(fields: Partial<Step>): void {
     onUpdate({ ...step, ...fields } as Step);
@@ -101,7 +108,7 @@ export function StepCard({
             problemCount={problemCount}
           />
         </div>
-        {isLoopStep(step) && onToggleBodyFolded && (
+        {isContainerStep(step) && onToggleBodyFolded && (
           <Button
             appearance="subtle"
             size="small"
@@ -152,6 +159,8 @@ export function StepCard({
         <div style={{ borderTop: '1px solid var(--colorNeutralStroke2)', padding: 12 }}>
           {isLoopStep(step) ? (
             <LoopFields step={step} onUpdate={onUpdate} fieldErrors={fieldErrors} />
+          ) : isStagesStep(step) ? (
+            <StagesFields step={step} onUpdate={onUpdate} fieldErrors={fieldErrors} />
           ) : (
             <div className={styles.body} style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
               <div style={{ flex: '1 1 320px', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -165,7 +174,7 @@ export function StepCard({
                       style={{ minWidth: 120 }}
                       onOptionSelect={(_e, data) => data.optionValue && onUpdate(convertStep(step, data.optionValue as StepKind))}
                     >
-                      {KIND_OPTIONS.map(v => <Option key={v} value={v}>{v}</Option>)}
+                      {kindOptions.map(v => <Option key={v} value={v}>{v}</Option>)}
                     </Dropdown>
                   </Field>
                 </div>
@@ -201,28 +210,57 @@ export function StepCard({
                     <Textarea value={step.instructions} rows={12} onChange={(_e, data) => patch({ instructions: data.value })} />
                   </Field>
                 )}
-                {isStagesStep(step) && (
-                  // No StagesFields card yet (later work: a proper items/max_retries
-                  // editor, plus recursing into its body) — this only has to keep
-                  // the card from silently looking like an empty agent step.
-                  <Text size={200} style={{ color: 'var(--colorNeutralForeground3)' }}>
-                    Stage files editing isn&apos;t available here yet — edit this step&apos;s YAML directly.
-                  </Text>
-                )}
               </div>
-              {!isStagesStep(step) && (
-                <StepRail
-                  step={step}
-                  earlierStepIds={earlierStepIds}
-                  guardedByLoopId={guardedByLoopId}
-                  onUpdate={onUpdate}
-                  fieldErrors={fieldErrors}
-                />
-              )}
+              <StepRail
+                step={step}
+                earlierStepIds={earlierStepIds}
+                inStages={inStages}
+                guardedByLoopId={guardedByLoopId}
+                onUpdate={onUpdate}
+                fieldErrors={fieldErrors}
+              />
             </div>
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * A stages card has no prose either: which files make the stages, and how many
+ * extra attempts a failing stage gets. No `until` — a stages step ends when
+ * its files run out, not on a verdict.
+ */
+function StagesFields({
+  step, onUpdate, fieldErrors,
+}: { step: StagesStep; onUpdate: (next: Step) => void; fieldErrors?: Record<string, string> }) {
+  function patch(fields: Partial<StagesStep>): void {
+    onUpdate({ ...step, ...fields });
+  }
+  return (
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <Field
+        label="Stage files"
+        required
+        hint="A glob relative to the workspace, one stage per file, in path order. Supports {{ inputs.* }}."
+        validationState={fieldErrors?.items ? 'error' : 'none'}
+        validationMessage={fieldErrors?.items}
+        style={{ flex: '1 1 320px' }}
+      >
+        <Input value={step.items} onChange={(_e, data) => patch({ items: data.value })} />
+      </Field>
+      <Field
+        label="Max retries"
+        hint="Extra attempts a failing stage gets. Blank = 2."
+        validationState={fieldErrors?.max_retries ? 'error' : 'none'}
+        validationMessage={fieldErrors?.max_retries}
+      >
+        <Input
+          value={step.max_retries === undefined ? '' : String(step.max_retries)}
+          onChange={(_e, data) => patch({ max_retries: numberOrUndefined(data.value) })}
+        />
+      </Field>
     </div>
   );
 }

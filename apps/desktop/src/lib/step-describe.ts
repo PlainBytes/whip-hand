@@ -6,13 +6,15 @@
  * packages/core because it's presentation — a phrase like "until X passes"
  * has no business in the engine.
  */
-import type { AgentStep, CommandStep, LoopStep, ManualStep, Step } from '../../../../packages/core/src/types.ts';
+import type {
+  AgentStep, CommandStep, LoopStep, ManualStep, StagesStep, Step,
+} from '../../../../packages/core/src/types.ts';
 import {
-  findStep, flattenSteps, isCommandStep, isContainerStep, isLoopStep, isManualStep,
+  findStep, flattenSteps, isCommandStep, isContainerStep, isLoopStep, isManualStep, isStagesStep,
 } from '../../../../packages/core/src/steps.ts';
 import { ATTACHMENTS_REF } from '../../../../packages/core/src/attachments.ts';
 
-/** A step that can appear as a tile — everything except a loop, which gets a group instead. */
+/** A step that can appear as a tile — everything except a container, which gets a group instead. */
 export type LeafStep = AgentStep | CommandStep | ManualStep;
 
 export type Actor = 'chat' | 'auto' | 'decide' | 'shell';
@@ -83,10 +85,27 @@ export function loopRule(loop: LoopStep, steps: Step[]): LoopRule {
   };
 }
 
+export interface StagesRule {
+  /** How often the body runs — the stages counterpart to a loop's "until X passes". */
+  phrase: 'once per stage file';
+  /** The templated glob the stage files come from. */
+  items: string;
+  maxRetries?: number;
+}
+
+/** The words for a stages group's edge label, plus the retry budget when the workflow set one. */
+export function stagesRule(stages: StagesStep): StagesRule {
+  return {
+    phrase: 'once per stage file',
+    items: stages.items,
+    ...(stages.max_retries !== undefined ? { maxRetries: stages.max_retries } : {}),
+  };
+}
+
 /**
- * Nested ordinals for every step in the tree: "4", "4.1", "4.1.1" — a loop
- * counts as one number at its own level, and its body continues underneath
- * it rather than restarting the top-level count.
+ * Nested ordinals for every step in the tree: "4", "4.1", "4.1.1" — a
+ * container (loop or stages) counts as one number at its own level, and its
+ * body continues underneath it rather than restarting the top-level count.
  */
 export function ordinals(steps: Step[]): Map<string, string> {
   const out = new Map<string, string>();
@@ -94,7 +113,7 @@ export function ordinals(steps: Step[]): Map<string, string> {
     list.forEach((step, i) => {
       const ordinal = prefix ? `${prefix}.${i + 1}` : `${i + 1}`;
       out.set(step.id, ordinal);
-      if (isLoopStep(step)) walk(step.steps, ordinal);
+      if (isContainerStep(step)) walk(step.steps, ordinal);
     });
   };
   walk(steps, '');
@@ -104,14 +123,17 @@ export function ordinals(steps: Step[]): Map<string, string> {
 interface Position {
   /** ids of every loop this step sits inside, outermost first. */
   loopChain: Set<string>;
-  /** Position in document order (loops expanded once, matching `flattenSteps`). */
+  /** Position in document order (containers expanded once, matching `flattenSteps`). */
   order: number;
 }
 
 function positionsOf(steps: Step[], chain: readonly string[], counter: { n: number }, out: Map<string, Position>): void {
   for (const step of steps) {
     out.set(step.id, { loopChain: new Set(chain), order: counter.n++ });
+    // A stages body is walked but never joins the loop chain: a later step
+    // in the same stage is not a previous iteration of anything.
     if (isLoopStep(step)) positionsOf(step.steps, [...chain, step.id], counter, out);
+    else if (isStagesStep(step)) positionsOf(step.steps, chain, counter, out);
   }
 }
 

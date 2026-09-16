@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   appendAt, insertAfter, moveAt, referenceableIds, removeAt, removeStep, renameStep, siblingsAt, stepAt, updateAt,
 } from './step-tree.ts';
+import { stagesRule } from './step-describe.ts';
+import { validateWorkflowSemantics } from '../../../../packages/core/src/schema.ts';
 import type { CommandStep, LoopStep, StagesStep, Step } from '../../../../packages/core/src/types.ts';
 
 const cmd = (id: string, output?: string): CommandStep =>
@@ -171,5 +173,87 @@ describe('referenceable ids', () => {
     const withSilent: Step[] = [cmd('quiet'), cmd('loud', 'loud.log'), cmd('z', 'z.log')];
     expect(referenceableIds(withSilent, [2])).toEqual(['loud']);
     expect(referenceableIds(tree(), [1, 1])).toEqual(['a', 'b']);
+  });
+});
+
+describe('a stages body', () => {
+  /** plan → build (stages: impl, fix-loop(check), gate) → after */
+  const stagedTree = (): Step[] => [
+    cmd('plan', 'plan.md'),
+    {
+      kind: 'stages', id: 'build', items: 'plans/*.md',
+      steps: [
+        cmd('impl', 'impl.log'),
+        { kind: 'loop', id: 'fix', until: 'check', steps: [cmd('patch', 'patch.log'), cmd('check', 'check.log')] } as LoopStep,
+        cmd('gate', 'gate.log'),
+      ],
+    } as StagesStep,
+    cmd('after', 'after.log'),
+  ];
+
+  it('a step inside a stages body can be added, moved and described', () => {
+    // Addressing: the body is a list like a loop body.
+    expect(siblingsAt(stagedTree(), [1]).map(s => s.id)).toEqual(['impl', 'fix', 'gate']);
+    expect(stepAt(stagedTree(), [1, 1, 0])?.id).toBe('patch');
+
+    // Add: appended into the body, inserted after a body step, and "insert
+    // below" on the stages card itself lands as its first body child.
+    expect((appendAt(stagedTree(), [1], cmd('new'))[1] as StagesStep).steps.map(s => s.id))
+      .toEqual(['impl', 'fix', 'gate', 'new']);
+    expect((insertAfter(stagedTree(), [1, 0], cmd('new'))[1] as StagesStep).steps.map(s => s.id))
+      .toEqual(['impl', 'new', 'fix', 'gate']);
+    const intoCard = insertAfter(stagedTree(), [1], cmd('new'));
+    expect((intoCard[1] as StagesStep).steps.map(s => s.id)).toEqual(['new', 'impl', 'fix', 'gate']);
+    expect(intoCard.map(s => s.id)).toEqual(['plan', 'build', 'after']);
+
+    // Move: within the body, and never out of it.
+    expect((moveAt(stagedTree(), [1, 2], -1)[1] as StagesStep).steps.map(s => s.id)).toEqual(['impl', 'gate', 'fix']);
+    expect((moveAt(stagedTree(), [1, 2], 1)[1] as StagesStep).steps.map(s => s.id)).toEqual(['impl', 'fix', 'gate']);
+
+    // Update: reaches into a loop nested in the body.
+    const updated = updateAt(stagedTree(), [1, 1, 1], cmd('verify', 'check.log'));
+    expect(((updated[1] as StagesStep).steps[1] as LoopStep).steps.map(s => s.id)).toEqual(['patch', 'verify']);
+    expect(removeAt(stagedTree(), [1, 0])[1]).toMatchObject({ steps: [{ id: 'fix' }, { id: 'gate' }] });
+
+    // Described: the lane's label says how often the body runs.
+    expect(stagesRule(stagedTree()[1] as StagesStep)).toMatchObject({ phrase: 'once per stage file', items: 'plans/*.md' });
+  });
+
+  it('offers a step inside a body everything earlier outside it, and earlier body steps', () => {
+    expect(referenceableIds(stagedTree(), [1, 2])).toEqual(['plan', 'impl', 'patch', 'check']);
+  });
+
+  it('never offers a later body sibling — a stage is not an iteration', () => {
+    expect(referenceableIds(stagedTree(), [1, 0])).toEqual(['plan']);
+  });
+
+  it('still offers a later sibling inside a loop nested in the body', () => {
+    expect(referenceableIds(stagedTree(), [1, 1, 0])).toEqual(['plan', 'impl', 'check']);
+  });
+
+  it('never offers a body step to a step outside the stages step — its artifacts do not outlive a stage', () => {
+    expect(referenceableIds(stagedTree(), [2])).toEqual(['plan']);
+  });
+
+  it('never offers the stages step itself', () => {
+    expect(referenceableIds(stagedTree(), [2])).not.toContain('build');
+  });
+
+  it('offers nothing validateWorkflowSemantics would reject, from any card in the tree', () => {
+    const steps = stagedTree();
+    const walk = (list: Step[], prefix: number[]): number[][] => list.flatMap((step, i) => [
+      [...prefix, i],
+      ...('steps' in step ? walk(step.steps, [...prefix, i]) : []),
+    ]);
+    for (const path of walk(steps, [])) {
+      const reader = stepAt(steps, path)!;
+      if (reader.kind === 'loop' || reader.kind === 'stages') continue;
+      for (const id of referenceableIds(steps, path)) {
+        const wired = updateAt(steps, path, { ...reader, inputs: [id] });
+        const refProblems = validateWorkflowSemantics({ name: 'w', steps: wired })
+          .filter(p => p.startsWith(`step '${reader.id}' reads`) || p.startsWith(`step '${reader.id}' references`));
+        expect(refProblems, `${reader.id} reading ${id}`).toEqual([]);
+      }
+    }
   });
 });

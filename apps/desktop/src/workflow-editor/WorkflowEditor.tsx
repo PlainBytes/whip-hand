@@ -9,7 +9,7 @@ import { DeleteWorkflowDialog } from '../components/DeleteWorkflowDialog.tsx';
 import { PageHeader } from '../components/PageHeader.tsx';
 import { PageFooter } from '../components/PageFooter.tsx';
 import type { Scope, Workflow } from '../../../../packages/core/src/types.ts';
-import { isLoopStep } from '../../../../packages/core/src/steps.ts';
+import { isContainerStep } from '../../../../packages/core/src/steps.ts';
 import { untilTargetOf } from '../../../../packages/core/src/enabled.ts';
 import { validateWorkflowDraft } from '../../../../packages/core/src/schema.ts';
 import { readerNotes } from '../lib/disabled-copy.ts';
@@ -35,7 +35,7 @@ export interface WorkflowEditorProps {
   onDeleted: () => void;
 }
 
-/** True when hiding `row` because it sits inside a loop whose body is folded. */
+/** The rows left once every row inside a folded container's body (loop or stages) is hidden. */
 function computeVisible(rows: EditorRow[], isBodyFolded: (id: string) => boolean): EditorRow[] {
   const visible: EditorRow[] = [];
   let hideDepth: number | null = null;
@@ -45,7 +45,7 @@ function computeVisible(rows: EditorRow[], isBodyFolded: (id: string) => boolean
       hideDepth = null;
     }
     visible.push(row);
-    if (isLoopStep(row.step) && isBodyFolded(row.step.id)) hideDepth = row.depth;
+    if (isContainerStep(row.step) && isBodyFolded(row.step.id)) hideDepth = row.depth;
   }
   return visible;
 }
@@ -134,13 +134,13 @@ export function WorkflowEditor({
     problemCountByStepId.set(stepId, (problemCountByStepId.get(stepId) ?? 0) + 1);
   }
 
-  // Expands the card (and unfolds any loop bodies above it), then scrolls it
+  // Expands the card (and unfolds any container bodies above it), then scrolls it
   // into view once that expansion has actually reached the DOM.
   function revealStep(stepId: string): void {
     const target = rows.find(r => r.step.id === stepId);
     if (target === undefined) return;
     for (const row of rows) {
-      if (!isLoopStep(row.step)) continue;
+      if (!isContainerStep(row.step)) continue;
       if (row.path.length >= target.path.length) continue;
       if (!row.path.every((v, i) => v === target.path[i])) continue;
       if (draftApi.isBodyFolded(row.step.id)) draftApi.toggleBodyFolded(row.step.id);
@@ -267,10 +267,12 @@ export function WorkflowEditor({
                 idsInTree={draftApi.idsInTree}
                 endsLoop={row.endsLoop}
                 dimmed={row.dimmed}
+                nested={row.depth > 0}
+                inStages={row.inStages}
                 collapsed={!draftApi.isExpanded(row.step.id)}
                 onToggleCollapsed={() => draftApi.toggleExpanded(row.step.id)}
-                bodyFolded={isLoopStep(row.step) ? draftApi.isBodyFolded(row.step.id) : undefined}
-                onToggleBodyFolded={isLoopStep(row.step) ? () => draftApi.toggleBodyFolded(row.step.id) : undefined}
+                bodyFolded={isContainerStep(row.step) ? draftApi.isBodyFolded(row.step.id) : undefined}
+                onToggleBodyFolded={isContainerStep(row.step) ? () => draftApi.toggleBodyFolded(row.step.id) : undefined}
                 isFirst={siblings.index === 0}
                 isLast={siblings.index === siblings.total - 1}
                 onMove={dir => draftApi.moveStep(row.path, dir)}

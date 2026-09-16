@@ -191,7 +191,7 @@ function stageFindingsId(body: Step[], gateId: string): string | undefined {
 interface StageAttemptNotes {
   /** Review cycles that ran out of iterations and handed their failure to the gate. */
   exhausted: Array<{ loopId: string; untilId: string; iterations: number }>;
-  /** The tree as this attempt began, or null outside git (or on a dry run): no "no changes" note then. */
+  /** The tree as the stage (not this attempt) began, or null outside git (or on a dry run): no "no changes" note then. */
   entrySnapshot: string | null;
 }
 
@@ -1179,6 +1179,10 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         }
       };
 
+      // Taken once, at stage entry, and shared by every attempt: a retry that
+      // re-edits a file attempt 1 already changed leaves an identical porcelain
+      // line, so an attempt-entry snapshot would call real work "no changes".
+      const entrySnapshot = opts.dryRun ? null : await snapshotTree(workdir);
       // The gate that sent the last attempt back, and the note it wrote.
       let rejection: { gateId: string; path: string | undefined } | undefined;
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -1203,7 +1207,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
           stageId: stage.id, title: stage.title, attempt,
         });
         const frame: StageFrame = { kind: 'stages', id: stages.id, stage, attempt, maxAttempts, parent: outer };
-        stageNotes.set(frame, { exhausted: [], entrySnapshot: opts.dryRun ? null : await snapshotTree(workdir) });
+        stageNotes.set(frame, { exhausted: [], entrySnapshot });
 
         let rejected = false;
         for (const body of stages.steps) {

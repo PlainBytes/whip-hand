@@ -535,6 +535,26 @@ test('a stage that changed nothing says so at the gate rather than being skipped
   assert.doesNotMatch(h.asked[1].instructions, /produced no changes/i);
 });
 
+test("a retry that re-edits the same file is still a change, not 'no changes'", async () => {
+  const dir = await tmpRepoWithPlans(ONE_STAGE);
+  gitInit(dir);
+  // Attempt 1 creates api.ts; the human retries; attempt 2 edits the very same
+  // file again, so its porcelain line is identical to attempt 2's own start.
+  const h = harness({
+    answers: [{ choice: 'retry' }, { choice: 'continue' }],
+    onSpawn: (stepId, n) => {
+      if (stepId === 'execute') writeFileSync(join(dir, 'api.ts'), `export const attempt = ${n};\n`);
+    },
+  });
+  const result = await run(dir, h);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(attempts(h), [1, 2]);
+  assert.doesNotMatch(h.asked[0].instructions, /produced no changes/i);
+  assert.doesNotMatch(h.asked[1].instructions, /produced no changes/i,
+    'measured from the stage entry, not the attempt entry');
+});
+
 test('abort at a stage gate fails the run immediately', async () => {
   const dir = await tmpRepoWithPlans(TWO_STAGES);
   const h = harness({ answers: [{ choice: 'abort' }] });

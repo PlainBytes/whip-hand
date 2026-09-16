@@ -277,7 +277,7 @@ function readStages(detail: RunManifest): StagesRecord {
     if (where === undefined || step.kind === 'loop') continue;
     const key = stageBudgetKey(where.stagesKey, where.stageId);
     if (where.attempt !== used.get(key)) continue;
-    if (step.status !== 'done') unfinished.add(key);
+    if (step.status !== 'done' && step.status !== 'disabled') unfinished.add(key);
     else if ((step.kind === 'manual' || step.kind === 'approval') && step.stage !== undefined
       && step.verdict === 'fail') rejected.add(key);
   }

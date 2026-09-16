@@ -85,7 +85,9 @@ export function fromManualRequest(request: ManualRequest): ReviewRequest {
     ...(stage === undefined ? {} : {
       subtitle: [
         stageLabel(stage.index, stage.total, stage.title),
-        ...(stage.attempt > 1 ? [`attempt ${stage.attempt}`] : []),
+        ...(stage.attempt > 1
+          ? [stage.maxAttempts === undefined ? `attempt ${stage.attempt}` : `attempt ${stage.attempt} of ${stage.maxAttempts}`]
+          : []),
       ].join(' · '),
     }),
     instructions: request.instructions,

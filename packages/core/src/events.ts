@@ -77,6 +77,7 @@ export const manualRequestSchema: z.ZodType<ManualRequest> = z.object({
   stage: z.object({
     stagesId: z.string(), id: z.string(), title: z.string(),
     index: z.number().int().positive(), total: z.number().int().positive(), attempt: z.number().int().positive(),
+    maxAttempts: z.number().int().positive().optional(),
   }).optional(),
   execution: z.object({
     loopId: z.string().optional(), iteration: z.number().int().positive().optional(),
@@ -181,6 +182,7 @@ export const whiphandEventSchema: z.ZodType<WhiphandEvent> = z.discriminatedUnio
     type: z.literal('stages:item'), id: z.string(),
     index: z.number().int().positive(), total: z.number().int().positive(),
     stageId: z.string(), title: z.string(), attempt: z.number().int().positive(),
+    maxAttempts: z.number().int().positive().optional(),
   }),
   z.object({ type: z.literal('stages:accepted'), id: z.string(), stageId: z.string() }),
   z.object({

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   requestSchema, responseSchema, notificationSchema, methods, notifications, ErrorCode,
-  readArtifactResult, writeArtifactParams,
+  readArtifactResult, writeArtifactParams, whiphandEventNotificationParams, manualRequestParams,
 } from './protocol.ts';
 
 test('requestSchema: round-trips a well-formed request', () => {
@@ -408,4 +408,23 @@ test('methods: readArtifact takes an optional encoding; statArtifact takes a nam
   assert.equal(methods.readArtifact.params.safeParse({ workdir: '/w', runId: 'r', name: 'a', encoding: 'base64' }).success, true);
   assert.equal(methods.readArtifact.params.safeParse({ workdir: '/w', runId: 'r', name: 'a', encoding: 'hex' }).success, false);
   assert.equal(methods.statArtifact.params.safeParse({ workdir: '/w', runId: 'r', name: 'a' }).success, true);
+});
+
+test('a stage\'s attempt budget survives the wire on stages:item and on a manual request', () => {
+  const event = whiphandEventNotificationParams.parse({
+    jobId: 'j', ts: 't', event: {
+      type: 'stages:item', id: 'build', index: 2, total: 7, stageId: '02-b', title: 'API', attempt: 2, maxAttempts: 3,
+    },
+  });
+  assert.equal((event.event as { maxAttempts?: number }).maxAttempts, 3);
+
+  const request = manualRequestParams.parse({
+    jobId: 'j',
+    request: {
+      stepId: 'accept', kind: 'approval', title: 'Accept?', instructions: '', choices: ['continue'],
+      context: { artifacts: [] }, defaultChoice: 'continue',
+      stage: { stagesId: 'build', id: '02-b', title: 'API', index: 2, total: 7, attempt: 2, maxAttempts: 3 },
+    },
+  });
+  assert.equal(request.request.stage?.maxAttempts, 3);
 });

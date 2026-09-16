@@ -982,7 +982,7 @@ describe('RunDetailPage', () => {
     expect(screen.getByTestId('step-card-implement@01-a#1')).not.toHaveAttribute('data-current');
   });
 
-  it('counts the stages an earlier attempt accepted alongside the ones a resumed job accepted', async () => {
+  it('merges what an earlier attempt recorded about its stages with what a resumed job heard', async () => {
     // The resumed job only hears its own stages:accepted; the manifest holds
     // the rest. Neither copy may clobber the other.
     useAppStore.setState({
@@ -990,7 +990,12 @@ describe('RunDetailPage', () => {
         'job-resumed': {
           jobId: 'job-resumed', runId: 'r-resumed', finished: false, workdir: '/ws',
           stepOrder: ['build'],
-          steps: { build: { key: 'build', id: 'build', kind: 'stages', status: 'running', total: 7, completedStages: ['02-b'] } },
+          steps: {
+            build: {
+              key: 'build', id: 'build', kind: 'stages', status: 'running', total: 7, completedStages: ['02-b'],
+              startedStages: { '02-b': { title: 'API', index: 2, maxAttempts: 3 } },
+            },
+          },
           currentExecution: { build: 'build' }, events: [], logTail: [], logRows: [], activityTail: [], hasNarrated: false,
           ptyActive: false, ptyDataBuffer: [], ptyDataBaseIndex: 0, ptyDataTrimmed: false, ptyExited: false,
         },
@@ -1000,10 +1005,20 @@ describe('RunDetailPage', () => {
     await respondGetRun(transport, {
       runId: 'r-resumed', runDir: '/ws/.whiphand/runs/r-resumed', status: 'running',
       workflow: 'staged-feature', inputs: {}, artifacts: [],
-      steps: [{ id: 'build', kind: 'stages', status: 'running', total: 7, completedStages: ['01-a'] }],
+      steps: [
+        {
+          id: 'build', kind: 'stages', status: 'running', total: 7, completedStages: ['01-a'],
+          startedStages: { '01-a': { title: 'Schema', index: 1, maxAttempts: 3 } },
+        },
+        { id: 'implement', kind: 'agent', loopId: 'build', iteration: 1, stage: '01-a', status: 'done' },
+        { id: 'implement', kind: 'agent', loopId: 'build', iteration: 1, stage: '02-b', status: 'done' },
+      ],
     });
 
     expect(await screen.findByTestId('stages-progress-build')).toHaveTextContent('2 of 7 accepted');
+    // Stage titles, like accepted stages, come from both sides.
+    expect(screen.getByTestId('stage-label-build@01-a')).toHaveTextContent('stage 1 of 7 · Schema');
+    expect(screen.getByTestId('stage-label-build@02-b')).toHaveTextContent('stage 2 of 7 · API');
   });
 
   it('shows steps the live job has not reported yet by merging the manifest step list', async () => {

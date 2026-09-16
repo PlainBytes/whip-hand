@@ -67,6 +67,8 @@ export interface StepState {
   completed?: number;
   /** On a `stages` step's own row: the attempt number of `currentStage`. */
   attempt?: number;
+  /** On a `stages` step's own row: how many attempts `currentStage` has in all. Absent on older manifests. */
+  maxAttempts?: number;
   /** On a `stages` step's own row: stage ids accepted so far, in order. */
   completedStages?: string[];
   /** On a `stages` step's own row: the stage file its body is running against. */
@@ -74,12 +76,12 @@ export interface StepState {
   /** On a `stages` step's own row: `currentStage` ran out of retries and went to triage. */
   exhausted?: boolean;
   /**
-   * On a `stages` step's own row, live only: every stage a `stages:item` has
-   * named so far, by stage id. The manifest keeps only the current stage's
-   * title, so this is how an earlier stage's group keeps its name while the
-   * job is being watched — see run-tree.ts's stage labels.
+   * On a `stages` step's own row: every stage started so far, by stage id —
+   * title, position and attempt budget. Mirrors the manifest row's own field,
+   * which is what lets a stage finished before the page opened keep its name.
+   * Absent on manifests recorded before it existed.
    */
-  seenStages?: Record<string, { index: number; total: number; title: string }>;
+  startedStages?: Record<string, { title: string; index: number; maxAttempts?: number }>;
   /** On a loop's own row: how many iterations it has run so far. */
   iterations?: number;
   /**
@@ -624,11 +626,12 @@ export function reduceJobEvent(job: JobState, params: WhiphandEventNotificationP
       break;
     case 'stages:item': {
       const key = job.currentExecution[event.id] ?? findLatestExecutionKey(job, event.id);
-      const seen = key === undefined ? undefined : job.steps[key]?.seenStages;
+      const started = key === undefined ? undefined : job.steps[key]?.startedStages;
+      const budget = event.maxAttempts === undefined ? {} : { maxAttempts: event.maxAttempts };
       job = patchCurrent(job, event.id, {
         currentStage: { id: event.stageId, title: event.title, index: event.index },
-        attempt: event.attempt, total: event.total,
-        seenStages: { ...seen, [event.stageId]: { index: event.index, total: event.total, title: event.title } },
+        attempt: event.attempt, total: event.total, ...budget,
+        startedStages: { ...started, [event.stageId]: { title: event.title, index: event.index, ...budget } },
       });
       job = {
         ...job,

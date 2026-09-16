@@ -198,19 +198,35 @@ describe('buildRunTree: stages', () => {
     expect(first.key).not.toBe(second.key);
   });
 
-  it('names each group by its stage: the current one from the stages row, the rest by position', () => {
-    const stages = buildRunTree(staged())[0] as StagesNode;
-    expect(stages.children.map(g => [g.index, g.total, g.title])).toEqual([
-      [1, 2, '01-a'],
-      [2, 2, 'Add API routes'],
+  it('names a stage finished before the page opened by the title the manifest persisted', () => {
+    const rows = staged();
+    rows[0] = {
+      ...rows[0],
+      startedStages: {
+        '01-a': { title: 'Schema', index: 1, maxAttempts: 3 },
+        '02-b': { title: 'Add API routes', index: 2, maxAttempts: 3 },
+      },
+    };
+    const stages = buildRunTree(rows)[0] as StagesNode;
+    expect(stages.children.map(g => [g.index, g.total, g.title, g.maxAttempts])).toEqual([
+      [1, 2, 'Schema', 3],
+      [2, 2, 'Add API routes', 3],
     ]);
   });
 
-  it('prefers a title the live job saw on stages:item over the stage id', () => {
+  it('falls back to the current stage, then position and id, for a manifest recorded without startedStages', () => {
+    const stages = buildRunTree(staged())[0] as StagesNode;
+    expect(stages.children.map(g => [g.index, g.total, g.title, g.maxAttempts])).toEqual([
+      [1, 2, '01-a', undefined],
+      [2, 2, 'Add API routes', undefined],
+    ]);
+  });
+
+  it('takes the current stage\'s budget from the stages row when startedStages does not carry one', () => {
     const rows = staged();
-    rows[0] = { ...rows[0], seenStages: { '01-a': { index: 1, total: 2, title: 'Schema' } } };
+    rows[0] = { ...rows[0], maxAttempts: 4 };
     const stages = buildRunTree(rows)[0] as StagesNode;
-    expect(stages.children[0].title).toBe('Schema');
+    expect(stages.children.map(g => g.maxAttempts)).toEqual([undefined, 4]);
   });
 
   it('splits a stage retried after a rejection into one group per attempt', () => {

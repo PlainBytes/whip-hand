@@ -78,6 +78,8 @@ export interface StageGroup {
   total: number;
   /** The stage's title, falling back to its id where no event or manifest field named it. */
   title: string;
+  /** How many attempts the stage has in all — 'attempt 2 of 3'. Absent where the run never recorded it. */
+  maxAttempts?: number;
   children: StepNode[];
 }
 
@@ -151,10 +153,12 @@ function loopContextOf(node: StepState): LoopRef[] {
  * its iterations. Rows that never ran under any stage (the declared body,
  * before the stages step reaches it) form one trailing group of their own.
  *
- * Each group's label comes from, in order: the title a live `stages:item`
- * gave it (`seenStages`), the stages row's `currentStage`, and failing both
- * — a stage finished before this window opened, whose title the manifest
- * does not keep — its position among the stages seen and its bare id.
+ * Each group's label comes from the stages row's `startedStages` (persisted
+ * per stage by core's journal, and mirrored live by the store), then its
+ * `currentStage`, and failing both — a manifest recorded before
+ * `startedStages` existed — the stage's position among those seen and its
+ * bare id. Its attempt budget likewise, from `startedStages` or, for the
+ * current stage, the row's own `maxAttempts`.
  */
 function stageGroups(
   stages: StepState, body: StepState[], fold: (members: StepState[]) => StepNode[],
@@ -171,12 +175,13 @@ function stageGroups(
 
   stageIds.forEach((stageId, position) => {
     const rows = byStage.get(stageId)!;
-    const seen = stages.seenStages?.[stageId];
+    const started = stages.startedStages?.[stageId];
     const current = stages.currentStage?.id === stageId ? stages.currentStage : undefined;
     const label = {
-      index: seen?.index ?? current?.index ?? position + 1,
-      total: seen?.total ?? total,
-      title: seen?.title ?? current?.title ?? stageId,
+      index: started?.index ?? current?.index ?? position + 1,
+      total,
+      title: started?.title ?? current?.title ?? stageId,
+      maxAttempts: started?.maxAttempts ?? (current === undefined ? undefined : stages.maxAttempts),
     };
     const attempts = [...new Set(rows.map(row => row.iteration ?? 1))];
     for (const attempt of attempts) {

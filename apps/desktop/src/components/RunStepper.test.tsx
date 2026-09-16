@@ -520,6 +520,7 @@ function stagesRow(extra: Partial<StepState> = {}): StepState {
   return {
     key: 'build', id: 'build', kind: 'stages', status: 'running', total: 7, attempt: 1,
     currentStage: { id: '02-b', title: 'Add API routes', index: 2 }, completedStages: ['01-a'],
+    startedStages: { '01-a': { title: 'Schema', index: 1, maxAttempts: 3 }, '02-b': { title: 'Add API routes', index: 2, maxAttempts: 3 } },
     ...extra,
   } as StepState;
 }
@@ -549,7 +550,8 @@ describe('stages', () => {
     // The same step id in two stages is two pills, one under each stage.
     expect(within(first).getByTestId('step-card-implement@01-a#1')).toBeInTheDocument();
     expect(within(second).getByTestId('step-card-implement@02-b#1')).toHaveAccessibleName(/running/);
-    expect(within(first).getByTestId('stage-label-build@01-a')).toHaveTextContent('stage 1 of 7 · 01-a');
+    // Finished before this render, and still named by its title, not its id.
+    expect(within(first).getByTestId('stage-label-build@01-a')).toHaveTextContent('stage 1 of 7 · Schema');
   });
 
   it('says how many stages are accepted on the stages step\'s own pill', () => {
@@ -560,17 +562,29 @@ describe('stages', () => {
 
   it('badges each attempt of a stage that was sent back', () => {
     render(<RunStepper steps={[
-      stagesRow({ attempt: 2, currentStage: { id: '01-a', title: 'Schema', index: 1 }, completedStages: [] }),
+      stagesRow({
+        attempt: 2, maxAttempts: 3, currentStage: { id: '01-a', title: 'Schema', index: 1 }, completedStages: [],
+        startedStages: { '01-a': { title: 'Schema', index: 1, maxAttempts: 3 } },
+      }),
       stageRow('implement', '01-a', 1),
       stageRow('accept', '01-a', 1, { kind: 'approval', verdict: 'fail' }),
       stageRow('implement', '01-a', 2, { status: 'running' }),
     ]} />);
     // One stage label, however many times the stage was attempted.
     expect(screen.getAllByText('stage 1 of 7 · Schema')).toHaveLength(1);
-    expect(screen.getByTestId('stage-attempt-build@01-a#1')).toHaveTextContent('attempt 1');
-    expect(screen.getByTestId('stage-attempt-build@01-a#2')).toHaveTextContent('attempt 2');
+    expect(screen.getByTestId('stage-attempt-build@01-a#1')).toHaveTextContent(/^attempt 1 of 3$/);
+    expect(screen.getByTestId('stage-attempt-build@01-a#2')).toHaveTextContent(/^attempt 2 of 3$/);
     expect(within(screen.getByTestId('stage-attempt-group-build@01-a#2'))
       .getByTestId('step-card-implement@01-a#2')).toBeInTheDocument();
+  });
+
+  it('drops the budget from the attempt badge when the run never recorded one', () => {
+    render(<RunStepper steps={[
+      stagesRow({ attempt: 2, currentStage: { id: '01-a', title: 'Schema', index: 1 }, completedStages: [], startedStages: undefined }),
+      stageRow('implement', '01-a', 1),
+      stageRow('implement', '01-a', 2, { status: 'running' }),
+    ]} />);
+    expect(screen.getByTestId('stage-attempt-build@01-a#2')).toHaveTextContent(/^attempt 2$/);
   });
 
   it('shows no attempt badge on a stage accepted first time', () => {

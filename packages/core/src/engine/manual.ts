@@ -105,6 +105,7 @@ export async function buildManualRequest(
       stage: {
         stagesId: stage.id, id: stage.stage.id, title: stage.stage.title,
         index: stage.stage.index, total: stage.stage.total, attempt: stage.attempt,
+        maxAttempts: stage.maxAttempts,
       },
     }),
     // Which execution this is, so a frontend can key the request to its

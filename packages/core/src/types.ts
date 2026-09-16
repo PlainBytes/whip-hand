@@ -499,7 +499,11 @@ export interface ManualRequest {
   defaultChoice: 'continue' | 'abort';
   loop?: LoopFrame;
   /** Present when this step runs inside a `stages` body — which stage file, and where it sits among the others. */
-  stage?: { stagesId: string; id: string; title: string; index: number; total: number; attempt: number };
+  stage?: {
+    stagesId: string; id: string; title: string; index: number; total: number; attempt: number;
+    /** How many attempts the stage has in all — its frame's `maxAttempts`. Optional for agents predating it. */
+    maxAttempts?: number;
+  };
   /** The frame identity of this execution, so a frontend can key the request to its manifest row. */
   execution?: { loopId?: string; iteration?: number; stage?: string; outerLoops?: LoopRef[] };
 }
@@ -633,8 +637,15 @@ export type WhiphandEvent =
     }
   /** A `stages` step began: `id` is the stages step's own id, `total` how many stage files it found. */
   | { type: 'stages:start'; id: string; total: number }
-  /** The stages step is about to run its body against one stage file — `attempt` is 1-based, counting retries. */
-  | { type: 'stages:item'; id: string; index: number; total: number; stageId: string; title: string; attempt: number }
+  /**
+   * The stages step is about to run its body against one stage file — `attempt` is 1-based, counting retries.
+   * `maxAttempts` is how many attempts this stage has in all (1 + max_retries, or a resume's grant); optional
+   * only because events recorded before it existed lack it — the runner always sends it.
+   */
+  | {
+      type: 'stages:item'; id: string; index: number; total: number; stageId: string; title: string; attempt: number;
+      maxAttempts?: number;
+    }
   /** This stage was accepted and is finished — what a resume reads to skip it entirely. */
   | { type: 'stages:accepted'; id: string; stageId: string }
   /** A stage was rejected on every one of its `attempts` and is being handed to a triage session — the run stops at it. */

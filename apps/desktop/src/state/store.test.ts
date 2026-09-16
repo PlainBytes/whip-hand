@@ -911,7 +911,7 @@ describe('stages executions', () => {
   /** One pass of the body — a `cycle` loop holding `execute`, then an `accept` gate — as the runner emits it. */
   function runStage(index: number, stageId: string, title: string): void {
     const frame = [{ id: 'build', iteration: 1, stage: stageId }];
-    apply({ type: 'stages:item', id: 'build', index, total: 2, stageId, title, attempt: 1 });
+    apply({ type: 'stages:item', id: 'build', index, total: 2, stageId, title, attempt: 1, maxAttempts: 3 });
     apply({
       type: 'loop:start', loopId: 'cycle', maxIterations: 3,
       parentLoopId: 'build', parentIteration: 1, parentStage: stageId,
@@ -952,17 +952,20 @@ describe('stages executions', () => {
   it('folds the stages events onto the stages step\'s own row', () => {
     apply({ type: 'stages:start', id: 'build', total: 2 }, 't0');
     runStage(1, '01-a', 'Schema');
-    apply({ type: 'stages:item', id: 'build', index: 2, total: 2, stageId: '02-b', title: 'Add API routes', attempt: 3 });
+    apply({
+      type: 'stages:item', id: 'build', index: 2, total: 2, stageId: '02-b', title: 'Add API routes', attempt: 3, maxAttempts: 3,
+    });
     apply({ type: 'stages:exhausted', id: 'build', stageId: '02-b', attempts: 3 });
 
     let row = useAppStore.getState().jobs[jobId].steps.build;
     expect(row).toMatchObject({
-      kind: 'stages', status: 'running', startedAt: 't0', total: 2, attempt: 3,
+      kind: 'stages', status: 'running', startedAt: 't0', total: 2, attempt: 3, maxAttempts: 3,
       currentStage: { id: '02-b', title: 'Add API routes', index: 2 },
       completedStages: ['01-a'], exhausted: true,
-      seenStages: {
-        '01-a': { index: 1, total: 2, title: 'Schema' },
-        '02-b': { index: 2, total: 2, title: 'Add API routes' },
+      // The same shape core's journal persists, so live and reloaded rows agree.
+      startedStages: {
+        '01-a': { title: 'Schema', index: 1, maxAttempts: 3 },
+        '02-b': { title: 'Add API routes', index: 2, maxAttempts: 3 },
       },
     });
 

@@ -108,6 +108,22 @@ const manifestStepSchema = z.object({
   completed: z.number().int().nonnegative().optional(),
   /** On a `stages` step's own entry: the attempt number of `currentStage`. */
   attempt: z.number().int().positive().optional(),
+  /**
+   * On a `stages` step's own entry: how many attempts `currentStage` has in
+   * all (1 + max_retries, or a resume's grant), so a reader can say "attempt
+   * 2 of 3". Absent on rows written before it was recorded.
+   */
+  maxAttempts: z.number().int().positive().optional(),
+  /**
+   * On a `stages` step's own entry: every stage it has started, by stage id —
+   * its title and position, and its attempt budget as of its latest attempt.
+   * `currentStage`/`maxAttempts` alone forget a finished stage, and a reader
+   * reopening the run should still be able to say `stage 1 of 7 · Schema,
+   * attempt 2 of 3`. Survives a resume like `completedStages`: nothing clears it.
+   */
+  startedStages: z.record(z.string(), z.object({
+    title: z.string(), index: z.number().int().positive(), maxAttempts: z.number().int().positive().optional(),
+  })).optional(),
   /** On a `stages` step's own entry: stage ids accepted so far, in order — what a resume grants against. */
   completedStages: z.array(z.string()).optional(),
   /** On a `stages` step's own entry: the stage file its body is currently running against. */
@@ -132,7 +148,9 @@ const manifestStepSchema = z.object({
  * loop — a run recorded before it existed cannot be resumed if its workflow
  * turns out to have nested loops (see resume.ts's refusal). v5 added `stage`/
  * `stagesId` to a body row and `total`/`completed`/`attempt`/`completedStages`/
- * `currentStage`/`exhausted` to a `stages` step's own row. Earlier manifests
+ * `currentStage`/`exhausted` (and, later within v5, the optional
+ * `maxAttempts`/`startedStages`, whose absence just means "not recorded") to a
+ * `stages` step's own row. Earlier manifests
  * still parse: the union is what keeps `listRuns` from going blind on runs
  * recorded before cycles (or stages) existed.
  */
@@ -696,6 +714,14 @@ export class RunJournal {
       case 'stages:item':
         this.upsertStep(event.id, {
           currentStage: { id: event.stageId, title: event.title, index: event.index }, attempt: event.attempt,
+          ...(event.maxAttempts === undefined ? {} : { maxAttempts: event.maxAttempts }),
+          startedStages: {
+            ...this.findStep(event.id)?.startedStages,
+            [event.stageId]: {
+              title: event.title, index: event.index,
+              ...(event.maxAttempts === undefined ? {} : { maxAttempts: event.maxAttempts }),
+            },
+          },
         });
         break;
       case 'stages:accepted': {

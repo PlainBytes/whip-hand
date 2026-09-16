@@ -1616,6 +1616,52 @@ test('a manifest with stage rows round-trips through the schema', () => {
   assert.equal(parsed.steps.find(s => s.id === 'accept')!.stagesId, 'build');
 });
 
+test('the stages row records every started stage and the current attempt budget, through the schema', () => {
+  const j = journalFor([{ id: 'build', kind: 'stages' }]);
+  j.record({ type: 'stages:start', id: 'build', total: 2 });
+  j.record({ type: 'stages:item', id: 'build', index: 1, total: 2, stageId: '01-a', title: 'Schema', attempt: 1, maxAttempts: 3 });
+  j.record({ type: 'stages:accepted', id: 'build', stageId: '01-a' });
+  j.record({ type: 'stages:item', id: 'build', index: 2, total: 2, stageId: '02-b', title: 'API', attempt: 2, maxAttempts: 3 });
+
+  const parsed = runManifestSchema.parse(JSON.parse(JSON.stringify(manifestOf(j))));
+  const build = parsed.steps.find(s => s.id === 'build')!;
+  // currentStage alone would have forgotten stage 1's title by now.
+  assert.deepEqual(build.startedStages, {
+    '01-a': { title: 'Schema', index: 1, maxAttempts: 3 }, '02-b': { title: 'API', index: 2, maxAttempts: 3 },
+  });
+  assert.equal(build.maxAttempts, 3);
+  assert.equal(build.attempt, 2);
+});
+
+test('a resumed stages step keeps the stages an earlier attempt recorded', () => {
+  const j = journalFor([{ id: 'build', kind: 'stages' }]);
+  j.record({ type: 'stages:start', id: 'build', total: 2 });
+  j.record({ type: 'stages:item', id: 'build', index: 1, total: 2, stageId: '01-a', title: 'Schema', attempt: 3, maxAttempts: 3 });
+  j.record({ type: 'stages:exhausted', id: 'build', stageId: '01-a', attempts: 3 });
+  j.record({ type: 'run:error', stepId: 'build', message: 'rejected 3 times' });
+
+  const reopened = RunJournal.reopen(mkdtempSync(join(tmpdir(), 'whiphand-manifest-stages-')),
+    runManifestSchema.parse(JSON.parse(JSON.stringify(manifestOf(j)))));
+  reopened.record({ type: 'stages:start', id: 'build', total: 2 });
+  const build = reopened.manifest.steps.find(s => s.id === 'build')!;
+  assert.deepEqual(build.startedStages, { '01-a': { title: 'Schema', index: 1, maxAttempts: 3 } });
+  // A resume's granted attempt reports its own, larger budget.
+  reopened.record({ type: 'stages:item', id: 'build', index: 1, total: 2, stageId: '01-a', title: 'Schema', attempt: 4, maxAttempts: 4 });
+  const after = reopened.manifest.steps.find(s => s.id === 'build')!;
+  assert.equal(after.maxAttempts, 4);
+  assert.deepEqual(after.startedStages, { '01-a': { title: 'Schema', index: 1, maxAttempts: 4 } });
+  reopened.close();
+});
+
+test('a stages:item recorded before maxAttempts existed leaves the row without one', () => {
+  const j = journalFor([{ id: 'build', kind: 'stages' }]);
+  j.record({ type: 'stages:start', id: 'build', total: 1 });
+  j.record({ type: 'stages:item', id: 'build', index: 1, total: 1, stageId: '01-a', title: 'A', attempt: 1 });
+  const build = manifestOf(j).steps.find(s => s.id === 'build')!;
+  assert.equal(build.maxAttempts, undefined);
+  assert.deepEqual(build.startedStages, { '01-a': { title: 'A', index: 1 } });
+});
+
 test('version 5 is written, and v1..v4 manifests still parse', async () => {
   const runDir = await tmpRunDir();
   const journal = new RunJournal(baseInit(runDir, 'run-v5'));

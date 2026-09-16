@@ -1245,7 +1245,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         }
         emit({
           type: 'stages:item', id: stages.id, index: stage.index, total: stage.total,
-          stageId: stage.id, title: stage.title, attempt,
+          stageId: stage.id, title: stage.title, attempt, maxAttempts: allowed,
         });
         const frame: StageFrame = { kind: 'stages', id: stages.id, stage, attempt, maxAttempts: allowed, parent: outer };
         stageNotes.set(frame, { exhausted: [], entrySnapshot });

@@ -191,8 +191,13 @@ test('a stages step runs its body once per stage file, in order', async () => {
 
   assert.equal(result.ok, true);
   assert.deepEqual(h.events.flatMap(e => e.type === 'stages:start' ? [[e.id, e.total]] : []), [['build', 2]]);
-  assert.deepEqual(h.events.flatMap(e => e.type === 'stages:item' ? [[e.index, e.stageId, e.title, e.attempt]] : []),
-    [[1, '01-schema', 'Schema', 1], [2, '02-api', 'API', 1]]);
+  assert.deepEqual(
+    h.events.flatMap(e => e.type === 'stages:item' ? [[e.index, e.stageId, e.title, e.attempt, e.maxAttempts]] : []),
+    [[1, '01-schema', 'Schema', 1, 3], [2, '02-api', 'API', 1, 3]]);
+  const row = (await manifestOf(result.runDir)).steps.find(s => s.id === 'build')!;
+  assert.deepEqual(row.startedStages, {
+    '01-schema': { title: 'Schema', index: 1, maxAttempts: 3 }, '02-api': { title: 'API', index: 2, maxAttempts: 3 },
+  });
   assert.deepEqual(h.events.flatMap(e => e.type === 'stages:accepted' ? [e.stageId] : []), ['01-schema', '02-api']);
   assert.deepEqual(h.events.flatMap(e => e.type === 'stages:done' ? [e.completed] : []), [2]);
   assert.deepEqual(h.spawns.map(s => s.stepId), ['execute', 'review', 'execute', 'review']);
@@ -370,7 +375,9 @@ test('an approval inside a stage is offered retry and carries the stage on its r
 
   assert.deepEqual(h.asked[0].choices, ['continue', 'retry', 'abort']);
   assert.equal(h.asked[0].title, 'Accept Schema?');
-  assert.deepEqual(h.asked[0].stage, { stagesId: 'build', id: '01-schema', title: 'Schema', index: 1, total: 2, attempt: 1 });
+  assert.deepEqual(h.asked[0].stage, {
+    stagesId: 'build', id: '01-schema', title: 'Schema', index: 1, total: 2, attempt: 1, maxAttempts: 3,
+  });
   assert.equal(h.asked[0].stage?.title, 'Schema');
   assert.equal(h.asked[0].stage?.index, 1);
   assert.equal(h.asked[0].execution?.stage, '01-schema');
@@ -456,6 +463,7 @@ test('retries run out into a triage session, and the run stops naming the stage'
   const row = manifest.steps.find(s => s.id === 'build')!;
   assert.equal(row.exhausted, true);
   assert.equal(row.attempt, 3);
+  assert.equal(row.maxAttempts, 3);
   assert.equal(manifest.error?.stepId, 'build');
 });
 
@@ -706,6 +714,8 @@ test('a run that ended in triage resumes with one more attempt at that stage', a
   assert.doesNotMatch(execute, /previous attempt was interrupted/i);
   assert.equal(h.asked.length, 1);
   assert.equal(h.asked[0].stage?.attempt, 4);
+  assert.equal(h.asked[0].stage?.maxAttempts, 4, "a resume's grant is the stage's budget now");
+  assert.deepEqual(h.events.flatMap(e => e.type === 'stages:item' ? [e.maxAttempts] : []), [4, 4, 4, 4]);
   assert.equal(h.interactive.length, 0, 'no second triage');
   assert.deepEqual(
     h.events.flatMap(e => e.type === 'step:skipped' && e.stepId === 'accept' ? [[e.stage, e.iteration]] : []),
@@ -714,6 +724,8 @@ test('a run that ended in triage resumes with one more attempt at that stage', a
   const row = (await manifestOf(result.runDir)).steps.find(s => s.id === 'build')!;
   assert.deepEqual(row.completedStages, ['01-schema']);
   assert.notEqual(row.exhausted, true, 'an accepted stage is no longer exhausted');
+  assert.equal(row.maxAttempts, 4);
+  assert.deepEqual(row.startedStages, { '01-schema': { title: 'Schema', index: 1, maxAttempts: 4 } });
 });
 
 test('a granted attempt interrupted in its turn is reconciled on the next resume, not triaged again', async () => {

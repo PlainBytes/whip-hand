@@ -618,7 +618,9 @@ function StagesView({ node, focusKey, awaitingKey, awaiting, clock, nodeRef }: N
                 style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
               >
                 <Badge appearance="tint" color="informative" size="small" data-testid={`stage-attempt-${group.key}`}>
-                  attempt {group.attempt}
+                  {group.maxAttempts === undefined
+                    ? `attempt ${group.attempt}`
+                    : `attempt ${group.attempt} of ${group.maxAttempts}`}
                 </Badge>
                 {children(group.children)}
               </div>

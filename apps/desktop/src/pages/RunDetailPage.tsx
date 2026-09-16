@@ -169,12 +169,16 @@ function mergeSteps(manifest: RunDetailResult | null, job: JobState | undefined)
     const staleFinished = job?.finished === true && DISK_TERMINAL_STATUSES.has(step.status)
       && live.status === 'running';
     const status = live.inferred === true || staleFinished ? step.status : live.status;
-    // A resumed run's job only hears the stages it accepts itself; the ones
-    // earlier attempts accepted are on disk alone. Neither side is the whole list.
+    // A resumed run's job only hears the stages it starts and accepts itself;
+    // what earlier attempts recorded is on disk alone. Neither side is the
+    // whole list, so both are merged (the live entry winning per stage).
     const completedStages = step.completedStages === undefined && live.completedStages === undefined
       ? {}
       : { completedStages: [...new Set([...(step.completedStages ?? []), ...(live.completedStages ?? [])])] };
-    return { ...step, ...live, key, status, ...completedStages };
+    const startedStages = step.startedStages === undefined && live.startedStages === undefined
+      ? {}
+      : { startedStages: { ...step.startedStages, ...live.startedStages } };
+    return { ...step, ...live, key, status, ...completedStages, ...startedStages };
   });
   const seen = new Set(merged.map(step => step.key));
   for (const key of job?.stepOrder ?? []) {

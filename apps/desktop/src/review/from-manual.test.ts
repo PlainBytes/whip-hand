@@ -117,10 +117,13 @@ describe('fromManualRequest', () => {
 
   describe('inside a stage', () => {
     /** The gate `accept` directly under stage `stageId` of stages step 'build', as core's manual.ts builds it. */
-    const reqFor = (stageId: string, attempt = 1): ManualRequest => request({
+    const reqFor = (stageId: string, attempt = 1, maxAttempts: number | null = 3): ManualRequest => request({
       stepId: 'accept',
       choices: ['continue', 'retry', 'abort'],
-      stage: { stagesId: 'build', id: stageId, title: 'Add API routes', index: 2, total: 7, attempt },
+      stage: {
+        stagesId: 'build', id: stageId, title: 'Add API routes', index: 2, total: 7, attempt,
+        ...(maxAttempts === null ? {} : { maxAttempts }),
+      },
       execution: { loopId: 'build', iteration: attempt, stage: stageId },
     });
 
@@ -144,7 +147,9 @@ describe('fromManualRequest', () => {
 
     it('names the stage beneath the question', () => {
       expect(fromManualRequest(reqFor('02-b')).subtitle).toBe('stage 2 of 7 · Add API routes');
-      expect(fromManualRequest(reqFor('02-b', 2)).subtitle).toBe('stage 2 of 7 · Add API routes · attempt 2');
+      expect(fromManualRequest(reqFor('02-b', 2)).subtitle).toBe('stage 2 of 7 · Add API routes · attempt 2 of 3');
+      // An agent that predates maxAttempts sends none: no budget to state.
+      expect(fromManualRequest(reqFor('02-b', 2, null)).subtitle).toBe('stage 2 of 7 · Add API routes · attempt 2');
     });
 
     it('has no subtitle outside a stage', () => {

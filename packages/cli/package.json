@@ -1,7 +1,7 @@
 {
   "name": "@whiphand/cli",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "type": "module",
   "bin": { "whiphand": "./src/main.ts" },
-  "dependencies": { "@whiphand/core": "0.1.7", "commander": "^14.0.0" }
+  "dependencies": { "@whiphand/core": "0.2.0", "commander": "^14.0.0" }
 }

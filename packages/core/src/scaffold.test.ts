@@ -208,7 +208,13 @@ test('featureDevelopmentTemplate stage step works when the runs dir is gitignore
   assert.deepEqual(stdout.trim().split('\n'), ['a.txt', 'b.txt']);
 });
 
-test("the staged workflow's commit-plan subject names the run, or its slug when the run is unnamed", async () => {
+// The staged template's commit steps are POSIX sh lines ($VAR, `&&` next to a
+// quote) that cmd.exe can neither expand nor be handed; see docs/design.md.
+const posixShellOnly = {
+  skip: process.platform === 'win32' && "the staged template's commit steps need a POSIX shell",
+};
+
+test("the staged workflow's commit-plan subject names the run, or its slug when the run is unnamed", posixShellOnly, async () => {
   const step = findStep(parseWorkflow(stagedFeatureDevelopmentTemplate()).steps, 'commit-plan');
   assert.ok(step && step.kind === 'command');
   if (!step || step.kind !== 'command') return;
@@ -241,7 +247,7 @@ test("the staged workflow's commit-plan subject names the run, or its slug when 
 });
 
 test("the staged workflow's stage-body commit step exits 0 on an empty index instead of "
-  + "failing the run, and still commits — and still fails — for real", async () => {
+  + "failing the run, and still commits — and still fails — for real", posixShellOnly, async () => {
   const commit = findStep(parseWorkflow(stagedFeatureDevelopmentTemplate()).steps, 'commit');
   assert.ok(commit && commit.kind === 'command');
   if (!commit || commit.kind !== 'command') return;

@@ -49,7 +49,9 @@ export function stageTitleOf(text: string, fallback: string): string {
  */
 export async function discoverStages(workdir: string, pattern: string): Promise<Stage[]> {
   const relPaths: string[] = [];
-  for await (const p of glob(pattern, { cwd: workdir })) relPaths.push(p);
+  // glob yields native separators; '/' keeps the order and the paths named in
+  // errors the same on every platform, and matches how the pattern was written.
+  for await (const p of glob(pattern, { cwd: workdir })) relPaths.push(p.replace(/\\/g, '/'));
   relPaths.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
   const stages = await Promise.all(relPaths.map(async (relPath) => {

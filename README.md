@@ -228,6 +228,8 @@ Rejecting at the gate re-runs the whole stage, with the rejection handed to the 
 stage to you in a live session. `allow_paths` on a `writes: true` step fails it, naming the
 file, if it touched anything outside the given globs. See the shipped
 `staged-feature-development` workflow and `docs/design.md`'s "Stages" section for the rest.
+That workflow's commit steps are POSIX shell lines, so on Windows they do not run under the
+default `cmd.exe`.
 
 **Attachments.** `--attach <path>` (repeatable — or the desktop's New Run dialog: pick,
 drop, or paste an image) copies a file into the run before step one; a step reads them by

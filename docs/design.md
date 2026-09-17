@@ -733,6 +733,16 @@ staged. A real commit failure — a rejecting hook, a bad message file — still
 and fails the run loudly, exactly as every later stage's assumption that history is clean
 requires; nothing here blanket-forgives a failing commit the way `expect_exit: [0, 1]` would.
 
+**The shipped staged workflow needs a POSIX shell.** Its `commit-plan` and per-stage `commit`
+steps read `$WHIPHAND_RUN_NAME`, `$WHIPHAND_RUN_SLUG` and `$WHIPHAND_ARTIFACT_COMMIT_MESSAGE`
+and chain with `&&`/`||` beside quoted arguments. Under `cmd.exe`, the Windows default, those
+lines are refused before spawning (a `"` next to `&` cannot be carried through cmd) and
+`$VAR` would not expand anyway. A dialect-neutral rewrite needs core support that does not
+exist yet: no `{{ }}` placeholder names a stage attempt's artifact path, a command step has no
+condition to skip the commit on an empty index, and interpolating the run name into `run:` is
+the injection hazard described under "Command steps and shell injection". Until then, the
+tests that execute those steps are skipped on Windows.
+
 **Nesting.** A `stages` step cannot sit inside a loop, and cannot sit inside another `stages`
 step. A loop's `until` can never name a `stages` step either — `until` needs a non-container
 step with a verdict to watch, and a `stages` step is a container. All three are refused at

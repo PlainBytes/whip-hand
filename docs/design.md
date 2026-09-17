@@ -321,11 +321,13 @@ declares a `kind`; a step with no `kind` defaults to `agent`.
 | `manual` | A human checkpoint | `title`, `instructions`, `capture`, `show_diff`, `default` |
 | `approval` | The same machinery under a clearer name | as `manual` |
 | `loop` | A cycle over its own `steps` | `steps`, `until`, `max_iterations`, `on_exhausted` |
+| `stages` | Runs its own `steps` once per file in a directory | `items`, `steps`, `max_retries` |
 
-Every kind except `loop` may carry `inputs` (artifacts of other steps, injected as paths,
-or the reserved `attachments` — see "Attachments", below),
+Every kind except `loop` and `stages` may carry `inputs` (artifacts of other steps, injected
+as paths, or the reserved `attachments` — see "Attachments", below),
 `output` (the artifact it writes — required for `agent`, optional elsewhere) and `verdict`.
-Every kind, `loop` included, may also carry `enabled: false` (see "Disabling a step", below).
+Every kind, `loop` and `stages` included, may also carry `enabled: false` (see "Disabling a
+step", below). See "Stages", below, for `kind: stages` in full.
 
 `enabled` belongs on a step, not on the workflow — putting it (or any other unknown key) at
 the workflow root fails to parse with `workflow: '<key>' belongs on a step, not on the
@@ -439,6 +441,16 @@ step's inputs the way you would any other shell script: only interpolate values 
 trust into `run:`, and prefer reading untrusted ones from an environment variable (`env:`)
 instead, since a shell only re-parses `$VAR` expansions, not the variable's contents. See
 `docs/review-backlog.md` for the tracked follow-up.
+
+A `command` step also reaches its own `inputs:` this way rather than through `{{ }}`
+templating: each entry with a recorded artifact is exported as
+`$WHIPHAND_ARTIFACT_<ID>` (the id upper-cased, non-alphanumeric characters turned to `_` —
+`commit-message` becomes `WHIPHAND_ARTIFACT_COMMIT_MESSAGE`), holding that artifact's path.
+An id with nothing recorded yet (a dropped forward reference, a disabled step) exports
+nothing, rather than a variable holding the empty string — a distinction a shell script can
+tell apart with `${VAR:+...}` but a lie an always-present empty variable could not tell at
+all. `attachments` entries are skipped: a command already reaches them at
+`"$WHIPHAND_RUN_DIR/attachments"`.
 
 ### Attachments
 
@@ -597,6 +609,162 @@ recurs once per round of the outer loop, so identity needs a second axis:
 inside one. A verdict step inside an explicit loop is governed by the loop, and
 `on_findings` never fires for it; `on_exhausted` reuses the same vocabulary
 (`report` / `interactive`) so there is one set of words, not two.
+
+## Stages
+
+`kind: stages` is what a plan too large to review as one diff needs: instead of running its
+`steps` body once over one input, like a loop does, it runs that body once per file in a
+directory — build stage 1, get it reviewed and accepted, commit it, then move to stage 2 —
+so no single review has to hold the whole feature in its head at once.
+
+```yaml
+- id: build
+  kind: stages
+  items: "{{ inputs.plan_dir }}/*.md"   # templated glob, re-evaluated before every stage
+  max_retries: 2                        # default: 2 (so 3 attempts total); non-negative
+  steps: [...]
+```
+
+**Discovering stages.** `items` is globbed against the run's workdir (`discoverStages`,
+`engine/stages.ts`) and sorted by relative path with plain `<`, not locale collation — which
+would sort `03a-api` after `04-ui` and defeat the point of a letter-suffixed file landing
+between two numbered ones. The list is re-globbed before every stage, not just once at the
+start:
+
+- **A stage's id is its whole basename minus extension** (`03a-api.md` → `03a-api`), never
+  the slug with the leading number stripped — stripping it would collide `01-api` and
+  `03a-api` on `api`, and the runner picks the next stage as "the first id not yet
+  completed", so the second file would silently never run. The price is that renaming or
+  renumbering an already-completed stage file makes it run again under its new id — a
+  visible surprise, not a silent skip.
+- **A stage's title is its file's first `# heading`**, else its id — most plans open with
+  one, and falling back keeps a heading-less file usable instead of blocking the run over it.
+- **Re-globbing before every stage** means a file added mid-run gets picked up, and a pending
+  file deleted mid-run simply stops appearing (the run moves on to whatever is next) — but an
+  id already recorded as completed is never re-run just because its file is now gone. Only
+  the *first* glob matters for "no stages at all": it fails the step, naming the pattern,
+  if it matches nothing; a later glob emptying out (every remaining stage removed) ends the
+  step cleanly instead.
+- A stage id containing `@`, `#`, `/` or `\` is refused outright — those would corrupt the
+  execution key or a path segment. An id that does not read as `NN-slug` (optionally `NN`
+  plus one trailing letter) only gets a `guard:warning`: the convention is what keeps
+  ordering obvious, but a stray file that breaks it is not worth stopping the run over.
+
+**Inside a stage.** A step declared in a `stages` step's own body can read the stage
+currently running:
+
+| | prompts, manual titles/instructions | a `command` step's shell |
+|---|---|---|
+| the title | `{{ stage.title }}` | `$WHIPHAND_STAGE_TITLE` |
+| the id | `{{ stage.id }}` | `$WHIPHAND_STAGE_ID` |
+| the 1-based position | `{{ stage.index }}` | `$WHIPHAND_STAGE_INDEX` |
+| how many stages in total | `{{ stage.total }}` | `$WHIPHAND_STAGE_TOTAL` |
+| the stage file's path | — | `$WHIPHAND_STAGE_PATH` |
+
+`inputs: [stage]` attaches the stage file itself, the same as any other artifact reference —
+real only inside a `stages` body, exactly as `loop.*` is only real inside a loop, so a reader
+outside one is refused at validation time rather than left to fail at render time. `stage` is
+also a reserved step id, but only in a workflow that actually has a `stages` step: one with
+none (every pre-`stages` shipped template) may still declare a real step named `stage`, and
+`inputs: [stage]` there keeps resolving to it exactly as before.
+
+**Per-stage scope.** A stage's artifacts, verdicts and findings are cleared between stages —
+the next one sees only what existed before the `stages` step began, plus its own work, never
+an earlier stage's. A step outside the `stages` step can never read one declared inside its
+body (naming it in `inputs:` is refused at validation time: "whose artifacts do not outlive a
+stage"), and each stage's own artifacts land under
+`<runDir>/<stagesId>/<stageId>/attempt-<n>/<output>` — one directory per attempt, so a
+rejected attempt's work is never overwritten by the retry that follows it.
+
+**`allow_paths`.** A `writes: true` agent step may restrict what it is allowed to have
+touched: once it returns, any changed path that matches none of `allow_paths`'s globs fails
+the step, naming the file. The shipped `staged-feature-development` workflow's planning step
+uses `allow_paths: ["{{ inputs.plan_dir }}/**"]` to keep the planning phase from writing
+anywhere outside the plan directory it exists to fill.
+
+**Gating a stage.** The schema requires every enabled step with `verdict: true` in a
+`stages` body — at any depth, including a loop's `until` and a verdict step nested two loops
+deep — to be followed, later in document order, by an enabled `manual` or `approval` step
+placed directly in the stages body, not inside any loop. The error names the verdict step, the
+stages step, and the gate to add. Without one, a failing verdict inside a stage would be carried
+past to the end of the body and restored away when the stage was accepted: the run would end
+ok without anyone having seen the failure. So a gate only inside the loop, a gate inside a
+later loop, a disabled gate, and a verdict step (say a `tests` command) placed after the last
+gate are all refused at parse time, and the runner never needs to invent a gate.
+
+Only a gate directly in the body carries the stage's verdict. It needs no `verdict: true`:
+*continue* passes and *retry* fails, exactly like a loop's `until` step, because accepting or
+rejecting a stage already says which. A gate inside a loop in the body is an ordinary step of
+that loop, and its `retry` does not re-run the stage. `retry` at a body-level gate re-runs the
+stage from the top. The rejection note is injected as findings into the stage's retry target,
+the last `writes: true` agent step before the gate, by the same mechanism a top-level
+`on_findings: loop` re-run uses. This can happen up to `max_retries` times (default 2, so 3
+attempts total). Once they run out, the stage opens a live triage session seeded with the last
+rejection and the run stops, resumable at that stage with one more attempt.
+
+**A loop that runs out inside a stage** does not fail the run. It ends the attempt's work at
+that point: the loop and every loop enclosing it inside the stages body stop there, at
+whatever round they were in, so an outer review loop does not go round again spending its
+budget before a human sees anything. The stage carries on to its next body-level step, which
+the rule above guarantees includes a gate. The gate is told once per loop that ran out
+("The review cycle 'test-fix' never passed within 3 iterations — its findings are attached."),
+and that loop's `until` artifact is put in front of the human even if the gate did not list
+it. A loop that sets its own `on_exhausted: interactive` still opens triage and stops the run,
+as it does outside a stage. Outside a `stages` step, loop exhaustion is unchanged.
+
+A gate also says "This stage produced no changes." when the tree is exactly as it was when
+the stage began, so the human accepts an empty stage knowingly rather than having it skipped.
+A resumed run leaves that note off for any stage it re-enters: the process can only snapshot
+the tree after the earlier process's edits, so an unchanged tree since then proves nothing.
+A stage the resume reaches for the first time still gets the note.
+
+**Accepting a stage is authoritative**: it restores the run's own verdict to whatever it was
+before the stage started, so a review the human waved through does not also fail the run. A
+genuine failure from before the `stages` step began is not erased by it either.
+
+**A stage with no diff is a normal stage.** A stage whose work turned out to need no change
+to the tree — a no-op refactor stage, a stage that was already satisfied by earlier work —
+still goes through `accept` like any other: the diff the gate shows is simply empty, and
+accepting it says "correct, move on" rather than "here is a change". The shipped workflow's
+per-stage `commit` step accounts for this: a bare `git commit` would exit 1 ("nothing to
+commit") and fail the run right there, so it checks the index first (`git diff --cached
+--quiet && echo … || git commit -F …`) and exits 0 without committing when there is nothing
+staged. A real commit failure — a rejecting hook, a bad message file — still exits non-zero
+and fails the run loudly, exactly as every later stage's assumption that history is clean
+requires; nothing here blanket-forgives a failing commit the way `expect_exit: [0, 1]` would.
+
+**The shipped staged workflow needs a POSIX shell.** Its `commit-plan` and per-stage `commit`
+steps read `$WHIPHAND_RUN_NAME`, `$WHIPHAND_RUN_SLUG` and `$WHIPHAND_ARTIFACT_COMMIT_MESSAGE`
+and chain with `&&`/`||` beside quoted arguments. Under `cmd.exe`, the Windows default, those
+lines are refused before spawning (a `"` next to `&` cannot be carried through cmd) and
+`$VAR` would not expand anyway. A dialect-neutral rewrite needs core support that does not
+exist yet: no `{{ }}` placeholder names a stage attempt's artifact path, a command step has no
+condition to skip the commit on an empty index, and interpolating the run name into `run:` is
+the injection hazard described under "Command steps and shell injection". Until then, the
+tests that execute those steps are skipped on Windows.
+
+**Nesting.** A `stages` step cannot sit inside a loop, and cannot sit inside another `stages`
+step. A loop's `until` can never name a `stages` step either — `until` needs a non-container
+step with a verdict to watch, and a `stages` step is a container. All three are refused at
+validation time, before the run ever starts.
+
+**Unattended runs.** `whiphand run --yes` (and `--resume --yes`) refuses a workflow with a
+gate inside a `stages` step that carries no explicit `default: continue` or
+`default: abort` — the ordinary default of taking `continue` would otherwise let an
+unattended run wave through every stage unread, the exact thing `stages` exists to prevent.
+A gate outside any `stages` step is unaffected; `--yes` has always been allowed to answer it.
+
+**Resuming.** A resumed run skips every stage already accepted and restarts the one that was
+left unfinished, resuming at whichever attempt was in progress. If that attempt was
+interrupted (the process died mid-attempt) rather than rejected at the gate, its implementer
+is told a previous attempt was interrupted and to reconcile whatever it left in the tree,
+rather than starting from a clean slate that is a lie. A stage that went all the way to a
+triage session after exhausting `max_retries` is granted one attempt beyond what it used,
+replacing `max_retries`' count for that stage only. Attempts that are already over (an accepted stage, an attempt a
+gate already rejected, a stage handed to triage) are only replayed to restore their verdicts.
+Their loops replay at exactly the budget and rounds the manifest recorded, whatever
+`--max-iterations` or `--extra-iterations` say, so a resume never spawns an implementer inside
+work a human has already answered.
 
 ## Disabling a step
 

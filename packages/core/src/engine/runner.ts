@@ -1,19 +1,23 @@
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import type {
-  AgentStep, AttachmentSource, CommandStep, Frontend, LoopFrame, LoopStep, ManualStep, WhiphandEvent,
-  OnFindings, RunnerAdapter, Scope, Workflow, RunCtx, SpawnSpec, Step, WorkspaceConfig,
+  AgentStep, AttachmentSource, CommandStep, Frame, Frontend, LoopFrame, LoopStep, ManualStep, WhiphandEvent,
+  OnFindings, RunnerAdapter, Scope, Stage, StageFrame, StagesStep, Workflow, RunCtx, SpawnSpec, Step, WorkspaceConfig,
 } from '../types.ts';
+import { STAGE_REF } from '../types.ts';
 import { AdapterRegistry, validateWorkflowRunners, validateWorkflowFrontend } from '../registry.ts';
 import { WorkflowError, locateSteps, isForwardRef } from '../schema.ts';
-import { collectLoops, flattenSteps, isAgentStep, isCommandStep, isLoopStep, isManualStep } from '../steps.ts';
+import {
+  collectLoops, flattenSteps, isAgentStep, isCommandStep, isContainerStep, isLoopStep, isManualStep, isStagesStep,
+} from '../steps.ts';
 import { disabledIds, droppedRefs, droppedRefSentence, pruneDisabled } from '../enabled.ts';
 import { ATTACHMENTS_REF } from '../attachments.ts';
 import { copyAttachments, recordOf, validateAttachments } from './attachments.ts';
 import { artifactPath, assertArtifact, ArtifactError, ensureArtifactDir } from './artifacts.ts';
-import { snapshotTree, diffSnapshots, headSha, pathsFromStatusLines } from './git-guard.ts';
+import { snapshotTree, diffSnapshots, headSha, pathsFromStatusLines, pathsOutside } from './git-guard.ts';
+import { renderTemplate } from '../template.ts';
 import { CORE_VERSION } from '../version.ts';
 import { parseVerdict, verdictFromExit, verdictFromChoice, VERDICT_INSTRUCTION } from './verdict.ts';
 import { createProgressParser, progressErrorMessage } from './progress.ts';
@@ -23,11 +27,13 @@ import { clearEndMarker } from './session-end.ts';
 import { clearAwaitState } from './await-state.ts';
 import { clearSessionCapture } from './session-capture.ts';
 import { RunJournal, WORKFLOW_SNAPSHOT_NAME } from './manifest.ts';
-import { ancestorLoops, executionKey } from '../execution-key.ts';
+import { executionKey, frameIdentity, isStageFrame, nearestLoop, nearestStage } from '../execution-key.ts';
 import { pruneRuns } from './retention.ts';
+import { DEFAULT_STAGE_RETRIES, discoverStages, nextStage, oddStageNames, StageError } from './stages.ts';
 import { readRunName, runSlugFor, setRunName } from './run-name.ts';
 import { autoNameRun } from './auto-name.ts';
 import type { ResumePlan } from './resume.ts';
+import { stageBudgetKey } from './resume.ts';
 
 export interface RunOptions {
   workflow: Workflow;
@@ -91,8 +97,12 @@ export interface RunResult {
  * What one step produced. `null` means "carried on"; 'verdict-fail' is a
  * signal the caller decides what to do with (a loop iterates, an un-looped
  * verdict step consults on_findings); a RunResult stops the run outright.
+ * 'stage-exhausted' is a loop inside a stage running out: unlike a failing
+ * verdict, which an enclosing loop ignores unless it is that loop's `until`,
+ * it ends every enclosing loop on its way up to the stages body, where
+ * runStage carries on to the gate.
  */
-type StepOutcome = RunResult | 'verdict-fail' | null;
+type StepOutcome = RunResult | 'verdict-fail' | 'stage-exhausted' | null;
 
 function resolveInputs(workflow: Workflow, given: Record<string, string>): Record<string, string> {
   const problems: string[] = [];
@@ -124,6 +134,25 @@ function effectiveStep(step: AgentStep): AgentStep {
   return { ...step, prompt: `${step.prompt}\n\n${VERDICT_INSTRUCTION}` };
 }
 
+/**
+ * The execution identity `step:start` and `step:skipped` carry, spread from
+ * frameIdentity's tuple with every absent part left out — so a top-level
+ * step's event stays exactly as it always was.
+ */
+function executionFields(idn: ReturnType<typeof frameIdentity>) {
+  return {
+    ...(idn.loopId === undefined ? {} : { loopId: idn.loopId, iteration: idn.iteration }),
+    ...(idn.stage === undefined ? {} : { stage: idn.stage }),
+    ...(idn.outerLoops.length === 0 ? {} : { outerLoops: idn.outerLoops }),
+  };
+}
+
+/** Makes `target` hold exactly `source`'s entries, in place — other holders of `target` see the change. */
+function replaceRecord<V>(target: Record<string, V>, source: Record<string, V>): void {
+  for (const key of Object.keys(target)) delete target[key];
+  Object.assign(target, source);
+}
+
 /** Index of the nearest step before `verdictIdx` with writes: true, or -1. */
 function loopTargetIndex(steps: Step[], verdictIdx: number): number {
   for (let i = verdictIdx - 1; i >= 0; i--) {
@@ -131,6 +160,44 @@ function loopTargetIndex(steps: Step[], verdictIdx: number): number {
     if (isAgentStep(s) && s.writes) return i;
   }
   return -1;
+}
+
+/**
+ * Whether a step's outcome is a verdict. A manual or approval step directly
+ * inside a stage carries one without `verdict: true`: the human's answer *is*
+ * the stage's verdict, and `retry` has to reach runStage as a failure rather
+ * than be read as `continue`. Stage frames only — inside a loop a non-`until`
+ * verdict is ignored anyway, and `until` already requires `verdict: true`.
+ */
+function carriesVerdict(step: Step, frame: Frame | undefined): boolean {
+  if (isContainerStep(step)) return false;
+  return step.verdict === true || (isManualStep(step) && isStageFrame(frame));
+}
+
+/** A stages body in document order, containers' own bodies included, and where `id` sits in it. */
+function bodyBefore(body: Step[], id: string): Step[] {
+  const flat = flattenSteps(body).map(f => f.step);
+  const idx = flat.findIndex(s => s.id === id);
+  return idx === -1 ? [] : flat.slice(0, idx);
+}
+
+/** The last `writes: true` agent step before the gate — whom a rejection is addressed to, and whose session triage reopens. */
+function stageRetryTarget(body: Step[], gateId: string): AgentStep | undefined {
+  return bodyBefore(body, gateId).filter(isAgentStep).filter(s => s.writes).at(-1);
+}
+
+/** The last machine verdict step before the gate — the review whose findings a triage session is handed. */
+function stageFindingsId(body: Step[], gateId: string): string | undefined {
+  return bodyBefore(body, gateId)
+    .filter(s => !isContainerStep(s) && !isManualStep(s) && s.verdict === true).at(-1)?.id;
+}
+
+/** What one attempt at a stage has learned that its gate must be told. */
+interface StageAttemptNotes {
+  /** Review cycles that ran out of iterations and handed their failure to the gate, keyed by loop id. */
+  exhausted: Map<string, { untilId: string; iterations: number }>;
+  /** The tree as the stage (not this attempt) began, or null outside git, on a dry run or for a stage a resume re-enters: no "no changes" note then. */
+  entrySnapshot: string | null;
 }
 
 export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
@@ -179,7 +246,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     // Only top-level verdict steps fall back to on_findings; one inside an
     // explicit loop is governed by that loop instead.
     effective.steps.forEach((step, idx) => {
-      if (!isLoopStep(step) && step.verdict && loopTargetIndex(effective.steps, idx) === -1) {
+      if (!isContainerStep(step) && step.verdict && loopTargetIndex(effective.steps, idx) === -1) {
         throw new WorkflowError(
           [`on_findings 'loop' requires a writes:true step before verdict step '${step.id}'`]);
       }
@@ -243,10 +310,11 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         runDir, runId, workflow: workflow.name, workdir, dryRun: !!opts.dryRun,
         workflowSource: opts.workflowSource,
         inputs, attachments: attachments.map(recordOf),
-        sessionIds: ctx.sessionIds, steps: planned.map(({ step, loopId }) => ({
+        sessionIds: ctx.sessionIds, steps: planned.map(({ step, loopId, stagesId }) => ({
           id: step.id,
           kind: step.kind,
           loopId,
+          stagesId,
           runner: isAgentStep(step) ? step.runner : undefined,
           model: isAgentStep(step) ? step.model : undefined,
           mode: isAgentStep(step) ? step.mode : undefined,
@@ -455,6 +523,18 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         if (isAgentStep(step) && !step.writes && changed.length > 0) {
           return fail(`read-only step '${step.id}' modified the tree: ${changed.join(', ')}`, step.id);
         }
+        // The only thing that can still prove a `writes: true` step touched
+        // nothing else. Inherits the guard's own blind spot: a file already
+        // dirty before the step and modified again produces the same
+        // porcelain line, so it never shows up in `changed` — this sees
+        // status transitions, not content edits.
+        if (isAgentStep(step) && step.writes && (step.allow_paths?.length ?? 0) > 0) {
+          const globs = step.allow_paths!.map(g => renderTemplate(g, ctx));
+          const outside = pathsOutside(pathsFromStatusLines(changed), globs);
+          if (outside.length > 0) {
+            return fail(`step '${step.id}' wrote outside allow_paths: ${outside.join(', ')}`, step.id);
+          }
+        }
       }
 
       const artifact = ctx.artifacts[step.id];
@@ -471,7 +551,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         emit({ type: 'step:artifact', stepId: step.id, path: artifact, ...(bytes === undefined ? {} : { bytes }) });
       }
 
-      if (!step.verdict) return null;
+      if (!carriesVerdict(step, ctx.frame)) return null;
 
       let v = verdictOverride;
       if (v === undefined) {
@@ -481,7 +561,9 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         if (parsed === null) return fail(`step '${step.id}' artifact is missing a VERDICT line`, step.id);
         v = parsed;
       }
-      verdict = v;
+      // An implicit verdict (a gate inside a stage) is about that stage alone,
+      // and runStage settles it; only an explicit one speaks for the run.
+      if (step.verdict) verdict = v;
       ctx.verdicts[step.id] = v;
       emit({ type: 'step:verdict', stepId: step.id, verdict: v });
       return v === 'fail' ? 'verdict-fail' : null;
@@ -489,7 +571,11 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
 
     /** Findings-driven prompt/input injection for legacy on_findings re-runs. */
     const extraFindings = new Map<string, string[]>();
+    /** Plain sentences for a step's prompt, injected beside its findings and scoped the same way. */
+    const extraNotes = new Map<string, string[]>();
     let loopsUsed = 0;
+    /** Per stage attempt, keyed by its frame: what executeLoop found out and executeManual tells the human. */
+    const stageNotes = new WeakMap<StageFrame, StageAttemptNotes>();
 
     /**
      * Executions a resume may skip, consumed as they are used.
@@ -503,15 +589,18 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     const skippable = new Map(opts.resume?.done ?? []);
 
     const withFindings = (step: AgentStep): AgentStep => {
-      const findingIds = extraFindings.get(step.id);
-      if (!findingIds || findingIds.length === 0) return step;
-      const note = findingIds
-        .map(id => `A previous review found problems. Read the findings at ${ctx.artifacts[id]} and address every one of them.`)
-        .join('\n');
+      const findingIds = extraFindings.get(step.id) ?? [];
+      const notes = extraNotes.get(step.id) ?? [];
+      if (findingIds.length === 0 && notes.length === 0) return step;
+      const note = [
+        ...findingIds.map(id =>
+          `A previous review found problems. Read the findings at ${ctx.artifacts[id]} and address every one of them.`),
+        ...notes,
+      ].join('\n');
       return {
         ...step,
         prompt: `${step.prompt}\n\n${note}`,
-        inputs: [...new Set([...(step.inputs ?? []), ...findingIds])],
+        ...(findingIds.length === 0 ? {} : { inputs: [...new Set([...(step.inputs ?? []), ...findingIds])] }),
       };
     };
 
@@ -568,7 +657,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     // Per-kind execution
     // -----------------------------------------------------------------------
 
-    async function executeAgent(step: AgentStep, frame?: LoopFrame): Promise<StepOutcome> {
+    async function executeAgent(step: AgentStep, frame?: Frame): Promise<StepOutcome> {
       const adapter = registry.get(step.runner);
       recordArtifact(step.id, artifactPath(runDir, step, frame));
       await ensureArtifactDir(ctx.artifacts[step.id]);
@@ -667,7 +756,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       return finishStep(step, before);
     }
 
-    async function executeCommand(step: CommandStep, frame?: LoopFrame): Promise<StepOutcome> {
+    async function executeCommand(step: CommandStep, frame?: Frame): Promise<StepOutcome> {
       const capture = step.output === undefined
         ? undefined
         : artifactPath(runDir, { output: step.output }, frame);
@@ -675,7 +764,10 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         recordArtifact(step.id, capture);
         await ensureArtifactDir(capture);
       }
-      const spec = commandSpec(step, ctx, capture);
+      // Scoped exactly like an agent's: a forward reference into a loop that
+      // hasn't gone round yet is dropped rather than exported as an artifact
+      // env var pointing at a stale (or nonexistent) path.
+      const spec = commandSpec(scopeInputs(step, frame), ctx, capture);
 
       if (opts.dryRun) {
         emit({ type: 'step:spawn', stepId: step.id, spec, phase: 'main' });
@@ -714,8 +806,8 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       return finishStep(step, before, v);
     }
 
-    async function executeManual(step: ManualStep, frame?: LoopFrame): Promise<StepOutcome> {
-      const request = await buildManualRequest(scopeInputs(step, frame), ctx);
+    async function executeManual(step: ManualStep, frame?: Frame): Promise<StepOutcome> {
+      const request = await buildManualRequest(scopeInputs(step, frame), ctx, await manualExtras(frame));
 
       if (opts.dryRun) {
         emit({ type: 'step:manual', stepId: step.id, request });
@@ -765,6 +857,27 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     }
 
     /**
+     * What a gate inside a stage is told beyond its own instructions: every
+     * review cycle that ran out (with its findings forced onto the rail), and
+     * whether the stage has changed the tree at all — a stage with no diff is
+     * a normal stage, so the human decides knowingly rather than it being
+     * skipped.
+     */
+    async function manualExtras(frame: Frame | undefined): Promise<{ notes: string[]; forceInputs: string[] }> {
+      const stage = nearestStage(frame);
+      const known = stage === undefined ? undefined : stageNotes.get(stage);
+      if (known === undefined) return { notes: [], forceInputs: [] };
+      const exhausted = [...known.exhausted];
+      const notes = exhausted.map(([loopId, x]) =>
+        `The review cycle '${loopId}' never passed within ${x.iterations} iterations — its findings are attached.`);
+      if (known.entrySnapshot !== null
+        && diffSnapshots(known.entrySnapshot, await snapshotTree(workdir) ?? '').length === 0) {
+        notes.push('This stage produced no changes.');
+      }
+      return { notes, forceInputs: exhausted.map(([, x]) => x.untilId) };
+    }
+
+    /**
      * Inside a loop, a step may reference a later sibling — meaning "that
      * step's artifact from the previous iteration". On the first iteration
      * there is no such artifact, so the reference is simply dropped rather
@@ -780,15 +893,18 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
      * `attachments` is dropped the same way, anywhere, when the run has no
      * files attached — a workflow that can use them must not need them.
      */
-    function scopeInputs<T extends AgentStep | CommandStep | ManualStep>(step: T, frame?: LoopFrame): T {
+    function scopeInputs<T extends AgentStep | CommandStep | ManualStep>(step: T, frame?: Frame): T {
       if (step.inputs === undefined) return step;
       const kept = step.inputs.filter(id => {
         if (id === ATTACHMENTS_REF) return (ctx.attachments?.length ?? 0) > 0;
         if (frame !== undefined && isForwardRef(stepLocations, step.id, id)) {
           const loopId = stepLocations.get(id)?.parentLoopId;
-          let owner: LoopFrame | undefined = frame;
-          while (owner !== undefined && owner.id !== loopId) owner = owner.parent;
-          if (owner !== undefined && owner.iteration === 1) return false;
+          // A stage frame is never the loop this walk is hunting for — only a
+          // loop's own body can name a `parentLoopId` — so it is always
+          // skipped on the way up, same as any loop whose id doesn't match.
+          let owner: Frame | undefined = frame;
+          while (owner !== undefined && (isStageFrame(owner) || owner.id !== loopId)) owner = owner.parent;
+          if (owner !== undefined && !isStageFrame(owner) && owner.iteration === 1) return false;
         }
         return frame === undefined || ctx.artifacts[id] !== undefined;
       });
@@ -821,18 +937,26 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       return spawnHeadless;
     }
 
-    async function executeStep(step: Step, frame?: LoopFrame): Promise<StepOutcome> {
-      const enclosing = ctx.loop;
-      ctx.loop = frame;
+    async function executeStep(step: Step, frame?: Frame): Promise<StepOutcome> {
+      const enclosing = ctx.frame;
+      ctx.frame = frame;
+      // ctx.loop is a projection of ctx.frame (the nearest LoopFrame in the
+      // chain), kept in step with it so a consumer that only ever knew about
+      // loops keeps seeing exactly what it always did.
+      ctx.loop = nearestLoop(frame);
       try {
+        if (isStagesStep(step)) return await executeStages(step);
         // Loops are never skipped as a unit, even when the manifest records
         // one as done: descending and skipping inside is what restores every
         // body artifact into ctx in the right order, and the replay costs no
         // spawns because each body step is skipped in turn.
         if (isLoopStep(step)) return await executeLoop(step);
 
-        const outerLoops = ancestorLoops(frame);
-        const key = executionKey(step.id, frame?.iteration, outerLoops);
+        // frameIdentity is the single place that turns a frame into the
+        // loopId/iteration/stage/outerLoops tuple every emit site below
+        // speaks — a stage frame folds into it exactly like a loop would.
+        const idn = frameIdentity(frame);
+        const key = executionKey(step.id, idn.iteration, idn.outerLoops, idn.stage);
         const alreadyDone = skippable.get(key);
         if (alreadyDone !== undefined) {
           skippable.delete(key);
@@ -841,30 +965,31 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
           // a replayed step's prompt label must see the verdict it actually
           // produced, exactly like a fresh execution's finishStep would set.
           if (alreadyDone.verdict !== undefined) ctx.verdicts[step.id] = alreadyDone.verdict;
-          emit({
-            type: 'step:skipped', stepId: step.id,
-            ...(frame === undefined ? {} : { loopId: frame.id, iteration: frame.iteration }),
-            ...(outerLoops.length === 0 ? {} : { outerLoops }),
-          });
-          if (!step.verdict) return null;
+          emit({ type: 'step:skipped', stepId: step.id, ...executionFields(idn) });
+          if (!carriesVerdict(step, frame)) return null;
           // Restoring the verdict is not optional: it drives a loop's exit
-          // check and the top-level on_findings jump. Returning null here would
-          // make a loop that originally failed twice replay as passing.
-          verdict = alreadyDone.verdict;
+          // check, the top-level on_findings jump and a stage's retry. Returning
+          // null here would make a loop that originally failed twice replay as
+          // passing, and a rejected stage replay as accepted. As in finishStep,
+          // only an explicit verdict step speaks for the run.
+          if (step.verdict) verdict = alreadyDone.verdict;
           return alreadyDone.verdict === 'fail' ? 'verdict-fail' : null;
         }
 
         emit({
           type: 'step:start', stepId: step.id, kind: step.kind,
           ...(isAgentStep(step) ? { runner: step.runner, model: step.model, mode: step.mode } : {}),
-          ...(frame === undefined ? {} : { loopId: frame.id, iteration: frame.iteration }),
-          ...(outerLoops.length === 0 ? {} : { outerLoops }),
+          ...executionFields(idn),
         });
+        // The whole frame, not just its nearest loop: a step directly inside a
+        // stage must write under that stage's directory, or every stage's
+        // artifact would land on the same flat top-level path.
         if (isAgentStep(step)) return await executeAgent(step, frame);
         if (isCommandStep(step)) return await executeCommand(step, frame);
         return await executeManual(step, frame);
       } finally {
-        ctx.loop = enclosing;
+        ctx.frame = enclosing;
+        ctx.loop = nearestLoop(enclosing);
       }
     }
 
@@ -875,16 +1000,23 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     async function executeLoop(loop: LoopStep): Promise<StepOutcome> {
       // The frame this loop invocation runs under — set by executeStep just
       // before it dispatched here — is also this loop's own row identity:
-      // which round of *its* enclosing loop is this, if any.
-      const outer = ctx.loop;
-      const outerLoops = ancestorLoops(outer);
+      // which round of *its* enclosing loop or stage this is, if any.
+      const outer = ctx.frame;
+      const idn = frameIdentity(outer);
       const loopEvent = {
-        ...(outer === undefined ? {} : { parentLoopId: outer.id, parentIteration: outer.iteration }),
-        ...(outerLoops.length === 0 ? {} : { outerLoops }),
+        ...(idn.loopId === undefined ? {} : { parentLoopId: idn.loopId, parentIteration: idn.iteration }),
+        ...(idn.stage === undefined ? {} : { parentStage: idn.stage }),
+        ...(idn.outerLoops.length === 0 ? {} : { outerLoops: idn.outerLoops }),
       };
-      const grant = opts.resume?.loopBudgets[executionKey(loop.id, outer?.iteration, outerLoops)];
-      const maxIterations =
-        opts.maxIterations ?? grant?.budget ?? loop.max_iterations ?? config.loop.max_iterations;
+      const key = executionKey(loop.id, idn.iteration, idn.outerLoops, idn.stage);
+      const grant = opts.resume?.loopBudgets[key];
+      // A loop in a closed stage attempt replays at the budget it ran under,
+      // before anything else is consulted: opts.maxIterations overriding it
+      // would send the implementer back into an attempt a gate already
+      // answered, and the declared limit could cut its recorded rounds short.
+      const closed = opts.resume?.closedLoops[key];
+      const maxIterations = closed?.budget
+        ?? opts.maxIterations ?? grant?.budget ?? loop.max_iterations ?? config.loop.max_iterations;
       // opts.maxIterations is absolute, so it can be set below what this loop
       // already ran; without this, that instantly re-fails with nothing else
       // said, and it looks like resume itself is broken rather than the budget.
@@ -908,6 +1040,12 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         for (const body of loop.steps) {
           if (opts.signal?.aborted) return cancelled();
           const outcome = await executeStep(body, frame);
+          if (outcome === 'stage-exhausted') {
+            // A loop nested in this one ran out inside a stage: this loop is
+            // over too, at the round it was in, and the gate decides.
+            emit({ type: 'loop:done', loopId: loop.id, iterations: iteration, passed: false, ...loopEvent });
+            return outcome;
+          }
           if (outcome !== null && outcome !== 'verdict-fail') return outcome;
           if (body.id === loop.until) {
             // The exit check decides the iteration: pass ends the loop right
@@ -920,8 +1058,25 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
 
       const iterations = passed ? iteration - 1 : maxIterations;
       emit({ type: 'loop:done', loopId: loop.id, iterations, passed, ...loopEvent });
-      ctx.loop = outer;
-      if (passed) return null;
+      ctx.frame = outer;
+      ctx.loop = nearestLoop(outer);
+      const stage = nearestStage(outer);
+      if (passed) {
+        // Cannot happen today — an exhaustion ends every enclosing loop, so a
+        // loop that ran out never gets another round to pass in — but a note
+        // about a cycle that did pass in the end must never reach the gate.
+        if (stage !== undefined) stageNotes.get(stage)?.exhausted.delete(loop.id);
+        return null;
+      }
+
+      // Inside a stage the human gate in the stages body (schema.ts guarantees
+      // one) decides instead: the run must not end before anyone has seen the
+      // work, and no enclosing loop may spend more rounds before that. An
+      // author who explicitly chose on_exhausted: interactive still gets triage.
+      if (stage !== undefined && loop.on_exhausted !== 'interactive') {
+        stageNotes.get(stage)?.exhausted.set(loop.id, { untilId: loop.until, iterations: maxIterations });
+        return 'stage-exhausted';
+      }
 
       const policy = loop.on_exhausted ?? onFindings;
       const untilStep = loop.steps.find(s => s.id === loop.until);
@@ -949,11 +1104,255 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         loop.id);
     }
 
+    // -----------------------------------------------------------------------
+    // Stages
+    // -----------------------------------------------------------------------
+
+    /** The stages step's own execution key — what the resume plan's stage records are keyed by. */
+    function stagesKey(stages: StagesStep, frame: Frame | undefined): string {
+      const idn = frameIdentity(frame);
+      return executionKey(stages.id, idn.iteration, idn.outerLoops, idn.stage);
+    }
+
+    /**
+     * Ids of the stages a resumed run already accepted, which it must not run
+     * again — skipped wholesale rather than replayed, since an accepted stage
+     * can hold a loop that is `failed` for good.
+     */
+    function resumedCompletedStages(stages: StagesStep, frame: Frame | undefined): Set<string> {
+      return new Set(opts.resume?.stagesCompleted[stagesKey(stages, frame)] ?? []);
+    }
+
+    // Never 'verdict-fail': a stages step has no artifact, so the top-level
+    // on_findings: 'loop' jump would build "Read the findings at undefined".
+    async function executeStages(stages: StagesStep): Promise<RunResult | null> {
+      const outer = ctx.frame;
+      const pattern = renderTemplate(stages.items, ctx);
+      const completed = resumedCompletedStages(stages, outer);
+      const maxAttempts = 1 + (stages.max_retries ?? DEFAULT_STAGE_RETRIES);
+      let started = false;
+
+      // Re-globbed before every stage, so a stage added or removed while an
+      // earlier one ran is seen; `completed` (matched on stage.id) is what
+      // keeps an edited, already-finished stage from running again.
+      for (;;) {
+        if (opts.signal?.aborted) return cancelled();
+        let list: Stage[];
+        try {
+          list = await discoverStages(workdir, pattern);
+        } catch (e) {
+          // A bad plan directory is this step's failure; anything else is a bug.
+          if (!(e instanceof StageError)) throw e;
+          return fail(`stages step '${stages.id}': ${e.message}`, stages.id);
+        }
+        if (!started) {
+          // Only the first pass: a list that empties later means the plan's
+          // remaining stages were removed, which ends the step cleanly.
+          if (list.length === 0) {
+            return fail(`stages step '${stages.id}' matched no stage files (${pattern})`, stages.id);
+          }
+          const odd = new Set(oddStageNames(list));
+          for (const stage of list.filter(s => odd.has(s.id))) {
+            emit({
+              type: 'guard:warning', stepId: stages.id,
+              message: `stage file '${basename(stage.path)}' is not named NN-slug, `
+                + 'so its position in the order is not obvious',
+            });
+          }
+          emit({ type: 'stages:start', id: stages.id, total: list.length });
+          started = true;
+        }
+        const stage = nextStage(list, completed);
+        if (stage === undefined) break;
+        const outcome = await runStage(stages, stage, maxAttempts, outer, completed);
+        if (outcome !== null) return outcome;
+      }
+      emit({ type: 'stages:done', id: stages.id, completed: completed.size });
+      return null;
+    }
+
+    /**
+     * One stage file, start to accepted. Its body sees this stage's work plus
+     * whatever existed before the stages step began — never an earlier
+     * stage's artifacts, verdicts or findings, which is what makes each
+     * stage's minimal context real.
+     *
+     * A gate answering `retry` runs the body again from the top, with the
+     * rejection handed to the implementer, up to `maxAttempts`; after that the
+     * stage goes to a triage session and the run stops.
+     */
+    async function runStage(
+      stages: StagesStep, stage: Stage, maxAttempts: number, outer: Frame | undefined, completed: Set<string>,
+    ): Promise<RunResult | null> {
+      // The file was read once, for its title; if it is gone now, say so
+      // rather than handing the body an empty stage.
+      try {
+        await assertArtifact(stage.path);
+      } catch (e) {
+        return fail(`stages step '${stages.id}': stage file '${basename(stage.path)}' `
+          + `cannot be used: ${(e as Error).message}`, stages.id);
+      }
+
+      // A stage that went to triage is granted one attempt more than it used;
+      // the grant replaces max_retries' count for this stage only.
+      const resumeKey = stageBudgetKey(stagesKey(stages, outer), stage.id);
+      const granted = opts.resume?.stageBudgets[resumeKey];
+      const allowed = granted ?? maxAttempts;
+      const interruptedAttempt = opts.resume?.stagesInterrupted[resumeKey];
+
+      // Not ctx.attempts: that is an append-only audit list, never scoped.
+      const saved = {
+        artifacts: { ...ctx.artifacts }, verdicts: { ...ctx.verdicts },
+        findings: new Map([...extraFindings]), notes: new Map([...extraNotes]), verdict,
+      };
+      const restore = (): void => {
+        replaceRecord(ctx.artifacts, saved.artifacts);
+        replaceRecord(ctx.verdicts, saved.verdicts);
+        extraFindings.clear();
+        for (const [id, ids] of saved.findings) extraFindings.set(id, ids);
+        extraNotes.clear();
+        for (const [id, notes] of saved.notes) extraNotes.set(id, notes);
+        verdict = saved.verdict;
+      };
+      // Whoever writes to the tree in this body — the steps a note about the
+      // tree's state is addressed to.
+      const implementers = flattenSteps(stages.steps).map(f => f.step).filter(isAgentStep).filter(s => s.writes);
+      const tellImplementers = (note: string): void => {
+        for (const step of implementers) extraNotes.set(step.id, [...(extraNotes.get(step.id) ?? []), note]);
+      };
+      // Every id declared anywhere in the body — on a resumed run the resume
+      // plan seeds the newest artifact per id across *all* stages.
+      const bodyIds = flattenSteps(stages.steps).map(f => f.step.id);
+      const scrub = (): void => {
+        for (const id of bodyIds) {
+          delete ctx.artifacts[id];
+          delete ctx.verdicts[id];
+        }
+      };
+
+      // Taken once, at stage entry, and shared by every attempt: a retry that
+      // re-edits a file attempt 1 already changed leaves an identical porcelain
+      // line, so an attempt-entry snapshot would call real work "no changes".
+      // Not for a stage a resume re-enters: "entry" is then after whatever the
+      // earlier process already did to the tree, so an empty diff proves nothing.
+      const resumedStage = opts.resume?.stagesStarted.includes(resumeKey) === true
+        || granted !== undefined || interruptedAttempt !== undefined;
+      const entrySnapshot = opts.dryRun || resumedStage ? null : await snapshotTree(workdir);
+      // The gate that sent the last attempt back, and the note it wrote.
+      let rejection: { gateId: string; path: string | undefined } | undefined;
+      for (let attempt = 1; attempt <= allowed; attempt++) {
+        if (attempt > 1) restore();
+        scrub();
+        // A pseudo-artifact, deliberately not recordArtifact: it has no
+        // attempt history and no verdict of its own.
+        ctx.artifacts[STAGE_REF] = stage.path;
+        if (rejection !== undefined) {
+          // Re-seeded after the restore, so the rejection lives exactly as
+          // long as this stage: withFindings hands it to the implementer, and
+          // the next restore clears it.
+          const target = stageRetryTarget(stages.steps, rejection.gateId);
+          ctx.verdicts[rejection.gateId] = 'fail';
+          if (rejection.path !== undefined) {
+            ctx.artifacts[rejection.gateId] = rejection.path;
+            if (target !== undefined) extraFindings.set(target.id, [rejection.gateId]);
+          }
+        }
+        // A resume re-runs a cut-short attempt from the top, against a tree
+        // that already holds its partial edits: the engine never discards work
+        // it was not asked to, so the implementer is told to reconcile it.
+        if (attempt === interruptedAttempt) {
+          tellImplementers('A previous attempt was interrupted; reconcile whatever it left in the tree.');
+        }
+        // Not when that granted attempt is the one being resumed after an
+        // interruption: the triage was before it, and what the tree holds now
+        // is that attempt's own partial work.
+        if (granted !== undefined && attempt === granted && attempt !== interruptedAttempt) {
+          tellImplementers(`A human has just been through the tree in a triage session after this stage was `
+            + `rejected ${granted - 1} times; build on the tree as it is now.`);
+        }
+        emit({
+          type: 'stages:item', id: stages.id, index: stage.index, total: stage.total,
+          stageId: stage.id, title: stage.title, attempt, maxAttempts: allowed,
+        });
+        const frame: StageFrame = { kind: 'stages', id: stages.id, stage, attempt, maxAttempts: allowed, parent: outer };
+        stageNotes.set(frame, { exhausted: new Map(), entrySnapshot });
+
+        let rejected = false;
+        for (const body of stages.steps) {
+          if (opts.signal?.aborted) return cancelled();
+          const outcome = await executeStep(body, frame);
+          // An exhausted loop (its cycle recorded for the gate by executeLoop,
+          // every enclosing loop already ended) carries on to the next body
+          // step, which schema.ts guarantees includes a gate.
+          if (outcome === 'stage-exhausted') continue;
+          if (outcome === 'verdict-fail') {
+            // A gate answering retry sends the stage round again from the
+            // top. Any other failing verdict carries on to the next body step,
+            // exactly as a loop treats a non-`until` verdict; schema.ts
+            // guarantees a gate after it.
+            if (isManualStep(body)) {
+              rejection = { gateId: body.id, path: ctx.artifacts[body.id] };
+              rejected = true;
+              break;
+            }
+            continue;
+          }
+          if (outcome !== null) return outcome;
+        }
+
+        if (!rejected) {
+          completed.add(stage.id);
+          emit({ type: 'stages:accepted', id: stages.id, stageId: stage.id });
+          // Acceptance is authoritative: this restores the run-level verdict
+          // to what it was before the stage, so a review the human waved
+          // through does not fail the run — but a failure from before the
+          // stages step is not erased either.
+          restore();
+          return null;
+        }
+      }
+
+      // Out of attempts: hand the stage to a human in a live session, then
+      // stop. Marked first, so a triage that is itself cancelled still
+      // leaves the record a resume grants its extra attempt against.
+      const last = rejection!;
+      emit({ type: 'stages:exhausted', id: stages.id, stageId: stage.id, attempts: allowed });
+      const target = stageRetryTarget(stages.steps, last.gateId);
+      if (target === undefined) {
+        emit({
+          type: 'guard:warning', stepId: stages.id,
+          message: `stages step '${stages.id}': no writes: true agent step before '${last.gateId}', `
+            + `so stage '${stage.id}' has no session to hand over to`,
+        });
+      } else {
+        const findingsId = stageFindingsId(stages.steps, last.gateId);
+        const findings = findingsId === undefined ? undefined : ctx.artifacts[findingsId];
+        const prompt = [
+          `Stage ${stage.index} of ${stage.total} ('${stage.title}') was rejected ${allowed} times, `
+            + `so its retries have run out. The stage file is ${stage.path}.`,
+          "A previous attempt's work is in the working tree.",
+          ...(findings === undefined ? [] : [`The last review's findings are in ${findings}.`]),
+          ...(last.path === undefined ? [] : [`The last rejection note is in ${last.path}.`]),
+          'Read them and work with me to finish this stage.',
+        ].join(' ');
+        const triage = await runTriage(target, prompt);
+        if (triage !== null) return triage;
+      }
+      return fail(`stages step '${stages.id}': stage ${stage.index} of ${stage.total} ('${stage.title}') `
+        + `was rejected ${allowed} times`, stages.id);
+    }
+
     /**
      * The `on_findings: interactive` handoff, shared by the legacy top-level
-     * policy and a loop's on_exhausted: a live session seeded with the findings.
+     * policy, a loop's on_exhausted and a stage whose retries ran out: a live
+     * session seeded with the findings, or with `prompt` when the caller has
+     * more to say than one findings file.
      */
-    async function runTriage(source: Step): Promise<RunResult | null> {
+    async function runTriage(
+      source: Step,
+      prompt = `The review found problems. The findings are in ${ctx.artifacts[source.id]}. `
+        + 'Read them and work with me to resolve them.',
+    ): Promise<RunResult | null> {
       if (!isAgentStep(source)) return null;
       const adapter = registry.get(source.runner);
       const triage: AgentStep = {
@@ -962,9 +1361,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         mode: 'interactive',
         writes: true,
         verdict: undefined,
-        prompt:
-          `The review found problems. The findings are in ${ctx.artifacts[source.id]}. ` +
-          `Read them and work with me to resolve them.`,
+        prompt,
       };
       if (adapter.capabilities.sessionIdInjection) {
         ctx.sessionIds[triage.id] = randomUUID();
@@ -1033,6 +1430,8 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         // report (and exhausted loop / finished interactive triage): findings stood.
         return endWith(false);
       }
+      // Only a loop inside a stage says this, and runStage always absorbs it.
+      if (outcome === 'stage-exhausted') throw new Error(`step '${step.id}': a stage exhaustion escaped its stage`);
       if (outcome !== null) return outcome;
       i += 1;
     }

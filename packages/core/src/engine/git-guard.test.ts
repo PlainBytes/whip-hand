@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { snapshotTree, diffSnapshots } from './git-guard.ts';
+import { snapshotTree, diffSnapshots, pathsOutside } from './git-guard.ts';
 
 const run = promisify(execFile);
 
@@ -49,4 +49,14 @@ test('ignores changes under .whiphand/', async () => {
   await writeFile(join(dir, '.whiphand', 'runs', 'r1', 'plan.md'), 'plan\n');
   const after = await snapshotTree(dir);
   assert.deepEqual(diffSnapshots(before!, after!), []);
+});
+
+test('pathsOutside returns only the paths no glob covers', () => {
+  const globs = ['docs/plans/oauth/**', 'CHANGELOG.md'];
+  assert.deepEqual(
+    pathsOutside(['docs/plans/oauth/01-schema.md', 'CHANGELOG.md', 'src/app.ts'], globs), ['src/app.ts']);
+});
+
+test('a glob with no wildcard still matches its own path', () => {
+  assert.deepEqual(pathsOutside(['CHANGELOG.md'], ['CHANGELOG.md']), []);
 });

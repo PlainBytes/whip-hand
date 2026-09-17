@@ -20,9 +20,13 @@ function rowName(job: JobState): string {
  * this copy is centralised, so the row does not invent its own "waiting".
  */
 function stateLabel(job: JobState): string {
-  if (job.awaiting) return AWAIT_LABEL[job.awaiting.reason];
-  if (job.pendingManual) return manualLabel(job.pendingManual.kind);
-  return 'running';
+  const base = job.awaiting ? AWAIT_LABEL[job.awaiting.reason]
+    : job.pendingManual ? manualLabel(job.pendingManual.kind)
+    : 'running';
+  // A long staged run says how far through its stages it is, the same
+  // `stage 3/7` the run grids show.
+  const stage = job.stageProgress;
+  return stage === undefined ? base : `${base} · stage ${stage.index}/${stage.total}`;
 }
 
 export type RunStatus = 'running' | 'waiting' | 'failed';

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatLogLine, mergeUsage, parseLogLine, summarizeEvent, usageParts } from './log-rows.ts';
+import { formatLogLine, mergeUsage, nestedPrefix, parseLogLine, summarizeEvent, usageParts } from './log-rows.ts';
 import type { LogRow } from './log-rows.ts';
 import type { StepProgress, WhiphandEvent } from './types.ts';
 
@@ -90,4 +90,56 @@ test('usageParts: turns first, cost spelled by the caller, absent counters omitt
 test('summarizeEvent: an artifact row names its size in the shared byte format', () => {
   const row = summarizeEvent({ type: 'step:artifact', stepId: 'a', path: 'plan.md', bytes: 340 * 1024 });
   assert.equal(row.text, 'wrote artifact plan.md (340 KB)');
+});
+
+// ---------------------------------------------------------------------------
+// summarizeEvent: stages
+// ---------------------------------------------------------------------------
+
+test('stages events summarize as stage lines', () => {
+  assert.match(summarizeEvent({
+    type: 'stages:item', id: 'build', index: 3, total: 7,
+    stageId: '03-api', title: 'Add API routes', attempt: 1,
+  })!.text, /stage 3 of 7 · Add API routes/);
+});
+
+test('summarizeEvent: stages:start/accepted/exhausted/done each name the stages step by id', () => {
+  assert.equal(summarizeEvent({ type: 'stages:start', id: 'build', total: 2 }).stepId, 'build');
+  assert.match(summarizeEvent({ type: 'stages:start', id: 'build', total: 2 }).text, /2 stage/);
+  assert.equal(summarizeEvent({ type: 'stages:accepted', id: 'build', stageId: '01-a' }).text, 'stage accepted: 01-a');
+  assert.match(summarizeEvent({ type: 'stages:done', id: 'build', completed: 2 }).text, /2 completed/);
+  const exhausted = summarizeEvent({ type: 'stages:exhausted', id: 'build', stageId: '01-a', attempts: 3 });
+  assert.equal(exhausted.stepId, 'build');
+  assert.equal(exhausted.text, 'stage 01-a rejected 3 time(s), handed to triage');
+});
+
+// ---------------------------------------------------------------------------
+// nestedPrefix / summarizeEvent: a loop nested inside a stage
+// ---------------------------------------------------------------------------
+
+test('a plain nested loop (no stage) keeps its existing label', () => {
+  assert.equal(nestedPrefix('fix', 'human-review', 2), 'human-review 2 › fix');
+});
+
+test('a loop nested directly inside a stage names the stage, not just the stages step', () => {
+  assert.equal(nestedPrefix('cycle', 'build', 1, undefined, '01-schema'), 'build/01-schema 1 › cycle');
+});
+
+test('two different stages of the same stages step no longer collapse onto one label', () => {
+  const a = nestedPrefix('cycle', 'build', 1, undefined, '01-schema');
+  const b = nestedPrefix('cycle', 'build', 1, undefined, '02-api');
+  assert.notEqual(a, b, 'stage 1 and stage 2 must read as different loops even at the same attempt number');
+});
+
+test('summarizeEvent carries the stage into loop:start/iteration/done text', () => {
+  const start = summarizeEvent({
+    type: 'loop:start', loopId: 'cycle', maxIterations: 3,
+    parentLoopId: 'build', parentIteration: 1, parentStage: '02-api',
+  });
+  assert.match(start.text, /'build\/02-api 1 › cycle'/);
+  const done = summarizeEvent({
+    type: 'loop:done', loopId: 'cycle', iterations: 2, passed: true,
+    parentLoopId: 'build', parentIteration: 1, parentStage: '02-api',
+  });
+  assert.match(done.text, /'build\/02-api 1 › cycle'/);
 });

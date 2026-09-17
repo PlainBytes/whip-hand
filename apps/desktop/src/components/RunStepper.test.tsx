@@ -502,3 +502,124 @@ describe('StepDetails progress summary', () => {
     expect(screen.queryByTestId('step-progress')).not.toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Stages — a `stages` step runs one body per stage file. Rows are in the
+// shapes the runner writes: a body step directly under a stage carries the
+// stages id as `loopId`, the attempt as `iteration` and the file as `stage`.
+// ---------------------------------------------------------------------------
+
+function stageRow(id: string, stage: string, attempt: number, extra: Partial<StepState> = {}): StepState {
+  return {
+    key: executionKey(id, attempt, [], stage), id, kind: 'agent', runner: 'claude', mode: 'headless',
+    loopId: 'build', iteration: attempt, stage, status: 'done', ...extra,
+  } as StepState;
+}
+
+function stagesRow(extra: Partial<StepState> = {}): StepState {
+  return {
+    key: 'build', id: 'build', kind: 'stages', status: 'running', total: 7, attempt: 1,
+    currentStage: { id: '02-b', title: 'Add API routes', index: 2 }, completedStages: ['01-a'],
+    startedStages: { '01-a': { title: 'Schema', index: 1, maxAttempts: 3 }, '02-b': { title: 'Add API routes', index: 2, maxAttempts: 3 } },
+    ...extra,
+  } as StepState;
+}
+
+function stagedRows(): StepState[] {
+  return [
+    { key: 'plan', id: 'plan', kind: 'command', status: 'done' } as StepState,
+    stagesRow(),
+    stageRow('implement', '01-a', 1),
+    stageRow('accept', '01-a', 1, { kind: 'approval' }),
+    stageRow('implement', '02-b', 1, { status: 'running' }),
+  ];
+}
+
+describe('stages', () => {
+  it('labels a stage group by stage, not by iteration', () => {
+    render(<RunStepper steps={stagedRows()} />);
+    expect(screen.getByText('stage 2 of 7 · Add API routes')).toBeInTheDocument();
+    expect(screen.queryByText(/iteration/)).toBeNull();
+  });
+
+  it('draws the stages step as a container holding one group per stage', () => {
+    render(<RunStepper steps={stagedRows()} />);
+    const container = screen.getByTestId('step-stages-build');
+    const first = within(container).getByTestId('stage-group-build@01-a');
+    const second = within(container).getByTestId('stage-group-build@02-b');
+    // The same step id in two stages is two pills, one under each stage.
+    expect(within(first).getByTestId('step-card-implement@01-a#1')).toBeInTheDocument();
+    expect(within(second).getByTestId('step-card-implement@02-b#1')).toHaveAccessibleName(/running/);
+    // Finished before this render, and still named by its title, not its id.
+    expect(within(first).getByTestId('stage-label-build@01-a')).toHaveTextContent('stage 1 of 7 · Schema');
+  });
+
+  it('says how many stages are accepted on the stages step\'s own pill', () => {
+    render(<RunStepper steps={stagedRows()} />);
+    expect(screen.getByTestId('step-meta-build')).toHaveTextContent('stages');
+    expect(screen.getByTestId('stages-progress-build')).toHaveTextContent('1 of 7 accepted');
+  });
+
+  it('badges each attempt of a stage that was sent back', () => {
+    render(<RunStepper steps={[
+      stagesRow({
+        attempt: 2, maxAttempts: 3, currentStage: { id: '01-a', title: 'Schema', index: 1 }, completedStages: [],
+        startedStages: { '01-a': { title: 'Schema', index: 1, maxAttempts: 3 } },
+      }),
+      stageRow('implement', '01-a', 1),
+      stageRow('accept', '01-a', 1, { kind: 'approval', verdict: 'fail' }),
+      stageRow('implement', '01-a', 2, { status: 'running' }),
+    ]} />);
+    // One stage label, however many times the stage was attempted.
+    expect(screen.getAllByText('stage 1 of 7 · Schema')).toHaveLength(1);
+    expect(screen.getByTestId('stage-attempt-build@01-a#1')).toHaveTextContent(/^attempt 1 of 3$/);
+    expect(screen.getByTestId('stage-attempt-build@01-a#2')).toHaveTextContent(/^attempt 2 of 3$/);
+    expect(within(screen.getByTestId('stage-attempt-group-build@01-a#2'))
+      .getByTestId('step-card-implement@01-a#2')).toBeInTheDocument();
+  });
+
+  it('drops the budget from the attempt badge when the run never recorded one', () => {
+    render(<RunStepper steps={[
+      stagesRow({ attempt: 2, currentStage: { id: '01-a', title: 'Schema', index: 1 }, completedStages: [], startedStages: undefined }),
+      stageRow('implement', '01-a', 1),
+      stageRow('implement', '01-a', 2, { status: 'running' }),
+    ]} />);
+    expect(screen.getByTestId('stage-attempt-build@01-a#2')).toHaveTextContent(/^attempt 2$/);
+  });
+
+  it('shows no attempt badge on a stage accepted first time', () => {
+    render(<RunStepper steps={stagedRows()} />);
+    expect(screen.queryByText(/attempt/)).toBeNull();
+  });
+
+  it('counts stages rather than raw steps when collapsed inside a stage', () => {
+    render(<RunStepper steps={stagedRows()} focusStepId="implement" collapsed onToggleCollapse={vi.fn()} />);
+    expect(screen.getByTestId('step-card-implement@02-b#1')).toBeInTheDocument();
+    expect(screen.queryByTestId('step-card-plan')).not.toBeInTheDocument();
+    expect(screen.getByText('stage 2 of 7')).toBeInTheDocument();
+  });
+
+  it('counts a stages step as one step when collapsed outside it', () => {
+    // Its body repeats per stage, so counting body pills would make the total
+    // grow as stages pass — the same reason a loop's iterations are folded.
+    render(<RunStepper steps={stagedRows()} focusStepId="plan" collapsed onToggleCollapse={vi.fn()} />);
+    expect(screen.getByText('1 of 2')).toBeInTheDocument();
+  });
+
+  it('collapses a focused stages step to its own pill', () => {
+    render(<RunStepper steps={stagedRows().slice(0, 2)} focusStepId="build" collapsed onToggleCollapse={vi.fn()} />);
+    expect(screen.getByTestId('step-card-build')).toBeInTheDocument();
+    expect(screen.queryByTestId('step-stages-build')).not.toBeInTheDocument();
+  });
+
+  it('shows a disabled stages step as one dimmed pill counting its body', () => {
+    render(<RunStepper steps={[
+      stagesRow({ status: 'disabled', currentStage: undefined, total: undefined, completedStages: undefined }),
+      { key: 'implement', id: 'implement', stagesId: 'build', status: 'disabled' } as StepState,
+      { key: 'accept', id: 'accept', stagesId: 'build', status: 'disabled' } as StepState,
+    ]} />);
+    expect(screen.getByTestId('step-disabled-build')).toBeInTheDocument();
+    expect(screen.getByTestId('step-meta-build')).toHaveTextContent('stages disabled — 2 steps not run');
+    expect(screen.queryByTestId('step-card-implement')).not.toBeInTheDocument();
+  });
+});

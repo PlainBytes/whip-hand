@@ -3,4 +3,4 @@
  * import the version without importing index.ts itself and creating a cycle
  * (index.ts already re-exports from engine/runner.ts).
  */
-export const CORE_VERSION = '0.1.6';
+export const CORE_VERSION = '0.2.0';

@@ -45,6 +45,20 @@ test('an unknown run.* reference is left alone rather than throwing', () => {
   assert.equal(renderTemplate('{{ run.nope }}', scope()), '{{ run.nope }}');
 });
 
+test('stage.* renders inside a stage frame', () => {
+  const stage = { index: 2, total: 7, id: '02-api', title: 'Add API routes', path: '/p/02-api.md' };
+  const s = scope({
+    frame: { kind: 'stages', id: 'build', stage, attempt: 1, maxAttempts: 3 },
+  });
+  assert.equal(renderTemplate('Stage {{ stage.index }}/{{ stage.total }}: {{ stage.title }}', s),
+    'Stage 2/7: Add API routes');
+});
+
+test('stage.* outside a stages step is a TemplateError', () => {
+  assert.throws(() => renderTemplate('{{ stage.title }}', scope()),
+    /'stage.title' is only available inside a stages step/);
+});
+
 const ctx: RunCtx = {
   workdir: '/w', runId: 'r1', runDir: '/w/.whiphand/runs/r1', runSlug: 'r1',
   sessionIds: {}, artifacts: { plan: '/w/.whiphand/runs/r1/plan.md' }, attempts: {}, verdicts: {},

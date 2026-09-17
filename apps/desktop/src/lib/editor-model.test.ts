@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { editorRows, wiring } from './editor-model.ts';
-import type { AgentStep, LoopStep, Workflow } from '../../../../packages/core/src/types.ts';
+import type { AgentStep, LoopStep, StagesStep, Workflow } from '../../../../packages/core/src/types.ts';
 
 const agent = (over: Partial<AgentStep> & { id: string }): AgentStep => ({
   kind: 'agent', runner: 'claude', mode: 'headless', writes: false,
@@ -108,5 +108,50 @@ describe('wiring', () => {
     expect(w.sources('execute')).toEqual(['plan']);
     expect(w.sources('plan')).toEqual([]);
     expect(w.dependents('attachments')).toEqual([]);
+  });
+});
+
+describe('a stages step in the editor model', () => {
+  const staged = (): Workflow => ({
+    name: 'staged',
+    steps: [
+      agent({ id: 'plan' }),
+      {
+        kind: 'stages', id: 'build', items: 'plans/*.md',
+        steps: [
+          agent({ id: 'impl', inputs: ['stage', 'plan'] }),
+          { kind: 'loop', id: 'fix', until: 'check', steps: [agent({ id: 'check', verdict: true, inputs: ['impl'] })] },
+          { kind: 'approval', id: 'gate', title: 't', instructions: 'i' },
+        ],
+      } as StagesStep,
+      agent({ id: 'after', inputs: ['plan'] }),
+    ],
+  });
+
+  it('gives its body rows, one level in, addressable by path', () => {
+    const rows = editorRows(staged());
+    expect(rows.map(r => [r.step.id, r.depth])).toEqual([
+      ['plan', 0], ['build', 0], ['impl', 1], ['fix', 1], ['check', 2], ['gate', 1], ['after', 0],
+    ]);
+    expect(rows.find(r => r.step.id === 'check')!.path).toEqual([1, 1, 0]);
+  });
+
+  it('marks the rows inside a stages body, at any depth, and only those', () => {
+    const inStages = editorRows(staged()).filter(r => r.inStages).map(r => r.step.id);
+    expect(inStages).toEqual(['impl', 'fix', 'check', 'gate']);
+  });
+
+  it('dims a disabled stages step\'s whole body', () => {
+    const wf = staged();
+    (wf.steps[1] as StagesStep).enabled = false;
+    expect(editorRows(wf).filter(r => r.dimmed).map(r => r.step.id)).toEqual(['build', 'impl', 'fix', 'check', 'gate']);
+  });
+
+  it('wires reads inside its body — `stage` is the stage file, not a card to light up', () => {
+    const w = wiring(staged());
+    expect(w.sources('impl')).toEqual(['plan']);
+    expect(w.dependents('plan').sort()).toEqual(['after', 'impl']);
+    expect(w.dependents('impl')).toEqual(['check']);
+    expect(w.sources('build')).toEqual([]);
   });
 });

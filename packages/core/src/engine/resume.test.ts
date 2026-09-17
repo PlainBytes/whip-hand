@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { planResume, ResumeError } from './resume.ts';
+import type { ResumeOptions, ResumePlan } from './resume.ts';
 import { WORKFLOW_SNAPSHOT_NAME } from './manifest.ts';
 import type { RunManifest } from './manifest.ts';
 import { DEFAULT_CONFIG } from '../config.ts';
@@ -756,4 +757,257 @@ test('a run recorded before sessions were tracked keeps the old heuristic', asyn
   const plan = await planResume(workdir, DEFAULT_CONFIG, RUN_ID);
 
   assert.equal(plan.resumedStepIds.has('plan'), true);
+});
+
+// ---------------------------------------------------------------------------
+// Staged runs
+// ---------------------------------------------------------------------------
+
+/** The same shape runner.stages.test.ts runs: a fix cycle per stage, then a gate. */
+const STAGED_WORKFLOW = `name: staged
+steps:
+  - kind: stages
+    id: build
+    items: "plans/*.md"
+    steps:
+      - kind: loop
+        id: cycle
+        until: review
+        max_iterations: 2
+        steps:
+          - id: execute
+            runner: fake
+            mode: headless
+            writes: true
+            prompt: "Implement {{ stage.title }}"
+            inputs: [stage, review]
+            output: execute-report.md
+          - id: review
+            runner: fake
+            mode: headless
+            writes: false
+            verdict: true
+            prompt: Review it
+            inputs: [stage, execute]
+            output: review.md
+      - kind: approval
+        id: accept
+        title: "Accept {{ stage.title }}?"
+        instructions: Look at the work.
+        inputs: [stage, review]
+        output: accept.md
+`;
+
+type Row = RunManifest['steps'][number];
+
+/**
+ * The rows a real run records for one finished attempt at one stage, in the
+ * shapes RunJournal writes them (checked against runner.stages.test.ts's
+ * run.json): the loop row and the gate sit directly under the stage frame
+ * (`loopId: 'build'`, `iteration: <attempt>`, `stage`), while the cycle's own
+ * body carries the stage in `outerLoops` and has no `stage` of its own.
+ */
+function stageAttemptRows(stage: string, attempt: number, over: {
+  gate?: 'pass' | 'fail'; cycle?: 'pass' | 'fail';
+} = {}): Row[] {
+  const cycle = over.cycle ?? 'pass';
+  const iterations = cycle === 'pass' ? 1 : 2;
+  const dir = `/r/build/${stage}/attempt-${attempt}`;
+  const inCycle = (n: number): Pick<Row, 'loopId' | 'iteration' | 'outerLoops'> =>
+    ({ loopId: 'cycle', iteration: n, outerLoops: [{ id: 'build', iteration: attempt, stage }] });
+  return [
+    { id: 'cycle', kind: 'loop', status: cycle === 'pass' ? 'done' : 'failed', loopId: 'build', iteration: attempt,
+      stage, iterations, maxIterations: 2, verdict: cycle },
+    ...Array.from({ length: iterations }, (_, i) => [
+      { id: 'execute', kind: 'agent' as const, status: 'done' as const, ...inCycle(i + 1),
+        artifact: `${dir}/cycle/iter-${i + 1}/execute-report.md` },
+      { id: 'review', kind: 'agent' as const, status: 'done' as const, ...inCycle(i + 1), verdict: cycle,
+        artifact: `${dir}/cycle/iter-${i + 1}/review.md` },
+    ]).flat(),
+    { id: 'accept', kind: 'approval', status: 'done', loopId: 'build', iteration: attempt, stage,
+      verdict: over.gate ?? 'pass', artifact: `${dir}/accept.md` },
+  ];
+}
+
+function stagesRow(over: Partial<Row>): Row {
+  return { id: 'build', kind: 'stages', status: 'failed', total: 3, ...over };
+}
+
+async function stagedFixture(steps: Row[], opts: ResumeOptions = {}): Promise<ResumePlan> {
+  const workdir = await fixture(steps, { version: 5, workflow: 'staged' }, { snapshotText: STAGED_WORKFLOW });
+  return planResume(workdir, DEFAULT_CONFIG, RUN_ID, opts);
+}
+
+test('a resumed staged run skips the stages it already accepted', async () => {
+  const plan = await stagedFixture([
+    stagesRow({ completedStages: ['01-a', '02-b'], currentStage: { id: '03-c', title: 'C', index: 3 }, attempt: 1 }),
+    ...stageAttemptRows('01-a', 1),
+    ...stageAttemptRows('02-b', 1),
+    { id: 'cycle', kind: 'loop', status: 'interrupted', loopId: 'build', iteration: 1, stage: '03-c',
+      iterations: 1, maxIterations: 2 },
+    { id: 'execute', kind: 'agent', status: 'interrupted', loopId: 'cycle', iteration: 1,
+      outerLoops: [{ id: 'build', iteration: 1, stage: '03-c' }] },
+  ]);
+
+  assert.deepEqual(plan.stagesCompleted.build, ['01-a', '02-b']);
+  assert.equal(plan.restartAt?.stepId, 'execute', 'not the stages row, and not a row of an accepted stage');
+  assert.ok(plan.done.has('accept@01-a#1'), 'a gate directly under a stage is keyed by its stage');
+  assert.ok(plan.done.has('accept@02-b#1'));
+  assert.ok(plan.done.has('build@01-a#1/execute#1'));
+  assert.ok(!plan.done.has('accept'), 'never the bare id');
+  assert.match(plan.warnings.join('\n'), /stages step 'build' resumes in stage 3 \('C'\); 2 accepted stage\(s\) will not run again/);
+  assert.deepEqual(plan.stageBudgets, {});
+  assert.deepEqual(plan.stagesInterrupted, { 'build@03-c': 1 });
+  assert.deepEqual(plan.stagesStarted, ['build@01-a', 'build@02-b', 'build@03-c'],
+    'every stage with a recorded row, so none of their gates claims "no changes"');
+});
+
+test('a run stopped in triage grants the rejected stage one more attempt; an interrupted one does not', async () => {
+  const rejectedThrice = [
+    ...stageAttemptRows('01-a', 1),
+    ...stageAttemptRows('02-b', 1, { gate: 'fail' }),
+    ...stageAttemptRows('02-b', 2, { gate: 'fail' }),
+    ...stageAttemptRows('02-b', 3, { gate: 'fail' }),
+  ];
+  // `attempt` is deliberately stale: a crash can leave the scalar behind, so
+  // the attempts used come from the stage's own rows.
+  const exhausted = await stagedFixture([
+    stagesRow({ completedStages: ['01-a'], currentStage: { id: '02-b', title: 'B', index: 2 }, attempt: 2,
+      exhausted: true }),
+    ...rejectedThrice,
+  ]);
+  assert.equal(exhausted.stageBudgets['build@02-b'], 4, '3 used, one more granted');
+  assert.match(exhausted.warnings.join('\n'), /stage '02-b' was rejected 3 times; this resume allows one more attempt/);
+  assert.deepEqual(exhausted.stagesInterrupted, {}, 'every attempt was answered');
+
+  const interrupted = await stagedFixture([
+    stagesRow({ completedStages: ['01-a'], currentStage: { id: '02-b', title: 'B', index: 2 }, attempt: 2 }),
+    ...stageAttemptRows('01-a', 1),
+    ...stageAttemptRows('02-b', 1, { gate: 'fail' }),
+    { id: 'cycle', kind: 'loop', status: 'interrupted', loopId: 'build', iteration: 2, stage: '02-b',
+      iterations: 1, maxIterations: 2 },
+    { id: 'execute', kind: 'agent', status: 'interrupted', loopId: 'cycle', iteration: 1,
+      outerLoops: [{ id: 'build', iteration: 2, stage: '02-b' }] },
+  ]);
+  assert.deepEqual(interrupted.stageBudgets, {});
+  assert.doesNotMatch(interrupted.warnings.join('\n'), /rejected/);
+  assert.deepEqual(interrupted.stagesInterrupted, { 'build@02-b': 2 }, 'the attempt that was cut short');  assert.deepEqual(interrupted.closedLoops, {
+    'cycle@01-a#1': { budget: 2, completed: 1 },
+    'cycle@02-b#1': { budget: 2, completed: 1 },
+  }, 'the accepted stage and the rejected attempt replay at what they recorded; the open attempt is not closed');
+  assert.equal(interrupted.loopBudgets['cycle@02-b#2']?.budget, 2);
+});
+
+test("a completed stage's exhausted inner loop gets no iteration grant", async () => {
+  const plan = await stagedFixture([
+    stagesRow({ completedStages: ['01-a'], currentStage: { id: '02-b', title: 'B', index: 2 }, attempt: 1 }),
+    ...stageAttemptRows('01-a', 1, { cycle: 'fail' }),
+    { id: 'cycle', kind: 'loop', status: 'interrupted', loopId: 'build', iteration: 1, stage: '02-b',
+      iterations: 1, maxIterations: 2 },
+    { id: 'execute', kind: 'agent', status: 'interrupted', loopId: 'cycle', iteration: 1,
+      outerLoops: [{ id: 'build', iteration: 1, stage: '02-b' }] },
+  ]);
+
+  assert.equal(plan.loopBudgets['cycle@01-a#1'], undefined);
+  assert.doesNotMatch(plan.warnings.join('\n'), /ran out of iterations/);
+  assert.deepEqual(plan.loopBudgets['cycle@02-b#1'], { budget: 2, completed: 1 },
+    "the unfinished stage's loop is still budgeted, under its stage-keyed row");
+});
+
+test('a loop in a stage attempt a gate already answered is replayed as it ran, not granted more', async () => {
+  // Attempt 1's cycle exhausted and the human rejected it; attempt 2 was cut
+  // short. Replaying attempt 1 must reproduce it — a +1 there would spawn a
+  // third review inside an attempt that is already over.
+  const plan = await stagedFixture([
+    stagesRow({ completedStages: [], currentStage: { id: '01-a', title: 'A', index: 1 }, attempt: 2 }),
+    ...stageAttemptRows('01-a', 1, { cycle: 'fail', gate: 'fail' }),
+    { id: 'cycle', kind: 'loop', status: 'interrupted', loopId: 'build', iteration: 2, stage: '01-a',
+      iterations: 1, maxIterations: 2 },
+    { id: 'execute', kind: 'agent', status: 'interrupted', loopId: 'cycle', iteration: 1,
+      outerLoops: [{ id: 'build', iteration: 2, stage: '01-a' }] },
+  ], { extraIterations: 1 });
+
+  assert.equal(plan.loopBudgets['cycle@01-a#1'], undefined, 'not even an explicit extraIterations reaches it');
+  assert.deepEqual(plan.loopBudgets['cycle@01-a#2'], { budget: 3, completed: 1 },
+    'the open attempt still takes the explicit grant');
+});
+
+test('an exhausted cycle inside a stage gets no default +1: the gate, not the loop, stopped there', async () => {
+  const plan = await stagedFixture([
+    stagesRow({ completedStages: [], currentStage: { id: '01-a', title: 'A', index: 1 }, attempt: 1 }),
+    ...stageAttemptRows('01-a', 1, { cycle: 'fail' }).filter(r => r.id !== 'accept'),
+    { id: 'accept', kind: 'approval', status: 'interrupted', loopId: 'build', iteration: 1, stage: '01-a' },
+  ]);
+
+  assert.equal(plan.loopBudgets['cycle@01-a#1'], undefined);
+  assert.doesNotMatch(plan.warnings.join('\n'), /ran out of iterations/);
+  assert.equal(plan.restartAt?.stepId, 'accept');
+});
+
+test('an orphaned done row in an earlier stage is still healed to the right path', async () => {
+  const workdir = await fixture([
+    stagesRow({ completedStages: ['01-a'], currentStage: { id: '02-b', title: 'B', index: 2 }, attempt: 1 }),
+    { id: 'execute', kind: 'agent', status: 'done', loopId: 'cycle', iteration: 1,
+      outerLoops: [{ id: 'build', iteration: 1, stage: '01-a' }], startedAt: RUN_START },
+    { id: 'execute', kind: 'agent', status: 'done', loopId: 'cycle', iteration: 1,
+      outerLoops: [{ id: 'build', iteration: 1, stage: '02-b' }], startedAt: RUN_START, artifact: '/r/b.md' },
+  ], { version: 5, workflow: 'staged' }, { snapshotText: STAGED_WORKFLOW });
+  const expected = await leaveArtifact(workdir, join('build', '01-a', 'attempt-1', 'cycle', 'iter-1', 'execute-report.md'));
+
+  const plan = await planResume(workdir, DEFAULT_CONFIG, RUN_ID);
+
+  // Healing must not collapse rows by bare id across stages.
+  assert.match(plan.warnings.join('\n'), /adopting the 'execute-report\.md'/);
+  assert.equal(plan.done.get('build@01-a#1/execute#1')?.artifact, expected, "in stage 01-a's own directory");
+});
+
+test('an orphaned done gate directly under a stage is looked for in that stage attempt', async () => {
+  const workdir = await fixture([
+    stagesRow({ completedStages: [], currentStage: { id: '01-a', title: 'A', index: 1 }, attempt: 2 }),
+    { id: 'accept', kind: 'approval', status: 'done', loopId: 'build', iteration: 2, stage: '01-a',
+      startedAt: RUN_START },
+  ], { version: 5, workflow: 'staged' }, { snapshotText: STAGED_WORKFLOW });
+  const expected = await leaveArtifact(workdir, join('build', '01-a', 'attempt-2', 'accept.md'));
+
+  const plan = await planResume(workdir, DEFAULT_CONFIG, RUN_ID);
+
+  assert.equal(plan.done.get('accept@01-a#2')?.artifact, expected);
+});
+
+test('an exhausted cycle that chose on_exhausted: interactive stopped the run itself, so it keeps its +1', async () => {
+  const workdir = await fixture([
+    stagesRow({ completedStages: [], currentStage: { id: '01-a', title: 'A', index: 1 }, attempt: 1 }),
+    ...stageAttemptRows('01-a', 1, { cycle: 'fail' }).filter(r => r.id !== 'accept'),
+  ], { version: 5, workflow: 'staged' }, {
+    snapshotText: STAGED_WORKFLOW.replace('max_iterations: 2\n', 'max_iterations: 2\n        on_exhausted: interactive\n'),
+  });
+
+  const plan = await planResume(workdir, DEFAULT_CONFIG, RUN_ID);
+
+  assert.deepEqual(plan.loopBudgets['cycle@01-a#1'], { budget: 3, completed: 2 });
+  assert.match(plan.warnings.join('\n'), /loop 'cycle' ran out of iterations at 2; this resume allows 3/);
+});
+
+test('a granted attempt that was itself interrupted resumes that attempt, not a second triage', async () => {
+  // Triage after three rejections, a resume granted attempt 4, and attempt 4
+  // was cut short: `exhausted` is still set, but nothing new was rejected.
+  const plan = await stagedFixture([
+    stagesRow({ completedStages: [], currentStage: { id: '01-a', title: 'A', index: 1 }, attempt: 4,
+      exhausted: true }),
+    ...stageAttemptRows('01-a', 1, { gate: 'fail' }),
+    ...stageAttemptRows('01-a', 2, { gate: 'fail' }),
+    ...stageAttemptRows('01-a', 3, { gate: 'fail' }),
+    { id: 'cycle', kind: 'loop', status: 'interrupted', loopId: 'build', iteration: 4, stage: '01-a',
+      iterations: 1, maxIterations: 2 },
+    { id: 'execute', kind: 'agent', status: 'interrupted', loopId: 'cycle', iteration: 1,
+      outerLoops: [{ id: 'build', iteration: 4, stage: '01-a' }] },
+  ], { extraIterations: 1 });
+
+  assert.equal(plan.stageBudgets['build@01-a'], 4, 'the grant already given, not a fifth attempt');
+  assert.doesNotMatch(plan.warnings.join('\n'), /rejected 4 times/);
+  assert.doesNotMatch(plan.warnings.join('\n'), /this resume allows one more attempt/);
+  assert.deepEqual(plan.stagesInterrupted, { 'build@01-a': 4 });
+  assert.deepEqual(plan.loopBudgets['cycle@01-a#4'], { budget: 3, completed: 1 },
+    "attempt 4's cycle is open, so the explicit grant reaches it");
+  assert.doesNotMatch(plan.warnings.join('\n'), /had no effect/);
 });

@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import {
   AttachmentError, defaultRegistry, loadWorkspaceConfig, parseInputPairs, parseWorkflow, planResume,
-  resolveWorkflowPath, ResumeError, runWorkflow, validateAttachments, validateWorkflowWarnings,
+  resolveWorkflowPath, ResumeError, runWorkflow, unattendedProblems, validateAttachments, validateWorkflowWarnings,
 } from '@whiphand/core';
 import type { AttachmentSource, Frontend, WhiphandEvent, ResumePlan, Scope, Workflow } from '@whiphand/core';
 import { spawnHeadless, spawnInteractive } from '../tty.ts';
@@ -121,6 +121,22 @@ export async function runCommand(
     workflow = plan.workflow;
   }
   for (const warning of validateWorkflowWarnings(workflow)) console.error(`  ⚠ ${warning}`);
+
+  // `defaultChoice` is 'continue', so unchecked --yes would auto-accept every
+  // stage of a `stages` step — "implement all N stages unattended", the exact
+  // thing the feature exists to prevent. A gate opts in explicitly by writing
+  // `default: continue` (or `abort`) itself; covers both a fresh run and a
+  // `--resume`, since both reach this same resolved `workflow`.
+  if (opts.yes) {
+    const problems = unattendedProblems(workflow);
+    if (problems.length > 0) {
+      console.error(`✘ --yes refuses to run: ${problems.length} gate(s) inside a stages step `
+        + 'have no explicit default');
+      for (const problem of problems) console.error(`  - ${problem}`);
+      console.error("  fix: add 'default: continue' (or 'default: abort') to each gate listed above");
+      return USAGE_ERROR;
+    }
+  }
 
   const attachments: AttachmentSource[] = (opts.attach ?? []).map(path => ({ path: resolve(process.cwd(), path) }));
   // Checked here as well as in runWorkflow so a bad --attach is refused before

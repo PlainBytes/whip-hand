@@ -422,33 +422,52 @@ test('doctor parity: CLI human output and agent doctor() report the same tool fa
 // then --resume --extra-iterations off the exhausted loop, testable at all.
 // ---------------------------------------------------------------------------
 
-/** Strips every timestamp/pid/path field a real run's manifest carries, so two separate runs compare equal. */
-function normalizeManifest(value: unknown): unknown {
+/**
+ * Strips every timestamp/pid/path field a real run's manifest carries, so two
+ * separate runs compare equal. `dir` and `runId` also get substituted out of
+ * whatever string values survive — a stage step's own `artifact` field is an
+ * absolute path under the mkdtemp'd workspace and the minted runId (see
+ * normalizeString above for the identical need on a SpawnSpec), and neither
+ * workflow here recorded artifacts before staged.yaml gave one a reason to.
+ */
+function normalizeManifest(value: unknown, dir: string, runId: string): unknown {
   const VOLATILE = new Set([
     'runId', 'workdir', 'runDir', 'pid', 'startedAt', 'endedAt', 'updatedAt', 'heartbeatAt', 'resumedAt',
   ]);
-  if (Array.isArray(value)) return value.map(normalizeManifest);
+  if (Array.isArray(value)) return value.map(v => normalizeManifest(v, dir, runId));
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
         .filter(([k]) => !VOLATILE.has(k))
-        .map(([k, v]) => [k, normalizeManifest(v)]),
+        .map(([k, v]) => [k, normalizeManifest(v, dir, runId)]),
     );
   }
+  if (typeof value === 'string') return normalizeString(value, dir, runId);
   return value;
 }
 
 async function readManifest(dir: string, runId: string): Promise<unknown> {
-  return normalizeManifest(JSON.parse(await readFile(join(dir, '.whiphand', 'runs', runId, 'run.json'), 'utf8')));
+  const raw = JSON.parse(await readFile(join(dir, '.whiphand', 'runs', runId, 'run.json'), 'utf8'));
+  return normalizeManifest(raw, dir, runId);
 }
 
-/** Runs to completion (budget.yaml always fails, so a nonzero exit is expected) and returns the minted runId. */
-async function runCliBudget(dir: string, args: string[] = []): Promise<string> {
-  await execFileAsync(process.execPath, [CLI_MAIN, 'run', 'budget', '-C', dir, ...args], { env: childEnv() })
+/** Runs `workflow` to completion (whatever its own exit code) and returns the minted runId. */
+async function runCliToCompletion(dir: string, workflow: string, args: string[] = []): Promise<string> {
+  await execFileAsync(process.execPath, [CLI_MAIN, 'run', workflow, '-C', dir, ...args], { env: childEnv() })
     .catch(() => {});
   const [runId] = await readdir(join(dir, '.whiphand', 'runs'));
   assert.ok(runId, `expected a run directory under ${dir}`);
   return runId;
+}
+
+/** budget.yaml always fails, so a nonzero exit is expected. */
+async function runCliBudget(dir: string, args: string[] = []): Promise<string> {
+  return runCliToCompletion(dir, 'budget', args);
+}
+
+/** staged.yaml's gate declares `default: continue`, so `--yes` runs it unattended to a DONE manifest. */
+async function runCliStaged(dir: string, args: string[] = []): Promise<string> {
+  return runCliToCompletion(dir, 'staged', args);
 }
 
 async function resumeCliBudget(dir: string, runId: string, args: string[] = []): Promise<void> {
@@ -456,18 +475,71 @@ async function resumeCliBudget(dir: string, runId: string, args: string[] = []):
     .catch(() => {});
 }
 
-async function runAgentBudget(dir: string, params: Record<string, unknown> = {}): Promise<string> {
+/** Polls a mutable snapshot until `check` returns a defined value, or times out. */
+async function waitForCondition<T>(check: () => T | undefined, timeoutMs = 5000): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = check();
+    if (value !== undefined) return value;
+    if (Date.now() > deadline) throw new Error('timed out waiting for condition');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+}
+
+/**
+ * Runs `workflow` to completion over RPC, answering every `manualRequest`
+ * the agent parks on along the way (there is no CLI-shaped `--yes` on this
+ * transport — the desktop always asks, and a client that wants unattended
+ * behaviour has to answer as the CLI's `--yes` would: taking each gate's own
+ * declared `defaultChoice`). `onManual` is omitted for a workflow with no
+ * manual/approval steps at all, matching runAgentBudget's plain wait.
+ */
+async function runAgentToCompletion(
+  dir: string, workflow: string, params: Record<string, unknown> = {},
+  onManual?: (request: { stepId: string; defaultChoice?: string }) => string,
+): Promise<string> {
   const agent = startAgentProcess();
   try {
-    agent.send({ id: 1, method: 'startRun', params: { workdir: dir, workflow: 'budget', ...params } });
+    agent.send({ id: 1, method: 'startRun', params: { workdir: dir, workflow, ...params } });
     const started = await agent.waitFor(m => m.id === 1);
     const jobId = (started.result as { jobId: string }).jobId;
-    const finalState = await agent.waitFor(m =>
-      m.method === 'runStateChanged' && m.params.jobId === jobId && m.params.status !== 'running');
-    return finalState.params.runId as string;
+
+    let answered = 0;
+    let rpcId = 2;
+    for (;;) {
+      const next = await waitForCondition<AgentMessage>(() => {
+        if (onManual !== undefined) {
+          const manualMsgs = agent.messages.filter(m => m.method === 'manualRequest' && m.params.jobId === jobId);
+          if (manualMsgs.length > answered) return manualMsgs[answered];
+        }
+        return agent.messages.find(m =>
+          m.method === 'runStateChanged' && m.params.jobId === jobId && m.params.status !== 'running');
+      });
+      if (next.method === 'runStateChanged') return next.params.runId as string;
+
+      answered++;
+      const request = next.params.request as { stepId: string; defaultChoice?: string };
+      const choice = onManual!(request);
+      const thisRpcId = rpcId++;
+      agent.send({ id: thisRpcId, method: 'resolveManual', params: { jobId, stepId: request.stepId, choice } });
+      await agent.waitFor(m => m.id === thisRpcId);
+    }
   } finally {
     agent.stop();
   }
+}
+
+async function runAgentBudget(dir: string, params: Record<string, unknown> = {}): Promise<string> {
+  return runAgentToCompletion(dir, 'budget', params);
+}
+
+/**
+ * The client-side stand-in for the CLI's `--yes`: nothing `--yes`-shaped is
+ * sent to the agent (the protocol has no such parameter); this client simply
+ * answers every gate with its own declared `default`.
+ */
+async function runAgentStagedAnsweringDefaults(dir: string): Promise<string> {
+  return runAgentToCompletion(dir, 'staged', {}, request => request.defaultChoice ?? 'continue');
 }
 
 async function resumeAgentBudget(dir: string, runId: string, params: Record<string, unknown> = {}): Promise<void> {
@@ -661,4 +733,22 @@ test('config set parity: CLI dotted key/value and the agent configSet write the 
 
   const content = (dir: string) => readFile(join(dir, '.whiphand', 'config.yaml'), 'utf8');
   assert.equal(await content(cliDir), await content(agentDir));
+});
+
+// ---------------------------------------------------------------------------
+// stages parity
+// ---------------------------------------------------------------------------
+
+test('stages parity: CLI and agent walk the same stages and write the same manifest', async () => {
+  const cliDir = await copyFixtureWorkspace();
+  const agentDir = await copyFixtureWorkspace();
+  const cliRunId = await runCliStaged(cliDir, ['--yes']);        // the fixture's gate declares default: continue
+  const agentRunId = await runAgentStagedAnsweringDefaults(agentDir);
+  const cliManifest = await readManifest(cliDir, cliRunId) as {
+    steps: Array<{ id: string; stage?: string; completedStages?: string[] }>;
+  };
+  assert.deepEqual(cliManifest, await readManifest(agentDir, agentRunId));
+  const build = cliManifest.steps.find(s => s.id === 'build')!;
+  assert.deepEqual(build.completedStages, ['01-a', '02-b']);
+  assert.deepEqual(cliManifest.steps.filter(s => s.id === 'accept').map(s => s.stage), ['01-a', '02-b']);
 });

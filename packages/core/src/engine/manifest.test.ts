@@ -1,10 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chmod, mkdtemp, readFile, readdir, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { RunJournal, listRuns, getRun, renameRun, WORKFLOW_SNAPSHOT_NAME, renameReplacing } from './manifest.ts';
-import type { RunManifest } from './manifest.ts';
+import {
+  RunJournal, listRuns, getRun, renameRun, WORKFLOW_SNAPSHOT_NAME, renameReplacing, runManifestSchema,
+} from './manifest.ts';
+import type { RunManifest, RunJournalInit } from './manifest.ts';
 import { DEFAULT_CONFIG } from '../config.ts';
 import { setRunLocked } from './run-lock.ts';
 import { NAME_MARKER_NAME, setRunName } from './run-name.ts';
@@ -1514,4 +1517,209 @@ test('formatLogLine/parseLogLine round-trip mixed real newlines, literal backsla
   const line = formatLogLine(original);
   const parsed = parseLogLine(line.trimEnd());
   assert.deepEqual(parsed, { seq: 5, ts: original.ts, kind: 'run:error', stepId: undefined, text: original.text });
+});
+
+// ---------------------------------------------------------------------------
+// v5: stages events
+// ---------------------------------------------------------------------------
+
+/** A fresh journal over a real (synchronous) temp dir, seeded with the given plan. */
+function journalFor(steps: RunJournalInit['steps']): RunJournal {
+  const runDir = mkdtempSync(join(tmpdir(), 'whiphand-manifest-stages-'));
+  return new RunJournal({
+    runDir, runId: 'run-stages', workflow: 'stages', workdir: '/work', dryRun: false,
+    inputs: {}, sessionIds: {}, steps,
+  });
+}
+
+function manifestOf(journal: RunJournal): RunManifest {
+  return journal.manifest;
+}
+
+test('a stages run records one row per stage execution, tagged with its stage', () => {
+  const j = journalFor([{ id: 'build', kind: 'stages' }, { id: 'accept', kind: 'approval', stagesId: 'build' }]);
+  j.record({ type: 'stages:start', id: 'build', total: 2 });
+  j.record({ type: 'stages:item', id: 'build', index: 1, total: 2, stageId: '01-a', title: 'A', attempt: 1 });
+  j.record({ type: 'step:start', stepId: 'accept', kind: 'approval', loopId: 'build', iteration: 1, stage: '01-a' });
+  j.record({ type: 'step:done', stepId: 'accept', exitCode: 0 });
+  j.record({ type: 'stages:accepted', id: 'build', stageId: '01-a' });
+  j.record({ type: 'stages:item', id: 'build', index: 2, total: 2, stageId: '02-b', title: 'B', attempt: 1 });
+  j.record({ type: 'step:start', stepId: 'accept', kind: 'approval', loopId: 'build', iteration: 1, stage: '02-b' });
+  j.record({ type: 'step:done', stepId: 'accept', exitCode: 0 });
+  j.record({ type: 'stages:accepted', id: 'build', stageId: '02-b' });
+  j.record({ type: 'stages:done', id: 'build', completed: 2 });
+
+  const rows = manifestOf(j).steps.filter(s => s.id === 'accept');
+  assert.equal(rows.length, 2, 'two stages, two rows — they must not overwrite each other');
+  assert.deepEqual(rows.map(r => r.stage), ['01-a', '02-b']);
+  const build = manifestOf(j).steps.find(s => s.id === 'build')!;
+  assert.equal(build.kind, 'stages');
+  assert.deepEqual(build.completedStages, ['01-a', '02-b']);
+  assert.equal(build.status, 'done');
+  assert.equal(build.completed, 2);
+});
+
+test('a retried stage gets its own row rather than overwriting attempt 1', () => {
+  const j = journalFor([{ id: 'build', kind: 'stages' }, { id: 'accept', kind: 'approval', stagesId: 'build' }]);
+  j.record({ type: 'stages:start', id: 'build', total: 1 });
+  j.record({ type: 'stages:item', id: 'build', index: 1, total: 1, stageId: '01-a', title: 'A', attempt: 1 });
+  j.record({ type: 'step:start', stepId: 'accept', kind: 'approval', loopId: 'build', iteration: 1, stage: '01-a' });
+  j.record({ type: 'step:done', stepId: 'accept', exitCode: 1 });
+  // The stage is retried: same stageId, attempt 2 — its own row, not a patch
+  // onto attempt 1's, which stays a record of what actually happened then.
+  j.record({ type: 'stages:item', id: 'build', index: 1, total: 1, stageId: '01-a', title: 'A', attempt: 2 });
+  j.record({ type: 'step:start', stepId: 'accept', kind: 'approval', loopId: 'build', iteration: 2, stage: '01-a' });
+  j.record({ type: 'step:done', stepId: 'accept', exitCode: 0 });
+  j.record({ type: 'stages:accepted', id: 'build', stageId: '01-a' });
+  j.record({ type: 'stages:done', id: 'build', completed: 1 });
+
+  const rows = manifestOf(j).steps.filter(s => s.id === 'accept');
+  assert.equal(rows.length, 2, 'attempt 1 and attempt 2 each keep their own row');
+  assert.deepEqual(rows.map(r => r.iteration), [1, 2]);
+  assert.deepEqual(rows.map(r => r.stage), ['01-a', '01-a']);
+  assert.deepEqual(rows.map(r => r.exitCode), [1, 0]);
+  // Idempotent, and only the accepted attempt ends up recorded.
+  assert.deepEqual(manifestOf(j).steps.find(s => s.id === 'build')!.completedStages, ['01-a']);
+});
+
+test('an exhausted stage marks the stages row, and the mark survives the schema', () => {
+  const j = journalFor([{ id: 'build', kind: 'stages' }]);
+  j.record({ type: 'stages:start', id: 'build', total: 2 });
+  j.record({ type: 'stages:item', id: 'build', index: 1, total: 2, stageId: '01-a', title: 'A', attempt: 3 });
+  j.record({ type: 'stages:exhausted', id: 'build', stageId: '01-a', attempts: 3 });
+  j.record({ type: 'run:error', stepId: 'build', message: "stages step 'build': stage 1 of 2 ('A') was rejected 3 times" });
+
+  const parsed = runManifestSchema.parse(JSON.parse(JSON.stringify(manifestOf(j))));
+  const build = parsed.steps.find(s => s.id === 'build')!;
+  assert.equal(build.exhausted, true);
+  assert.deepEqual(build.currentStage, { id: '01-a', title: 'A', index: 1 });
+  assert.equal(build.attempt, 3);
+});
+
+test('a manifest with stage rows round-trips through the schema', () => {
+  const j = journalFor([{ id: 'build', kind: 'stages' }, { id: 'accept', kind: 'approval', stagesId: 'build' }]);
+  j.record({ type: 'stages:start', id: 'build', total: 1 });
+  j.record({ type: 'stages:item', id: 'build', index: 1, total: 1, stageId: '01-a', title: 'A', attempt: 1 });
+  j.record({ type: 'step:start', stepId: 'accept', kind: 'approval', loopId: 'build', iteration: 1, stage: '01-a' });
+  j.record({ type: 'step:done', stepId: 'accept', exitCode: 0 });
+  j.record({ type: 'stages:accepted', id: 'build', stageId: '01-a' });
+  j.record({ type: 'stages:done', id: 'build', completed: 1 });
+
+  const parsed = runManifestSchema.parse(JSON.parse(JSON.stringify(manifestOf(j))));
+  assert.equal(parsed.steps.find(s => s.id === 'accept')!.stage, '01-a',
+    'stage must survive the parse — a stripped field collapses every stage onto one key');
+  const build = parsed.steps.find(s => s.id === 'build')!;
+  assert.equal(build.stagesId, undefined);
+  assert.deepEqual(build.completedStages, ['01-a']);
+  assert.equal(build.total, 1);
+  assert.equal(build.completed, 1);
+  assert.equal(parsed.steps.find(s => s.id === 'accept')!.stagesId, 'build');
+});
+
+test('the stages row records every started stage and the current attempt budget, through the schema', () => {
+  const j = journalFor([{ id: 'build', kind: 'stages' }]);
+  j.record({ type: 'stages:start', id: 'build', total: 2 });
+  j.record({ type: 'stages:item', id: 'build', index: 1, total: 2, stageId: '01-a', title: 'Schema', attempt: 1, maxAttempts: 3 });
+  j.record({ type: 'stages:accepted', id: 'build', stageId: '01-a' });
+  j.record({ type: 'stages:item', id: 'build', index: 2, total: 2, stageId: '02-b', title: 'API', attempt: 2, maxAttempts: 3 });
+
+  const parsed = runManifestSchema.parse(JSON.parse(JSON.stringify(manifestOf(j))));
+  const build = parsed.steps.find(s => s.id === 'build')!;
+  // currentStage alone would have forgotten stage 1's title by now.
+  assert.deepEqual(build.startedStages, {
+    '01-a': { title: 'Schema', index: 1, maxAttempts: 3 }, '02-b': { title: 'API', index: 2, maxAttempts: 3 },
+  });
+  assert.equal(build.maxAttempts, 3);
+  assert.equal(build.attempt, 2);
+});
+
+test('a resumed stages step keeps the stages an earlier attempt recorded', () => {
+  const j = journalFor([{ id: 'build', kind: 'stages' }]);
+  j.record({ type: 'stages:start', id: 'build', total: 2 });
+  j.record({ type: 'stages:item', id: 'build', index: 1, total: 2, stageId: '01-a', title: 'Schema', attempt: 3, maxAttempts: 3 });
+  j.record({ type: 'stages:exhausted', id: 'build', stageId: '01-a', attempts: 3 });
+  j.record({ type: 'run:error', stepId: 'build', message: 'rejected 3 times' });
+
+  const reopened = RunJournal.reopen(mkdtempSync(join(tmpdir(), 'whiphand-manifest-stages-')),
+    runManifestSchema.parse(JSON.parse(JSON.stringify(manifestOf(j)))));
+  reopened.record({ type: 'stages:start', id: 'build', total: 2 });
+  const build = reopened.manifest.steps.find(s => s.id === 'build')!;
+  assert.deepEqual(build.startedStages, { '01-a': { title: 'Schema', index: 1, maxAttempts: 3 } });
+  // A resume's granted attempt reports its own, larger budget.
+  reopened.record({ type: 'stages:item', id: 'build', index: 1, total: 2, stageId: '01-a', title: 'Schema', attempt: 4, maxAttempts: 4 });
+  const after = reopened.manifest.steps.find(s => s.id === 'build')!;
+  assert.equal(after.maxAttempts, 4);
+  assert.deepEqual(after.startedStages, { '01-a': { title: 'Schema', index: 1, maxAttempts: 4 } });
+  reopened.close();
+});
+
+test('a stages:item recorded before maxAttempts existed leaves the row without one', () => {
+  const j = journalFor([{ id: 'build', kind: 'stages' }]);
+  j.record({ type: 'stages:start', id: 'build', total: 1 });
+  j.record({ type: 'stages:item', id: 'build', index: 1, total: 1, stageId: '01-a', title: 'A', attempt: 1 });
+  const build = manifestOf(j).steps.find(s => s.id === 'build')!;
+  assert.equal(build.maxAttempts, undefined);
+  assert.deepEqual(build.startedStages, { '01-a': { title: 'A', index: 1 } });
+});
+
+test('version 5 is written, and v1..v4 manifests still parse', async () => {
+  const runDir = await tmpRunDir();
+  const journal = new RunJournal(baseInit(runDir, 'run-v5'));
+  assert.equal(journal.manifest.version, 5);
+  await journal.flush();
+
+  const workdir = await tmpRunDir();
+  const fixtures: Array<{ version: number; legacy: unknown }> = [
+    {
+      version: 1,
+      legacy: {
+        version: 1, runId: 'run-fixture-v1', workflow: 'r', workdir: '/work', dryRun: false,
+        pid: process.pid, startedAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+        endedAt: '2026-01-01T00:00:01Z', status: 'succeeded', ok: true, inputs: {}, sessionIds: {},
+        steps: [{ id: 'a', runner: 'claude', mode: 'headless', status: 'done', exitCode: 0 }],
+      },
+    },
+    {
+      version: 2,
+      legacy: {
+        version: 2, runId: 'run-fixture-v2', workflow: 'r', workdir: '/work', dryRun: false,
+        pid: process.pid, startedAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+        endedAt: '2026-01-01T00:00:01Z', status: 'succeeded', ok: true, inputs: {}, sessionIds: {},
+        steps: [{ id: 'fix', kind: 'loop', status: 'done', iterations: 2 }],
+      },
+    },
+    {
+      version: 3,
+      legacy: {
+        version: 3, runId: 'run-fixture-v3', workflow: 'r', workdir: '/work', dryRun: false,
+        pid: process.pid, startedAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+        endedAt: '2026-01-01T00:00:01Z', status: 'succeeded', ok: true, inputs: {}, sessionIds: {},
+        steps: [{ id: 'a', kind: 'agent', mode: 'interactive', status: 'done', sessionStarted: true }],
+      },
+    },
+    {
+      version: 4,
+      legacy: {
+        version: 4, runId: 'run-fixture-v4', workflow: 'r', workdir: '/work', dryRun: false,
+        pid: process.pid, startedAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+        endedAt: '2026-01-01T00:00:01Z', status: 'succeeded', ok: true, inputs: {}, sessionIds: {},
+        steps: [{
+          id: 'inner', kind: 'loop', status: 'done', iterations: 1,
+          outerLoops: [{ id: 'outer', iteration: 2 }],
+        }],
+      },
+    },
+  ];
+  for (const { version, legacy } of fixtures) {
+    const dir = join(workdir, DEFAULT_CONFIG.artifacts_dir, `run-fixture-v${version}`);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'run.json'), JSON.stringify(legacy), 'utf8');
+  }
+
+  const runs = await listRuns(workdir, DEFAULT_CONFIG);
+  for (const { version } of fixtures) {
+    const run = runs.find(r => r.runId === `run-fixture-v${version}`);
+    assert.ok(run, `v${version} manifest must still parse`);
+    assert.equal(run!.status, 'succeeded', `v${version} manifest parsed with the wrong status`);
+  }
 });

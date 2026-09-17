@@ -11,7 +11,7 @@
 import { parseDocument, isMap, isSeq, stringify as stringifyYaml, YAMLMap, YAMLSeq } from 'yaml';
 import type { Document } from 'yaml';
 import type { Step, Workflow } from './types.ts';
-import { isLoopStep } from './steps.ts';
+import { isContainerStep } from './steps.ts';
 
 function indexById(seq: YAMLSeq, out: Map<string, YAMLMap>): void {
   for (const item of seq.items) {
@@ -106,7 +106,7 @@ function reconcileSeq(doc: Document, seq: YAMLSeq, newSteps: Step[], byId: Map<s
     }
     items.push(node);
 
-    if (isLoopStep(step)) {
+    if (isContainerStep(step)) {
       const existingChild = node.get('steps', true);
       const childSeq: YAMLSeq = isSeq(existingChild)
         ? existingChild

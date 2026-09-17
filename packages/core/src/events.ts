@@ -14,6 +14,8 @@ export const scopeSchema: z.ZodType<Scope> = z.enum(['project', 'global']);
 export const loopRefSchema: z.ZodType<LoopRef> = z.object({
   id: z.string(),
   iteration: z.number().int().positive(),
+  /** Present only when this ref describes a stage frame — see types.ts's `LoopRef`. */
+  stage: z.string().optional(),
 });
 
 export const stepProgressSchema: z.ZodType<StepProgress> = z.discriminatedUnion('kind', [
@@ -72,6 +74,15 @@ export const manualRequestSchema: z.ZodType<ManualRequest> = z.object({
   }),
   defaultChoice: z.enum(['continue', 'abort']),
   loop: loopFrameSchema.optional(),
+  stage: z.object({
+    stagesId: z.string(), id: z.string(), title: z.string(),
+    index: z.number().int().positive(), total: z.number().int().positive(), attempt: z.number().int().positive(),
+    maxAttempts: z.number().int().positive().optional(),
+  }).optional(),
+  execution: z.object({
+    loopId: z.string().optional(), iteration: z.number().int().positive().optional(),
+    stage: z.string().optional(), outerLoops: z.array(loopRefSchema).optional(),
+  }).optional(),
 });
 
 export const fileCommentSchema = z.object({ path: z.string(), body: z.string() });
@@ -85,19 +96,21 @@ export const whiphandEventSchema: z.ZodType<WhiphandEvent> = z.discriminatedUnio
   z.object({
     type: z.literal('run:resume'), runId: z.string(), workflow: z.string(),
     from: z.string().optional(), name: z.string().optional(),
+    /** Which iteration of `from`'s loop this resume is about to run — the field the CLI prints. */
+    iteration: z.number().int().positive().optional(),
   }),
   z.object({
     type: z.literal('step:skipped'), stepId: z.string(),
     loopId: z.string().optional(), iteration: z.number().int().positive().optional(),
-    outerLoops: z.array(loopRefSchema).optional(),
+    outerLoops: z.array(loopRefSchema).optional(), stage: z.string().optional(),
   }),
   z.object({
     type: z.literal('step:start'), stepId: z.string(),
-    kind: z.enum(['agent', 'command', 'manual', 'approval', 'loop']),
+    kind: z.enum(['agent', 'command', 'manual', 'approval', 'loop', 'stages']),
     runner: z.string().optional(), model: z.string().optional(),
     mode: z.enum(['interactive', 'headless']).optional(),
     loopId: z.string().optional(), iteration: z.number().int().positive().optional(),
-    outerLoops: z.array(loopRefSchema).optional(),
+    outerLoops: z.array(loopRefSchema).optional(), stage: z.string().optional(),
   }),
   z.object({
     type: z.literal('step:spawn'), stepId: z.string(), spec: spawnSpecSchema,
@@ -150,20 +163,33 @@ export const whiphandEventSchema: z.ZodType<WhiphandEvent> = z.discriminatedUnio
   z.object({
     type: z.literal('loop:start'), loopId: z.string(), maxIterations: z.number().int(),
     parentLoopId: z.string().optional(), parentIteration: z.number().int().positive().optional(),
-    outerLoops: z.array(loopRefSchema).optional(),
+    parentStage: z.string().optional(), outerLoops: z.array(loopRefSchema).optional(),
   }),
   z.object({
     type: z.literal('loop:iteration'), loopId: z.string(),
     iteration: z.number().int(), maxIterations: z.number().int(),
     parentLoopId: z.string().optional(), parentIteration: z.number().int().positive().optional(),
-    outerLoops: z.array(loopRefSchema).optional(),
+    parentStage: z.string().optional(), outerLoops: z.array(loopRefSchema).optional(),
   }),
   z.object({
     type: z.literal('loop:done'), loopId: z.string(),
     iterations: z.number().int(), passed: z.boolean(),
     parentLoopId: z.string().optional(), parentIteration: z.number().int().positive().optional(),
-    outerLoops: z.array(loopRefSchema).optional(),
+    parentStage: z.string().optional(), outerLoops: z.array(loopRefSchema).optional(),
   }),
+  z.object({ type: z.literal('stages:start'), id: z.string(), total: z.number().int().nonnegative() }),
+  z.object({
+    type: z.literal('stages:item'), id: z.string(),
+    index: z.number().int().positive(), total: z.number().int().positive(),
+    stageId: z.string(), title: z.string(), attempt: z.number().int().positive(),
+    maxAttempts: z.number().int().positive().optional(),
+  }),
+  z.object({ type: z.literal('stages:accepted'), id: z.string(), stageId: z.string() }),
+  z.object({
+    type: z.literal('stages:exhausted'), id: z.string(), stageId: z.string(),
+    attempts: z.number().int().positive(),
+  }),
+  z.object({ type: z.literal('stages:done'), id: z.string(), completed: z.number().int().nonnegative() }),
   z.object({ type: z.literal('guard:warning'), message: z.string(), stepId: z.string().optional() }),
   z.object({ type: z.literal('run:done'), runId: z.string(), ok: z.boolean() }),
   z.object({ type: z.literal('run:error'), stepId: z.string().optional(), message: z.string() }),

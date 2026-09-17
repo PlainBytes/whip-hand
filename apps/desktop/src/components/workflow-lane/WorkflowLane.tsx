@@ -7,7 +7,7 @@ import {
 } from '@fluentui/react-icons';
 import type { ListWorkflowsResult } from '../../../../../packages/agent/src/protocol.ts';
 import type { Workflow } from '../../../../../packages/core/src/types.ts';
-import { flattenSteps, isLoopStep } from '../../../../../packages/core/src/steps.ts';
+import { flattenSteps, isLoopStep, isStagesStep } from '../../../../../packages/core/src/steps.ts';
 import { disabledRoots } from '../../../../../packages/core/src/enabled.ts';
 import { dataFlow, ordinals as ordinalsOf, type DataFlowEntry } from '../../lib/step-describe.ts';
 import { StepTrack } from './StepTrack.tsx';
@@ -45,13 +45,15 @@ function plural(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? '' : 's'}`;
 }
 
-/** "10 steps · 2 loops", plus a disabled count when the workflow parks anything. */
+/** "10 steps · 2 loops · 1 stages step", plus a disabled count when the workflow parks anything. */
 function stepAndLoopCounts(workflow: Workflow): string {
   const flat = flattenSteps(workflow.steps);
   const loops = flat.filter(f => isLoopStep(f.step)).length;
+  const stages = flat.filter(f => isStagesStep(f.step)).length;
   const disabledCount = disabledRoots(workflow.steps).size;
-  const parts = [plural(flat.length - loops, 'step')];
+  const parts = [plural(flat.length - loops - stages, 'step')];
   if (loops > 0) parts.push(plural(loops, 'loop'));
+  if (stages > 0) parts.push(plural(stages, 'stages step'));
   if (disabledCount > 0) parts.push(`${plural(disabledCount, 'step')} disabled`);
   return parts.join(' · ');
 }

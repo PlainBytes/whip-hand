@@ -55,7 +55,7 @@ import { FileTree } from '../components/FileTree.tsx';
 import { FilePreview } from '../components/FilePreview.tsx';
 import { RECESSED_SURFACE } from '../components/recessed-surface.ts';
 import { resolveInArtifacts } from '../markdown/resolve.ts';
-import { elapsedMs, formatElapsed } from '../../../../packages/core/src/format.ts';
+import { elapsedMs, formatElapsed, stageLabel } from '../../../../packages/core/src/format.ts';
 import { parsePositiveInt } from '../lib/parse-number.ts';
 import { useOpenExternal } from '../lib/open-external.tsx';
 import type { FileComment, ManualChoice, Scope } from '../../../../packages/core/src/types.ts';
@@ -151,7 +151,7 @@ function mergeSteps(manifest: RunDetailResult | null, job: JobState | undefined)
   // A loop runs the same step id many times, so both sides key by execution —
   // including which round of any *enclosing* loop it ran under, once loops nest.
   const merged: StepState[] = base.map(step => {
-    const key = executionKey(step.id, step.iteration, step.outerLoops);
+    const key = executionKey(step.id, step.iteration, step.outerLoops, step.stage);
     const live = job?.steps[key];
     if (!live) return { ...step, key };
     // A row the store had to guess into existence (see StepState.inferred) is
@@ -169,7 +169,16 @@ function mergeSteps(manifest: RunDetailResult | null, job: JobState | undefined)
     const staleFinished = job?.finished === true && DISK_TERMINAL_STATUSES.has(step.status)
       && live.status === 'running';
     const status = live.inferred === true || staleFinished ? step.status : live.status;
-    return { ...step, ...live, key, status };
+    // A resumed run's job only hears the stages it starts and accepts itself;
+    // what earlier attempts recorded is on disk alone. Neither side is the
+    // whole list, so both are merged (the live entry winning per stage).
+    const completedStages = step.completedStages === undefined && live.completedStages === undefined
+      ? {}
+      : { completedStages: [...new Set([...(step.completedStages ?? []), ...(live.completedStages ?? [])])] };
+    const startedStages = step.startedStages === undefined && live.startedStages === undefined
+      ? {}
+      : { startedStages: { ...step.startedStages, ...live.startedStages } };
+    return { ...step, ...live, key, status, ...completedStages, ...startedStages };
   });
   const seen = new Set(merged.map(step => step.key));
   for (const key of job?.stepOrder ?? []) {
@@ -190,13 +199,37 @@ function mergeSteps(manifest: RunDetailResult | null, job: JobState | undefined)
  * itself between iterations, when it is running but nothing inside it is yet.
  */
 function findCurrentStepIndex(steps: StepState[]): number {
-  const runningBody = steps.findIndex(step => step.status === 'running' && step.kind !== 'loop');
+  // A `stages` step is a container exactly like a loop: its row is running
+  // for the whole time a stage's body does the work.
+  const runningBody = steps.findIndex(step => step.status === 'running' && step.kind !== 'loop' && step.kind !== 'stages');
   if (runningBody !== -1) return runningBody;
   const running = steps.findIndex(step => step.status === 'running');
   if (running !== -1) return running;
   const stopped = steps.findIndex(step => step.status === 'interrupted' || step.status === 'failed');
   if (stopped !== -1) return stopped;
   return steps.findIndex(step => !TERMINAL_STEP_STATUSES.has(step.status));
+}
+
+/**
+ * Where a stopped run stopped among its stages, for the run-error bar:
+ * `stopped at stage 3 of 7 · Add API routes after 3 rejections`. Read off the
+ * stages row that is not done yet and names a current stage — a run that
+ * failed *after* its stages step finished says nothing about stages.
+ *
+ * The rejection count is that row's `attempt`: a stage is only handed to
+ * triage once every attempt it had was rejected (core's `stages:exhausted`),
+ * so the attempt it reached is how many rejections there were. Without
+ * `exhausted` the run stopped mid-attempt for some other reason, and has no
+ * count to give.
+ */
+function stageStopSentence(steps: StepState[]): string | undefined {
+  const stages = steps.find(step => step.kind === 'stages' && step.status !== 'done'
+    && step.status !== 'disabled' && step.currentStage !== undefined);
+  const current = stages?.currentStage;
+  if (stages === undefined || current === undefined) return undefined;
+  const at = stageLabel(current.index, stages.total ?? current.index, current.title);
+  if (stages.exhausted !== true || stages.attempt === undefined) return `stopped at ${at}`;
+  return `stopped at ${at} after ${stages.attempt} rejection${stages.attempt === 1 ? '' : 's'}`;
 }
 
 /**
@@ -432,6 +465,10 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
   // never surfaced before, which is where the interrupted reason lands.
   const manifestRunError = (manifest?.error as { message?: string } | undefined)?.message;
   const runErrorMessage = job?.errorMessage ?? manifestRunError;
+  // Only once the run is over: a live run in triage has not stopped anywhere yet.
+  const stageStop = useMemo(
+    () => (isRunning ? undefined : stageStopSentence(steps)), [isRunning, steps],
+  );
 
   useEffect(() => {
     // jsdom (vitest) doesn't implement scrollIntoView; this is a real-browser nicety.
@@ -1255,7 +1292,12 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
           )}
           {runErrorMessage && (
             <MessageBar intent="error" data-testid="run-error">
-              <MessageBarBody>Run error: {runErrorMessage}</MessageBarBody>
+              <MessageBarBody>
+                {stageStop !== undefined && (
+                  <div data-testid="run-error-stage">Run {stageStop}.</div>
+                )}
+                Run error: {runErrorMessage}
+              </MessageBarBody>
             </MessageBar>
           )}
         </div>

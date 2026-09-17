@@ -115,6 +115,28 @@ test('an unrecognized answer is re-asked rather than guessed at', async () => {
   assert.ok(t.text.includes('not one of'));
 });
 
+test('a gate inside a stage names the stage above the question, not the loop', async () => {
+  const t = terminal('c\n');
+  const runManual = createManualPrompt({ yes: false, isTty: true, ...t });
+  await runManual({
+    ...request,
+    loop: { id: 'fix', iteration: 2, maxIterations: 3 },
+    stage: { stagesId: 'build', id: '03-api', title: 'Add API routes', index: 3, total: 7, attempt: 1 },
+  });
+  assert.match(t.text, /stage 3\/7 'Add API routes' of 'build'/);
+  assert.ok(!t.text.includes('iteration 2/3'), 'the stage line replaces the loop line, not both');
+});
+
+test('a retried gate inside a stage says which attempt it is', async () => {
+  const t = terminal('c\n');
+  const runManual = createManualPrompt({ yes: false, isTty: true, ...t });
+  await runManual({
+    ...request,
+    stage: { stagesId: 'build', id: '03-api', title: 'Add API routes', index: 3, total: 7, attempt: 2 },
+  });
+  assert.match(t.text, /stage 3\/7 'Add API routes' of 'build' \(attempt 2\)/);
+});
+
 test('a retry choice is offered and accepted inside a loop', async () => {
   const runManual = createManualPrompt({ yes: false, isTty: true, ...terminal('r\n') });
   const answer = await runManual({

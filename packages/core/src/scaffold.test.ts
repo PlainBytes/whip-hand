@@ -9,10 +9,11 @@ import { execRunner } from './exec.ts';
 import { DEFAULT_SHELL, shellFlags } from './engine/command.ts';
 import {
   createWorkflow, deleteWorkflow, cloneWorkflow, initWorkspace, workflowTemplate, specDrivenTemplate, featureDevelopmentTemplate,
-  updateWorkflow,
+  stagedFeatureDevelopmentTemplate, updateWorkflow,
 } from './scaffold.ts';
 import { parseWorkflow, validateWorkflowWarnings, validateWorkflowSemantics, WorkflowError } from './schema.ts';
 import { loadWorkspaceConfig } from './config.ts';
+import { findStep } from './steps.ts';
 import type { Workflow } from './types.ts';
 
 async function withConfigHome<T>(fn: (configHome: string) => Promise<T>): Promise<T> {
@@ -167,6 +168,22 @@ test('featureDevelopmentTemplate produces a parseable workflow, including the ba
   assert.equal(workflow.name, 'feature-development');
 });
 
+test('stagedFeatureDevelopmentTemplate parses, stages the plan dir, and gates every stage', () => {
+  const wf = parseWorkflow(stagedFeatureDevelopmentTemplate());
+  assert.deepEqual(validateWorkflowSemantics(wf), []);
+  assert.deepEqual(validateWorkflowWarnings(wf), []);
+  const build = wf.steps.find(s => s.id === 'build');
+  assert.ok(build && build.kind === 'stages');
+  if (!build || build.kind !== 'stages') return;
+  assert.equal(build.items, '{{ inputs.plan_dir }}/*.md');
+  const gate = findStep(wf.steps, 'accept');
+  assert.ok(gate && gate.kind === 'approval');
+  if (!gate || gate.kind !== 'approval') return;
+  assert.equal(gate.show_diff, true);
+  assert.equal(gate.capture, 'review');
+  assert.ok(findStep(wf.steps, 'commit'), 'each stage commits');
+});
+
 test('featureDevelopmentTemplate stage step works when the runs dir is gitignored and files are already staged', async () => {
   const stage = parseWorkflow(featureDevelopmentTemplate()).steps.find(s => s.id === 'stage');
   assert.ok(stage && stage.kind === 'command');
@@ -191,6 +208,93 @@ test('featureDevelopmentTemplate stage step works when the runs dir is gitignore
   assert.deepEqual(stdout.trim().split('\n'), ['a.txt', 'b.txt']);
 });
 
+// The staged template's commit steps are POSIX sh lines ($VAR, `&&` next to a
+// quote) that cmd.exe can neither expand nor be handed; see docs/design.md.
+const posixShellOnly = {
+  skip: process.platform === 'win32' && "the staged template's commit steps need a POSIX shell",
+};
+
+test("the staged workflow's commit-plan subject names the run, or its slug when the run is unnamed", posixShellOnly, async () => {
+  const step = findStep(parseWorkflow(stagedFeatureDevelopmentTemplate()).steps, 'commit-plan');
+  assert.ok(step && step.kind === 'command');
+  if (!step || step.kind !== 'command') return;
+
+  const ws = await mkdtemp(join(tmpdir(), 'whiphand-commit-plan-'));
+  const git = (...args: string[]) => promisify(execFile)('git', args, { cwd: ws });
+  await git('init', '-b', 'main');
+  await writeFile(join(ws, 'a.txt'), 'a\n');
+  // The step under test runs its own `git commit`, so the identity has to
+  // live in the repo, not in -c flags: CI runners have no global one.
+  await git('config', 'user.email', 't@t');
+  await git('config', 'user.name', 't');
+  await git('add', '-A');
+  await git('commit', '-m', 'init');
+  const subject = async () => (await git('log', '-1', '--pretty=%s')).stdout.trim();
+  // command.ts exports WHIPHAND_RUN_NAME only for a named run, so the
+  // unnamed case must not inherit one from whatever runs this test.
+  const { WHIPHAND_RUN_NAME: _inherited, ...baseEnv } = process.env;
+  const commitPlan = async (file: string, env: Record<string, string>) => {
+    await mkdir(join(ws, 'plans'), { recursive: true });
+    await writeFile(join(ws, 'plans', file), '# Stage\n');
+    await execRunner([DEFAULT_SHELL, ...shellFlags(DEFAULT_SHELL), step.run],
+      { cwd: ws, env: { ...baseEnv, WHIPHAND_PLAN_DIR: 'plans', WHIPHAND_RUN_SLUG: 'oauth-login', ...env } });
+  };
+
+  await commitPlan('01-a.md', {});
+  assert.equal(await subject(), 'plan: oauth-login', 'not a bare "plan: "');
+  await commitPlan('02-b.md', { WHIPHAND_RUN_NAME: 'OAuth login' });
+  assert.equal(await subject(), 'plan: OAuth login');
+});
+
+test("the staged workflow's stage-body commit step exits 0 on an empty index instead of "
+  + "failing the run, and still commits — and still fails — for real", posixShellOnly, async () => {
+  const commit = findStep(parseWorkflow(stagedFeatureDevelopmentTemplate()).steps, 'commit');
+  assert.ok(commit && commit.kind === 'command');
+  if (!commit || commit.kind !== 'command') return;
+
+  const ws = await mkdtemp(join(tmpdir(), 'whiphand-stage-commit-'));
+  const git = (...args: string[]) => promisify(execFile)('git', args, { cwd: ws });
+  await git('init', '-b', 'main');
+  await writeFile(join(ws, 'a.txt'), 'a\n');
+  // The step under test runs its own `git commit`, so the identity has to
+  // live in the repo, not in -c flags: CI runners have no global one.
+  await git('config', 'user.email', 't@t');
+  await git('config', 'user.name', 't');
+  await git('add', '-A');
+  await git('commit', '-m', 'init');
+  const head = async () => (await git('rev-parse', 'HEAD')).stdout.trim();
+  const before = await head();
+
+  // A stage with no diff is a normal stage (product spec's own edge case):
+  // an empty index must exit 0, not fail the run the way a bare `git commit`
+  // would (exit 1, "nothing to commit").
+  await execRunner([DEFAULT_SHELL, ...shellFlags(DEFAULT_SHELL), commit.run], { cwd: ws });
+  assert.equal(await head(), before, 'nothing was committed');
+
+  // Something staged: a real commit is made from the message artifact env
+  // var the way a running stage would export it.
+  await writeFile(join(ws, 'a.txt'), 'changed\n');
+  await git('add', 'a.txt');
+  const msgPath = join(ws, 'msg.txt');
+  await writeFile(msgPath, 'do the thing\n');
+  await execRunner(
+    [DEFAULT_SHELL, ...shellFlags(DEFAULT_SHELL), commit.run],
+    { cwd: ws, env: { ...process.env, WHIPHAND_ARTIFACT_COMMIT_MESSAGE: msgPath } },
+  );
+  assert.notEqual(await head(), before, 'a real commit was made');
+  assert.equal((await git('log', '-1', '--pretty=%s')).stdout.trim(), 'do the thing');
+
+  // A real failure (a bad -F path here, standing in for e.g. a rejecting
+  // hook) still exits non-zero — the whole point of not blanket-forgiving
+  // exit 1 the way commit-plan's expect_exit does.
+  await writeFile(join(ws, 'a.txt'), 'changed again\n');
+  await git('add', 'a.txt');
+  await assert.rejects(() => execRunner(
+    [DEFAULT_SHELL, ...shellFlags(DEFAULT_SHELL), commit.run],
+    { cwd: ws, env: { ...process.env, WHIPHAND_ARTIFACT_COMMIT_MESSAGE: join(ws, 'no-such-file.txt') } },
+  ));
+});
+
 test('createWorkflow writes the file, refuses overwrite, validates the name', async () => {
   const ws = await mkdtemp(join(tmpdir(), 'whiphand-scaffold-'));
   const { path } = await createWorkflow(ws, 'my-flow');
@@ -209,6 +313,7 @@ test('initWorkspace creates config + starter workflows once, then is a no-op', a
     join('.whiphand', 'workflows', 'feature-development.yaml'),
     join('.whiphand', 'workflows', 'feature.yaml'),
     join('.whiphand', 'workflows', 'spec-driven.yaml'),
+    join('.whiphand', 'workflows', 'staged-feature-development.yaml'),
   ]);
   await loadWorkspaceConfig(ws); // parses
   const second = await initWorkspace(ws);

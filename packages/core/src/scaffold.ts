@@ -443,6 +443,191 @@ steps:
 `;
 }
 
+/**
+ * The fourth workflow `whiphand init` ships: `feature-development` with the
+ * plan cut into stage files and the human-review loop replaced by a `kind:
+ * stages` step, so a large feature is built, reviewed, accepted and
+ * committed one stage at a time instead of as one giant sign-off at the end.
+ * Fixed content, unlike `workflowTemplate` — `whiphand new-workflow` does not
+ * offer this shape. Exported only so scaffold.test.ts can parse it directly,
+ * and so its byte-identical dogfood copy at
+ * `.whiphand/workflows/staged-feature-development.yaml` can be generated
+ * from the same source rather than kept in sync by hand.
+ *
+ * `execute` and `review`, both nested inside `do-review`'s loops, cannot list
+ * `accept` in their own `inputs:` — a forward reference is only legal across
+ * a loop that encloses the reader (the "previous iteration" reading), never
+ * across a whole `stages` body, and `accept` sits at the body's own level,
+ * outside every loop `execute`/`review` are nested in (see
+ * `validateWorkflowSemantics`'s `sameBody` check). That reference is not
+ * needed anyway: a rejection at `accept` reaches `execute` — the stage's
+ * retry target, being the last `writes: true` agent step before the gate —
+ * automatically, injected as findings when the stage retries (see
+ * `runStage`/`withFindings` in engine/runner.ts). `review` has no such
+ * channel, so its prompt asks it to judge the implementer's own report
+ * instead of claiming to see the rejection note itself.
+ */
+export function stagedFeatureDevelopmentTemplate(): string {
+  return `# staged-feature-development — branch off trunk, plan, cut the plan into
+# stages, then build, review, accept and commit one stage at a time.
+# Reference: docs/design.md
+name: staged-feature-development
+description: Cut a large feature into stages, then build, review, accept and commit one stage at a time.
+inputs:
+  feature:
+    required: true
+    prompt: What are we building?
+  plan_dir:
+    required: true
+    remember: true
+    multiline: false
+    prompt: "Plan directory (e.g. docs/plans/oauth)"
+  base:
+    required: false
+    default: main
+    multiline: false
+    prompt: Branch to start from
+  test_command:
+    required: false
+    default: npm test
+    remember: true
+    multiline: false
+    prompt: Test command (leave blank to skip tests)
+steps:
+  - id: sync-base
+    kind: command
+    run: git checkout "{{ inputs.base }}" && git pull --ff-only
+    output: sync-base.log
+
+  - id: branch
+    kind: command
+    run: git checkout -b "feature/{{ run.slug }}"
+    output: branch.log
+
+  - id: plan
+    kind: agent
+    runner: claude
+    model: opus
+    mode: interactive
+    writes: true                       # the plan lives in the repo, not the run dir
+    allow_paths: ["{{ inputs.plan_dir }}/**"]
+    inputs: [attachments]
+    output: plan.md
+    prompt: |
+      We are planning: {{ inputs.feature }}. Work with me on a plan, then cut the work
+      into stages small enough to review in one sitting. Write one file per stage into
+      {{ inputs.plan_dir }}/, named NN-slug.md, each opening with a \`# Title\` heading.
+      Write nothing outside that directory.
+
+  - id: commit-plan
+    kind: command
+    run: 'git add -A -- "$WHIPHAND_PLAN_DIR" && git commit -m "plan: \${WHIPHAND_RUN_NAME:-$WHIPHAND_RUN_SLUG}"'
+    env: { WHIPHAND_PLAN_DIR: "{{ inputs.plan_dir }}" }
+    expect_exit: [0, 1]                # 1 is git's "nothing to commit"
+    output: commit-plan.log
+
+  - id: build
+    kind: stages
+    items: "{{ inputs.plan_dir }}/*.md"
+    max_retries: 2
+    steps:
+      - id: do-review
+        kind: loop
+        until: review
+        max_iterations: 10
+        steps:
+          - id: test-fix
+            kind: loop
+            until: tests
+            max_iterations: 3
+            steps:
+              - id: execute
+                # 'tests' is later in THIS loop, so it means the previous iteration's
+                # log; 'review' is a later sibling of the outer loop, so it means the
+                # previous round's findings — both are simply dropped when there is
+                # nothing yet to read. 'accept' is a later sibling of the stages body
+                # itself, not of any loop that encloses this step, so it can never be a
+                # forward reference here — a human's rejection at 'accept' instead
+                # reaches this step, the stage's retry target, as injected findings
+                # when the stage is retried.
+                inputs: [stage, tests, review]
+                kind: agent
+                runner: claude
+                model: sonnet
+                mode: headless
+                writes: true
+                output: execute-report.md
+                prompt: |
+                  Implement stage {{ stage.index }} of {{ stage.total }}: {{ stage.title }}.
+                  Earlier stages are implemented and committed — read the tree or \`git log\`
+                  if you need them. Implement only this stage. If a tests log marked
+                  VERDICT: FAIL is attached, fix every failure first; if review findings
+                  are attached, address every point.
+              - id: tests
+                kind: command
+                run: "{{ inputs.test_command }}"
+                verdict: true
+                output: tests.log
+                timeout_ms: 1800000
+          - id: review
+            inputs: [stage, execute, tests]
+            verdict: true
+            kind: agent
+            runner: claude
+            model: opus
+            mode: headless
+            writes: false
+            output: review.md
+            prompt: |
+              Review the working-tree diff against this stage only. If the implementer's
+              report says a previous rejection's feedback was addressed, check that every
+              point it names was actually addressed.
+      - id: accept
+        inputs: [stage, review]
+        kind: approval
+        title: "Stage {{ stage.index }}/{{ stage.total }}: {{ stage.title }}"
+        instructions: Accept this stage before the next one starts.
+        show_diff: true
+        capture: review
+        output: accept.md
+      - id: stage-changes
+        kind: command
+        run: git add -A -- . ":![.]whiphand/runs/*"
+        output: stage-changes.log
+      - id: commit-message
+        inputs: [stage, review, accept]
+        kind: agent
+        runner: claude
+        model: haiku
+        mode: headless
+        writes: false
+        output: commit-message.md
+        prompt: |
+          Write the commit message for this stage, staged on this branch. Read it with
+          \`git diff --cached\`, and read the attached stage file, review and feedback for
+          why it was made. A subject line in the imperative mood, at most 72 characters,
+          no trailing period; then a blank line, then one to three short lines. Write the
+          message and nothing else.
+      - id: commit
+        inputs: [commit-message]
+        kind: command
+        # A stage with no diff is a normal stage (the human saw that at
+        # 'accept' and took it anyway) — 'git commit' alone would exit 1 for
+        # "nothing to commit" and fail the run right here, since there is no
+        # expect_exit to forgive it. Checking the index first turns that case
+        # into a clean exit 0 with no commit made; a real commit failure (a
+        # hook, a bad message file) still exits non-zero and fails the run
+        # loudly, exactly as every later stage's clean-history assumption needs.
+        run: git diff --cached --quiet && echo "nothing to commit for this stage" || git commit -F "$WHIPHAND_ARTIFACT_COMMIT_MESSAGE"
+        output: commit.log
+
+  - id: push
+    kind: command
+    run: git push -u origin "feature/{{ run.slug }}"
+    output: push.log
+`;
+}
+
 /** Where a scoped workflow file lives — a global write `mkdir -p`s its directory on demand, same as project. */
 function workflowsDir(workdir: string, scope: Scope): string {
   return scope === 'global' ? globalWorkflowsDir() : join(workdir, '.whiphand', 'workflows');
@@ -560,6 +745,7 @@ export async function initWorkspace(workdir: string): Promise<{ created: string[
     ['feature', workflowTemplate('feature')],
     ['feature-development', featureDevelopmentTemplate()],
     ['spec-driven', specDrivenTemplate()],
+    ['staged-feature-development', stagedFeatureDevelopmentTemplate()],
   ];
   for (const [name, content] of shipped) {
     const rel = join('.whiphand', 'workflows', `${name}.yaml`);

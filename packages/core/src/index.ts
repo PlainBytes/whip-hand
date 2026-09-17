@@ -2,12 +2,12 @@ export { CORE_VERSION } from './version.ts';
 export * from './types.ts';
 export {
   parseWorkflow, validateWorkflowSemantics, validateWorkflowWarnings, validateWorkflowDraft, formatWorkflowIssues,
-  formatWorkflowFieldIssues, WorkflowError, stepSchema, workflowSchema,
+  formatWorkflowFieldIssues, unattendedProblems, WorkflowError, stepSchema, workflowSchema,
 } from './schema.ts';
 export type { WorkflowFieldProblem } from './schema.ts';
 export {
-  isAgentStep, isCommandStep, isManualStep, isLoopStep, isLeafStep,
-  flattenSteps, findStep, collectLoops,
+  isAgentStep, isCommandStep, isManualStep, isLoopStep, isStagesStep, isContainerStep, isLeafStep,
+  flattenSteps, findStep, collectLoops, childSteps,
 } from './steps.ts';
 export type { FlatStep } from './steps.ts';
 export {

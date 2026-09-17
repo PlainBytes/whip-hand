@@ -18,7 +18,19 @@ export type Scope = 'project' | 'global';
  * What a step *is*. `agent` is the original (and only) kind and stays the
  * default, so every workflow written before kinds existed parses unchanged.
  */
-export type StepKind = 'agent' | 'command' | 'manual' | 'approval' | 'loop';
+export type StepKind = 'agent' | 'command' | 'manual' | 'approval' | 'loop' | 'stages';
+
+/**
+ * The reserved pseudo-artifact id a step's `inputs:` names to read the
+ * current stage file's own `Stage` fields via `{{ stage.* }}` — see
+ * template.ts. Only meaningful, and only accepted, inside a `stages` body
+ * (schema.ts rejects it everywhere else): outside one there is no current
+ * stage to read. Also why a step id (or a loop id, alongside `attachments`)
+ * cannot be named `stage` in a workflow that has any `stages` step at all —
+ * see schema.ts's `STAGE_REF` reservation for why that rule is conditional
+ * rather than blanket.
+ */
+export const STAGE_REF = 'stage';
 
 export interface WorkflowInput {
   required: boolean;
@@ -108,7 +120,30 @@ export interface LoopStep {
   enabled?: boolean;
 }
 
-export type Step = AgentStep | CommandStep | ManualStep | LoopStep;
+/**
+ * Runs `steps` once per file matched by `items`, in order, one stage at a
+ * time — the counterpart to `loop`'s "repeat until" for "once per plan file".
+ * Shaped like `LoopStep` (no `StepCommon`: it produces no artifact of its own
+ * and cannot be referenced — see schema.ts's "produces no artifact" check),
+ * plus `items` for the glob and `max_retries` for how many extra attempts a
+ * failing stage gets before its failure reaches the enclosing gate.
+ *
+ * `max_retries` is deliberately its own field, not folded into a body loop's
+ * `max_iterations`: `--max-iterations` (an operator's blanket override) must
+ * not silently change how many attempts a stage gets, since a stage's retry
+ * budget is a property of the plan, not of any one run.
+ */
+export interface StagesStep {
+  kind: 'stages';
+  id: string;
+  items: string;          // templated glob, relative to the workdir
+  steps: Step[];
+  max_retries?: number;   // default 2; deliberately NOT overridden by --max-iterations
+  /** Disabling a stages step takes its whole body with it — see StepCommon.enabled. */
+  enabled?: boolean;
+}
+
+export type Step = AgentStep | CommandStep | ManualStep | LoopStep | StagesStep;
 
 export interface Workflow {
   name: string;
@@ -200,27 +235,69 @@ export type StepProgress =
 
 /**
  * Where we are inside a loop, when we are inside one. `parent` is the frame
- * of the loop enclosing this one, when this loop is itself nested inside
- * another loop's body — absent for a top-level loop, which is what keeps a
- * single-level frame identical to what it always was.
+ * enclosing this one — another loop's frame, or (once a loop lives inside a
+ * `stages` body) that stage's frame — absent for a top-level loop, which is
+ * what keeps a single-level frame identical to what it always was.
  */
 export interface LoopFrame {
   id: string;
   iteration: number;      // 1-based
   maxIterations: number;
-  parent?: LoopFrame;
+  parent?: Frame;
 }
 
 /**
- * One loop enclosing an execution, named and at the iteration it was on.
- * `WhiphandEvent`'s `outerLoops` and manifest rows use this to record every
- * loop *beyond* the immediate one a `loopId`/`iteration` pair already names —
- * see execution-key.ts's `ancestorLoops`, which derives it from a `LoopFrame`
- * chain.
+ * One pass over a `stages` step's current stage file — an attempt, in the
+ * sense a loop has iterations. `index`/`total` and `title` are recomputed on
+ * every pass (the stage files on disk may change between attempts, and a
+ * resume must not trust a stale count); `id`/`path` are what identify *which*
+ * file this is across those recomputations.
+ */
+export interface Stage {
+  index: number;   // 1-based, recomputed on every pass
+  total: number;
+  id: string;      // basename without extension, e.g. '03a-api' — unique per file
+  title: string;   // first markdown heading, falling back to id
+  path: string;    // absolute
+}
+
+/**
+ * Where we are inside a `stages` step: which stage file, and which attempt at
+ * it. Deliberately shaped like `LoopFrame` (an `id`, a 1-based counter, a
+ * `parent`) — see execution-key.ts's `frameIdentity` for why that shape is
+ * what lets every existing loop-only consumer keep working unchanged.
+ */
+export interface StageFrame {
+  kind: 'stages';
+  id: string;            // the stages step's id
+  stage: Stage;
+  attempt: number;       // 1-based
+  maxAttempts: number;   // 1 + max_retries
+  parent?: Frame;
+}
+
+/**
+ * A step executes under some chain of enclosing constructs — nested loops,
+ * and (once `stages` lands) a stage a loop or a step can itself be nested
+ * inside. `LoopFrame` and `StageFrame` both carry a `parent?: Frame`, so the
+ * chain can freely interleave the two; execution-key.ts's helpers are what
+ * every consumer should use to read it rather than walking `parent` by hand.
+ */
+export type Frame = LoopFrame | StageFrame;
+
+/**
+ * One loop enclosing an execution, named and at the iteration it was on — or,
+ * for a stage frame folded into the same chain, the stage step's id and
+ * attempt plus the stage file's own id in `stage`. `WhiphandEvent`'s
+ * `outerLoops` and manifest rows use this to record every frame *beyond* the
+ * immediate one a `loopId`/`iteration` pair already names — see
+ * execution-key.ts's `ancestorLoops`, which derives it from a `Frame` chain.
  */
 export interface LoopRef {
   id: string;
   iteration: number;
+  /** Present only when this ref describes a stage frame — see `frameRef`. */
+  stage?: string;
 }
 
 export interface RunCtx {
@@ -255,7 +332,15 @@ export interface RunCtx {
    */
   verdicts: Record<string, 'pass' | 'fail'>;
   inputs: Record<string, string>;        // resolved workflow input values
+  /** The nearest enclosing loop, exactly as before `stages` existed — see `frame`. */
   loop?: LoopFrame;
+  /**
+   * The construct this execution actually runs under, loop or stage —
+   * `loop` above stays a projection of it (the nearest `LoopFrame` in the
+   * chain), so every reader that only ever cared about loops keeps working
+   * unchanged. Set by runner.ts's `executeStep` alongside `loop`.
+   */
+  frame?: Frame;
   /**
    * Steps whose recorded session should be resumed rather than minted afresh.
    * Set only on a resumed run; adapters that cannot resume a session ignore it.
@@ -413,6 +498,14 @@ export interface ManualRequest {
   /** What a non-interactive frontend should pick under `--yes`. */
   defaultChoice: 'continue' | 'abort';
   loop?: LoopFrame;
+  /** Present when this step runs inside a `stages` body — which stage file, and where it sits among the others. */
+  stage?: {
+    stagesId: string; id: string; title: string; index: number; total: number; attempt: number;
+    /** How many attempts the stage has in all — its frame's `maxAttempts`. Optional for agents predating it. */
+    maxAttempts?: number;
+  };
+  /** The frame identity of this execution, so a frontend can key the request to its manifest row. */
+  execution?: { loopId?: string; iteration?: number; stage?: string; outerLoops?: LoopRef[] };
 }
 
 /** What core hands a frontend so it knows how to ask for, and require, text. */
@@ -462,12 +555,17 @@ export type WhiphandEvent =
       model?: string; mode?: StepMode; loopId?: string; iteration?: number;
       /** Loops enclosing `loopId` itself, outermost first — empty/absent outside nested loops. */
       outerLoops?: LoopRef[];
+      /** The stage file this execution ran under, when `loopId` names a `stages` frame rather than a plain loop. */
+      stage?: string;
     }
   /**
    * This execution completed in an earlier attempt, so a resumed run did not
    * run it again. Its artifact is restored; nothing was spawned.
    */
-  | { type: 'step:skipped'; stepId: string; loopId?: string; iteration?: number; outerLoops?: LoopRef[] }
+  | {
+      type: 'step:skipped'; stepId: string; loopId?: string; iteration?: number; outerLoops?: LoopRef[];
+      stage?: string;
+    }
   | { type: 'step:spawn'; stepId: string; spec: SpawnSpec; phase: 'main' | 'harvest' }
   /**
    * A `sessionIdCapture` runner's interactive spawn exited, and the runner
@@ -521,19 +619,38 @@ export type WhiphandEvent =
    * when it is nested — a second `loopId` field would clash with this loop's
    * own, which is why the enclosing one gets a different name. `outerLoops`
    * carries anything nested deeper still, beyond the immediate parent.
+   * `parentStage` is the stage file, when that immediate parent is a `stages`
+   * frame rather than a loop — the loop-shaped counterpart of `step:start`'s
+   * `stage`, without which a loop's row for stage 2 would overwrite stage 1's.
    */
   | {
       type: 'loop:start'; loopId: string; maxIterations: number;
-      parentLoopId?: string; parentIteration?: number; outerLoops?: LoopRef[];
+      parentLoopId?: string; parentIteration?: number; parentStage?: string; outerLoops?: LoopRef[];
     }
   | {
       type: 'loop:iteration'; loopId: string; iteration: number; maxIterations: number;
-      parentLoopId?: string; parentIteration?: number; outerLoops?: LoopRef[];
+      parentLoopId?: string; parentIteration?: number; parentStage?: string; outerLoops?: LoopRef[];
     }
   | {
       type: 'loop:done'; loopId: string; iterations: number; passed: boolean;
-      parentLoopId?: string; parentIteration?: number; outerLoops?: LoopRef[];
+      parentLoopId?: string; parentIteration?: number; parentStage?: string; outerLoops?: LoopRef[];
     }
+  /** A `stages` step began: `id` is the stages step's own id, `total` how many stage files it found. */
+  | { type: 'stages:start'; id: string; total: number }
+  /**
+   * The stages step is about to run its body against one stage file — `attempt` is 1-based, counting retries.
+   * `maxAttempts` is how many attempts this stage has in all (1 + max_retries, or a resume's grant); optional
+   * only because events recorded before it existed lack it — the runner always sends it.
+   */
+  | {
+      type: 'stages:item'; id: string; index: number; total: number; stageId: string; title: string; attempt: number;
+      maxAttempts?: number;
+    }
+  /** This stage was accepted and is finished — what a resume reads to skip it entirely. */
+  | { type: 'stages:accepted'; id: string; stageId: string }
+  /** A stage was rejected on every one of its `attempts` and is being handed to a triage session — the run stops at it. */
+  | { type: 'stages:exhausted'; id: string; stageId: string; attempts: number }
+  | { type: 'stages:done'; id: string; completed: number }
   /** `stepId` is absent for a workflow-level warning (a dropped ref, an exhausted loop) — present when one step's own guard tripped. */
   | { type: 'guard:warning'; message: string; stepId?: string }
   /**

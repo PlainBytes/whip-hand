@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import type { Step, Workflow } from '../../../../packages/core/src/types.ts';
-import { flattenSteps, isLoopStep } from '../../../../packages/core/src/steps.ts';
+import { flattenSteps } from '../../../../packages/core/src/steps.ts';
 import {
   appendAt, insertAfter, moveAt, removeStep as removeStepById, renameStep as renameStepById, stepAt, updateAt,
   type StepPath,
@@ -43,7 +43,7 @@ export function useWorkflowDraft(initial: Workflow) {
   const [draft, setDraft] = useState<Workflow>(initial);
   // Empty means "everything collapsed" — the editor opens with nothing expanded.
   const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(new Set());
-  // Empty means "nothing folded" — a loop's body is visible until folded.
+  // Empty means "nothing folded" — a container's body is visible until folded.
   const [foldedLoopIds, setFoldedLoopIds] = useState<ReadonlySet<string>>(new Set());
   const [settingsCollapsed, setSettingsCollapsed] = useState(true);
   const [highlight, setHighlight] = useState<Highlight | null>(null);
@@ -64,7 +64,7 @@ export function useWorkflowDraft(initial: Workflow) {
     setDraft(d => ({ ...d, steps: moveAt(d.steps, path, dir) }));
   }
 
-  /** Insert-below: a loop card's next row is its own first body child; any other card inserts as the next sibling. */
+  /** Insert-below: a container card's next row is its own first body child; any other card inserts as the next sibling. */
   function insertStepBelow(path: StepPath): void {
     setDraft(d => {
       const step = newStep(d.steps);
@@ -181,6 +181,5 @@ export function useWorkflowDraft(initial: Workflow) {
     highlightReads,
     highlightWrites,
     highlightFor,
-    isLoop: isLoopStep,
   };
 }

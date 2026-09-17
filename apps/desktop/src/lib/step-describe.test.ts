@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  actorOf, dataFlow, endsLoop, loopRule, ordinals, purposeOf,
+  actorOf, dataFlow, endsLoop, loopRule, ordinals, purposeOf, stagesRule,
 } from './step-describe.ts';
 import type {
-  AgentStep, CommandStep, LoopStep, ManualStep, Step,
+  AgentStep, CommandStep, LoopStep, ManualStep, StagesStep, Step,
 } from '../../../../packages/core/src/types.ts';
 
 function agent(id: string, overrides: Partial<AgentStep> = {}): AgentStep {
@@ -189,5 +189,36 @@ describe('endsLoop', () => {
 
   it('is false with no enclosing loop', () => {
     expect(endsLoop(agent('review'), undefined)).toBe(false);
+  });
+});
+
+describe('a stages step', () => {
+  const stages = (id: string, steps: Step[], overrides: Partial<StagesStep> = {}): StagesStep => ({
+    kind: 'stages', id, items: 'docs/plan/*.md', steps, ...overrides,
+  });
+
+  it('stagesRule reads "once per stage file", with the glob and any retry budget', () => {
+    expect(stagesRule(stages('build', [agent('impl')], { max_retries: 3 })))
+      .toEqual({ phrase: 'once per stage file', items: 'docs/plan/*.md', maxRetries: 3 });
+    expect(stagesRule(stages('build', [agent('impl')])).maxRetries).toBeUndefined();
+  });
+
+  it('numbers its body underneath it, like a loop', () => {
+    const map = ordinals([agent('plan'), stages('build', [agent('impl'), loop('fix', [agent('review')])]), agent('done')]);
+    expect(map.get('build')).toBe('2');
+    expect(map.get('impl')).toBe('2.1');
+    expect(map.get('fix')).toBe('2.2');
+    expect(map.get('review')).toBe('2.2.1');
+    expect(map.get('done')).toBe('3');
+  });
+
+  it('links reads inside its body, and never calls a later body step a previous iteration', () => {
+    const impl = agent('impl', { inputs: ['plan', 'check'] });
+    const check = agent('check', { inputs: ['impl'] });
+    const map = dataFlow([agent('plan'), stages('build', [impl, check])]);
+    expect(map.get('impl')?.sources).toEqual(['plan', 'check']);
+    expect(map.get('plan')?.dependents).toEqual(['impl']);
+    expect(map.get('impl')?.previousIteration).toEqual([]);
+    expect(map.has('build')).toBe(false);
   });
 });

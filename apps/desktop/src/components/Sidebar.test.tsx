@@ -214,6 +214,21 @@ describe('Sidebar', () => {
       expect(section.compareDocumentPosition(activity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
+    it('says which stage a run inside a stages step is on', () => {
+      useAppStore.setState({
+        workspacePath: '/ws',
+        jobs: {
+          j1: job('j1', {
+            runName: 'Staged',
+            stageProgress: { stagesId: 'build', index: 3, total: 7, title: 'Add API routes', attempt: 1 },
+          }),
+        },
+      });
+      renderSidebar();
+      const section = screen.getByLabelText('Ongoing runs');
+      expect(within(section).getByRole('button', { name: 'Staged — running · stage 3/7 · whip-hand' })).toBeInTheDocument();
+    });
+
     it('renders the name of a job known only from a listJobs summary', () => {
       // Regression: a client that attaches mid-run learns the job only
       // through applyJobSummaries, which used to carry no name at all.

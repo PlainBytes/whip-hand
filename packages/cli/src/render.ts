@@ -68,6 +68,9 @@ export function createRenderer(
   // command step streams its own output as it goes.
   const tallies = new Map<string, StepTally>();
 
+  // Keyed by the stages step's own id, holding its current stage's index/total — see 'stages:accepted' below.
+  const stagePositions = new Map<string, { index: number; total: number }>();
+
   /** The run's label, when it has one. The id stays: `--resume` takes that. */
   const named = (name: string | undefined): string => (name === undefined ? '' : ` "${name}"`);
 
@@ -124,18 +127,41 @@ export function createRenderer(
       }
       case 'step:manual': return; // the prompt itself is the rendering, on stderr
       case 'step:manual-resolved': return out(`  ↳ ${event.choice}`);
-      case 'loop:start':
-        return out(`↻ loop ${nestedPrefix(event.loopId, event.parentLoopId, event.parentIteration, event.outerLoops)}`
-          + ` (up to ${event.maxIterations} iterations)`);
-      case 'loop:iteration':
-        return out(`↻ ${nestedPrefix(event.loopId, event.parentLoopId, event.parentIteration, event.outerLoops)}`
-          + ` — iteration ${event.iteration}/${event.maxIterations}`);
+      case 'loop:start': {
+        const label = nestedPrefix(
+          event.loopId, event.parentLoopId, event.parentIteration, event.outerLoops, event.parentStage);
+        return out(`↻ loop ${label} (up to ${event.maxIterations} iterations)`);
+      }
+      case 'loop:iteration': {
+        const label = nestedPrefix(
+          event.loopId, event.parentLoopId, event.parentIteration, event.outerLoops, event.parentStage);
+        return out(`↻ ${label} — iteration ${event.iteration}/${event.maxIterations}`);
+      }
       case 'loop:done': {
-        const label = nestedPrefix(event.loopId, event.parentLoopId, event.parentIteration, event.outerLoops);
+        const label = nestedPrefix(
+          event.loopId, event.parentLoopId, event.parentIteration, event.outerLoops, event.parentStage);
         return out(event.passed
           ? `↻ ${label} passed after ${event.iterations} iteration(s)`
           : `↻ ${label} exhausted after ${event.iterations} iteration(s)`);
       }
+      case 'stages:start':
+        return out(`▤ stages ${event.id} (${event.total} stages)`);
+      case 'stages:item':
+        // Position tracked so 'stages:accepted' (which carries only a
+        // stageId, not the index/total) can still say "stage 3/7 accepted"
+        // rather than repeating the raw stage id.
+        stagePositions.set(event.id, { index: event.index, total: event.total });
+        return out(`▤ ${event.id} — stage ${event.index}/${event.total}: ${event.title}`
+          + (event.attempt > 1 ? ` (attempt ${event.attempt})` : ''));
+      case 'stages:accepted': {
+        const pos = stagePositions.get(event.id);
+        return out(`▤ ${event.id} — stage ${pos ? `${pos.index}/${pos.total}` : event.stageId} accepted`);
+      }
+      case 'stages:exhausted':
+        return out(`▤ ${event.id} — stage '${event.stageId}' rejected after ${event.attempts} attempt(s), `
+          + 'handed to a human');
+      case 'stages:done':
+        return out(`▤ ${event.id} finished ${event.completed} stages`);
       case 'guard:warning': return err(`  ⚠ ${event.message}`);
       case 'run:error': return err(`✘ ${event.message}`);
       case 'run:cancelled': return out('✖ run cancelled');

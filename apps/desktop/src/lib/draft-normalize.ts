@@ -7,7 +7,7 @@
  * field core treats as absent is never the one thing the editor still flags.
  */
 import type { Step, Workflow, WorkflowInput } from '../../../../packages/core/src/types.ts';
-import { isLoopStep } from '../../../../packages/core/src/steps.ts';
+import { isContainerStep } from '../../../../packages/core/src/steps.ts';
 
 function blank(v: string | undefined): boolean {
   return v === undefined || v.trim() === '';
@@ -21,7 +21,7 @@ function normalizeInput(input: WorkflowInput): WorkflowInput {
 }
 
 function normalizeStep(step: Step): Step {
-  if (isLoopStep(step)) {
+  if (isContainerStep(step)) {
     return { ...step, steps: step.steps.map(normalizeStep) };
   }
   const next = { ...step } as Record<string, unknown>;

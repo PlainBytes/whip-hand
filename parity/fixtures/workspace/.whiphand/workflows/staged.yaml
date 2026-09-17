@@ -1,0 +1,30 @@
+name: staged
+# Mirrors budget.yaml's determinism, not parity.yaml's real-runner spawns:
+# 'execute' and 'verdict' are kind: command throughout, so this full run
+# never depends on the claude/copilot stub binaries doing anything beyond
+# exiting — the same reason budget.yaml avoids runner: claude for its own
+# real (non-dry) execution. The gate declares 'default: continue' itself,
+# which is what lets --yes run it at all (see unattendedProblems).
+steps:
+  - kind: stages
+    id: build
+    items: "plans/*.md"
+    steps:
+      - id: execute
+        kind: command
+        run: "true"
+        output: execute.md
+
+      - id: verdict
+        kind: command
+        verdict: true
+        run: "exit 0"
+        output: verdict.md
+
+      - kind: approval
+        id: accept
+        title: "Accept {{ stage.title }}?"
+        instructions: Look at the work and accept the stage.
+        default: continue
+        inputs: [stage, verdict]
+        output: accept.md

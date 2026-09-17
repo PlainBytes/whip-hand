@@ -39,6 +39,13 @@ export interface ReviewRequest {
   /** "Decision needed" / "Your turn". */
   badge: string;
   title: string;
+  /**
+   * Which stage file a gate inside a `stages` step is asking about —
+   * `stage 2 of 7 · Add API routes`. The stepper names the stage too, but only
+   * on its group, which a collapsed stepper hides; the question is not
+   * answerable without knowing which stage's work is on the rail.
+   */
+  subtitle?: string;
   /** Markdown, already templated by core. */
   instructions: string;
   sources: ReviewSource[];

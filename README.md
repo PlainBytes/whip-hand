@@ -211,11 +211,31 @@ The desktop app gives the decision the whole page: `show_diff: true` shows the w
 side by side, and `capture: review` turns the screen into a place to leave per-file feedback
 that feeds back into the next loop iteration on `retry`.
 
+**Stages.** `kind: stages` runs its own `steps` once per file in a directory instead of once
+over one input — build stage 1, get it reviewed and accepted, commit it, then move to stage
+2 — so a large feature never needs one sign-off over the whole diff at the end. `items` is a
+templated glob (`{{ inputs.plan_dir }}/*.md`, re-globbed before every stage, so an added file
+is picked up and a deleted pending one is skipped); a stage's id is its file's basename
+without extension, and renaming or renumbering an already-completed stage file makes it run
+again under its new id. `{{ stage.index }}`, `{{ stage.total }}`, `{{ stage.id }}`,
+`{{ stage.title }}` (and `$WHIPHAND_STAGE_ID`/`_TITLE`/`_INDEX`/`_TOTAL`/`_PATH` for a
+`command` step) read the stage currently running, and `inputs: [stage]` attaches its file —
+all four only exist inside a `stages` body. Every `verdict: true` step in a stage's body
+(a loop's `until` included) must be followed by a gate placed directly in the body, not
+inside a loop. A loop that runs out inside a stage ends there and hands over to that gate.
+Rejecting at the gate re-runs the whole stage, with the rejection handed to the last
+`writes: true` step before the gate, up to `max_retries` (default 2) before it hands the
+stage to you in a live session. `allow_paths` on a `writes: true` step fails it, naming the
+file, if it touched anything outside the given globs. See the shipped
+`staged-feature-development` workflow and `docs/design.md`'s "Stages" section for the rest.
+That workflow's commit steps are POSIX shell lines, so on Windows they do not run under the
+default `cmd.exe`.
+
 **Attachments.** `--attach <path>` (repeatable — or the desktop's New Run dialog: pick,
 drop, or paste an image) copies a file into the run before step one; a step reads them by
 naming the reserved ref `attachments` in its `inputs:`.
 
-See `docs/design.md` for the full reference: cycles and resuming an exhausted loop,
+See `docs/design.md` for the full reference: cycles and resuming an exhausted loop, stages,
 disabling a step, `on_findings` (what happens when a review outside a loop finds problems),
 and every rule above in detail.
 

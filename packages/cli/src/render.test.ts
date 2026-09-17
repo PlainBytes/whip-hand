@@ -152,6 +152,43 @@ test('run:start without attachments prints no 📎 line', () => {
   assert.deepEqual(out, ["whiphand run r1 — workflow 'feature'"]);
 });
 
+test('stages events render as stage lines', () => {
+  const { out, render } = capture();
+  render({ type: 'stages:start', id: 'build', total: 7 });
+  render({
+    type: 'stages:item', id: 'build', index: 3, total: 7, stageId: '03-api', title: 'Add API routes', attempt: 1,
+  });
+  render({
+    type: 'stages:item', id: 'build', index: 3, total: 7, stageId: '03-api', title: 'Add API routes', attempt: 2,
+  });
+  render({ type: 'stages:accepted', id: 'build', stageId: '03-api' });
+  render({ type: 'stages:done', id: 'build', completed: 7 });
+  assert.deepEqual(out, [
+    '▤ stages build (7 stages)',
+    '▤ build — stage 3/7: Add API routes',
+    '▤ build — stage 3/7: Add API routes (attempt 2)',
+    '▤ build — stage 3/7 accepted',
+    '▤ build finished 7 stages',
+  ]);
+});
+
+test('an exhausted stage is reported — the run stops there for a human', () => {
+  const { out, render } = capture();
+  render({ type: 'stages:exhausted', id: 'build', stageId: '03-api', attempts: 3 });
+  assert.deepEqual(out, ["▤ build — stage '03-api' rejected after 3 attempt(s), handed to a human"]);
+});
+
+test('a loop directly inside a stage names the stage, so two stages read as different loops', () => {
+  const { out, render } = capture();
+  render({ type: 'loop:start', loopId: 'cycle', maxIterations: 3, parentLoopId: 'build', parentIteration: 1, parentStage: '01-schema' });
+  render({ type: 'loop:start', loopId: 'cycle', maxIterations: 3, parentLoopId: 'build', parentIteration: 1, parentStage: '02-api' });
+  assert.deepEqual(out, [
+    '↻ loop build/01-schema 1 › cycle (up to 3 iterations)',
+    '↻ loop build/02-api 1 › cycle (up to 3 iterations)',
+  ]);
+  assert.notEqual(out[0], out[1], 'stage 1 and stage 2 must not collapse onto one identical label');
+});
+
 test('a dry run also names where each attachment would have been copied', () => {
   const out: string[] = [];
   const render = createRenderer({ out: l => out.push(l), err: () => {} }, { runDirOf: id => `/ws/.whiphand/runs/${id}` });

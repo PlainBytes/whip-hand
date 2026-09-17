@@ -74,6 +74,16 @@ describe('ReviewOverlay', () => {
     expect(screen.getByText('Decision needed')).toBeInTheDocument();
   });
 
+  it('names the stage a gate belongs to beside the question', () => {
+    renderOverlay({ request: request({ subtitle: 'stage 2 of 7 · Add API routes' }) });
+    expect(screen.getByTestId('review-subtitle')).toHaveTextContent('stage 2 of 7 · Add API routes');
+  });
+
+  it('shows no subtitle when the request has none', () => {
+    renderOverlay();
+    expect(screen.queryByTestId('review-subtitle')).not.toBeInTheDocument();
+  });
+
   it('spends no vertical space on the instructions', () => {
     // They restate what the rail already lists, and this screen exists to give
     // the change set room — so they live in the tooltip, never in the header's

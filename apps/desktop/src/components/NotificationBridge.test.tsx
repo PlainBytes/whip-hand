@@ -110,6 +110,22 @@ describe('NotificationBridge: manual steps', () => {
     expect(notifier).toHaveBeenCalledWith('Decision needed', 'Ship it?');
   });
 
+  it('says which stage a gate inside a stage belongs to, keeping the title stable for OS grouping', () => {
+    const { transport, notifier } = renderBridge(false);
+    const line = manualLine('j-s', 'approval', 'Accept this stage?');
+    transport.emitLine({
+      ...line,
+      params: {
+        ...line.params,
+        request: {
+          ...line.params.request,
+          stage: { stagesId: 'build', id: '03-c', title: 'Add API routes', index: 3, total: 7, attempt: 1 },
+        },
+      },
+    });
+    expect(notifier).toHaveBeenCalledWith('Decision needed', 'Stage 3 of 7: Add API routes');
+  });
+
   it('distinguishes a plain manual step from an approval', () => {
     const { transport, notifier } = renderBridge(false);
     transport.emitLine(manualLine('j-b', 'manual', 'Release note'));

@@ -1,9 +1,10 @@
 import { Text } from '@fluentui/react-components';
 import type { LoopStep, Step } from '../../../../../packages/core/src/types.ts';
-import { isLoopStep } from '../../../../../packages/core/src/steps.ts';
+import { isLoopStep, isStagesStep } from '../../../../../packages/core/src/steps.ts';
 import { endsLoop, type DataFlowEntry } from '../../lib/step-describe.ts';
 import { StepTile } from './StepTile.tsx';
 import { LoopGroup } from './LoopGroup.tsx';
+import { StagesGroup } from './StagesGroup.tsx';
 
 export interface StepTrackProps {
   steps: Step[];
@@ -13,6 +14,8 @@ export interface StepTrackProps {
   dataFlow: Map<string, DataFlowEntry>;
   /** The loop `steps` is the body of, when it is one — undefined at the top level. */
   enclosingLoop?: LoopStep;
+  /** The container `steps` is the body of, for the test id — defaults to `enclosingLoop`'s id. */
+  trackId?: string;
   /** Top level wraps between nodes; a loop body stays on one (scrollable) line. */
   wrap: boolean;
   sourceSet: ReadonlySet<string>;
@@ -23,16 +26,17 @@ export interface StepTrackProps {
 
 /**
  * A step list, left to right, `→`-connected. Recurses into `LoopGroup` for a
- * nested loop; renders everything else as a `StepTile`. The connector for
- * each node (after the first) travels with it in one flex item, so a wrapped
- * top-level line naturally starts with its own `→` — no JS measuring needed.
+ * nested loop and `StagesGroup` for a stages step; renders everything else as
+ * a `StepTile`. The connector for each node (after the first) travels with it
+ * in one flex item, so a wrapped top-level line naturally starts with its own
+ * `→` — no JS measuring needed.
  */
 export function StepTrack({
-  steps, workflowSteps, ordinals, dataFlow, enclosingLoop, wrap, sourceSet, dependentSet, onHoverStep, nestLevel,
+  steps, workflowSteps, ordinals, dataFlow, enclosingLoop, trackId, wrap, sourceSet, dependentSet, onHoverStep, nestLevel,
 }: StepTrackProps) {
   return (
     <div
-      data-testid={enclosingLoop ? `step-track-${enclosingLoop.id}` : 'step-track-root'}
+      data-testid={(trackId ?? enclosingLoop?.id) ? `step-track-${trackId ?? enclosingLoop?.id}` : 'step-track-root'}
       style={{
         display: 'flex',
         flexWrap: wrap ? 'wrap' : 'nowrap',
@@ -60,6 +64,18 @@ export function StepTrack({
           {isLoopStep(step) ? (
             <LoopGroup
               loop={step}
+              ordinal={ordinals.get(step.id) ?? ''}
+              workflowSteps={workflowSteps}
+              ordinals={ordinals}
+              dataFlow={dataFlow}
+              sourceSet={sourceSet}
+              dependentSet={dependentSet}
+              onHoverStep={onHoverStep}
+              nestLevel={nestLevel}
+            />
+          ) : isStagesStep(step) ? (
+            <StagesGroup
+              stages={step}
               ordinal={ordinals.get(step.id) ?? ''}
               workflowSteps={workflowSteps}
               ordinals={ordinals}

@@ -83,8 +83,15 @@ export function NotificationBridge({
       // A parked manual step is the strongest "come back" signal there is:
       // the run is stopped and only this person can restart it. No dedupe —
       // one notification per question, and a question is asked once.
+      //
+      // Inside a stages step the body says which stage is waiting instead:
+      // every stage asks the same gate, so its title alone cannot tell stage 3
+      // from stage 4. The title stays the kind label so the OS still groups
+      // these with every other manual step.
       client.onNotification('manualRequest', p => {
-        sendForJob(p.jobId, manualLabel(p.request.kind), p.request.title);
+        const stage = p.request.stage;
+        const body = stage === undefined ? p.request.title : `Stage ${stage.index} of ${stage.total}: ${stage.title}`;
+        sendForJob(p.jobId, manualLabel(p.request.kind), body);
       }),
       client.onNotification('whiphandEvent', p => {
         if (p.event.type === 'run:error') sendForJob(p.jobId, 'Run error', p.event.message);

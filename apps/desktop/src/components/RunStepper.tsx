@@ -20,8 +20,10 @@ import type { StepState } from '../state/store.ts';
 import { AttentionBadge } from './AttentionBadge.tsx';
 import { GENERATING_ARTIFACT_LABEL, isGeneratingArtifact } from '../lib/step-phase.ts';
 import { STATUS_BADGE_SIZE, STATUS_GLYPH_PX, STATUS_SPINNER_SIZE } from '../lib/status-style.ts';
-import { buildRunTree, flattenNodes, type LeafNode, type LoopNode, type StepNode } from '../lib/run-tree.ts';
-import { elapsedMs, formatElapsed } from '../../../../packages/core/src/format.ts';
+import {
+  buildRunTree, flattenNodes, type LeafNode, type LoopNode, type StageGroup, type StagesNode, type StepNode,
+} from '../lib/run-tree.ts';
+import { elapsedMs, formatElapsed, stageLabel } from '../../../../packages/core/src/format.ts';
 import { usageParts } from '../../../../packages/core/src/log-rows.ts';
 
 /**
@@ -86,6 +88,7 @@ function metaLine(step: StepState): string {
     case 'manual':
     case 'approval':
     case 'loop':
+    case 'stages':
       return step.kind;
     default:
       // 'agent', and undefined for v1 manifests written before kinds existed.
@@ -110,6 +113,26 @@ function loopProgress(loop: StepState): string | null {
   return loop.maxIterations === undefined
     ? `iteration ${loop.iterations}`
     : `iteration ${loop.iterations} of ${loop.maxIterations}`;
+}
+
+/**
+ * 'N of M accepted' — progress in stages, on the stages step's own pill.
+ * Never 'iteration': a stage is not a lap of a loop. `completed` is only
+ * written once the step is done, so the running count is the accepted list.
+ */
+function stagesProgress(stages: StepState): string | null {
+  if (stages.total === undefined) return null;
+  const accepted = stages.completed ?? stages.completedStages?.length ?? 0;
+  return `${accepted} of ${stages.total} accepted`;
+}
+
+/** The pill a node is represented by: its own row for a container, its newest execution for a leaf. */
+function nodeStep(node: StepNode): StepState {
+  switch (node.kind) {
+    case 'loop': return node.loop;
+    case 'stages': return node.stages;
+    default: return node.latest;
+  }
 }
 
 /**
@@ -217,6 +240,8 @@ interface PillProps {
   runCount?: number;
   /** A loop's place in its budget — 'iteration 2 of 3'. Loops only. */
   iteration?: string | null;
+  /** A stages step's accepted count — '2 of 7 accepted'. Stages steps only. */
+  stagesCount?: string | null;
   isFocus: boolean;
   /** Set only on the one node — of possibly several sharing `id` — that is actually awaiting. */
   awaiting?: StepAwaiting;
@@ -238,8 +263,8 @@ interface PillProps {
  * still answers "which tool, which model" without a click.
  */
 function StepPill({
-  id, nodeKey, ordinal, step, meta, duration, spend, runCount, iteration, isFocus, awaiting, nodeRef, extraKeys,
-  children,
+  id, nodeKey, ordinal, step, meta, duration, spend, runCount, iteration, stagesCount, isFocus, awaiting, nodeRef,
+  extraKeys, children,
 }: PillProps) {
   const color = stepStatusColor(step.status);
   const isDisabled = step.status === 'disabled';
@@ -261,6 +286,7 @@ function StepPill({
             ...(isGeneratingArtifact(step) ? [GENERATING_ARTIFACT_LABEL] : []),
             ...(runCount === undefined ? [] : [`${runCount} iterations`]),
             ...(iteration ? [iteration] : []),
+            ...(stagesCount ? [stagesCount] : []),
             meta,
             ...(duration === null ? [] : [duration]),
             ...(spend ? [spend] : []),
@@ -321,6 +347,16 @@ function StepPill({
                   data-testid={`loop-progress-${nodeKey}`}
                 >
                   {iteration}
+                </Badge>
+              )}
+              {stagesCount && (
+                <Badge
+                  appearance="tint"
+                  color="informative"
+                  size="small"
+                  data-testid={`stages-progress-${nodeKey}`}
+                >
+                  {stagesCount}
                 </Badge>
               )}
               {isGeneratingArtifact(step) && (
@@ -492,10 +528,118 @@ function LoopView({ node, focusKey, awaitingKey, awaiting, clock, nodeRef }: Nod
   );
 }
 
+/** Runs of consecutive groups for the same stage — one per stage file, each holding its attempts. */
+function groupsByStage(groups: readonly StageGroup[]): StageGroup[][] {
+  const runs: StageGroup[][] = [];
+  for (const group of groups) {
+    const last = runs[runs.length - 1];
+    if (last !== undefined && last[0].stage !== undefined && last[0].stage === group.stage) last.push(group);
+    else runs.push([group]);
+  }
+  return runs;
+}
+
+/**
+ * A `stages` step and its body, drawn like a loop group — its own pill, then
+ * one labelled group per stage file, reading `stage 2 of 7 · Add API routes`.
+ * A stage sent back after a rejection keeps each attempt's pills apart,
+ * badged `attempt N`, rather than folding them into one another.
+ */
+function StagesView({ node, focusKey, awaitingKey, awaiting, clock, nodeRef }: NodeProps & { node: StagesNode }) {
+  const pill = (meta: string, withDuration: boolean) => (
+    <StepPill
+      id={node.id}
+      nodeKey={node.key}
+      ordinal={node.ordinal}
+      step={node.stages}
+      meta={meta}
+      duration={withDuration ? stepDuration(node.stages, clock) : null}
+      stagesCount={withDuration ? stagesProgress(node.stages) : null}
+      isFocus={node.key === focusKey}
+      awaiting={node.key === awaitingKey ? awaiting : undefined}
+      nodeRef={nodeRef}
+    >
+      <StepDetails step={node.stages} />
+    </StepPill>
+  );
+  if (node.stages.status === 'disabled') {
+    // As for a disabled loop: the body never runs, so a count says more than
+    // phantom pills with no stage to hang them on.
+    const descendantCount = flattenNodes(node.children.flatMap(group => group.children)).length;
+    return pill(`stages disabled — ${descendantCount} step${descendantCount === 1 ? '' : 's'} not run`, false);
+  }
+  const children = (nodes: StepNode[]) => nodes.map(child => (
+    <NodeView
+      key={child.key}
+      node={child}
+      focusKey={focusKey}
+      awaitingKey={awaitingKey}
+      awaiting={awaiting}
+      clock={clock}
+      nodeRef={nodeRef}
+    />
+  ));
+  return (
+    <div
+      data-testid={`step-stages-${node.key}`}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+        border: `1px dashed ${stepStatusColor(node.stages.status)}`,
+        borderRadius: 12, padding: 6,
+      }}
+    >
+      {pill(metaLine(node.stages), true)}
+      {groupsByStage(node.children).map(attempts => {
+        const first = attempts[0];
+        const stageKey = first.stage === undefined ? first.key : `${node.key}@${first.stage}`;
+        // Badged only once a stage has been attempted more than once: an
+        // "attempt 1" on every stage that passed first time is noise.
+        const badged = attempts.length > 1 || (first.attempt ?? 1) > 1;
+        return (
+          <div
+            key={stageKey}
+            data-testid={`stage-group-${stageKey}`}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+              borderLeft: '2px solid var(--colorNeutralStroke2)', paddingLeft: 8,
+            }}
+          >
+            <Text
+              size={200}
+              data-testid={`stage-label-${stageKey}`}
+              style={{ color: 'var(--colorNeutralForeground2)' }}
+            >
+              {first.stage === undefined ? 'not started' : stageLabel(first.index, first.total, first.title)}
+            </Text>
+            {attempts.map(group => badged ? (
+              <div
+                key={group.key}
+                data-testid={`stage-attempt-group-${group.key}`}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
+              >
+                <Badge appearance="tint" color="informative" size="small" data-testid={`stage-attempt-${group.key}`}>
+                  {group.maxAttempts === undefined
+                    ? `attempt ${group.attempt}`
+                    : `attempt ${group.attempt} of ${group.maxAttempts}`}
+                </Badge>
+                {children(group.children)}
+              </div>
+            ) : (
+              <div key={group.key} style={{ display: 'contents' }}>{children(group.children)}</div>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function NodeView(props: NodeProps) {
-  return props.node.kind === 'loop'
-    ? <LoopView {...props} node={props.node} />
-    : <LeafView {...props} node={props.node} />;
+  switch (props.node.kind) {
+    case 'loop': return <LoopView {...props} node={props.node} />;
+    case 'stages': return <StagesView {...props} node={props.node} />;
+    default: return <LeafView {...props} node={props.node} />;
+  }
 }
 
 /**
@@ -509,6 +653,30 @@ function resolveKey(flat: readonly StepNode[], id: string | undefined): string |
   if (id === undefined) return undefined;
   for (let i = flat.length - 1; i >= 0; i--) {
     if (flat[i].id === id) return flat[i].key;
+  }
+  return undefined;
+}
+
+/** Depth-first, like `flattenNodes`, but not into a stages step's body. */
+function flattenOutsideStages(nodes: StepNode[]): StepNode[] {
+  const out: StepNode[] = [];
+  const walk = (list: StepNode[]): void => {
+    for (const node of list) {
+      out.push(node);
+      if (node.kind === 'loop') walk(node.children);
+    }
+  };
+  walk(nodes);
+  return out;
+}
+
+/** The stage group holding the node keyed `key`, at any depth inside it; `undefined` outside every stage. */
+function stageGroupOf(nodes: StepNode[], key: string | undefined): StageGroup | undefined {
+  if (key === undefined) return undefined;
+  for (const node of flattenOutsideStages(nodes)) {
+    if (node.kind !== 'stages') continue;
+    const group = node.children.find(g => g.stage !== undefined && flattenNodes(g.children).some(n => n.key === key));
+    if (group !== undefined) return group;
   }
   return undefined;
 }
@@ -563,10 +731,16 @@ export function RunStepper({
   // same way a disabled loop excludes its own descendants (they are never
   // separate nodes to begin with once the loop itself is disabled). Without
   // this the bar would stall on a step that will never start.
-  const isDisabledNode = (node: StepNode): boolean =>
-    (node.kind === 'loop' ? node.loop.status : node.latest.status) === 'disabled';
-  const countedFlat = useMemo(() => flat.filter(node => !isDisabledNode(node)), [flat]);
+  //
+  // A stages step's body counts as nothing here: it repeats once per stage,
+  // so counting its pills would grow the total as stages pass. Focus inside a
+  // stage is counted in stages instead — see `focusStage`.
+  const isDisabledNode = (node: StepNode): boolean => nodeStep(node).status === 'disabled';
+  const countedFlat = useMemo(
+    () => flattenOutsideStages(tree).filter(node => !isDisabledNode(node)), [tree],
+  );
   const countedIndex = countedFlat.findIndex(node => node.key === focusKey);
+  const focusStage = useMemo(() => stageGroupOf(tree, focusKey), [tree, focusKey]);
 
   // Collapsed shows the step the run is actually on, on its own — a loop body
   // step included, without the group around it. With no focus step (an empty
@@ -607,20 +781,20 @@ export function RunStepper({
               style={{ flex: '1 1 12px', minWidth: 12, height: 1, background: 'var(--colorNeutralStroke2)' }}
             />
           )}
-          {collapsedToFocus && node.kind === 'loop' ? (
-            // Collapsed means one pill, so a loop shows itself and not its body.
+          {collapsedToFocus && node.kind !== 'step' ? (
+            // Collapsed means one pill, so a container shows itself and not its body.
             <StepPill
               id={node.id}
               nodeKey={node.key}
               ordinal={node.ordinal}
-              step={node.loop}
-              meta={metaLine(node.loop)}
-              duration={stepDuration(node.loop, clock)}
+              step={nodeStep(node)}
+              meta={metaLine(nodeStep(node))}
+              duration={stepDuration(nodeStep(node), clock)}
               isFocus
               awaiting={node.key === awaitingKey ? awaiting : undefined}
               nodeRef={nodeRef}
             >
-              <StepDetails step={node.loop} />
+              <StepDetails step={nodeStep(node)} />
             </StepPill>
           ) : (
             <NodeView
@@ -636,7 +810,9 @@ export function RunStepper({
       ))}
       {collapsedToFocus && (
         <Text size={200} style={{ color: 'var(--colorNeutralForeground3)' }}>
-          {countedIndex + 1} of {countedFlat.length}
+          {focusStage === undefined
+            ? `${countedIndex + 1} of ${countedFlat.length}`
+            : `stage ${focusStage.index} of ${focusStage.total}`}
         </Text>
       )}
       {onToggleCollapse && (

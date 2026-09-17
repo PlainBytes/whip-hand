@@ -8,46 +8,99 @@
  */
 import { readFile, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import type { LoopFrame, LoopRef, Scope, Workflow, WorkspaceConfig } from '../types.ts';
+import type { Frame, LoopRef, Scope, Workflow, WorkspaceConfig } from '../types.ts';
 import { parseWorkflow, WorkflowError } from '../schema.ts';
 import { collectLoops, findStep, isLeafStep, isLoopStep } from '../steps.ts';
 import { resolveWorkflowPath } from '../workspace.ts';
 import { artifactPath, assertArtifact } from './artifacts.ts';
 import { executionKey } from '../execution-key.ts';
 import { diffSnapshots, snapshotTree } from './git-guard.ts';
-import { getRun, isSafeRunId, MANIFEST_VERSION, WORKFLOW_SNAPSHOT_NAME } from './manifest.ts';
+import { getRun, isSafeRunId, NESTED_LOOP_TRACKING_VERSION, WORKFLOW_SNAPSHOT_NAME } from './manifest.ts';
 import type { RunManifest } from './manifest.ts';
 
-type ManifestStepLoopFields = { loopId?: string; iteration?: number; outerLoops?: LoopRef[] };
+type ManifestStepLoopFields = { loopId?: string; iteration?: number; outerLoops?: LoopRef[]; stage?: string };
 
 /**
  * A row's own identity string — the same one runner.ts computes for the
- * matching execution via `executionKey(id, frame?.iteration, ancestorLoops(frame))`.
+ * matching execution via `executionKey(id, idn.iteration, idn.outerLoops, idn.stage)`.
+ * A row directly under a stage carries that stage in `stage`, and it is part
+ * of the key: without it a stage's gate would be looked up as `accept` while
+ * the runner asks for `accept@01-schema#1`, and every resumed stage would ask
+ * its gates again.
  */
 function rowKey(id: string, row: ManifestStepLoopFields): string {
-  return executionKey(id, row.iteration, row.outerLoops);
+  return executionKey(id, row.iteration, row.outerLoops, row.stage);
 }
 
 /**
- * The `outerLoops` a body of *this* loop row would itself carry — its own
- * `(loopId, iteration)` prepended onto whatever is beyond that. Lets a body
- * row (`loopId`/`outerLoops`) be matched back to the loop incarnation
- * (`id`/`iteration`/`outerLoops`) it belongs to.
+ * The chain of frames enclosing a row, outermost first: its `outerLoops`
+ * plus the immediate container its `loopId`/`iteration`/`stage` name. For a
+ * loop row this is exactly the `outerLoops` its own body rows carry, which is
+ * what lets a body row be matched back to the loop incarnation it belongs
+ * to — including a loop nested in a stage, whose body's chain ends in that
+ * stage's ref.
  */
-function loopContext(row: { id: string } & ManifestStepLoopFields): LoopRef[] {
-  return row.loopId === undefined ? [] : [...(row.outerLoops ?? []), { id: row.loopId, iteration: row.iteration ?? 1 }];
+function loopContext(row: ManifestStepLoopFields): LoopRef[] {
+  return [
+    ...(row.outerLoops ?? []),
+    ...(row.loopId === undefined ? [] : [{
+      id: row.loopId, iteration: row.iteration ?? 1, ...(row.stage === undefined ? {} : { stage: row.stage }),
+    }]),
+  ];
+}
+
+/** The key `planResume` and the runner both use for one stage of one stages step. */
+export function stageBudgetKey(stagesKey: string, stageId: string): string {
+  return `${stagesKey}@${stageId}`;
+}
+
+/** Which stage (and attempt at it) a row ran under, if any — the innermost stage ref in its chain. */
+interface RowStage {
+  /** The stages step's own row key — what `stagesCompleted` is keyed by. */
+  stagesKey: string;
+  stageId: string;
+  attempt: number;
+}
+
+function stageOfRow(row: ManifestStepLoopFields): RowStage | undefined {
+  const chain = loopContext(row);
+  for (let k = chain.length - 1; k >= 0; k--) {
+    const ref = chain[k];
+    if (ref.stage === undefined) continue;
+    // The stages step's own row sits where this ref's frame began: under
+    // whatever encloses it, identified the way rowKey identifies any row.
+    const parent = k === 0 ? undefined : chain[k - 1];
+    return {
+      stagesKey: executionKey(ref.id, parent?.iteration, chain.slice(0, Math.max(0, k - 1)), parent?.stage),
+      stageId: ref.stage,
+      attempt: ref.iteration,
+    };
+  }
+  return undefined;
 }
 
 function incarnationKey(loopId: string, outerLoops: LoopRef[]): string {
   return `${loopId}::${JSON.stringify(outerLoops)}`;
 }
 
-/** Rebuilds the `LoopFrame` chain a row's `loopId`/`iteration`/`outerLoops` describe, for `artifactPath`. */
-function frameOfRow(row: ManifestStepLoopFields & { maxIterations?: number }): LoopFrame | undefined {
-  if (row.loopId === undefined) return undefined;
-  let parent: LoopFrame | undefined;
-  for (const l of row.outerLoops ?? []) parent = { id: l.id, iteration: l.iteration, maxIterations: 1, parent };
-  return { id: row.loopId, iteration: row.iteration ?? 1, maxIterations: row.maxIterations ?? 1, parent };
+/**
+ * Rebuilds the frame chain a row's `loopId`/`iteration`/`stage`/`outerLoops`
+ * describe, for `artifactPath`. A ref carrying `stage` becomes a `StageFrame`
+ * (its iteration is the attempt). Every path segment is derivable from the
+ * ref alone, so the stage's title, index and path are placeholders nothing
+ * reads.
+ */
+function frameOfRow(row: ManifestStepLoopFields): Frame | undefined {
+  let frame: Frame | undefined;
+  for (const ref of loopContext(row)) {
+    frame = ref.stage === undefined
+      ? { id: ref.id, iteration: ref.iteration, maxIterations: 1, parent: frame }
+      : {
+          kind: 'stages', id: ref.id, attempt: ref.iteration, maxAttempts: 1, parent: frame,
+          stage: { id: ref.stage, title: ref.stage, index: 1, total: 1, path: '' },
+        };
+  }
+  return frame;
 }
 
 /** True when any loop in the tree has another loop among its own body steps. */
@@ -105,6 +158,30 @@ export interface ResumePlan {
   restartAt: { stepId: string; iteration?: number } | undefined;
   /** loopId -> the budget this resume allows it, and what it has already run. */
   loopBudgets: Record<string, LoopBudget>;
+  /**
+   * Loop execution key -> the budget a loop in a closed stage attempt ran
+   * under, and the iterations it recorded. Such a loop is only replayed, to
+   * restore its verdicts, so it runs at exactly that budget whatever
+   * `--max-iterations` or `--extra-iterations` say: a larger one would spawn
+   * the implementer inside work a gate already answered.
+   */
+  closedLoops: Record<string, LoopBudget>;
+  /** stages execution key -> stage ids this run already accepted. */
+  stagesCompleted: Record<string, string[]>;
+  /** '<stagesKey>@<stageId>' -> attempts this resume allows, granted only after triage. */
+  stageBudgets: Record<string, number>;
+  /**
+   * '<stagesKey>@<stageId>' -> the attempt a previous run left unfinished,
+   * whose implementer is told to reconcile what that attempt left in the tree.
+   */
+  stagesInterrupted: Record<string, number>;
+  /**
+   * '<stagesKey>@<stageId>' of every stage the manifest records anything
+   * under: a stage this resume re-enters rather than starts. Its tree already
+   * holds whatever the earlier process did, so a snapshot taken now cannot
+   * tell the gate the stage "produced no changes".
+   */
+  stagesStarted: string[];
   warnings: string[];
 }
 
@@ -119,23 +196,43 @@ const RESUMABLE = new Set(['failed', 'interrupted', 'cancelled']);
  */
 function computeLoopBudgets(
   detail: RunManifest, workflow: Workflow, config: WorkspaceConfig,
-  opts: ResumeOptions | undefined, warnings: string[],
-): Record<string, LoopBudget> {
+  opts: ResumeOptions | undefined, stages: StagesRecord, warnings: string[],
+): { budgets: Record<string, LoopBudget>; closed: Record<string, LoopBudget> } {
   const extra = opts?.extraIterations ?? 1;
   const explicit = opts?.extraIterations !== undefined;
   const declared = new Map(collectLoops(workflow.steps).map(loop => [loop.id, loop]));
   const budgets: Record<string, LoopBudget> = {};
+  const closed: Record<string, LoopBudget> = {};
   let anyEligible = false;
 
   for (const step of detail.steps) {
-    if (step.kind !== 'loop' || step.status === 'done') continue;
-    anyEligible = true;
+    if (step.kind !== 'loop') continue;
+    const where = stageOfRow(step);
     const base = step.maxIterations ?? declared.get(step.id)?.max_iterations ?? config.loop.max_iterations;
     const completed = step.iterations ?? 0;
-    // The default +1 only rescues an exhausted ('failed') loop; an explicit
-    // count is a deliberate ask and applies to every loop not yet passed,
-    // exhausted or merely interrupted mid-run.
-    const bump = step.status === 'failed' || explicit ? extra : 0;
+    // A loop in a stage attempt that is already over — passed or not — is
+    // replayed exactly as it ran, never granted more: an accepted stage is
+    // skipped wholesale, and an attempt a gate already answered (a later
+    // attempt exists, or the stage went to triage) is only walked to restore
+    // its verdicts. A grant there would really spawn the implementer inside
+    // work that is finished.
+    if (where !== undefined && stages.closed(where)) {
+      closed[rowKey(step.id, step)] = { budget: Math.max(base, completed), completed };
+      continue;
+    }
+    if (step.status === 'done') continue;
+    anyEligible = true;
+    // The default +1 only rescues an exhausted ('failed') loop that stopped
+    // the run; an explicit count is a deliberate ask and applies to every
+    // loop not yet passed, exhausted or merely interrupted mid-run. Inside a
+    // stage an exhausted loop hands over to the gate rather than stopping the
+    // run — unless it chose on_exhausted: interactive — so there it gets none.
+    const stoppedTheRun = where === undefined || declared.get(step.id)?.on_exhausted === 'interactive';
+    const bump = (step.status === 'failed' && stoppedTheRun) || explicit ? extra : 0;
+    // No entry at all rather than a spent one: the runner reads a budget no
+    // larger than what already ran as "this loop cannot pass" and says so,
+    // while this loop's replay is simply meant to fail over to its gate again.
+    if (bump === 0 && step.status === 'failed') continue;
     const budget = base + bump;
     budgets[rowKey(step.id, step)] = { budget, completed };
     if (bump > 0) {
@@ -147,7 +244,129 @@ function computeLoopBudgets(
     warnings.push('no loop in this run has iterations left to raise, so the extra iterations had no effect');
   }
 
+  return { budgets, closed };
+}
+
+/**
+ * What the manifest says about every stages step: which stages it accepted,
+ * which attempts each stage ran, and which stage went to triage. Read once,
+ * up front, so the budget passes and the done/restartAt walk agree on it.
+ */
+interface StagesRecord {
+  completed: Record<string, string[]>;
+  /** A row's stage was accepted, or its attempt is over (superseded, or handed to triage). */
+  closed(where: RowStage): boolean;
+  /** The row belongs to a stage this run already accepted. */
+  accepted(where: RowStage): boolean;
+  /** The highest attempt any row of this stage recorded. */
+  attemptsUsed(stagesKey: string, stageId: string): number;
+  /** Every stage with at least one recorded row, as '<stagesKey>@<stageId>'. */
+  started: string[];
+  /**
+   * The stage is still where triage left it: its row says `exhausted` and its
+   * highest attempt really ended in a rejection. A granted attempt that was
+   * then cut short leaves `exhausted` set, but that attempt is open, not a
+   * second triage.
+   */
+  inTriage(stagesKey: string, stageId: string): boolean;
+}
+
+function readStages(detail: RunManifest): StagesRecord {
+  const completed: Record<string, string[]> = {};
+  const exhausted = new Set<string>();
+  for (const step of detail.steps) {
+    if (step.kind !== 'stages') continue;
+    const key = rowKey(step.id, step);
+    completed[key] = step.completedStages ?? [];
+    if (step.exhausted === true && step.currentStage !== undefined) {
+      exhausted.add(stageBudgetKey(key, step.currentStage.id));
+    }
+  }
+  const used = new Map<string, number>();
+  for (const step of detail.steps) {
+    const where = stageOfRow(step);
+    if (where === undefined) continue;
+    const key = stageBudgetKey(where.stagesKey, where.stageId);
+    used.set(key, Math.max(used.get(key) ?? 0, where.attempt));
+  }
+  // What each stage's highest attempt came to: a gate directly under the
+  // stage answered with a rejection, and whether anything in it is unfinished.
+  // A loop's own row is left out — an exhausted cycle is 'failed' in an
+  // attempt that still ran to its gate.
+  const rejected = new Set<string>();
+  const unfinished = new Set<string>();
+  for (const step of detail.steps) {
+    const where = stageOfRow(step);
+    if (where === undefined || step.kind === 'loop') continue;
+    const key = stageBudgetKey(where.stagesKey, where.stageId);
+    if (where.attempt !== used.get(key)) continue;
+    if (step.status !== 'done' && step.status !== 'disabled') unfinished.add(key);
+    else if ((step.kind === 'manual' || step.kind === 'approval') && step.stage !== undefined
+      && step.verdict === 'fail') rejected.add(key);
+  }
+  const inTriage = (stagesKey: string, stageId: string): boolean => {
+    const key = stageBudgetKey(stagesKey, stageId);
+    return exhausted.has(key) && rejected.has(key) && !unfinished.has(key);
+  };
+  const attemptsUsed = (stagesKey: string, stageId: string): number =>
+    used.get(stageBudgetKey(stagesKey, stageId)) ?? 0;
+  const accepted = (where: RowStage): boolean => (completed[where.stagesKey] ?? []).includes(where.stageId);
+  return {
+    completed,
+    accepted,
+    attemptsUsed,
+    started: [...used.keys()],
+    inTriage,
+    closed: where => accepted(where)
+      || where.attempt < attemptsUsed(where.stagesKey, where.stageId)
+      || inTriage(where.stagesKey, where.stageId),
+  };
+}
+
+/**
+ * The attempts each stage that went to triage gets on this resume: one more
+ * than it used. "Used" is the highest attempt among the stage's own rows, not
+ * the stages row's `attempt` scalar, which a crash can leave stale.
+ *
+ * A stage whose row still says `exhausted` but whose highest attempt did not
+ * end in a rejection is a granted attempt that was cut short: it keeps the
+ * grant it already had (that attempt, re-run and told to reconcile) and gets
+ * no further one — nothing new was rejected.
+ */
+function computeStageBudgets(detail: RunManifest, stages: StagesRecord, warnings: string[]): Record<string, number> {
+  const budgets: Record<string, number> = {};
+  for (const step of detail.steps) {
+    if (step.kind !== 'stages' || step.exhausted !== true || step.currentStage === undefined) continue;
+    const key = rowKey(step.id, step);
+    const stageId = step.currentStage.id;
+    const used = stages.attemptsUsed(key, stageId);
+    if (!stages.inTriage(key, stageId)) {
+      if (used > 0) budgets[stageBudgetKey(key, stageId)] = used;
+      continue;
+    }
+    budgets[stageBudgetKey(key, stageId)] = used + 1;
+    warnings.push(`stage '${stageId}' was rejected ${used} times; this resume allows one more attempt`);
+  }
   return budgets;
+}
+
+/**
+ * The attempt each unfinished stage was cut short in: a body row that started
+ * and never finished. A loop's own row is left out — an exhausted cycle is
+ * 'failed' without anything having been interrupted, and a really interrupted
+ * loop always has an unfinished body row of its own.
+ */
+function computeStagesInterrupted(detail: RunManifest, stages: StagesRecord): Record<string, number> {
+  const interrupted: Record<string, number> = {};
+  for (const step of detail.steps) {
+    if (step.kind === 'loop' || step.status === 'done' || step.status === 'disabled') continue;
+    if (step.status === 'pending' && step.attempted !== true) continue;
+    const where = stageOfRow(step);
+    if (where === undefined || stages.closed(where)) continue;
+    const key = stageBudgetKey(where.stagesKey, where.stageId);
+    interrupted[key] = Math.max(interrupted[key] ?? 0, where.attempt);
+  }
+  return interrupted;
 }
 
 export async function planResume(
@@ -170,7 +389,7 @@ export async function planResume(
   const warnings: string[] = [];
   const workflow = await loadWorkflow(detail, workdir, warnings);
 
-  if (detail.version < MANIFEST_VERSION && hasNestedLoops(workflow.steps)) {
+  if (detail.version < NESTED_LOOP_TRACKING_VERSION && hasNestedLoops(workflow.steps)) {
     throw new ResumeError(
       `run '${runId}' was recorded before whiphand tracked nested-loop rounds separately (manifest `
       + `v${detail.version}), and workflow '${workflow.name}' now has a loop nested inside another loop; `
@@ -178,7 +397,12 @@ export async function planResume(
   }
 
   await healOrphanedDone(detail, workflow, warnings);
-  const loopBudgets = computeLoopBudgets(detail, workflow, config, opts, warnings);
+  const stages = readStages(detail);
+  const { budgets: loopBudgets, closed: closedLoops } =
+    computeLoopBudgets(detail, workflow, config, opts, stages, warnings);
+  const stageBudgets = computeStageBudgets(detail, stages, warnings);
+  const stagesInterrupted = computeStagesInterrupted(detail, stages);
+  warnings.push(...stagesResumeWarnings(detail));
 
   const done = new Map<string, DoneExecution>();
   const artifacts: Record<string, string> = {};
@@ -216,8 +440,11 @@ export async function planResume(
     // A loop's own entry is not a step anyone restarts at — its body is. But
     // when this resume grants it more room than it has used, the loop is
     // exactly where execution is headed next, so name that rather than
-    // falling through to whatever pending step follows it.
-    if (restartAt === undefined) {
+    // falling through to whatever pending step follows it. A stages step's
+    // own row is never a restart point either, and nothing in a stage this
+    // run already accepted runs again.
+    const where = stageOfRow(step);
+    if (restartAt === undefined && step.kind !== 'stages' && !(where !== undefined && stages.accepted(where))) {
       if (step.kind === 'loop') {
         const grant = loopBudgets[rowKey(step.id, step)];
         if (grant !== undefined && grant.budget > grant.completed
@@ -268,8 +495,23 @@ export async function planResume(
     attachments,
     restartAt,
     loopBudgets,
+    closedLoops,
+    stagesCompleted: stages.completed,
+    stageBudgets,
+    stagesInterrupted,
+    stagesStarted: stages.started,
     warnings,
   };
+}
+
+/** Where each unfinished stages step picks up, so the `run:resume` line names the stage and not just a step. */
+function stagesResumeWarnings(detail: RunManifest): string[] {
+  return detail.steps.flatMap(step => {
+    if (step.kind !== 'stages' || step.status === 'done' || step.currentStage === undefined) return [];
+    const accepted = (step.completedStages ?? []).length;
+    return [`stages step '${step.id}' resumes in stage ${step.currentStage.index} ('${step.currentStage.title}'); `
+      + `${accepted} accepted stage(s) will not run again`];
+  });
 }
 
 /**
@@ -325,8 +567,13 @@ async function healOrphanedDone(
   // times, and only the newest flows forward into ctx.artifacts. An older
   // iteration's gap can never wedge a run, and re-running one would rewrite
   // the history that makes a cycle reviewable.
+  // Per stage too: each stage's work is its own history, so an orphan in an
+  // earlier stage is not "an older execution" of a later stage's step.
   const newest = new Map<string, ManifestStep>();
-  for (const step of detail.steps) newest.set(step.id, step);
+  for (const step of detail.steps) {
+    const where = stageOfRow(step);
+    newest.set(where === undefined ? step.id : `${step.id}@${stageBudgetKey(where.stagesKey, where.stageId)}`, step);
+  }
 
   for (const step of newest.values()) {
     if (step.status !== 'done' || step.artifact !== undefined) continue;

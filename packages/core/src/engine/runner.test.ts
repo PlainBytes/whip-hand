@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1041,6 +1041,59 @@ test('a read-only step whose tree changed after a clean harvest is recorded fail
   assert.equal(manifest.steps.find(s => s.id === 'plan')!.status, 'failed');
 });
 
+test('a writes step that writes outside allow_paths fails the run and names the file', async () => {
+  const dir = await gitRepo();
+  const workflow: Workflow = {
+    name: 'r',
+    steps: [{
+      id: 'plan', kind: 'agent', runner: 'fake', mode: 'headless', writes: true,
+      allow_paths: ['docs/plans/**'], prompt: 'p', output: 'plan.md',
+    }],
+  };
+  const { events, frontend } = collector();
+  const result = await runWorkflow({
+    workflow, workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: registry(), frontend,
+    spawnHeadless: async spec => {
+      await writeFile(spec.argv[3], '# the plan\n');
+      await mkdir(join(dir, 'docs', 'plans'), { recursive: true });
+      await writeFile(join(dir, 'docs', 'plans', '01-a.md'), 'in bounds\n');
+      await mkdir(join(dir, 'src'), { recursive: true });
+      await writeFile(join(dir, 'src', 'sneaky.ts'), 'export const x = 1;\n');
+      return 0;
+    },
+  });
+
+  assert.equal(result.ok, false);
+  const error = events.find(e => e.type === 'run:error');
+  assert.equal(
+    error?.type === 'run:error' && error.message,
+    "step 'plan' wrote outside allow_paths: src/sneaky.ts",
+  );
+});
+
+test('a writes step staying inside allow_paths passes', async () => {
+  const dir = await gitRepo();
+  const workflow: Workflow = {
+    name: 'r',
+    steps: [{
+      id: 'plan', kind: 'agent', runner: 'fake', mode: 'headless', writes: true,
+      allow_paths: ['docs/plans/**'], prompt: 'p', output: 'plan.md',
+    }],
+  };
+  const { frontend } = collector();
+  const result = await runWorkflow({
+    workflow, workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: registry(), frontend,
+    spawnHeadless: async spec => {
+      await writeFile(spec.argv[3], '# the plan\n');
+      await mkdir(join(dir, 'docs', 'plans'), { recursive: true });
+      await writeFile(join(dir, 'docs', 'plans', '01-a.md'), 'in bounds\n');
+      return 0;
+    },
+  });
+
+  assert.equal(result.ok, true);
+});
+
 test('a command killed by its timeout is recorded failed even when the child reports 0', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'whiphand-run-'));
   const workflow: Workflow = {
@@ -1148,7 +1201,8 @@ async function resumePlan(
   return {
     runId: 'run-x', runDir, manifest, workflow,
     inputs: {}, sessionIds: {}, artifacts: {}, attempts: {},
-    done, resumedStepIds: new Set(), attachments: [], restartAt: undefined, loopBudgets: {}, warnings: [],
+    done, resumedStepIds: new Set(), attachments: [], restartAt: undefined, loopBudgets: {},
+    closedLoops: {}, stagesCompleted: {}, stageBudgets: {}, stagesInterrupted: {}, stagesStarted: [], warnings: [],
   };
 }
 

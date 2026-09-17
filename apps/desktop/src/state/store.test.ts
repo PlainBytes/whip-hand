@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { ongoingJobs, useAppStore, waitingRunIds, type JobState } from './store.ts';
+import { liveStageProgress, ongoingJobs, useAppStore, waitingRunIds, type JobState } from './store.ts';
+import type { WhiphandEvent } from '../../../../packages/core/src/types.ts';
 import { EMPTY_APP_STATE } from '../../../../packages/agent/src/app-state.ts';
 
 /** A JobState with the fields these selector tests do not care about filled in. */
@@ -893,5 +894,114 @@ describe('loop iteration budget', () => {
     const loop = useAppStore.getState().jobs[jobId].steps['fix'];
     expect(loop.maxIterations).toBe(3);
     expect(loop.iterations).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stages
+// ---------------------------------------------------------------------------
+
+describe('stages executions', () => {
+  beforeEach(() => resetStore());
+
+  const jobId = 'j-stages';
+  const apply = (event: WhiphandEvent, ts = 't0'): void =>
+    useAppStore.getState().applyWhiphandEvent({ jobId, runId: 'r-stages', event, ts });
+
+  /** One pass of the body — a `cycle` loop holding `execute`, then an `accept` gate — as the runner emits it. */
+  function runStage(index: number, stageId: string, title: string): void {
+    const frame = [{ id: 'build', iteration: 1, stage: stageId }];
+    apply({ type: 'stages:item', id: 'build', index, total: 2, stageId, title, attempt: 1, maxAttempts: 3 });
+    apply({
+      type: 'loop:start', loopId: 'cycle', maxIterations: 3,
+      parentLoopId: 'build', parentIteration: 1, parentStage: stageId,
+    });
+    apply({
+      type: 'loop:iteration', loopId: 'cycle', iteration: 1, maxIterations: 3,
+      parentLoopId: 'build', parentIteration: 1, parentStage: stageId,
+    });
+    apply({ type: 'step:start', stepId: 'execute', kind: 'agent', loopId: 'cycle', iteration: 1, outerLoops: frame });
+    apply({ type: 'step:done', stepId: 'execute', exitCode: 0 });
+    apply({
+      type: 'loop:done', loopId: 'cycle', iterations: 1, passed: true,
+      parentLoopId: 'build', parentIteration: 1, parentStage: stageId,
+    });
+    apply({ type: 'step:start', stepId: 'accept', kind: 'approval', loopId: 'build', iteration: 1, stage: stageId });
+    apply({ type: 'step:done', stepId: 'accept', exitCode: 0 });
+    apply({ type: 'stages:accepted', id: 'build', stageId });
+  }
+
+  it('gives each stage its own rows, including a loop inside the stage', () => {
+    apply({ type: 'stages:start', id: 'build', total: 2 });
+    runStage(1, '01-a', 'Schema');
+    runStage(2, '02-b', 'Add API routes');
+
+    const job = useAppStore.getState().jobs[jobId];
+    expect(job.stepOrder).toEqual([
+      'build',
+      'cycle@01-a#1', 'build@01-a#1/execute#1', 'accept@01-a#1',
+      'cycle@02-b#1', 'build@02-b#1/execute#1', 'accept@02-b#1',
+    ]);
+    // Two stages' cycle rows are two rows: stage 2's loop:done must not have
+    // landed on stage 1's already-finished loop.
+    expect(job.steps['cycle@01-a#1']).toMatchObject({ kind: 'loop', stage: '01-a', loopId: 'build', status: 'done' });
+    expect(job.steps['cycle@02-b#1']).toMatchObject({ kind: 'loop', stage: '02-b', loopId: 'build', status: 'done' });
+    expect(job.steps['accept@02-b#1']).toMatchObject({ stage: '02-b', loopId: 'build', iteration: 1 });
+  });
+
+  it('folds the stages events onto the stages step\'s own row', () => {
+    apply({ type: 'stages:start', id: 'build', total: 2 }, 't0');
+    runStage(1, '01-a', 'Schema');
+    apply({
+      type: 'stages:item', id: 'build', index: 2, total: 2, stageId: '02-b', title: 'Add API routes', attempt: 3, maxAttempts: 3,
+    });
+    apply({ type: 'stages:exhausted', id: 'build', stageId: '02-b', attempts: 3 });
+
+    let row = useAppStore.getState().jobs[jobId].steps.build;
+    expect(row).toMatchObject({
+      kind: 'stages', status: 'running', startedAt: 't0', total: 2, attempt: 3, maxAttempts: 3,
+      currentStage: { id: '02-b', title: 'Add API routes', index: 2 },
+      completedStages: ['01-a'], exhausted: true,
+      // The same shape core's journal persists, so live and reloaded rows agree.
+      startedStages: {
+        '01-a': { title: 'Schema', index: 1, maxAttempts: 3 },
+        '02-b': { title: 'Add API routes', index: 2, maxAttempts: 3 },
+      },
+    });
+
+    apply({ type: 'stages:accepted', id: 'build', stageId: '02-b' });
+    apply({ type: 'stages:done', id: 'build', completed: 2 }, 't9');
+    row = useAppStore.getState().jobs[jobId].steps.build;
+    expect(row).toMatchObject({ status: 'done', completed: 2, endedAt: 't9', completedStages: ['01-a', '02-b'] });
+    expect(row.exhausted).toBeUndefined();
+  });
+
+  it('carries the stage on a step reused from an earlier attempt', () => {
+    apply({ type: 'step:skipped', stepId: 'accept', loopId: 'build', iteration: 1, stage: '01-a' });
+    expect(useAppStore.getState().jobs[jobId].steps['accept@01-a#1']).toMatchObject({ stage: '01-a', status: 'done' });
+  });
+
+  it('tracks where a live run is among its stages, and forgets it once the stages step is done', () => {
+    apply({ type: 'stages:start', id: 'build', total: 7 });
+    apply({ type: 'stages:item', id: 'build', index: 3, total: 7, stageId: '03-c', title: 'Add API routes', attempt: 1 });
+    expect(useAppStore.getState().jobs[jobId].stageProgress).toEqual({
+      stagesId: 'build', index: 3, total: 7, title: 'Add API routes', attempt: 1,
+    });
+    expect(liveStageProgress(useAppStore.getState().jobs).get('r-stages')).toEqual({ index: 3, total: 7 });
+
+    apply({ type: 'stages:done', id: 'build', completed: 7 });
+    expect(useAppStore.getState().jobs[jobId].stageProgress).toBeUndefined();
+    expect(liveStageProgress(useAppStore.getState().jobs).has('r-stages')).toBe(false);
+  });
+
+  it('reports no live stage progress for a finished job or another workspace\'s', () => {
+    useAppStore.setState({
+      jobs: {
+        live: { ...baseJob('live'), runId: 'r1', workdir: '/ws', stageProgress: { stagesId: 'b', index: 1, total: 2, title: 't', attempt: 1 } },
+        done: { ...baseJob('done'), runId: 'r2', workdir: '/ws', finished: true, stageProgress: { stagesId: 'b', index: 1, total: 2, title: 't', attempt: 1 } },
+        other: { ...baseJob('other'), runId: 'r3', workdir: '/elsewhere', stageProgress: { stagesId: 'b', index: 1, total: 2, title: 't', attempt: 1 } },
+      },
+    });
+    expect([...liveStageProgress(useAppStore.getState().jobs, '/ws').keys()]).toEqual(['r1']);
   });
 });

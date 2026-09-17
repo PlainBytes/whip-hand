@@ -4,7 +4,7 @@
  * risk of drifting apart.
  */
 import type { Step, Workflow } from './types.ts';
-import { flattenSteps, isCommandStep, isLoopStep } from './steps.ts';
+import { flattenSteps, isContainerStep, isLoopStep } from './steps.ts';
 
 /** Absent means enabled. */
 export function isEnabled(step: Step): boolean {
@@ -26,14 +26,14 @@ export function disabledRoots(steps: Step[]): Set<string> {
 
 /**
  * Every id that will not run: the roots, plus every descendant of a disabled
- * loop. This is the set anything that *decides what runs* asks —
- * `pruneDisabled`, both runtime preconditions, the manifest seed.
+ * container (`loop` or `stages`). This is the set anything that *decides what
+ * runs* asks — `pruneDisabled`, both runtime preconditions, the manifest seed.
  */
 export function disabledIds(steps: Step[]): Set<string> {
   const roots = disabledRoots(steps);
   const out = new Set<string>(roots);
   for (const { step } of flattenSteps(steps)) {
-    if (isLoopStep(step) && roots.has(step.id)) {
+    if (isContainerStep(step) && roots.has(step.id)) {
       for (const desc of flattenSteps(step.steps)) out.add(desc.step.id);
     }
   }
@@ -44,7 +44,7 @@ function pruneList(steps: Step[], disabled: ReadonlySet<string>): Step[] {
   const kept: Step[] = [];
   for (const step of steps) {
     if (!isEnabled(step)) continue;
-    if (isLoopStep(step)) {
+    if (isContainerStep(step)) {
       kept.push({ ...step, steps: pruneList(step.steps, disabled) });
       continue;
     }
@@ -60,10 +60,10 @@ function pruneList(steps: Step[], disabled: ReadonlySet<string>): Step[] {
 }
 
 /**
- * The tree that will actually run: disabled steps and disabled loops' whole
- * bodies removed, and every disabled id stripped from every surviving step's
- * `inputs:`. `LoopStep` carries no `inputs`, so stripping only ever touches
- * leaf steps.
+ * The tree that will actually run: disabled steps and disabled containers'
+ * whole bodies removed, and every disabled id stripped from every surviving
+ * step's `inputs:`. `LoopStep` and `StagesStep` carry no `inputs`, so
+ * stripping only ever touches leaf steps.
  */
 export function pruneDisabled(workflow: Workflow): Workflow {
   const disabled = disabledIds(workflow.steps);
@@ -76,19 +76,20 @@ export interface DroppedRef {
 }
 
 /**
- * Enabled, non-command steps naming a disabled id in `inputs:`. Command steps
- * never appear here: their `inputs:` is a runtime no-op. Evaluated against the
- * full `disabledIds` set (not just the roots), so a step that reads two of a
- * disabled loop's body steps is warned about both.
+ * Enabled steps naming a disabled id in `inputs:` — a command step included,
+ * now that its `inputs:` resolves to real `WHIPHAND_ARTIFACT_*` env vars
+ * rather than being a runtime no-op. Evaluated against the full `disabledIds`
+ * set (not just the roots), so a step that reads two of a disabled loop's
+ * body steps is warned about both.
  */
 export function droppedRefs(workflow: Workflow): DroppedRef[] {
   const disabled = disabledIds(workflow.steps);
   const out: DroppedRef[] = [];
   for (const { step } of flattenSteps(workflow.steps)) {
-    // A reader inside a disabled loop is itself in `disabled` even though it
-    // carries no `enabled: false` of its own — `isEnabled` alone would miss
-    // that and warn about a step that will not run either.
-    if (isLoopStep(step) || disabled.has(step.id) || isCommandStep(step)) continue;
+    // A reader inside a disabled container is itself in `disabled` even
+    // though it carries no `enabled: false` of its own — `isEnabled` alone
+    // would miss that and warn about a step that will not run either.
+    if (isContainerStep(step) || disabled.has(step.id)) continue;
     const missing = (step.inputs ?? []).filter(id => disabled.has(id));
     if (missing.length > 0) out.push({ reader: step.id, missing });
   }

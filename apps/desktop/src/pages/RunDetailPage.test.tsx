@@ -900,6 +900,127 @@ describe('RunDetailPage', () => {
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
   });
 
+  it('a run stopped in triage says which stage it stopped at', async () => {
+    const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'r-triage');
+    // What core records once a stage's retries run out: the stages row names
+    // the stage and the attempt it reached, and is marked exhausted.
+    await respondGetRun(transport, {
+      runId: 'r-triage', runDir: '/ws/.whiphand/runs/r-triage', status: 'failed',
+      workflow: 'staged-feature', inputs: {}, artifacts: [],
+      error: { stepId: 'build', message: "stages step 'build': stage 3 of 7 ('Add API routes') was rejected 3 times" },
+      steps: [
+        {
+          id: 'build', kind: 'stages', status: 'failed', total: 7, completed: 2, attempt: 3, exhausted: true,
+          completedStages: ['01-a', '02-b'], currentStage: { id: '03-c', title: 'Add API routes', index: 3 },
+        },
+        { id: 'implement', kind: 'agent', loopId: 'build', iteration: 3, stage: '03-c', status: 'done' },
+        { id: 'accept', kind: 'approval', loopId: 'build', iteration: 3, stage: '03-c', status: 'done', verdict: 'fail' },
+      ],
+    });
+
+    expect(await screen.findByText(/stopped at stage 3 of 7 · Add API routes after 3 rejections/)).toBeInTheDocument();
+    // The engine's own message still follows it.
+    expect(screen.getByTestId('run-error')).toHaveTextContent('was rejected 3 times');
+  });
+
+  it('a run that failed inside a stage without exhausting it names the stage alone', async () => {
+    const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'r-stage-fail');
+    await respondGetRun(transport, {
+      runId: 'r-stage-fail', runDir: '/ws/.whiphand/runs/r-stage-fail', status: 'failed',
+      workflow: 'staged-feature', inputs: {}, artifacts: [],
+      error: { stepId: 'implement', message: "step 'implement' exited with code 1" },
+      steps: [
+        {
+          id: 'build', kind: 'stages', status: 'interrupted', total: 7, attempt: 1,
+          currentStage: { id: '03-c', title: 'Add API routes', index: 3 },
+        },
+        { id: 'implement', kind: 'agent', loopId: 'build', iteration: 1, stage: '03-c', status: 'failed' },
+      ],
+    });
+
+    expect(await screen.findByTestId('run-error-stage')).toHaveTextContent('Run stopped at stage 3 of 7 · Add API routes');
+    expect(screen.getByTestId('run-error-stage')).not.toHaveTextContent('rejection');
+  });
+
+  it('says nothing about stages for a run whose stages step finished', async () => {
+    const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'r-after');
+    await respondGetRun(transport, {
+      runId: 'r-after', runDir: '/ws/.whiphand/runs/r-after', status: 'failed',
+      workflow: 'staged-feature', inputs: {}, artifacts: [],
+      error: { stepId: 'ship', message: "step 'ship' exited with code 1" },
+      steps: [
+        {
+          id: 'build', kind: 'stages', status: 'done', total: 1, completed: 1, attempt: 1,
+          currentStage: { id: '01-a', title: 'Schema', index: 1 }, completedStages: ['01-a'],
+        },
+        { id: 'implement', kind: 'agent', loopId: 'build', iteration: 1, stage: '01-a', status: 'done' },
+        { id: 'ship', kind: 'command', status: 'failed' },
+      ],
+    });
+
+    expect(await screen.findByTestId('run-error')).toHaveTextContent("step 'ship' exited");
+    expect(screen.queryByTestId('run-error-stage')).not.toBeInTheDocument();
+  });
+
+  it('marks the running body step inside a stage as current, not the stages step around it', async () => {
+    const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'r-stage-live');
+    await respondGetRun(transport, {
+      runId: 'r-stage-live', runDir: '/ws/.whiphand/runs/r-stage-live', status: 'running',
+      workflow: 'staged-feature', inputs: {}, artifacts: [],
+      steps: [
+        {
+          id: 'build', kind: 'stages', status: 'running', total: 2, attempt: 1,
+          currentStage: { id: '02-b', title: 'Add API routes', index: 2 },
+        },
+        { id: 'implement', kind: 'agent', loopId: 'build', iteration: 1, stage: '01-a', status: 'done' },
+        { id: 'implement', kind: 'agent', loopId: 'build', iteration: 1, stage: '02-b', status: 'running' },
+      ],
+    });
+
+    expect(await screen.findByTestId('step-card-implement@02-b#1')).toHaveAttribute('data-current', 'true');
+    expect(screen.getByTestId('step-card-build')).not.toHaveAttribute('data-current');
+    expect(screen.getByTestId('step-card-implement@01-a#1')).not.toHaveAttribute('data-current');
+  });
+
+  it('merges what an earlier attempt recorded about its stages with what a resumed job heard', async () => {
+    // The resumed job only hears its own stages:accepted; the manifest holds
+    // the rest. Neither copy may clobber the other.
+    useAppStore.setState({
+      jobs: {
+        'job-resumed': {
+          jobId: 'job-resumed', runId: 'r-resumed', finished: false, workdir: '/ws',
+          stepOrder: ['build'],
+          steps: {
+            build: {
+              key: 'build', id: 'build', kind: 'stages', status: 'running', total: 7, completedStages: ['02-b'],
+              startedStages: { '02-b': { title: 'API', index: 2, maxAttempts: 3 } },
+            },
+          },
+          currentExecution: { build: 'build' }, events: [], logTail: [], logRows: [], activityTail: [], hasNarrated: false,
+          ptyActive: false, ptyDataBuffer: [], ptyDataBaseIndex: 0, ptyDataTrimmed: false, ptyExited: false,
+        },
+      },
+    });
+    const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'r-resumed');
+    await respondGetRun(transport, {
+      runId: 'r-resumed', runDir: '/ws/.whiphand/runs/r-resumed', status: 'running',
+      workflow: 'staged-feature', inputs: {}, artifacts: [],
+      steps: [
+        {
+          id: 'build', kind: 'stages', status: 'running', total: 7, completedStages: ['01-a'],
+          startedStages: { '01-a': { title: 'Schema', index: 1, maxAttempts: 3 } },
+        },
+        { id: 'implement', kind: 'agent', loopId: 'build', iteration: 1, stage: '01-a', status: 'done' },
+        { id: 'implement', kind: 'agent', loopId: 'build', iteration: 1, stage: '02-b', status: 'done' },
+      ],
+    });
+
+    expect(await screen.findByTestId('stages-progress-build')).toHaveTextContent('2 of 7 accepted');
+    // Stage titles, like accepted stages, come from both sides.
+    expect(screen.getByTestId('stage-label-build@01-a')).toHaveTextContent('stage 1 of 7 · Schema');
+    expect(screen.getByTestId('stage-label-build@02-b')).toHaveTextContent('stage 2 of 7 · API');
+  });
+
   it('shows steps the live job has not reported yet by merging the manifest step list', async () => {
     const { transport } = renderRunDetail('job-merge');
     emitWhiphandEvent(transport, 'job-merge', 'run-merge', { type: 'step:start', stepId: 'plan', kind: 'agent', runner: 'claude', mode: 'headless' }, 't1');

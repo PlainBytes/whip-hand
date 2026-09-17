@@ -18,7 +18,7 @@
  * manifest fold, the desktop store and step pills) can already import it.
  */
 import type { LoopRef, StepProgress, WhiphandEvent } from './types.ts';
-import { formatBytes } from './format.ts';
+import { formatBytes, stageLabel } from './format.ts';
 
 /** One line's budget, after which it is truncated with a marker — one giant blob must not own the file. */
 export const MAX_LOG_LINE_BYTES = 8 * 1024;
@@ -45,15 +45,39 @@ const WHIPHAND_ENV_KEYS = new Set([
 ]);
 
 /**
- * `<id>` prefixed with every loop enclosing it, outermost first — e.g.
- * `human-review 2 › fix-cycle`. Empty for a top-level loop, which is what
+ * `<id>` prefixed with every loop (or stage) enclosing it, outermost first —
+ * e.g. `human-review 2 › fix-cycle`. Empty for a top-level loop, which is what
  * keeps its own rendering byte-identical to what it always was. Exported for
  * the CLI renderer, so run.log and the terminal name a nested loop alike.
+ *
+ * An ancestor that is a `stages` frame rather than a plain loop carries its
+ * stage id too (either via `outerLoops`' own `LoopRef.stage`, or — for the
+ * immediate parent — via `parentStage`), rendered as `<id>/<stage>` before the
+ * iteration number. Without this, a loop directly inside a `stages` body
+ * reports the same `parentLoopId`/`parentIteration` (the stages step's own id
+ * and this stage's attempt count) for every stage, so stage 1 and stage 2
+ * would otherwise collapse onto one identical label.
  */
-export function nestedPrefix(id: string, parentLoopId?: string, parentIteration?: number, outerLoops?: LoopRef[]): string {
-  const ancestors = [...(outerLoops ?? [])];
-  if (parentLoopId !== undefined) ancestors.push({ id: parentLoopId, iteration: parentIteration ?? 1 });
-  return ancestors.length === 0 ? id : `${ancestors.map(l => `${l.id} ${l.iteration}`).join(' › ')} › ${id}`;
+export function nestedPrefix(
+  id: string, parentLoopId?: string, parentIteration?: number, outerLoops?: LoopRef[], parentStage?: string,
+): string {
+  const ancestors: LoopRef[] = [...(outerLoops ?? [])];
+  if (parentLoopId !== undefined) {
+    ancestors.push({
+      id: parentLoopId, iteration: parentIteration ?? 1,
+      ...(parentStage === undefined ? {} : { stage: parentStage }),
+    });
+  }
+  const label = (l: LoopRef): string =>
+    (l.stage === undefined ? `${l.id} ${l.iteration}` : `${l.id}/${l.stage} ${l.iteration}`);
+  return ancestors.length === 0 ? id : `${ancestors.map(label).join(' › ')} › ${id}`;
+}
+
+/** Shared shape of the three loop events — one place to spell `nestedPrefix`'s five-argument call. */
+function loopEventLabel(e: {
+  loopId: string; parentLoopId?: string; parentIteration?: number; parentStage?: string; outerLoops?: LoopRef[];
+}): string {
+  return nestedPrefix(e.loopId, e.parentLoopId, e.parentIteration, e.outerLoops, e.parentStage);
 }
 
 /** The counters a `usage` report carries — and every summary that accumulates them. */
@@ -216,21 +240,37 @@ export function summarizeEvent(event: WhiphandEvent): Omit<LogRow, 'seq' | 'ts'>
     case 'loop:start':
       return {
         kind: event.type,
-        text: `loop '${nestedPrefix(event.loopId, event.parentLoopId, event.parentIteration, event.outerLoops)}' `
+        text: `loop '${loopEventLabel(event)}' `
           + `started, up to ${event.maxIterations} iteration(s)`,
       };
     case 'loop:iteration':
       return {
         kind: event.type,
-        text: `loop '${nestedPrefix(event.loopId, event.parentLoopId, event.parentIteration, event.outerLoops)}' `
+        text: `loop '${loopEventLabel(event)}' `
           + `iteration ${event.iteration}/${event.maxIterations}`,
       };
     case 'loop:done':
       return {
         kind: event.type,
-        text: `loop '${nestedPrefix(event.loopId, event.parentLoopId, event.parentIteration, event.outerLoops)}' `
+        text: `loop '${loopEventLabel(event)}' `
           + `${event.passed ? 'passed' : 'did not pass'} after ${event.iterations} iteration(s)`,
       };
+    case 'stages:start':
+      return { kind: event.type, stepId: event.id, text: `stages started, ${event.total} stage(s)` };
+    case 'stages:item':
+      return {
+        kind: event.type, stepId: event.id,
+        text: `${stageLabel(event.index, event.total, event.title)} (attempt ${event.attempt})`,
+      };
+    case 'stages:accepted':
+      return { kind: event.type, stepId: event.id, text: `stage accepted: ${event.stageId}` };
+    case 'stages:exhausted':
+      return {
+        kind: event.type, stepId: event.id,
+        text: `stage ${event.stageId} rejected ${event.attempts} time(s), handed to triage`,
+      };
+    case 'stages:done':
+      return { kind: event.type, stepId: event.id, text: `stages done, ${event.completed} completed` };
     case 'guard:warning':
       return { kind: event.type, stepId: event.stepId, text: event.message };
     case 'run:done':

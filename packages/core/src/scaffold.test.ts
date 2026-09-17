@@ -217,8 +217,12 @@ test("the staged workflow's commit-plan subject names the run, or its slug when 
   const git = (...args: string[]) => promisify(execFile)('git', args, { cwd: ws });
   await git('init', '-b', 'main');
   await writeFile(join(ws, 'a.txt'), 'a\n');
+  // The step under test runs its own `git commit`, so the identity has to
+  // live in the repo, not in -c flags: CI runners have no global one.
+  await git('config', 'user.email', 't@t');
+  await git('config', 'user.name', 't');
   await git('add', '-A');
-  await git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-m', 'init');
+  await git('commit', '-m', 'init');
   const subject = async () => (await git('log', '-1', '--pretty=%s')).stdout.trim();
   // command.ts exports WHIPHAND_RUN_NAME only for a named run, so the
   // unnamed case must not inherit one from whatever runs this test.
@@ -246,8 +250,12 @@ test("the staged workflow's stage-body commit step exits 0 on an empty index ins
   const git = (...args: string[]) => promisify(execFile)('git', args, { cwd: ws });
   await git('init', '-b', 'main');
   await writeFile(join(ws, 'a.txt'), 'a\n');
+  // The step under test runs its own `git commit`, so the identity has to
+  // live in the repo, not in -c flags: CI runners have no global one.
+  await git('config', 'user.email', 't@t');
+  await git('config', 'user.name', 't');
   await git('add', '-A');
-  await git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-m', 'init');
+  await git('commit', '-m', 'init');
   const head = async () => (await git('rev-parse', 'HEAD')).stdout.trim();
   const before = await head();
 

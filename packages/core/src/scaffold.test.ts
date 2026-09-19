@@ -7,6 +7,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { execRunner } from './exec.ts';
 import { commandSpec } from './engine/command.ts';
+import { discoverStages } from './engine/stages.ts';
+import { renderTemplate } from './template.ts';
 import { resolveShell } from './shell.ts';
 import type { CommandStep, RunCtx } from './types.ts';
 import {
@@ -170,14 +172,14 @@ test('featureDevelopmentTemplate produces a parseable workflow, including the ba
   assert.equal(workflow.name, 'feature-development');
 });
 
-test('stagedFeatureDevelopmentTemplate parses, stages the plan dir, and gates every stage', () => {
+test('stagedFeatureDevelopmentTemplate parses, stages the run folder\'s plans, and gates every stage', () => {
   const wf = parseWorkflow(stagedFeatureDevelopmentTemplate());
   assert.deepEqual(validateWorkflowSemantics(wf), []);
   assert.deepEqual(validateWorkflowWarnings(wf), []);
   const build = wf.steps.find(s => s.id === 'build');
   assert.ok(build && build.kind === 'stages');
   if (!build || build.kind !== 'stages') return;
-  assert.equal(build.items, '{{ inputs.plan_dir }}/*.md');
+  assert.equal(build.items, '{{ run.dir }}/plans/*.md');
   const gate = findStep(wf.steps, 'accept');
   assert.ok(gate && gate.kind === 'approval');
   if (!gate || gate.kind !== 'approval') return;
@@ -230,35 +232,35 @@ test('featureDevelopmentTemplate stage step works when the runs dir is gitignore
   assert.deepEqual(stdout.trim().split('\n'), ['a.txt', 'b.txt']);
 });
 
-test("the staged workflow's commit-plan subject names the run, or its slug when the run is unnamed", withShell, async () => {
-  const step = findStep(parseWorkflow(stagedFeatureDevelopmentTemplate()).steps, 'commit-plan');
-  assert.ok(step && step.kind === 'command');
-  if (!step || step.kind !== 'command') return;
+test('the staged workflow keeps its stage files in the run folder: no plan_dir input, no commit-plan step', () => {
+  const wf = parseWorkflow(stagedFeatureDevelopmentTemplate());
+  assert.ok(!('plan_dir' in (wf.inputs ?? {})));
+  assert.equal(findStep(wf.steps, 'commit-plan'), undefined);
+  const plan = findStep(wf.steps, 'plan');
+  assert.ok(plan && plan.kind === 'agent');
+  if (!plan || plan.kind !== 'agent') return;
+  assert.equal(plan.writes, true);
+  assert.deepEqual(plan.allow_paths, ['{{ run.dir }}/**']);
+  assert.ok(plan.prompt.includes('{{ run.dir }}/plans/'));
+});
 
-  const ws = await mkdtemp(join(tmpdir(), 'whiphand-commit-plan-'));
-  const git = (...args: string[]) => promisify(execFile)('git', args, { cwd: ws });
-  await git('init', '-b', 'main');
-  await writeFile(join(ws, 'a.txt'), 'a\n');
-  // The step under test runs its own `git commit`, so the identity has to
-  // live in the repo, not in -c flags: CI runners have no global one.
-  await git('config', 'user.email', 't@t');
-  await git('config', 'user.name', 't');
-  await git('add', '-A');
-  await git('commit', '-m', 'init');
-  const subject = async () => (await git('log', '-1', '--pretty=%s')).stdout.trim();
-  // command.ts exports WHIPHAND_RUN_NAME only for a named run, so the
-  // unnamed case must not inherit one from whatever runs this test.
-  delete process.env.WHIPHAND_RUN_NAME;
-  const commitPlan = async (file: string, ctx: Partial<RunCtx>) => {
-    await mkdir(join(ws, 'plans'), { recursive: true });
-    await writeFile(join(ws, 'plans', file), '# Stage\n');
-    await runStep(step, ws, {}, { inputs: { plan_dir: 'plans' }, runSlug: 'oauth-login', ...ctx });
-  };
+test("the staged workflow's build glob finds the planner's files under <runDir>/plans, whatever the workdir", async () => {
+  const wf = parseWorkflow(stagedFeatureDevelopmentTemplate());
+  const build = findStep(wf.steps, 'build');
+  assert.ok(build && build.kind === 'stages');
+  if (!build || build.kind !== 'stages') return;
 
-  await commitPlan('01-a.md', {});
-  assert.equal(await subject(), 'plan: oauth-login', 'not a bare "plan: "');
-  await commitPlan('02-b.md', { runName: 'OAuth login' });
-  assert.equal(await subject(), 'plan: OAuth login');
+  const ws = await mkdtemp(join(tmpdir(), 'whiphand-staged-ws-'));
+  const runDir = join(ws, '.whiphand', 'runs', 'r1');
+  await mkdir(join(runDir, 'plans'), { recursive: true });
+  await writeFile(join(runDir, 'plans', '01-schema.md'), '# Schema\n');
+  await writeFile(join(runDir, 'plans', '02-api.md'), '# API\n');
+  await writeFile(join(runDir, 'plan.md'), '# Not a stage\n');
+
+  const pattern = renderTemplate(build.items, { inputs: {}, runId: 'r1', runSlug: 'r1', runDir });
+  const stages = await discoverStages(ws, pattern);
+  assert.deepEqual(stages.map(s => s.id), ['01-schema', '02-api']);
+  assert.deepEqual(stages.map(s => s.title), ['Schema', 'API']);
 });
 
 test("the staged workflow's stage-body commit step exits 0 on an empty index instead of "
@@ -298,7 +300,7 @@ test("the staged workflow's stage-body commit step exits 0 on an empty index ins
 
   // A real failure (a bad -F path here, standing in for e.g. a rejecting
   // hook) still exits non-zero — the whole point of not blanket-forgiving
-  // exit 1 the way commit-plan's expect_exit does.
+  // exit 1 the way `expect_exit: [0, 1]` would.
   await writeFile(join(ws, 'a.txt'), 'changed again\n');
   await git('add', 'a.txt');
   await assert.rejects(() => runStep(

@@ -1,7 +1,7 @@
 import type { Frame, LoopFrame, RunCtx } from './types.ts';
 import { ATTACHMENTS_REF } from './attachments.ts';
 import { nearestLoop, nearestStage } from './execution-key.ts';
-import { toWorkspace } from './path-form.ts';
+import { toFwdAbs, toWorkspace } from './path-form.ts';
 
 export class TemplateError extends Error {
   constructor(message: string) { super(message); this.name = 'TemplateError'; }
@@ -24,6 +24,12 @@ export interface TemplateScope {
   /** Path/ref-safe form of the run name, falling back to runId. Never empty. */
   runSlug: string;
   runName?: string;
+  /**
+   * The run's directory, absolute. Optional so a bare literal in a test need
+   * not invent one; `{{ run.dir }}` against a scope without it is a
+   * `TemplateError` rather than the text `undefined`. `RunCtx` always has it.
+   */
+  runDir?: string;
   loop?: LoopFrame;
   frame?: Frame;
 }
@@ -42,7 +48,7 @@ export function inputEnvName(key: string): string {
 }
 
 const PLACEHOLDER =
-  /\{\{\s*(inputs\.[A-Za-z0-9_-]+|loop\.(?:iteration|max_iterations)|stage\.(?:index|total|id|title)|run\.(?:name|slug|id))\s*\}\}/g;
+  /\{\{\s*(inputs\.[A-Za-z0-9_-]+|loop\.(?:iteration|max_iterations)|stage\.(?:index|total|id|title)|run\.(?:name|slug|id|dir))\s*\}\}/g;
 
 /**
  * One resolved placeholder: the `{{ ref }}` a template names, the environment
@@ -60,6 +66,7 @@ const REF_FIELDS = {
   'run.id': 'WHIPHAND_RUN_ID',
   'run.slug': 'WHIPHAND_RUN_SLUG',
   'run.name': 'WHIPHAND_RUN_NAME',
+  'run.dir': 'WHIPHAND_RUN_DIR',
   'stage.index': 'WHIPHAND_STAGE_INDEX',
   'stage.total': 'WHIPHAND_STAGE_TOTAL',
   'stage.id': 'WHIPHAND_STAGE_ID',
@@ -85,10 +92,18 @@ function bind(ref: string, scope: TemplateScope): Binding {
     return { ref, envName: REF_FIELDS[ref as 'stage.index'], value: String(stageFrame.stage[field]) };
   }
   // Unlike loop.*/stage.*, run.* is always available — every template is
-  // rendered inside a run — so there is no "not here" error case. An
-  // unnamed run reads as its id, which is what every display site falls
-  // back to too.
+  // rendered inside a run — so the only "not here" case is a scope built
+  // without a run dir (a test literal). An unnamed run reads as its id,
+  // which is what every display site falls back to too.
   if (ref.startsWith('run.')) {
+    // Absolute with forward slashes — the value `$WHIPHAND_RUN_DIR` holds, so
+    // one name means one thing. (A glob over it, as `items:` does, inherits
+    // the limit that `[`, `*`, `?` or `{` in the workdir path read as glob
+    // syntax.)
+    if (ref === 'run.dir') {
+      if (scope.runDir === undefined) throw new TemplateError(`'${ref}' needs a run directory, and this scope has none`);
+      return { ref, envName: REF_FIELDS['run.dir'], value: toFwdAbs(scope.runDir) };
+    }
     // An unnamed run's name *is* its id, so `{{ run.name }}` refers to
     // WHIPHAND_RUN_ID and WHIPHAND_RUN_NAME stays unset — "absent rather than
     // empty" is a contract templates lean on (`${WHIPHAND_RUN_NAME:-…}`).
@@ -117,6 +132,7 @@ export function bindings(scope: TemplateScope): Binding[] {
   const out: Binding[] = [];
   const refs = [
     'run.id', 'run.slug', 'run.name',
+    ...(scope.runDir === undefined ? [] : ['run.dir']),
     ...(nearestStage(scope.frame) === undefined ? [] : ['stage.index', 'stage.total', 'stage.id', 'stage.title']),
     ...((nearestLoop(scope.frame) ?? scope.loop) === undefined ? [] : ['loop.iteration', 'loop.max_iterations']),
     ...Object.keys(scope.inputs).filter(k => INPUT_KEY.test(k)).map(k => `inputs.${k}`),

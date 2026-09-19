@@ -220,8 +220,13 @@ that feeds back into the next loop iteration on `retry`.
 **Stages.** `kind: stages` runs its own `steps` once per file in a directory instead of once
 over one input — build stage 1, get it reviewed and accepted, commit it, then move to stage
 2 — so a large feature never needs one sign-off over the whole diff at the end. `items` is a
-templated glob (`{{ inputs.plan_dir }}/*.md`, re-globbed before every stage, so an added file
-is picked up and a deleted pending one is skipped); a stage's id is its file's basename
+templated glob (`{{ run.dir }}/plans/*.md`, re-globbed before every stage, so an added file
+is picked up and a deleted pending one is skipped). `{{ run.dir }}` is the run folder — an
+absolute path with forward slashes, the same value as `$WHIPHAND_RUN_DIR` — so the shipped
+workflow's planner writes its stage files there, not into the repository: they are not
+committed to the branch or the PR, and go when `runs.max_retained` prunes the run. (A glob
+metacharacter — `[`, `*`, `?`, `{` — in the workdir path would break that glob.) A stage's
+id is its file's basename
 without extension, and renaming or renumbering an already-completed stage file makes it run
 again under its new id. `{{ stage.index }}`, `{{ stage.total }}`, `{{ stage.id }}`,
 `{{ stage.title }}` (and `$WHIPHAND_STAGE_ID`/`_TITLE`/`_INDEX`/`_TOTAL`/`_PATH` for a

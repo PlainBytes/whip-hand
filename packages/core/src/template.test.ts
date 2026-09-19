@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderTemplate, buildPrompt, TemplateError } from './template.ts';
+import { renderTemplate, buildPrompt, bindings, referencedRefs, TemplateError } from './template.ts';
 import type { AgentStep, RunCtx } from './types.ts';
 
 import type { TemplateScope } from './template.ts';
@@ -28,6 +28,23 @@ test('run.* resolves the run name, slug and id', () => {
   assert.equal(renderTemplate('{{ run.name }}', s), 'OAuth support');
   assert.equal(renderTemplate('{{run.slug}}', s), 'oauth-support');
   assert.equal(renderTemplate('{{ run.id }}', s), '20260101-000000-aaaa');
+});
+
+test('run.dir renders the absolute run dir with forward slashes', () => {
+  const s = scope({ runDir: 'C:\\proj\\.whiphand\\runs\\r1' });
+  assert.equal(renderTemplate('{{ run.dir }}/plans/*.md', s), 'C:/proj/.whiphand/runs/r1/plans/*.md');
+  assert.equal(renderTemplate('{{ run.dir }}', scope({ runDir: '/w/.whiphand/runs/r1' })), '/w/.whiphand/runs/r1');
+});
+
+test('run.dir without a run dir in scope is a TemplateError, not "undefined"', () => {
+  assert.throws(() => renderTemplate('{{ run.dir }}', scope()), /'run.dir' needs a run directory/);
+});
+
+test('referencedRefs and bindings include run.dir', () => {
+  assert.deepEqual(referencedRefs('{{ run.dir }}/a {{ run.dir }}/b'), ['run.dir']);
+  const dir = bindings(scope({ runDir: '/w/r1' })).find(b => b.ref === 'run.dir');
+  assert.deepEqual(dir, { ref: 'run.dir', envName: 'WHIPHAND_RUN_DIR', value: '/w/r1' });
+  assert.ok(!bindings(scope()).some(b => b.ref === 'run.dir'));
 });
 
 test('an unnamed run reads as its id, and its slug is that id', () => {

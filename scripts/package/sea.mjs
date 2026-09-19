@@ -11,8 +11,7 @@ import * as esbuild from 'esbuild';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
-import { planLaunch, verbatim } from '../../packages/core/src/exec.ts';
+import { planLaunch, runSync, verbatim } from '../../packages/core/src/exec.ts';
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 export const distDir = path.join(repoRoot, 'dist');
@@ -48,7 +47,7 @@ function findSigntool() {
 }
 
 /**
- * Resolves an argv through core's launch plan and prepares the execFileSync
+ * Resolves an argv through core's launch plan and prepares the spawn
  * options that make cmd.exe (if one turns out to be needed) receive it
  * unwrapped, instead of Node's own `shell: true` — which joins file and args
  * with a bare space and no quoting (DEP0190) and would break on any argument
@@ -77,8 +76,7 @@ export function planExec(argv, deps = {}) {
 function runSignCommand(binary) {
   const command = process.env.WHIPHAND_SIGN_COMMAND;
   if (!command) return;
-  const { file, args, options } = planExec([command, binary]);
-  execFileSync(file, args, { stdio: 'inherit', shell: false, ...options });
+  runSync([command, binary], { check: true });
   log('sign', 'WHIPHAND_SIGN_COMMAND applied');
 }
 
@@ -129,7 +127,7 @@ export async function buildSingleExecutable({ name, entry, assets = {}, plugins 
   // stderr captured, not inherited: the blob builder announces itself on every
   // run, which is noise the surrounding log already covers. Kept for failures.
   try {
-    execFileSync(process.execPath, ['--experimental-sea-config', config], { stdio: ['ignore', 'ignore', 'pipe'] });
+    runSync([process.execPath, '--experimental-sea-config', config], { stdio: ['ignore', 'ignore', 'pipe'], check: true });
   } catch (error) {
     process.stderr.write(String(error.stderr ?? ''));
     throw error;
@@ -144,7 +142,7 @@ export async function buildSingleExecutable({ name, entry, assets = {}, plugins 
   fs.chmodSync(binary, 0o755);
 
   if (isWindows) {
-    execFileSync(findSigntool(), ['remove', '/s', binary], { stdio: ['ignore', 'ignore', 'pipe'] });
+    runSync([findSigntool(), 'remove', '/s', binary], { stdio: ['ignore', 'ignore', 'pipe'], check: true });
     log('unsign', "removed node.exe's original signature");
   }
 
@@ -157,8 +155,9 @@ export async function buildSingleExecutable({ name, entry, assets = {}, plugins 
   // properly-quoted cmd.exe wrapper otherwise, so a repoRoot or blob path
   // containing a space survives either way.
   const postject = path.join(repoRoot, 'node_modules/.bin', isWindows ? 'postject.cmd' : 'postject');
-  const { file, args, options } = planExec([postject, binary, 'NODE_SEA_BLOB', blob, '--sentinel-fuse', FUSE]);
-  execFileSync(file, args, { stdio: ['ignore', 'ignore', 'pipe'], cwd: repoRoot, shell: false, ...options });
+  runSync([postject, binary, 'NODE_SEA_BLOB', blob, '--sentinel-fuse', FUSE], {
+    stdio: ['ignore', 'ignore', 'pipe'], cwd: repoRoot, check: true,
+  });
   log('inject', `${path.relative(repoRoot, binary)} (${(fs.statSync(binary).size / 1024 / 1024).toFixed(0)} MB)`);
 
   runSignCommand(binary);

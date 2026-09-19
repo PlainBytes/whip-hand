@@ -1,13 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runWorkflow } from './runner.ts';
 import { buildPrompt } from '../template.ts';
+import { toWorkspace } from '../path-form.ts';
 import { endMarkerPath } from './session-end.ts';
 import { awaitStatePath } from './await-state.ts';
 import type { RunManifest } from './manifest.ts';
@@ -15,7 +16,7 @@ import { planResume } from './resume.ts';
 import type { ResumePlan } from './resume.ts';
 import { AdapterRegistry } from '../registry.ts';
 import { DEFAULT_CONFIG } from '../config.ts';
-import { listRuns } from './manifest.ts';
+import { listRuns, getRun } from './manifest.ts';
 import { parseWorkflow } from '../schema.ts';
 import type {
   AgentStep, Frontend, ManualResponse, WhiphandEvent, Workflow, RunnerAdapter, SpawnSpec, RunCtx,
@@ -110,7 +111,7 @@ test('--name lands on disk, on run:start, and in the step\'s template and env', 
   // `[shell, ...shellFlags(shell), run]`, and Windows contributes three flags
   // to POSIX's one — so index from the end rather than from the shell.
   assert.equal(specs[0].argv.at(-1),
-    `echo "OAuth support / oauth-support / ${result.runId} / $WHIPHAND_RUN_SLUG"`);
+    'echo "${WHIPHAND_RUN_NAME} / ${WHIPHAND_RUN_SLUG} / ${WHIPHAND_RUN_ID} / $WHIPHAND_RUN_SLUG"');
   assert.equal(specs[0].env.WHIPHAND_RUN_NAME, 'OAuth support');
   assert.equal(specs[0].env.WHIPHAND_RUN_SLUG, 'oauth-support');
   assert.equal(specs[0].env.WHIPHAND_RUN_ID, result.runId);
@@ -129,7 +130,9 @@ test('an unnamed run reads as its id everywhere a name would appear', async () =
   assert.equal(existsSync(join(result.runDir, '.name')), false);
   assert.equal(events.find(e => e.type === 'run:start')?.name, undefined);
   assert.equal(specs[0].argv.at(-1),
-    `echo "${result.runId} / ${result.runId} / ${result.runId} / $WHIPHAND_RUN_SLUG"`);
+    // `{{ }}` in `run:` is a reference, not the value; an unnamed run's name is its id.
+    'echo "${WHIPHAND_RUN_ID} / ${WHIPHAND_RUN_SLUG} / ${WHIPHAND_RUN_ID} / $WHIPHAND_RUN_SLUG"');
+  assert.equal(specs[0].env.WHIPHAND_RUN_SLUG, result.runId);
   assert.ok(!('WHIPHAND_RUN_NAME' in specs[0].env));
 });
 
@@ -160,7 +163,9 @@ test('runs.auto_name names an unnamed run before its first step runs', async () 
   // Named before step one, which is what makes the slug usable for a worktree.
   assert.equal(specs[0].argv[1], 'name');
   assert.equal(specs[1].argv.at(-1),
-    `echo "Add OAuth support / add-oauth-support / ${result.runId} / $WHIPHAND_RUN_SLUG"`);
+    'echo "${WHIPHAND_RUN_NAME} / ${WHIPHAND_RUN_SLUG} / ${WHIPHAND_RUN_ID} / $WHIPHAND_RUN_SLUG"');
+  assert.equal(specs[1].env.WHIPHAND_RUN_NAME, 'Add OAuth support');
+  assert.equal(specs[1].env.WHIPHAND_RUN_SLUG, 'add-oauth-support');
   // The captured reply is folded into the marker, not left as an artifact.
   assert.equal(existsSync(join(result.runDir, '.name.suggest')), false);
 });
@@ -233,6 +238,55 @@ test('headless run writes artifacts via injected spawn and succeeds', async () =
   assert.equal(result.ok, true);
   assert.ok((await readFile(result.artifacts['a'], 'utf8')).includes('out for a'));
   assert.ok(events.some(e => e.type === 'step:artifact'));
+});
+
+test('event payloads carry workspace-relative / paths; the spec handed to spawn stays native', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'whiphand-run-'));
+  const { events, frontend } = collector();
+  const specs: SpawnSpec[] = [];
+  const result = await runWorkflow({
+    workflow: twoStep, workdir: dir, inputs: {}, config: DEFAULT_CONFIG,
+    registry: registry(), frontend,
+    spawnHeadless: async spec => { specs.push(spec); await writeFile(spec.argv[3], `# out for ${spec.argv[2]}\n`); return 0; },
+  });
+  assert.equal(result.ok, true);
+  const artifact = events.find(e => e.type === 'step:artifact' && e.stepId === 'a');
+  assert.equal(artifact?.type === 'step:artifact' && artifact.path, toWorkspace(result.artifacts['a'], dir));
+  assert.match(artifact?.type === 'step:artifact' ? artifact.path : '', /^\.whiphand\/runs\/[^/]+\/a\.md$/);
+  const spawn = events.find(e => e.type === 'step:spawn' && e.stepId === 'a');
+  assert.equal(spawn?.type === 'step:spawn' && spawn.spec.cwd, '.');
+  // the OS boundary still gets the real thing
+  assert.equal(specs[0].cwd, resolve(dir));
+  assert.equal(specs[0].argv[3], result.artifacts['a']);
+
+  const recorded = await readFile(join(result.runDir, 'events.ndjson'), 'utf8');
+  const workspaceRoot = resolve(dir).replace(/\\/g, '/');
+  const lines = recorded.split('\n').filter(l => l.length > 0).map(l => JSON.parse(l) as { event?: WhiphandEvent } & WhiphandEvent);
+  const payloads = lines.map(l => l.event ?? l);
+  const artifacts = payloads.filter(p => p.type === 'step:artifact');
+  assert.ok(artifacts.length > 0);
+  for (const p of artifacts) assert.ok(p.type === 'step:artifact' && !p.path.includes(workspaceRoot), JSON.stringify(p));
+  const spawns = payloads.filter(p => p.type === 'step:spawn');
+  assert.ok(spawns.length > 0);
+  for (const p of spawns) assert.ok(p.type === 'step:spawn' && p.spec.cwd === '.', JSON.stringify(p));
+  // the manifest still means resolved paths in memory and run-dir-relative on disk
+  const onDisk = JSON.parse(await readFile(join(result.runDir, 'run.json'), 'utf8')) as RunManifest;
+  assert.equal(onDisk.steps.find(s => s.id === 'a')?.artifact, 'a.md');
+  const detail = await getRun(dir, DEFAULT_CONFIG, result.runId);
+  assert.ok(detail !== null && detail.status !== 'unknown');
+  assert.equal(detail.steps.find(s => s.id === 'a')?.artifact, result.artifacts['a']);
+});
+
+test('a missing artifact is reported by its workspace-relative path', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'whiphand-run-'));
+  const { events, frontend } = collector();
+  const result = await runWorkflow({
+    workflow: twoStep, workdir: dir, inputs: {}, config: DEFAULT_CONFIG,
+    registry: registry(), frontend, spawnHeadless: async () => 0,
+  });
+  assert.equal(result.ok, false);
+  const missing = events.find(e => e.type === 'step:artifact-missing');
+  assert.match(missing?.type === 'step:artifact-missing' ? missing.path : '', /^\.whiphand\/runs\/[^/]+\/a\.md$/);
 });
 
 test('workflowSource flows onto the run:start event and the manifest', async () => {
@@ -588,7 +642,9 @@ test('successful headless run persists a run.json reflecting the outcome', async
   assert.equal(manifest.runId, result.runId);
   const a = manifest.steps.find(s => s.id === 'a')!;
   assert.equal(a.status, 'done');
-  assert.equal(a.artifact, result.artifacts['a']);
+  // On disk the path is run-dir-relative, so the run directory can move.
+  assert.equal(a.artifact, 'a.md');
+  assert.equal(join(result.runDir, a.artifact!), result.artifacts['a']);
 });
 
 test('maxRetainedRuns prunes older runs once the run completes', async () => {
@@ -691,7 +747,10 @@ test('headless steps get their artifact path appended to the prompt', async () =
     spawnHeadless: async spec => { seenPrompt = spec.argv[4]; await writeFile(spec.argv[3], 'x'); return 0; },
   });
   assert.ok(seenPrompt.startsWith('do it'));
-  assert.ok(seenPrompt.includes(`Write your 'out.md' artifact to: ${result.artifacts['a']}`));
+  // Workspace-relative with forward slashes, like every path a model is shown.
+  assert.ok(seenPrompt.includes(`Write your 'out.md' artifact to: ${toWorkspace(result.artifacts['a'], dir)}`));
+  assert.ok(seenPrompt.includes(`artifact to: .whiphand/runs/${result.runId}/out.md`), seenPrompt);
+  assert.ok(!seenPrompt.includes(dir), 'no absolute path reaches the prompt');
 });
 
 test('an unexpected throw still persists a terminal run.json instead of leaving it running', async () => {
@@ -1494,3 +1553,155 @@ test('retry with comments writes the review artifact and drives the loop round a
   assert.equal(events.filter(e => e.type === 'step:start' && e.stepId === 'execute').length, 2);
   assert.equal(events.filter(e => e.type === 'step:verdict').map(e => e.verdict).join(','), 'fail,pass');
 });
+
+// ---------------------------------------------------------------------------
+// Invariant 7, tier 1: the git write-guard fails a step rather than warn
+// ---------------------------------------------------------------------------
+
+const git = (cwd: string, ...args: string[]) => promisify(execFile)('git', args, { cwd });
+
+async function repoWorkdir(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'whiphand-guard-'));
+  await git(dir, 'init', '-b', 'main');
+  await writeFile(join(dir, 'a.txt'), 'a\n');
+  await git(dir, 'add', '-A');
+  await git(dir, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-m', 'init');
+  return dir;
+}
+
+const readOnly: Workflow = {
+  name: 'r',
+  steps: [{ id: 'look', kind: 'agent', runner: 'fake', mode: 'headless', writes: false, prompt: 'look', output: 'look.md' }],
+};
+
+const writer: Workflow = {
+  name: 'r',
+  steps: [{ id: 'edit', kind: 'agent', runner: 'fake', mode: 'headless', writes: true, prompt: 'edit', output: 'edit.md' }],
+};
+
+const writerScoped: Workflow = {
+  name: 'r',
+  steps: [{ id: 'edit', kind: 'agent', runner: 'fake', mode: 'headless', writes: true, allow_paths: ['docs/**'], prompt: 'edit', output: 'edit.md' }],
+};
+
+const spawnWriting = async (spec: SpawnSpec): Promise<number> => { await writeFile(spec.argv[3], '# out\n'); return 0; };
+
+test('a non-git workspace keeps working, with the guard recorded as a degradation (not a warning)', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'whiphand-nogit-'));
+  const { events, frontend } = collector();
+  const result = await runWorkflow({
+    workflow: readOnly, workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: registry(), frontend,
+    spawnHeadless: spawnWriting,
+  });
+  assert.equal(result.ok, true);
+  const degraded = events.filter(e => e.type === 'run:degraded');
+  assert.equal(degraded.length, 1);
+  assert.deepEqual(degraded[0], {
+    type: 'run:degraded', capability: 'git-guard', stepId: 'look', reason: 'not a git repository: read-only tree assertion disabled',
+  });
+  assert.equal(events.some(e => e.type === 'guard:warning'), false, 'the not-a-repo producer moved off guard:warning');
+  const manifest: RunManifest = JSON.parse(await readFile(join(result.runDir, 'run.json'), 'utf8'));
+  assert.deepEqual(manifest.degradations?.map(d => d.capability), ['git-guard']);
+});
+
+test('a read-only step FAILS when git is unavailable — it has lost its protection, not a convenience', async () => {
+  const dir = await repoWorkdir();
+  await writeFile(join(dir, '.git', 'index'), 'corrupt'); // git status now exits 128, but not "not a repository"
+  const { events, frontend } = collector();
+  let spawned = false;
+  const result = await runWorkflow({
+    workflow: readOnly, workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: registry(), frontend,
+    spawnHeadless: async spec => { spawned = true; return spawnWriting(spec); },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(spawned, false, 'the agent never got write access to the repo');
+  const error = events.find(e => e.type === 'run:error');
+  assert.ok(error && error.type === 'run:error');
+  assert.match(error.message, /step 'look' cannot run without its git write-guard, and git is unavailable: git failed \(exit 128\)/);
+});
+
+test('a step with allow_paths is guarded too, so it fails the same way', async () => {
+  const dir = await repoWorkdir();
+  await writeFile(join(dir, '.git', 'index'), 'corrupt');
+  const { frontend } = collector();
+  const result = await runWorkflow({
+    workflow: writerScoped, workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: registry(), frontend,
+    spawnHeadless: spawnWriting,
+  });
+  assert.equal(result.ok, false);
+});
+
+test('an unguarded writer carries on when git is unavailable, and says so', async () => {
+  const dir = await repoWorkdir();
+  await writeFile(join(dir, '.git', 'index'), 'corrupt');
+  const { events, frontend } = collector();
+  const result = await runWorkflow({
+    workflow: writer, workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: registry(), frontend,
+    spawnHeadless: spawnWriting,
+  });
+  assert.equal(result.ok, true);
+  const degraded = events.find(e => e.type === 'run:degraded' && e.stepId === 'edit');
+  assert.ok(degraded && degraded.type === 'run:degraded');
+  assert.equal(degraded.capability, 'git-guard');
+});
+
+test('a failed POST-step snapshot always fails the step: the tree is never reported clean because it could not be seen', async () => {
+  const dir = await repoWorkdir();
+  const { frontend } = collector();
+  const result = await runWorkflow({
+    workflow: writer, workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: registry(), frontend,
+    // The step corrupts the index on its way out, so only the post-step snapshot fails.
+    spawnHeadless: async spec => { await spawnWriting(spec); await writeFile(join(dir, '.git', 'index'), 'corrupt'); return 0; },
+  });
+  assert.equal(result.ok, false);
+  const manifest: RunManifest = JSON.parse(await readFile(join(result.runDir, 'run.json'), 'utf8'));
+  assert.match(manifest.error?.message ?? '', /could not verify the working tree after step 'edit'/);
+});
+
+test('a read-only step that modifies the tree still fails, on the happy path', async () => {
+  const dir = await repoWorkdir();
+  const { frontend } = collector();
+  const result = await runWorkflow({
+    workflow: readOnly, workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: registry(), frontend,
+    spawnHeadless: async spec => { await spawnWriting(spec); await writeFile(join(dir, 'sneaky.txt'), 'x'); return 0; },
+  });
+  assert.equal(result.ok, false);
+});
+
+test('a prune that cannot remove a directory is recorded as a retention degradation and never fails the run',
+  { skip: (process.platform === 'win32' || process.getuid?.() === 0) && 'needs a directory the current user cannot empty' },
+  async () => {
+    const { chmod } = await import('node:fs/promises');
+    const dir = await mkdtemp(join(tmpdir(), 'whiphand-retention-'));
+    const first = await runWorkflow({
+      workflow: twoStep, workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: registry(),
+      frontend: collector().frontend, spawnHeadless: spawnWriting,
+    });
+    // Two runs in one second get random-suffix ids, so which is "oldest" would be a coin flip:
+    // date the first one properly, as a run from another year.
+    const oldId = '20200101-000000-0000';
+    const oldDir = join(dirname(first.runDir), oldId);
+    await rename(first.runDir, oldDir);
+    const recorded: RunManifest = JSON.parse(await readFile(join(oldDir, 'run.json'), 'utf8'));
+    await writeFile(join(oldDir, 'run.json'), JSON.stringify({ ...recorded, runId: oldId }));
+    // An old run holding a file in a read-only directory: `rm -r` cannot empty it, however long it retries.
+    const stuck = join(oldDir, 'stuck');
+    await mkdir(stuck);
+    await writeFile(join(stuck, 'held'), 'x');
+    await chmod(stuck, 0o500);
+    try {
+      const { events, frontend } = collector();
+      const second = await runWorkflow({
+        workflow: twoStep, workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: registry(), frontend,
+        spawnHeadless: spawnWriting, maxRetainedRuns: 1,
+      });
+      assert.equal(second.ok, true, 'the run itself succeeded');
+      const degraded = events.find(e => e.type === 'run:degraded' && e.capability === 'retention');
+      assert.ok(degraded && degraded.type === 'run:degraded', 'the failure is recorded, not swallowed');
+      assert.match(degraded.reason, new RegExp(`could not prune ${oldId}`));
+      const manifest: RunManifest = JSON.parse(await readFile(join(second.runDir, 'run.json'), 'utf8'));
+      assert.ok(manifest.degradations?.some(d => d.capability === 'retention'));
+    } finally {
+      await chmod(stuck, 0o700);
+    }
+  });

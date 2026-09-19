@@ -84,8 +84,8 @@ test('pruneRuns: null or 0 is a no-op', async () => {
   await makeRun(workdir, '20260101-000000-aaaa', { done: true });
   await makeRun(workdir, '20260101-000001-bbbb', { done: true });
 
-  assert.deepEqual(await pruneRuns(workdir, DEFAULT_CONFIG, null), { deleted: [] });
-  assert.deepEqual(await pruneRuns(workdir, DEFAULT_CONFIG, 0), { deleted: [] });
+  assert.deepEqual(await pruneRuns(workdir, DEFAULT_CONFIG, null), { deleted: [], failed: [] });
+  assert.deepEqual(await pruneRuns(workdir, DEFAULT_CONFIG, 0), { deleted: [], failed: [] });
 });
 
 test('pruneRuns: deletes oldest-first by runId once the count exceeds max', async () => {
@@ -113,7 +113,7 @@ test('pruneRuns: a locked run is excluded from the count entirely', async () => 
   await makeRun(workdir, '20260101-000002-b', { done: true });
 
   const result = await pruneRuns(workdir, DEFAULT_CONFIG, 2);
-  assert.deepEqual(result, { deleted: [] });
+  assert.deepEqual(result, { deleted: [], failed: [] });
   assert.equal(await exists(lockedDir), true);
 });
 

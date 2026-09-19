@@ -12,6 +12,7 @@
 import type { AgentStep, ModelInfo, ModelList, RunCtx, SpawnSpec } from '../types.ts';
 import { execRunner } from '../exec.ts';
 import { PROBE_TIMEOUT_MS } from '../tools.ts';
+import { toWorkspace } from '../path-form.ts';
 
 /**
  * `[flag, value]` when the value is set, nothing otherwise. Truthiness rather
@@ -85,13 +86,31 @@ export async function listModelsVia(
 }
 
 /**
+ * The one argv sentence that points a runner at a prompt file (spec §3): short,
+ * fixed, workspace-relative with forward slashes, and free of metacharacters.
+ * Every runner can read files — every workflow already relies on "Input
+ * artifacts (read these files first)" — so this is the universal fallback
+ * where a runner is not verified to read a piped prompt. Agent spawns run with
+ * `cwd` = the workspace root, which is what makes the relative path resolve.
+ */
+export function promptPointer(file: string, ctx: RunCtx): string {
+  return `Read and follow the instructions in ${toWorkspace(file, ctx.workdir)}`;
+}
+
+/** A file core writes before the spawn: LF, UTF-8, no BOM — so the bytes are the same on every platform. */
+export function lf(content: string): string {
+  return content.replace(/\r\n?/g, '\n');
+}
+
+/**
  * The prompt every resume-based harvest sends: "write the artifact we agreed
  * on, then say done." Shared by claude, copilot and opencode — the three
  * adapters that harvest by resuming the interactive session itself, rather
  * than reading a transcript file — so the wording can't drift between them.
+ * The artifact path is workspace-relative (one path style in every prompt).
  */
 export function harvestPrompt(step: AgentStep, ctx: RunCtx): string {
-  const path = `${ctx.runDir}/${step.output}`;
+  const path = toWorkspace(`${ctx.runDir}/${step.output}`, ctx.workdir);
   return `Write the final '${step.output}' artifact we agreed on in this conversation to ${path}. ` +
     `Write only the artifact content to that file, then reply with just: done`;
 }

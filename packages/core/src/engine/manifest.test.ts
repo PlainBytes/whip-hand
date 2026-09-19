@@ -2,10 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chmod, mkdtemp, readFile, readdir, writeFile, mkdir } from 'node:fs/promises';
 import { mkdtempSync } from 'node:fs';
+import { cp } from 'node:fs/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import {
-  RunJournal, listRuns, getRun, renameRun, WORKFLOW_SNAPSHOT_NAME, renameReplacing, runManifestSchema,
+  RunJournal, listRuns, getRun, renameRun, WORKFLOW_SNAPSHOT_NAME, runManifestSchema,
+  HEARTBEAT_INTERVAL_MS, HEARTBEAT_STALE_MS,
 } from './manifest.ts';
 import type { RunManifest, RunJournalInit } from './manifest.ts';
 import { DEFAULT_CONFIG } from '../config.ts';
@@ -34,43 +37,6 @@ function baseInit(runDir: string, runId: string) {
     ],
   };
 }
-
-test('renameReplacing retries a transient rename and then succeeds', async () => {
-  // Windows only, in practice: MoveFileEx over a target someone else holds —
-  // or is itself replacing — fails, where POSIX rename(2) just wins. Two
-  // journals flushing over one run dir is the case that hits it, and losing a
-  // manifest write is exactly what tmp+rename exists to prevent.
-  let calls = 0;
-  await renameReplacing('from', 'to', async () => {
-    calls += 1;
-    if (calls < 3) throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
-  });
-  assert.equal(calls, 3);
-});
-
-test('renameReplacing rethrows anything that is not transient, without retrying', async () => {
-  let calls = 0;
-  await assert.rejects(
-    () => renameReplacing('from', 'to', async () => {
-      calls += 1;
-      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-    }),
-    /ENOENT/,
-  );
-  assert.equal(calls, 1, 'a missing source is not going to appear');
-});
-
-test('renameReplacing gives up rather than retrying forever', async () => {
-  let calls = 0;
-  await assert.rejects(
-    () => renameReplacing('from', 'to', async () => {
-      calls += 1;
-      throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
-    }),
-    /EBUSY/,
-  );
-  assert.ok(calls > 1 && calls <= 20, `bounded retries, got ${calls}`);
-});
 
 test('a fresh journal records workflowSource on the manifest when given one', async () => {
   const runDir = await tmpRunDir();
@@ -309,8 +275,9 @@ test('listRuns: unparseable run.json reported as unknown', async () => {
 
 /**
  * Writes an abandoned run: `status: 'running'` on disk with a step still
- * in flight, exactly as a SIGKILLed process leaves it. `pid`/`heartbeatAt`
- * are overridden after construction to control which staleness arm fires.
+ * in flight, exactly as a SIGKILLed process leaves it: an expired lease by
+ * default. `heartbeatAt` (and `updatedAt`) are overridden after construction
+ * to control what the lease reads as.
  */
 async function writeAbandonedRun(
   workdir: string, runId: string, overrides: Partial<RunManifest> = {},
@@ -324,15 +291,15 @@ async function writeAbandonedRun(
   journal.record({ type: 'step:start', stepId: 'b', kind: 'agent', runner: 'fake', mode: 'headless' });
   await journal.flush();
   journal.close();
-  Object.assign(journal.manifest, { pid: DEAD_PID, ...overrides });
+  Object.assign(journal.manifest, { heartbeatAt: staleStamp(), ...overrides });
   await writeFile(join(runDir, 'run.json'), JSON.stringify(journal.manifest, null, 2));
   return runDir;
 }
 
-/** A pid high enough to be unused; process.kill(pid, 0) throws ESRCH for it. */
-const DEAD_PID = 999999999;
+/** Older than the lease window, so the owner reads as gone. */
+const staleStamp = (): string => new Date(Date.now() - HEARTBEAT_STALE_MS - 60_000).toISOString();
 
-test('listRuns: abandoned run with a dead pid is repaired to interrupted on disk', async () => {
+test('listRuns: a run whose lease expired is repaired to interrupted on disk, with the reason', async () => {
   const workdir = await tmpRunDir();
   const runDir = await writeAbandonedRun(workdir, '20260101-000003-dddd');
 
@@ -351,6 +318,7 @@ test('listRuns: abandoned run with a dead pid is repaired to interrupted on disk
   assert.equal(b.endedAt, onDisk.endedAt);
   assert.equal(onDisk.error?.stepId, 'b');
   assert.match(onDisk.error!.message, /interrupted/i);
+  assert.equal(onDisk.interruptedReason, 'lease-expired');
 });
 
 test('listRuns: repair is idempotent across repeated reads', async () => {
@@ -368,10 +336,10 @@ test('listRuns: repair is idempotent across repeated reads', async () => {
   assert.equal(afterFirst, afterSecond);
 });
 
-test('listRuns: a live pid with a stale heartbeat is still detected as interrupted', async () => {
+test('listRuns: the pid is never consulted — a live pid with an expired lease is interrupted', async () => {
   const workdir = await tmpRunDir();
-  // pid is our own (very much alive) — only the heartbeat arm can catch this.
-  // This is the pid-reuse case and the threw-without-a-terminal-event case.
+  // pid is our own (very much alive). A PID probe would call this run alive, as
+  // it would a dead run whose PID Windows has since recycled; the lease does not.
   await writeAbandonedRun(workdir, '20260101-000005-ffff', {
     pid: process.pid,
     heartbeatAt: new Date(Date.now() - 10 * 60_000).toISOString(),
@@ -381,10 +349,11 @@ test('listRuns: a live pid with a stale heartbeat is still detected as interrupt
   assert.equal(runs[0].status, 'interrupted');
 });
 
-test('listRuns: a live pid with a fresh heartbeat is left running', async () => {
+test('listRuns: a fresh lease is left running, whatever the pid says', async () => {
   const workdir = await tmpRunDir();
+  // A pid nothing could be running under: a PID probe would call this dead.
   const runDir = await writeAbandonedRun(workdir, '20260101-000006-aaab', {
-    pid: process.pid,
+    pid: 999_999_999,
     heartbeatAt: new Date().toISOString(),
   });
 
@@ -394,19 +363,26 @@ test('listRuns: a live pid with a fresh heartbeat is left running', async () => 
   assert.equal(onDisk.status, 'running', 'a live run must never be repaired out from under itself');
 });
 
-test('listRuns: a manifest with no heartbeatAt falls back to the pid check alone', async () => {
+test('listRuns: a legacy manifest with no heartbeatAt is judged by updatedAt against the same window', async () => {
   const workdir = await tmpRunDir();
-  // Pre-heartbeat manifests have no heartbeatAt and an arbitrarily old
-  // updatedAt; a live pid must keep them running rather than tripping the
-  // time-based arm.
   await writeAbandonedRun(workdir, '20260101-000007-aaac', {
-    pid: process.pid,
+    heartbeatAt: undefined,
+    updatedAt: new Date(Date.now() - 60_000).toISOString(),
+  });
+  await writeAbandonedRun(workdir, '20260101-000007-aaad', {
     heartbeatAt: undefined,
     updatedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
   });
 
   const runs = await listRuns(workdir, DEFAULT_CONFIG);
-  assert.equal(runs[0].status, 'running');
+  const byId = Object.fromEntries(runs.map(r => [r.runId, r.status]));
+  assert.equal(byId['20260101-000007-aaac'], 'running');
+  assert.equal(byId['20260101-000007-aaad'], 'interrupted');
+});
+
+test('the lease is renewed every 30 seconds and stale at five minutes', () => {
+  assert.equal(HEARTBEAT_INTERVAL_MS, 30_000);
+  assert.equal(HEARTBEAT_STALE_MS, 5 * 60_000);
 });
 
 test('listRuns: an unwritable run dir still reports interrupted', async () => {
@@ -723,6 +699,38 @@ test('listRuns: missing artifacts dir returns empty array', async () => {
   const workdir = await tmpRunDir();
   const runs = await listRuns(workdir, DEFAULT_CONFIG);
   assert.deepEqual(runs, []);
+});
+
+test('journal folds a workspace-relative step:artifact path into the resolved in-memory artifact', async () => {
+  const workdir = await tmpRunDir();
+  const runId = '20260101-000000-eeef';
+  const runDir = join(workdir, DEFAULT_CONFIG.artifacts_dir, runId);
+  await mkdir(runDir, { recursive: true });
+  const journal = new RunJournal({ ...baseInit(runDir, runId), workdir });
+  journal.record({ type: 'run:start', runId, workflow: 'r' });
+  journal.record({ type: 'step:artifact', stepId: 'a', path: `${DEFAULT_CONFIG.artifacts_dir}/${runId}/a.md` });
+  journal.record({ type: 'step:artifact', stepId: 'b', path: join(runDir, 'b.md') });
+  assert.equal(journal.manifest.steps.find(s => s.id === 'a')?.artifact, join(runDir, 'a.md'));
+  // an absolute event path (an old events.ndjson, another producer) is taken as it is
+  assert.equal(journal.manifest.steps.find(s => s.id === 'b')?.artifact, join(runDir, 'b.md'));
+  await journal.flush();
+  const onDisk = JSON.parse(await readFile(join(runDir, 'run.json'), 'utf8')) as RunManifest;
+  assert.deepEqual(onDisk.steps.map(s => s.artifact), ['a.md', 'b.md']);
+});
+
+test('a reopened journal resolves event paths against the workspace the resume was opened in', async () => {
+  const workdir = await tmpRunDir();
+  const moved = await tmpRunDir();
+  const runId = '20260101-000000-eeee';
+  const runDir = join(moved, DEFAULT_CONFIG.artifacts_dir, runId);
+  await mkdir(runDir, { recursive: true });
+  const first = new RunJournal({ ...baseInit(runDir, runId), workdir });
+  first.record({ type: 'run:start', runId, workflow: 'r' });
+  await first.flush();
+  const reopened = RunJournal.reopen(runDir, first.manifest, { workdir: moved });
+  reopened.record({ type: 'step:artifact', stepId: 'a', path: `${DEFAULT_CONFIG.artifacts_dir}/${runId}/a.md` });
+  assert.equal(reopened.manifest.steps.find(s => s.id === 'a')?.artifact, join(runDir, 'a.md'));
+  await reopened.flush();
 });
 
 test('getRun: returns manifest plus artifacts excluding run.json/events.ndjson', async () => {
@@ -1203,8 +1211,8 @@ test('a reopened run abandoned before its first step blames no step', async () =
   const second = RunJournal.reopen(runDir, first.manifest);
   await second.flush();
   second.close();
-  // A dead owner: no terminal event, a pid that cannot be running.
-  Object.assign(second.manifest, { pid: DEAD_PID });
+  // A dead owner: no terminal event, and a lease that ran out.
+  Object.assign(second.manifest, { heartbeatAt: staleStamp() });
   await writeFile(join(runDir, 'run.json'), JSON.stringify(second.manifest, null, 2));
 
   const detail = await getRun(workdir, DEFAULT_CONFIG, runId);
@@ -1722,4 +1730,134 @@ test('version 5 is written, and v1..v4 manifests still parse', async () => {
     assert.ok(run, `v${version} manifest must still parse`);
     assert.equal(run!.status, 'succeeded', `v${version} manifest parsed with the wrong status`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Lease fencing, degradations, and run-dir-relative paths
+// ---------------------------------------------------------------------------
+
+async function untilTrue(check: () => boolean, ms = 3000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error('timed out waiting for condition');
+    await sleep(10);
+  }
+}
+
+test('fencing: an owner whose lease was repaired by another process stops, and never writes running back', async () => {
+  const workdir = await tmpRunDir();
+  const runId = '20260101-000020-fnce';
+  const runDir = join(workdir, DEFAULT_CONFIG.artifacts_dir, runId);
+  await mkdir(runDir, { recursive: true });
+  const reasons: string[] = [];
+  const journal = new RunJournal({
+    ...baseInit(runDir, runId), heartbeatIntervalMs: 30, onLeaseLost: reason => reasons.push(reason),
+  });
+  journal.record({ type: 'run:start', runId, workflow: 'r' });
+  journal.record({ type: 'step:start', stepId: 'a', kind: 'agent', runner: 'fake', mode: 'headless' });
+  await journal.flush();
+
+  // The host "slept" past the window: the lease on disk is stale, and a second
+  // process (any reader of the store) repairs the run to a terminal state.
+  const onDisk = JSON.parse(await readFile(join(runDir, 'run.json'), 'utf8')) as RunManifest;
+  onDisk.heartbeatAt = staleStamp();
+  await writeFile(join(runDir, 'run.json'), JSON.stringify(onDisk));
+  const [repaired] = await listRuns(workdir, DEFAULT_CONFIG);
+  assert.equal(repaired.status, 'interrupted');
+
+  // The owner wakes and its heartbeat fires.
+  await untilTrue(() => reasons.length > 0);
+  assert.match(reasons[0], /lease lost \(host suspended\?\)/);
+  assert.equal(journal.lostLease, true);
+
+  // It goes on receiving events while it winds down; none of them may resurrect the run.
+  journal.record({ type: 'step:done', stepId: 'a', exitCode: 0 });
+  journal.record({ type: 'run:error', message: 'lease lost (host suspended?)' });
+  await journal.flush();
+  await sleep(100);
+  const final = JSON.parse(await readFile(join(runDir, 'run.json'), 'utf8')) as RunManifest;
+  assert.equal(final.status, 'interrupted', 'the other process\'s verdict stands');
+  assert.equal(reasons.length, 1, 'reported once');
+});
+
+test('fencing does not fire for a healthy owner: the lease is renewed', async () => {
+  const runDir = await tmpRunDir();
+  let lost = false;
+  const journal = new RunJournal({ ...baseInit(runDir, 'r-healthy'), heartbeatIntervalMs: 20, onLeaseLost: () => { lost = true; } });
+  await journal.flush();
+  const first = journal.manifest.heartbeatAt;
+  await sleep(120);
+  await journal.flush();
+  journal.close();
+  assert.equal(lost, false);
+  assert.notEqual(journal.manifest.heartbeatAt, first, 'heartbeatAt advanced');
+  const onDisk = JSON.parse(await readFile(join(runDir, 'run.json'), 'utf8')) as RunManifest;
+  assert.equal(onDisk.status, 'running');
+});
+
+test('a legacy manifest that still carries a pid parses, and the pid is not consulted', async () => {
+  const workdir = await tmpRunDir();
+  const runDir = await writeAbandonedRun(workdir, '20260101-000021-lgcy', { pid: 1, heartbeatAt: new Date().toISOString() });
+  const parsed = runManifestSchema.safeParse(JSON.parse(await readFile(join(runDir, 'run.json'), 'utf8')));
+  assert.equal(parsed.success, true);
+  const [run] = await listRuns(workdir, DEFAULT_CONFIG);
+  assert.equal(run.status, 'running');
+});
+
+test('run:degraded folds into degradations[], de-duplicated on (capability, stepId)', async () => {
+  const runDir = await tmpRunDir();
+  const journal = new RunJournal(baseInit(runDir, 'r-deg'));
+  journal.record({ type: 'run:degraded', capability: 'git-guard', reason: 'not a git repository' });
+  journal.record({ type: 'run:degraded', capability: 'git-guard', reason: 'not a git repository (again)' });
+  journal.record({ type: 'run:degraded', capability: 'diff', reason: 'git unavailable', stepId: 'a' });
+  journal.record({ type: 'run:degraded', capability: 'diff', reason: 'git unavailable', stepId: 'b' });
+  await journal.flush();
+  journal.close();
+  const onDisk = JSON.parse(await readFile(join(runDir, 'run.json'), 'utf8')) as RunManifest;
+  assert.deepEqual(onDisk.degradations?.map(d => [d.capability, d.stepId]),
+    [['git-guard', undefined], ['diff', 'a'], ['diff', 'b']]);
+  assert.equal(onDisk.degradations?.[0].reason, 'not a git repository', 'first report wins');
+});
+
+test('run.json stores path fields run-dir-relative, and a moved run directory resolves under its new home', async () => {
+  const workdir = await tmpRunDir();
+  const runId = '20260101-000022-move';
+  const runDir = join(workdir, DEFAULT_CONFIG.artifacts_dir, runId);
+  await mkdir(join(runDir, 'sub'), { recursive: true });
+  const journal = new RunJournal(baseInit(runDir, runId));
+  journal.record({ type: 'step:start', stepId: 'a', kind: 'agent', runner: 'fake', mode: 'headless' });
+  journal.record({ type: 'step:artifact', stepId: 'a', path: join(runDir, 'sub', 'plan.md') });
+  journal.record({ type: 'step:done', stepId: 'a', exitCode: 0 });
+  journal.record({ type: 'run:done', runId, ok: true });
+  await journal.flush();
+  journal.close();
+
+  const raw = JSON.parse(await readFile(join(runDir, 'run.json'), 'utf8')) as RunManifest;
+  assert.equal(raw.steps.find(x => x.id === 'a')?.artifact, 'sub/plan.md');
+  assert.equal(raw.pid, process.pid, 'pid stays informational, for cross-process cancel');
+
+  // Move the whole run to another workspace and read it there.
+  const elsewhere = await tmpRunDir();
+  const movedDir = join(elsewhere, DEFAULT_CONFIG.artifacts_dir, runId);
+  await mkdir(dirname(movedDir), { recursive: true });
+  await cp(runDir, movedDir, { recursive: true });
+  const moved = await getRun(elsewhere, DEFAULT_CONFIG, runId);
+  assert.equal((moved as RunManifest | undefined)?.steps.find(x => x.id === 'a')?.artifact, join(movedDir, 'sub', 'plan.md'));
+});
+
+test('an absolute artifact path written by an older version is read as-is', async () => {
+  const workdir = await tmpRunDir();
+  const runId = '20260101-000023-abso';
+  const runDir = join(workdir, DEFAULT_CONFIG.artifacts_dir, runId);
+  await mkdir(runDir, { recursive: true });
+  const journal = new RunJournal(baseInit(runDir, runId));
+  journal.record({ type: 'step:start', stepId: 'a', kind: 'agent', runner: 'fake', mode: 'headless' });
+  journal.record({ type: 'run:done', runId, ok: true });
+  await journal.flush();
+  journal.close();
+  const raw = JSON.parse(await readFile(join(runDir, 'run.json'), 'utf8')) as RunManifest;
+  raw.steps.find(x => x.id === 'a')!.artifact = '/old/absolute/plan.md';
+  await writeFile(join(runDir, 'run.json'), JSON.stringify(raw));
+  const detail = await getRun(workdir, DEFAULT_CONFIG, runId);
+  assert.equal((detail as RunManifest | undefined)?.steps.find(x => x.id === 'a')?.artifact, '/old/absolute/plan.md');
 });

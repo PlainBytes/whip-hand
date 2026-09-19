@@ -25,9 +25,12 @@ export function buildProgram(): Command {
   const program = new Command();
   program.name('whiphand').description('workflow runner for LLM CLIs').version(CORE_VERSION);
 
-  program.command('doctor').description('check the tools whiphand needs').action(async () => {
-    console.log(await runDoctor(defaultRegistry()));
-  });
+  program.command('doctor')
+    .description('check the tools whiphand needs, and the working folder')
+    .option('-C <dir>', 'working folder to check alongside the machine', process.cwd())
+    .action(async (opts: { C: string }) => {
+      console.log(await runDoctor(defaultRegistry(), resolve(opts.C)));
+    });
 
   program.command('run')
     .description('run a workflow, or resume a stopped one')

@@ -8,7 +8,7 @@
 import { z } from 'zod';
 import {
   CORE_VERSION, workspaceConfigSchema, partialConfigSchema, scopeSchema, configKeySchema,
-  WORKFLOW_NAME_RE, workflowSchema, whiphandEventSchema, manualChoiceSchema, manualRequestSchema,
+  isValidWorkflowName, workflowSchema, whiphandEventSchema, manualChoiceSchema, manualRequestSchema,
   fileCommentSchema,
 } from '@whiphand/core';
 import type { ConfigKey, ModelList, PartialConfig, Scope, ToolStatus, Workflow, WorkspaceConfig } from '@whiphand/core';
@@ -71,6 +71,9 @@ const runDetailSchema = runSummarySchema.extend({
   artifacts: z.array(z.object({ name: z.string(), path: z.string() })),
 });
 
+/** A workflow name: the shape pattern *and* the segment rules (no `nul`, `con`, …). */
+const workflowName = z.string().refine(isValidWorkflowName, { message: 'not a valid workflow name' });
+
 export const jobStatusSchema = z.enum(['running', 'succeeded', 'failed', 'cancelled']);
 export type JobStatus = z.infer<typeof jobStatusSchema>;
 
@@ -95,7 +98,7 @@ export const listWorkflowsResult = z.array(z.object({
  * on the other side of it.
  */
 export const getWorkflowParams = z.object({
-  workdir: z.string().min(1), name: z.string().regex(WORKFLOW_NAME_RE), scope: scopeSchema.optional(),
+  workdir: z.string().min(1), name: workflowName, scope: scopeSchema.optional(),
 });
 export const getWorkflowResult = workflowSchema;
 
@@ -116,7 +119,7 @@ export const updateWorkflowResult = z.object({ path: z.string() });
  * means the file was already gone.
  */
 export const deleteWorkflowParams = z.object({
-  workdir: z.string().min(1), name: z.string().regex(WORKFLOW_NAME_RE), scope: scopeSchema.optional(),
+  workdir: z.string().min(1), name: workflowName, scope: scopeSchema.optional(),
 });
 export const deleteWorkflowResult = z.object({ deleted: z.boolean() });
 
@@ -128,8 +131,8 @@ export const deleteWorkflowResult = z.object({ deleted: z.boolean() });
  */
 export const cloneWorkflowParams = z.object({
   workdir: z.string().min(1),
-  name: z.string().regex(WORKFLOW_NAME_RE),
-  newName: z.string().regex(WORKFLOW_NAME_RE),
+  name: workflowName,
+  newName: workflowName,
   scope: scopeSchema.optional(),
 });
 export const cloneWorkflowResult = z.object({ path: z.string() });
@@ -138,13 +141,15 @@ export const initWorkspaceParams = z.object({ workdir: z.string().min(1) });
 export const initWorkspaceResult = z.object({ created: z.array(z.string()) });
 
 /**
- * No `workdir`: doctor answers "is this MACHINE set up", not "is this
- * workspace". That is why the desktop keeps its result across a workspace
- * switch, why the Doctor page renders with no workspace open, and why the
- * user's extra probes live in the global doctor.yaml rather than a project
- * layer. Adding a workdir here would quietly invalidate all three.
+ * `workdir` is optional: doctor answers "is this MACHINE set up" with none —
+ * which is why the desktop keeps its result across a workspace switch, why the
+ * Doctor page renders with no workspace open, and why the user's extra probes
+ * live in the global doctor.yaml rather than a project layer. Given one, it
+ * *adds* rows about that folder (git refusing its repo, too little path
+ * headroom) and changes nothing else, so a caller that omits it gets exactly
+ * the machine-level report.
  */
-export const doctorParams = z.object({}).default({});
+export const doctorParams = z.object({ workdir: z.string().min(1).optional() }).default({});
 
 /**
  * One row per tool, not per adapter. `runner` is the load-bearing field: it
@@ -316,7 +321,11 @@ export const renameRunResult = z.object({
 
 /** Prunes one workspace's runs down to `max`, oldest-first, skipping locked/running runs. */
 export const pruneRunsParams = z.object({ workdir: z.string().min(1), max: z.number().int() });
-export const pruneRunsResult = z.object({ deleted: z.array(z.string()) });
+/** `failed` is the runs whose directory could not be removed — a user-initiated prune surfaces them rather than swallowing them. */
+export const pruneRunsResult = z.object({
+  deleted: z.array(z.string()),
+  failed: z.array(z.object({ runId: z.string(), reason: z.string() })).optional(),
+});
 
 /**
  * Ends the job's live interactive session (and only that): the step finishes
@@ -508,7 +517,11 @@ export const setUiStateResult = z.object({ ok: z.literal(true) });
 export const listRecentRunsParams = z.object({
   limit: z.number().int().positive().max(100).optional(),
 }).default({});
-export const listRecentRunsResult = z.array(runSummarySchema.extend({ workspace: z.string() }));
+export const listRecentRunsResult = z.array(runSummarySchema.extend({
+  workspace: z.string(),
+  /** The workspace's identity key, when its recents entry has one. */
+  identityKey: z.string().optional(),
+}));
 export type ListRecentRunsParams = z.infer<typeof listRecentRunsParams>;
 
 /**
@@ -523,7 +536,9 @@ export type AwaitReason = z.infer<typeof awaitReasonSchema>;
  * `workdir` is the workspace the job was started in. Optional so a replayed
  * log or an older recorded stream still parses (same posture as
  * ptyExitParams.reason) — the desktop treats an untagged job as belonging to
- * no workspace rather than to the current one.
+ * no workspace rather than to the current one. `identityKey` is that
+ * workspace's canonical identity (see canonicalize.ts): the desktop compares
+ * it, when both sides have one, rather than the two spellings of the path.
  *
  * Declared up here, ahead of the "Notifications" section below where the live
  * whiphandEvent notification itself is wired up, because jobScrollbackSchema
@@ -531,7 +546,7 @@ export type AwaitReason = z.infer<typeof awaitReasonSchema>;
  * event and a live one are wire-identical.
  */
 export const whiphandEventNotificationParams = z.object({
-  jobId: z.string(), workdir: z.string().optional(),
+  jobId: z.string(), workdir: z.string().optional(), identityKey: z.string().optional(),
   runId: z.string().optional(), event: whiphandEventSchema, ts: z.string(),
   /** The ordinal core's journal assigned this event — see engine/manifest.ts. Optional so an older agent's replayed stream still parses. */
   seq: z.number().int().nonnegative().optional(),
@@ -551,6 +566,7 @@ export type WhiphandEventNotificationParams = z.infer<typeof whiphandEventNotifi
 export const jobSummarySchema = z.object({
   jobId: z.string(),
   workdir: z.string(),
+  identityKey: z.string().optional(),
   runId: z.string().optional(),
   name: z.string().optional(),
   status: jobStatusSchema,
@@ -796,7 +812,7 @@ export { CORE_VERSION };
 // ---------------------------------------------------------------------------
 
 export const runStateChangedParams = z.object({
-  jobId: z.string(), workdir: z.string().optional(),
+  jobId: z.string(), workdir: z.string().optional(), identityKey: z.string().optional(),
   runId: z.string().optional(), status: jobStatusSchema,
 });
 export type RunStateChangedParams = z.infer<typeof runStateChangedParams>;

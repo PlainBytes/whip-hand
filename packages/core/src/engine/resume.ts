@@ -687,8 +687,12 @@ async function treeWarnings(manifest: RunManifest, workdir: string): Promise<str
   const now = await snapshotTree(workdir);
   // Not a git repository: the guard is already off for this workspace, and
   // there is nothing honest to compare against.
-  if (now === null) return [];
-  const changed = diffSnapshots(manifest.stoppedTree, now);
+  if (now.kind === 'not-a-repo') return [];
+  // Git failing when it was expected to work is not "nothing changed".
+  if (now.kind === 'unavailable') {
+    return [`could not read the working tree to report changes since this run stopped: ${now.reason}`];
+  }
+  const changed = diffSnapshots(manifest.stoppedTree, now.tree);
   if (changed.length === 0) return [];
   const shown = changed.slice(0, 10).join(', ');
   return [

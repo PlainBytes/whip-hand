@@ -5,10 +5,11 @@
  * directory. Deleting this file must lose zero work, so every read path
  * degrades to EMPTY_APP_STATE instead of throwing.
  */
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
+import { findWorkspaceKey, sameWorkspace, writeFileAtomic } from '@whiphand/core';
 
 export const recentWorkspaceSchema = z.object({
   path: z.string().min(1),
@@ -22,6 +23,14 @@ export const recentWorkspaceSchema = z.object({
    * stays assignable from existing two-field literals.
    */
   pinned: z.boolean().optional(),
+  /**
+   * The workspace's canonical identity (`openWorkspace`'s `identityKey`), which
+   * is what "same workspace" compares — `path` stays the spelling the user
+   * opened it by. Optional for the same reason as `pinned`: an entry written
+   * before keys existed keeps parsing, and is matched by its path until it is
+   * next opened.
+   */
+  identityKey: z.string().optional(),
 });
 export type RecentWorkspace = z.infer<typeof recentWorkspaceSchema>;
 
@@ -50,6 +59,8 @@ export const runsRetentionSchema = z.object({
 });
 
 const workspaceMemorySchema = z.object({
+  /** As on recentWorkspaceSchema; the record key stays the first spelling seen. */
+  identityKey: z.string().optional(),
   lastWorkflow: z.string().optional(),
   lastInputs: z.record(z.string(), z.record(z.string(), z.string())),
 });
@@ -107,21 +118,27 @@ export function resolveAppStatePath(
 }
 
 /**
- * Prepend `path` (deduped by exact path), newest first. The cap applies to
+ * Prepend `path` (deduped by workspace identity), newest first. The cap applies to
  * unpinned entries only — pinning a workspace is a promise that it stays in
  * the list however many others you open. Order stays pure recency; showing
  * pinned entries first is presentation, and lives in the frontend's
  * sortWorkspaces().
  */
-export function touchRecent(list: RecentWorkspace[], path: string, now: string): RecentWorkspace[] {
-  const existing = list.find(r => r.path === path);
+export function touchRecent(
+  list: RecentWorkspace[], path: string, now: string, identityKey?: string,
+): RecentWorkspace[] {
+  // The same folder opened as `C:\\Proj` and `c:\\proj`, or by its 8.3 name, is one workspace, not two with separate state.
+  const same = (r: RecentWorkspace): boolean => sameWorkspace(r, { path, identityKey });
+  const existing = list.find(same);
   const head: RecentWorkspace = {
-    path, lastOpenedAt: now, ...(existing?.pinned ? { pinned: true } : {}),
+    path, lastOpenedAt: now,
+    ...(identityKey === undefined ? {} : { identityKey }),
+    ...(existing?.pinned ? { pinned: true } : {}),
   };
   const kept: RecentWorkspace[] = [];
   let unpinned = head.pinned ? 0 : 1;
   for (const r of list) {
-    if (r.path === path) continue;
+    if (same(r)) continue;
     if (r.pinned) kept.push(r);
     else if (unpinned < MAX_RECENT_WORKSPACES) {
       kept.push(r);
@@ -133,15 +150,18 @@ export function touchRecent(list: RecentWorkspace[], path: string, now: string):
 
 /** Record that `workflow` just ran in `workspace` with `inputs` (immutable update). */
 export function rememberRun(
-  state: AppState, workspace: string, workflow: string, inputs: Record<string, string>,
+  state: AppState, workspace: string, workflow: string, inputs: Record<string, string>, identityKey?: string,
 ): AppState {
-  const memory = state.workspaces[workspace] ?? { lastInputs: {} };
+  // Keyed by whichever spelling of this workspace state already knows.
+  const key = findWorkspaceKey(state.workspaces, { path: workspace, identityKey }) ?? workspace;
+  const memory = state.workspaces[key] ?? { lastInputs: {} };
   return {
     ...state,
     workspaces: {
       ...state.workspaces,
-      [workspace]: {
+      [key]: {
         ...memory,
+        ...(identityKey === undefined ? {} : { identityKey }),
         lastWorkflow: workflow,
         lastInputs: { ...memory.lastInputs, [workflow]: { ...inputs } },
       },
@@ -213,8 +233,6 @@ export class AppStateStore {
 
   private async persist(next: AppState): Promise<void> {
     await mkdir(dirname(this.filePath), { recursive: true });
-    const tmp = `${this.filePath}.tmp`;
-    await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
-    await rename(tmp, this.filePath);
+    await writeFileAtomic(this.filePath, `${JSON.stringify(next, null, 2)}\n`);
   }
 }

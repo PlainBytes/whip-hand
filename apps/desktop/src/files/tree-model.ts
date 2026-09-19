@@ -8,6 +8,7 @@
  * that survived — which is what keeps expansion state and selection alive
  * across a refresh.
  */
+import { validateSegment } from '../../../../packages/core/src/segment.ts';
 
 export interface DirEntry {
   name: string;
@@ -151,5 +152,10 @@ export function validateName(name: string): string | null {
   if (name.trim().length === 0) return 'A name is required.';
   if (name === '.' || name === '..') return 'The name cannot be "." or "..".';
   if (/[/\\\0]/.test(name)) return 'The name cannot contain slashes or NUL characters.';
+  // The same rules a workflow's own names are held to (invariant 3): what
+  // Windows would refuse is refused here, while typing, instead of as an
+  // opaque filesystem error after the click.
+  const segment = validateSegment(name);
+  if (!segment.ok) return `The name ${segment.reason}.`;
   return null;
 }

@@ -14,6 +14,9 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnRunner, cmdInvocation } from './exec.ts';
+import { claudeAdapter } from './adapters/claude.ts';
+import { copilotAdapter } from './adapters/copilot.ts';
+import { opencodeAdapter } from './adapters/opencode.ts';
 
 const windowsOnly = { skip: process.platform !== 'win32' ? 'Windows only' : false };
 
@@ -151,18 +154,37 @@ test('reading through an npm shim carries what cmd.exe never could', windowsOnly
   });
 });
 
-test('a defined %VAR% is still expanded — the documented residual hazard', windowsOnly, async () => {
-  // Pinned deliberately: quoting cannot suppress this, because cmd expands on
-  // the `/c` line before any quote processing. The fix is to get prompts off
-  // the command line entirely (see exec.ts's header), and when that lands this
-  // assertion is what should change.
+test('a defined %VAR% can no longer reach a runner: prompts are not on the command line', windowsOnly, async () => {
+  // This used to pin the hazard ("a defined variable does not survive — this is
+  // the known limitation"), because quoting cannot suppress cmd's `%VAR%`
+  // expansion. The fix was to get prompts off the command line entirely, and
+  // this is what asserts it is gone — for every adapter, headless and
+  // interactive: what is left on argv is flags, a model name, short paths and
+  // one fixed pointer sentence, none of which carries a `%`, a newline or a
+  // metacharacter — so it round-trips through the cmd.exe fallback intact.
+  const hostile = '%COMSPEC% %PATH% "quoted" & piped | redirected > x\nsecond line ^ caret ! bang ' + 'lorem ipsum '.repeat(1200);
+  const ctx = {
+    workdir: 'C:\\Users\\me\\proj', runId: 'r1', runDir: 'C:\\Users\\me\\proj\\.whiphand\\runs\\r1', runSlug: 'r1',
+    sessionIds: { s: '11111111-1111-4111-8111-111111111111' }, artifacts: {}, attempts: {}, verdicts: {}, inputs: {},
+  };
+  const step = { kind: 'agent' as const, id: 's', runner: 'x', mode: 'headless' as const, writes: true, prompt: hostile, output: 's.md' };
+  const specs = [
+    claudeAdapter.headless(step, ctx), claudeAdapter.interactive({ ...step, mode: 'interactive' }, ctx),
+    copilotAdapter.headless(step, ctx), copilotAdapter.interactive({ ...step, mode: 'interactive' }, ctx),
+    opencodeAdapter.headless(step, ctx), opencodeAdapter.interactive({ ...step, mode: 'interactive' }, ctx),
+  ];
+  for (const spec of specs) {
+    for (const arg of spec.argv) {
+      assert.ok(!/[%\r\n"&|<>^!]/.test(arg), `argv element carries prompt syntax: ${arg.slice(0, 80)}`);
+    }
+    assert.ok(spec.argv.join(' ').length < 1500, 'nothing near the 8191-character cmd.exe cap is left on argv');
+    assert.ok(spec.files?.some(f => f.content.includes(hostile)), 'the prompt travels in a file');
+  }
   await withShim(async shim => {
-    const [got] = await roundTrip(shim, ['%NOT_A_REAL_VAR_XYZ%']);
-    assert.equal(got, '%NOT_A_REAL_VAR_XYZ%', 'an undefined variable survives literally');
-    assert.notEqual(
-      (await roundTrip(shim, ['%COMSPEC%']))[0], '%COMSPEC%',
-      'a defined variable does not — this is the known limitation',
-    );
+    for (const spec of specs) {
+      const args = spec.argv.slice(1).filter(a => !/[%\r\n"&|<>^!]/.test(a));
+      assert.deepEqual(await roundTrip(shim, args), args);
+    }
   }, { readable: false });
 });
 

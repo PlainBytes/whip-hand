@@ -1,0 +1,21 @@
+# One line ending in the tree, on every platform. GitHub's Windows runners check
+# out with core.autocrlf=true, which would turn goldens, workflow YAML and every
+# fixture into CRLF: goldens then fail for checkout reasons, and Git Bash chokes
+# on `$'\r'`. This is also what makes "shipped templates are identical bytes"
+# true for anything read from disk.
+* text=auto eol=lf
+
+# Never touched by line-ending conversion.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.pdf binary
+*.exe binary
+*.dll binary
+*.node binary

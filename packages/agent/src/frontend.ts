@@ -4,10 +4,10 @@
  * ptyData/ptyExit notifications and resolving with the session's exit code.
  */
 import type {
-  AwaitReason, Frontend, ManualRequest, ManualResponse, WhiphandEvent, SpawnSpec,
+  AwaitReason, Container, Frontend, ManualRequest, ManualResponse, WhiphandEvent, SpawnSpec,
 } from '@whiphand/core';
 import type { Job } from './jobs.ts';
-import { abandonManual } from './jobs.ts';
+import { abandonManual, jobWorkspace } from './jobs.ts';
 import { startPty } from './pty.ts';
 import { beginGracefulEnd, watchForMarker } from './session-end.ts';
 import { watchAwaitState } from './await-state.ts';
@@ -38,7 +38,7 @@ export interface RunIdBox {
  * let the ptyInput/ptyResize rpc handlers reach the job's current PTY.
  */
 export function createFrontend(
-  job: Job, notify: NotifyFn, runIdBox: RunIdBox, timings: FrontendTimings = {},
+  job: Job, notify: NotifyFn, runIdBox: RunIdBox, timings: FrontendTimings = {}, container?: Container,
 ): Frontend {
   const jobId = job.jobId;
   // The engine's on_findings 'interactive' triage branch calls runInteractive
@@ -63,12 +63,12 @@ export function createFrontend(
         // stamped on this event's run.log line (F9) — falling back to a fresh
         // one only for a caller that predates that plumbing (a test double,
         // or a future Frontend implementation that ignores the param).
-        jobId, workdir: job.workdir, runId: runIdBox.current, event, ts: ts ?? new Date().toISOString(),
+        jobId, ...jobWorkspace(job), runId: runIdBox.current, event, ts: ts ?? new Date().toISOString(),
         ...(seq === undefined ? {} : { seq }),
       });
       if (event.type === 'run:start' || event.type === 'run:resume') {
         notify('runStateChanged', {
-          jobId, workdir: job.workdir, runId: runIdBox.current, status: 'running',
+          jobId, ...jobWorkspace(job), runId: runIdBox.current, status: 'running',
         });
       }
     },
@@ -154,6 +154,7 @@ export function createFrontend(
           handle = startPty(spec, {
             cols,
             rows,
+            container,
             onData: data => notify('ptyData', { jobId, data }),
             onBell: () => { bell = true; publishAwait(); },
             onExit: exitCode => {

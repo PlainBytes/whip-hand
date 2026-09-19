@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { DoctorPage } from './DoctorPage.tsx';
 import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
@@ -52,6 +52,27 @@ describe('DoctorPage', () => {
     useAppStore.setState({ agentStatus: 'connecting' });
     renderDoctor();
     expect(screen.getByText(/waiting for the whiphand agent/i)).toBeInTheDocument();
+  });
+
+  it('asks about the open workspace too, and about the machine alone when none is open', async () => {
+    const withNone = renderDoctor();
+    expect((await respond(withNone.transport, 'doctor', [GIT])).params).toEqual({});
+    cleanup();
+
+    useAppStore.setState({ workspacePath: '/work/proj' });
+    const withOne = renderDoctor();
+    expect((await respond(withOne.transport, 'doctor', [GIT])).params).toEqual({ workdir: '/work/proj' });
+    useAppStore.setState({ workspacePath: null });
+  });
+
+  it('shows the rows a workspace check reported, with their remediation notes', async () => {
+    const { transport } = renderDoctor();
+    await respond(transport, 'doctor', [GIT, row({
+      id: 'git-ownership', label: 'Workspace git ownership', group: 'support', runner: false,
+      notes: ['git config --global --add safe.directory C:/proj'],
+    })]);
+    expect(await screen.findByText('Workspace git ownership')).toBeInTheDocument();
+    expect(screen.getByText(/safe\.directory C:\/proj/)).toBeInTheDocument();
   });
 
   it('groups tools under the two headings, harnesses first', async () => {

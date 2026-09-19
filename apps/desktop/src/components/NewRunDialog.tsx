@@ -29,7 +29,7 @@ import { useCapabilities } from '../capabilities.tsx';
 import { extensionForImageMime } from '../files/file-kind.ts';
 import { bytesToBase64 } from '../lib/base64.ts';
 import { parsePositiveInt } from '../lib/parse-number.ts';
-import { useAppStore } from '../state/store.ts';
+import { findWorkspaceMemory, useAppStore } from '../state/store.ts';
 import { collectLoops, findStep, flattenSteps, isLoopStep } from '../../../../packages/core/src/steps.ts';
 import { disabledRoots, droppedRefs, droppedRefSentence } from '../../../../packages/core/src/enabled.ts';
 import { attachmentNames, consumesAttachments } from '../../../../packages/core/src/attachments.ts';
@@ -235,11 +235,13 @@ export interface NewRunDialogProps {
 export function NewRunDialog({ open, onOpenChange, onStarted }: NewRunDialogProps) {
   const client = useAgentClient();
   const workspacePath = useAppStore(state => state.workspacePath);
+  const identityKey = useAppStore(state => state.workspaceIdentityKey) ?? undefined;
   const workflows = useAppStore(state => state.workflows);
   const noteJobWorkspace = useAppStore(state => state.noteJobWorkspace);
   const setWorkflows = useAppStore(state => state.setWorkflows);
-  const memory = useAppStore(state =>
-    state.workspacePath ? state.appState?.workspaces[state.workspacePath] : undefined);
+  const memory = useAppStore(state => (state.workspacePath
+    ? findWorkspaceMemory(state.appState, { path: state.workspacePath, identityKey: state.workspaceIdentityKey ?? undefined })
+    : undefined));
   const pendingRunAgain = useAppStore(state => state.pendingRunAgain);
   const setPendingRunAgain = useAppStore(state => state.setPendingRunAgain);
   const rememberInputsLocal = useAppStore(state => state.rememberInputsLocal);
@@ -500,8 +502,8 @@ export function NewRunDialog({ open, onOpenChange, onStarted }: NewRunDialogProp
       // Tag the job before any of its notifications can land, so the window
       // title and Activity badge attribute it from the first millisecond
       // rather than from the first whiphandEvent.
-      noteJobWorkspace(result.jobId, workspacePath);
-      rememberInputsLocal(workspacePath, workflowRef, values);
+      noteJobWorkspace(result.jobId, workspacePath, identityKey);
+      rememberInputsLocal(workspacePath, workflowRef, values, identityKey);
       onStarted(result.jobId);
     } catch (err) {
       setStartError(errorMessage(err));

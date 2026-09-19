@@ -121,7 +121,7 @@ steps:
                   address every requested change.
               - id: tests
                 kind: command
-                run: "{{ inputs.test_command }}"
+                run: eval "{{ inputs.test_command }}"
                 verdict: true # a failing exit sends the loop round again, not a crash
                 output: tests.log
                 timeout_ms: 1800000 # a hung suite fails the run (resumable) rather than blocking forever

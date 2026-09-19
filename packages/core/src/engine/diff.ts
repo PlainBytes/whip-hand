@@ -3,13 +3,12 @@
  * unlike manual.ts's string-shaped `workingDiff`, this includes untracked
  * files and isn't truncated at 400 lines.
  */
-import { execFile } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
+import { execRunner } from '../exec.ts';
+import { GitUnavailableError, classifyGitFailure } from './git-guard.ts';
 
-const run = promisify(execFile);
 
 /** git's hash of the empty tree — the base for a repo with no commits yet. */
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
@@ -36,7 +35,7 @@ export const MAX_TOTAL_PATCH_BYTES = 4 * 1024 * 1024;
  */
 async function gitStdout(args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<string> {
   try {
-    const { stdout } = await run('git', args, {
+    const { stdout } = await execRunner(['git', ...args], {
       cwd, maxBuffer: 64 * 1024 * 1024, ...(env ? { env } : {}),
     });
     return stdout;
@@ -225,8 +224,14 @@ export async function workingDiffFiles(workdir: string): Promise<WorkingDiff | n
     // Also the "is this a git repo" probe: everything after this point may
     // fail loudly, but reaching it at all proves the repo exists.
     head = await gitStdout(['rev-parse', '--verify', '--quiet', 'HEAD'], workdir);
-  } catch {
-    return null;
+  } catch (error) {
+    // `null` is "not a repository" and only that. Git having been expected to
+    // work and not working (not on PATH, dubious ownership, a timeout) is loud:
+    // a review screen that shows nothing looks exactly like one for a run that
+    // changed nothing (invariant 7). The RPC surfaces it as an error.
+    const failure = classifyGitFailure(error);
+    if (failure.kind === 'not-a-repo') return null;
+    throw new GitUnavailableError(failure.reason);
   }
   // A repo with no commits has no HEAD to diff against; the empty tree is what
   // "everything is new" means.

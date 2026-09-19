@@ -7,7 +7,9 @@ import type {
   OnFindings, RunnerAdapter, Scope, Stage, StageFrame, StagesStep, Workflow, RunCtx, SpawnSpec, Step, WorkspaceConfig,
 } from '../types.ts';
 import { STAGE_REF } from '../types.ts';
-import { AdapterRegistry, validateWorkflowRunners, validateWorkflowFrontend } from '../registry.ts';
+import type { DegradationId } from '../degradations.ts';
+import { AdapterRegistry, validateWorkflowRunners, validateWorkflowFrontend, validateWorkflowShell } from '../registry.ts';
+import { resolveShell } from '../shell.ts';
 import { WorkflowError, locateSteps, isForwardRef } from '../schema.ts';
 import {
   collectLoops, flattenSteps, isAgentStep, isCommandStep, isContainerStep, isLoopStep, isManualStep, isStagesStep,
@@ -18,6 +20,8 @@ import { copyAttachments, recordOf, validateAttachments } from './attachments.ts
 import { artifactPath, assertArtifact, ArtifactError, ensureArtifactDir } from './artifacts.ts';
 import { snapshotTree, diffSnapshots, headSha, pathsFromStatusLines, pathsOutside } from './git-guard.ts';
 import { renderTemplate } from '../template.ts';
+import { toWorkspace } from '../path-form.ts';
+import { eventPathsToWorkspace } from '../event-paths.ts';
 import { CORE_VERSION } from '../version.ts';
 import { parseVerdict, verdictFromExit, verdictFromChoice, VERDICT_INSTRUCTION } from './verdict.ts';
 import { createProgressParser, progressErrorMessage } from './progress.ts';
@@ -26,6 +30,7 @@ import { buildManualRequest, noteArtifact, reviewArtifact } from './manual.ts';
 import { clearEndMarker } from './session-end.ts';
 import { clearAwaitState } from './await-state.ts';
 import { clearSessionCapture } from './session-capture.ts';
+import { clearSpawnFiles, SpawnFilesError, writeSpecFiles } from './spawn-files.ts';
 import { RunJournal, WORKFLOW_SNAPSHOT_NAME } from './manifest.ts';
 import { executionKey, frameIdentity, isStageFrame, nearestLoop, nearestStage } from '../execution-key.ts';
 import { pruneRuns } from './retention.ts';
@@ -82,6 +87,12 @@ export interface RunOptions {
     onLine?: (line: string, stream: 'stdout' | 'stderr') => void,
   ) => Promise<number>;
   signal?: AbortSignal;
+  /**
+   * Facts about the run's environment the frontend already knows and core does
+   * not — the process container could not contain, say. Each becomes a
+   * `run:degraded` event right after `run:start`, so it lands in the manifest.
+   */
+  degradations?: Array<{ capability: DegradationId; reason: string }>;
 }
 
 export interface RunResult {
@@ -104,6 +115,10 @@ export interface RunResult {
  */
 type StepOutcome = RunResult | 'verdict-fail' | 'stage-exhausted' | null;
 
+/** A step whose promise about the tree only git can keep: read-only, or scoped by `allow_paths`. */
+const isGuardedStep = (step: Step): boolean =>
+  isAgentStep(step) && (!step.writes || (step.allow_paths?.length ?? 0) > 0);
+
 function resolveInputs(workflow: Workflow, given: Record<string, string>): Record<string, string> {
   const problems: string[] = [];
   const resolved: Record<string, string> = { ...given };
@@ -113,19 +128,6 @@ function resolveInputs(workflow: Workflow, given: Record<string, string>): Recor
   }
   if (problems.length > 0) throw new WorkflowError(problems);
   return resolved;
-}
-
-/**
- * Writes a spawn's support files (opencode's guidance and plugin, today)
- * before the spawn, so adapters themselves stay pure — they only ever
- * describe what to write, never touch the filesystem. A no-op for every spec
- * without `files`, which is every claude/copilot spec and most opencode ones.
- */
-async function writeSpecFiles(spec: SpawnSpec): Promise<void> {
-  for (const file of spec.files ?? []) {
-    await ensureArtifactDir(file.path);
-    await writeFile(file.path, file.content, 'utf8');
-  }
 }
 
 /** Steps passed to adapters get the verdict instruction appended when needed. */
@@ -200,8 +202,22 @@ interface StageAttemptNotes {
   entrySnapshot: string | null;
 }
 
-export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
+export async function runWorkflow(options: RunOptions): Promise<RunResult> {
+  // Losing the lease (another process judged this run abandoned while the host
+  // slept) stops the run the way a cancel does — an abort every spawn and pty
+  // already honours, which is how the frontend's container ends the tree — but
+  // it is reported as the failure it is, not as a cancel. See onLeaseLost below.
+  const leaseAbort = new AbortController();
+  let leaseLostReason: string | undefined;
+  const opts: RunOptions = {
+    ...options,
+    signal: options.signal === undefined ? leaseAbort.signal : AbortSignal.any([options.signal, leaseAbort.signal]),
+  };
   const { workflow, config, registry, frontend } = opts;
+  const onLeaseLost = (reason: string): void => {
+    leaseLostReason = reason;
+    leaseAbort.abort();
+  };
 
   // The tree that will actually run: disabled steps and disabled loops' whole
   // bodies removed, references to disabled ids stripped from every survivor.
@@ -226,9 +242,14 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     }
   }
 
+  // Resolved once per run, at run start (never cached across runs). With no
+  // POSIX shell every enabled command step is refused here, before anything
+  // spawns, with the remediation named; agent steps still run.
+  const shell = resolveShell();
   const problems = [
     ...validateWorkflowRunners(effective, registry),
     ...(opts.dryRun ? [] : validateWorkflowFrontend(effective, frontend)),
+    ...(opts.dryRun ? [] : validateWorkflowShell(effective, shell)),
   ];
   if (problems.length > 0) throw new WorkflowError(problems);
   const inputs = resolveInputs(workflow, opts.inputs);
@@ -274,6 +295,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
   }
   const ctx: RunCtx = {
     workdir, runId, runDir,
+    ...(shell.ok ? { shell: shell.path } : {}),
     ...(runName === undefined ? {} : { runName }),
     runSlug: runSlugFor(runId, runName),
     sessionIds: { ...(opts.resume?.sessionIds ?? {}) },
@@ -320,8 +342,9 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
           mode: isAgentStep(step) ? step.mode : undefined,
           disabled: disabled.has(step.id) ? true : undefined,
         })),
+        onLeaseLost,
       })
-    : RunJournal.reopen(runDir, opts.resume.manifest);
+    : RunJournal.reopen(runDir, opts.resume.manifest, { workdir, onLeaseLost });
   // Tee every WhiphandEvent to both the frontend and the run journal; every
   // emission site below (including error paths) must go through this.
   // journal.record runs first so the ordinal it assigns can ride along on the
@@ -333,7 +356,10 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
   // run:env probe below: a run that fails or finishes before the probe
   // resolves must never have it land AFTER run:done.
   let runEnded = false;
-  const emit = (e: WhiphandEvent) => {
+  // The one place an event takes its emitted form: payload paths become
+  // workspace-relative here, so nothing downstream sees a native absolute one.
+  const emit = (raw: WhiphandEvent) => {
+    const e = eventPathsToWorkspace(raw, workdir);
     if (e.type === 'run:done') runEnded = true;
     const { seq, ts } = journal.record(e);
     frontend.onEvent(e, seq, ts);
@@ -393,7 +419,13 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     // legitimate output. A dry run touched nothing worth recording.
     if (!opts.dryRun) {
       const stopped = await snapshotTree(workdir);
-      if (stopped !== null) journal.noteStoppedTree(stopped);
+      if (stopped.kind === 'ok') journal.noteStoppedTree(stopped.tree);
+      // Not a repository is already on record (`git-guard`). Git failing when it
+      // was expected to work is a loss a later resume should know about: without
+      // this snapshot it cannot report what changed while the run was stopped.
+      else if (stopped.kind === 'unavailable' && !journal.lostLease) {
+        emit({ type: 'run:degraded', capability: 'stopped-tree', reason: stopped.reason });
+      }
     }
     // By this point run:done has always already been emitted (every path
     // through runSteps/the catch above ends with it), so runEnvSettled's own
@@ -402,8 +434,18 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     // dangling subprocess reference) before the process that owns it exits.
     await runEnvSettled;
     await journal.flush();
-    // Best-effort: a prune failure must not fail a run that otherwise succeeded.
-    await pruneRuns(workdir, config, opts.maxRetainedRuns ?? config.runs.max_retained).catch(() => {});
+    // A prune failure must not fail a run that otherwise succeeded — but it is
+    // not silent either (invariant 7): each directory that could not be removed
+    // is recorded as a `retention` degradation. This is teardown, so these land
+    // after `run:done`, the one place that ordering is deliberately relaxed.
+    const pruned = await pruneRuns(workdir, config, opts.maxRetainedRuns ?? config.runs.max_retained)
+      .catch((error: Error) => ({ deleted: [], failed: [{ runId: '(retention)', reason: error.message }] }));
+    if (!journal.lostLease) {
+      for (const failure of pruned.failed) {
+        emit({ type: 'run:degraded', capability: 'retention', reason: `could not prune ${failure.runId}: ${failure.reason}` });
+      }
+      await journal.flush();
+    }
   }
 
   async function runSteps(): Promise<RunResult> {
@@ -425,6 +467,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     for (const sentence of droppedRefSentence(droppedRefs(workflow))) {
       emit({ type: 'guard:warning', message: sentence });
     }
+    for (const degradation of opts.degradations ?? []) emit({ type: 'run:degraded', ...degradation });
 
     // One line naming what actually ran this: the highest-value single line
     // in the file for an issue report. Deliberately NOT awaited: probing a
@@ -449,7 +492,24 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       return { ok: false, runId, runDir, artifacts: ctx.artifacts };
     };
 
+    /**
+     * Writes a spawn's files. One that cannot be written (a prompt, claude's
+     * settings object) fails the *step* with the file named, like any other
+     * step failure — it never rejects the run, and the runner never starts with
+     * an empty prompt.
+     */
+    const writeFilesOrFail = async (spec: SpawnSpec, stepId: string): Promise<RunResult | null> => {
+      try {
+        await writeSpecFiles(spec);
+        return null;
+      } catch (error) {
+        if (error instanceof SpawnFilesError) return fail(error.message, stepId);
+        throw error;
+      }
+    };
+
     const cancelled = (): RunResult => {
+      if (leaseLostReason !== undefined) return fail(leaseLostReason);
       emit({ type: 'run:cancelled', runId });
       emit({ type: 'run:done', runId, ok: false });
       return { ok: false, runId, runDir, artifacts: ctx.artifacts, cancelled: true };
@@ -471,7 +531,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       const runnerIds = [...new Set(
         planned.map(({ step }) => step).filter(isAgentStep).map(step => step.runner),
       )];
-      const [sha, snapshot, runners] = await Promise.all([
+      const [head, snapshot, runners] = await Promise.all([
         headSha(workdir),
         snapshotTree(workdir),
         Promise.all(runnerIds.map(async (id): Promise<{ id: string; installed: boolean; version?: string }> => {
@@ -487,22 +547,45 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         type: 'run:env', runId,
         whiphandVersion: CORE_VERSION, nodeVersion: process.version, platform: process.platform,
         runners,
-        ...(sha === null ? {} : { git: { sha, dirty: snapshot !== null && snapshot !== '' } }),
+        ...(head.kind !== 'ok' ? {} : { git: { sha: head.sha, dirty: snapshot.kind === 'ok' && snapshot.tree !== '' } }),
+        ...(shell.ok ? { shell: shell.path } : {}),
       };
     }
 
-    /** Take a pre-step tree snapshot for every agent/command step — the read-only guard's own check, and step:tree-delta's, share it. */
-    const guardBefore = async (step: Step): Promise<string | null> => {
-      if (!isAgentStep(step) && !isCommandStep(step)) return null;
-      const before = await snapshotTree(workdir);
-      if (before === null && isAgentStep(step) && !step.writes && !warnedNoGit) {
-        warnedNoGit = true;
-        emit({
-          type: 'guard:warning', stepId: step.id,
-          message: 'not a git repository: read-only tree assertion disabled',
-        });
+    /**
+     * Take a pre-step tree snapshot for every agent/command step — the read-only
+     * guard's own check, and step:tree-delta's, share it.
+     *
+     * Tier 1 of invariant 7: this is where "git was expected to work and
+     * didn't" is told apart from "this is not a repository". A `writes: false`
+     * step (or one with `allow_paths`) whose write-guard is *unavailable* has
+     * lost its protection — not a convenience — so it fails, with git's own
+     * words. A workspace that simply is not a repository keeps working, with a
+     * visible record that the guard is off.
+     */
+    const guardBefore = async (step: Step): Promise<{ before: string | null; failure?: string }> => {
+      if (!isAgentStep(step) && !isCommandStep(step)) return { before: null };
+      const snapshot = await snapshotTree(workdir);
+      if (snapshot.kind === 'ok') return { before: snapshot.tree };
+      const guarded = isGuardedStep(step);
+      if (snapshot.kind === 'not-a-repo') {
+        if (isAgentStep(step) && !step.writes && !warnedNoGit) {
+          warnedNoGit = true;
+          emit({
+            type: 'run:degraded', capability: 'git-guard', stepId: step.id,
+            reason: 'not a git repository: read-only tree assertion disabled',
+          });
+        }
+        return { before: null };
       }
-      return before;
+      if (guarded) {
+        return {
+          before: null,
+          failure: `step '${step.id}' cannot run without its git write-guard, and git is unavailable: ${snapshot.reason}`,
+        };
+      }
+      emit({ type: 'run:degraded', capability: 'git-guard', stepId: step.id, reason: snapshot.reason });
+      return { before: null };
     };
 
     /**
@@ -515,8 +598,15 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       verdictOverride?: 'pass' | 'fail',
     ): Promise<StepOutcome> => {
       if (before !== null) {
-        const after = await snapshotTree(workdir);
-        const changed = diffSnapshots(before, after ?? '');
+        const snapshot = await snapshotTree(workdir);
+        // A failed post-step snapshot always fails the step. It used to be read
+        // as `''`, which diffs to "nothing modified" — the tree reported clean
+        // exactly when it could not be seen.
+        if (snapshot.kind !== 'ok') {
+          const why = snapshot.kind === 'unavailable' ? snapshot.reason : 'the workspace is no longer a git repository';
+          return fail(`could not verify the working tree after step '${step.id}': ${why}`, step.id);
+        }
+        const changed = diffSnapshots(before, snapshot.tree);
         if (changed.length > 0) {
           emit({ type: 'step:tree-delta', stepId: step.id, files: pathsFromStatusLines(changed) });
         }
@@ -594,7 +684,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       if (findingIds.length === 0 && notes.length === 0) return step;
       const note = [
         ...findingIds.map(id =>
-          `A previous review found problems. Read the findings at ${ctx.artifacts[id]} and address every one of them.`),
+          `A previous review found problems. Read the findings at ${toWorkspace(ctx.artifacts[id], workdir)} and address every one of them.`),
         ...notes,
       ].join('\n');
       return {
@@ -667,7 +757,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         // A headless step cannot know its run dir; name the artifact path explicitly.
         eff = {
           ...eff,
-          prompt: `${eff.prompt}\n\nWrite your '${step.output}' artifact to: ${ctx.artifacts[step.id]}`,
+          prompt: `${eff.prompt}\n\nWrite your '${step.output}' artifact to: ${toWorkspace(ctx.artifacts[step.id], workdir)}`,
         };
       }
 
@@ -693,10 +783,14 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       }
 
       const spawnHeadless = requireSpawn();
-      const before = await guardBefore(step);
+      const guard = await guardBefore(step);
+      if (guard.failure !== undefined) return fail(guard.failure, step.id);
+      const before = guard.before;
 
       if (step.mode === 'interactive') {
-        const main = await prepareInteractiveSpawn(adapter, eff);
+        const prepared = await prepareInteractiveSpawn(adapter, eff);
+        if ('failed' in prepared) return prepared.failed;
+        const main = prepared.spec;
         emit({ type: 'step:spawn', stepId: step.id, spec: main, phase: 'main' });
         const sessionExit = await frontend.runInteractive(main, opts.signal, emit);
         // A sessionIdCapture runner (opencode) cannot be handed an id up
@@ -733,7 +827,8 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
           }
         }
         const hSpec = adapter.harvest(eff, ctx);
-        await writeSpecFiles(hSpec);
+        const hFailed = await writeFilesOrFail(hSpec, step.id);
+        if (hFailed !== null) return hFailed;
         emit({ type: 'step:spawn', stepId: step.id, spec: hSpec, phase: 'harvest' });
         const harvestSink = lineSink(step.id, hSpec);
         const harvestExit = await spawnHeadless(hSpec, opts.signal, harvestSink.onLine);
@@ -744,7 +839,8 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
         }
       } else {
         const spec = adapter.headless(eff, ctx);
-        await writeSpecFiles(spec);
+        const specFailed = await writeFilesOrFail(spec, step.id);
+        if (specFailed !== null) return specFailed;
         emit({ type: 'step:spawn', stepId: step.id, spec, phase: 'main' });
         const sink = lineSink(step.id, spec);
         const exitCode = await spawnHeadless(spec, opts.signal, sink.onLine);
@@ -781,7 +877,9 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       if (capture !== undefined) await writeFile(capture, captureHeader(step, spec.argv, frame));
 
       const spawnHeadless = requireSpawn();
-      const before = await guardBefore(step);
+      const guard = await guardBefore(step);
+      if (guard.failure !== undefined) return fail(guard.failure, step.id);
+      const before = guard.before;
       emit({ type: 'step:spawn', stepId: step.id, spec, phase: 'main' });
       const { exitCode, timedOut } = await runWithTimeout(step, spec, spawnHeadless, lineSink(step.id, spec).onLine);
       if (opts.signal?.aborted) return cancelled();
@@ -808,6 +906,9 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
 
     async function executeManual(step: ManualStep, frame?: Frame): Promise<StepOutcome> {
       const request = await buildManualRequest(scopeInputs(step, frame), ctx, await manualExtras(frame));
+      if (request.context.diffUnavailable !== undefined) {
+        emit({ type: 'run:degraded', capability: 'diff', stepId: step.id, reason: request.context.diffUnavailable });
+      }
 
       if (opts.dryRun) {
         emit({ type: 'step:manual', stepId: step.id, request });
@@ -857,6 +958,31 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
     }
 
     /**
+     * The tree as a stage begins, for the gate's "no changes" note. For a stage
+     * with nothing guarded in it that is only ever a note, so a snapshot that
+     * cannot be taken costs the note and is recorded as a `diff` degradation.
+     * A *guarded* stage (any step in its body is read-only or has `allow_paths`)
+     * is different: git being unavailable there means the stage's promise about
+     * the tree cannot be kept, so the stage fails at entry — before a step spawns
+     * — with git's own words, the same failure guardBefore gives a lone step.
+     */
+    async function stageEntrySnapshot(stages: StagesStep): Promise<{ tree: string | null } | { failed: RunResult }> {
+      const snapshot = await snapshotTree(workdir);
+      if (snapshot.kind === 'ok') return { tree: snapshot.tree };
+      if (snapshot.kind === 'unavailable') {
+        if (flattenSteps(stages.steps).some(f => isGuardedStep(f.step))) {
+          return {
+            failed: fail(
+              `stages step '${stages.id}' cannot run without its git write-guard, and git is unavailable: ${snapshot.reason}`,
+              stages.id),
+          };
+        }
+        emit({ type: 'run:degraded', capability: 'diff', stepId: stages.id, reason: snapshot.reason });
+      }
+      return { tree: null };
+    }
+
+    /**
      * What a gate inside a stage is told beyond its own instructions: every
      * review cycle that ran out (with its findings forced onto the rail), and
      * whether the stage has changed the tree at all — a stage with no diff is
@@ -870,9 +996,13 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       const exhausted = [...known.exhausted];
       const notes = exhausted.map(([loopId, x]) =>
         `The review cycle '${loopId}' never passed within ${x.iterations} iterations — its findings are attached.`);
-      if (known.entrySnapshot !== null
-        && diffSnapshots(known.entrySnapshot, await snapshotTree(workdir) ?? '').length === 0) {
-        notes.push('This stage produced no changes.');
+      if (known.entrySnapshot !== null) {
+        const now = await snapshotTree(workdir);
+        // Only claim "no changes" when the tree was actually seen: an unreadable
+        // tree diffs to nothing, and that is not the same statement.
+        if (now.kind === 'ok' && diffSnapshots(known.entrySnapshot, now.tree).length === 0) {
+          notes.push('This stage produced no changes.');
+        }
       }
       return { notes, forceInputs: exhausted.map(([, x]) => x.untilId) };
     }
@@ -920,13 +1050,16 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
      * over; the spec's support files (opencode's guidance and plugin) must be
      * on disk before the runner starts reading them.
      */
-    async function prepareInteractiveSpawn(adapter: RunnerAdapter, step: AgentStep): Promise<SpawnSpec> {
+    async function prepareInteractiveSpawn(
+      adapter: RunnerAdapter, step: AgentStep,
+    ): Promise<{ spec: SpawnSpec } | { failed: RunResult }> {
       await clearEndMarker(runDir, step.id);
       await clearAwaitState(runDir, step.id);
+      await clearSpawnFiles(runDir, step.id);
       if (adapter.capabilities.sessionIdCapture) await clearSessionCapture(runDir, step.id);
       const spec = adapter.interactive(step, ctx);
-      await writeSpecFiles(spec);
-      return spec;
+      const failed = await writeFilesOrFail(spec, step.id);
+      return failed === null ? { spec } : { failed };
     }
 
     function requireSpawn(): (
@@ -1237,7 +1370,9 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       // earlier process already did to the tree, so an empty diff proves nothing.
       const resumedStage = opts.resume?.stagesStarted.includes(resumeKey) === true
         || granted !== undefined || interruptedAttempt !== undefined;
-      const entrySnapshot = opts.dryRun || resumedStage ? null : await snapshotTree(workdir);
+      const entry = opts.dryRun || resumedStage ? { tree: null } : await stageEntrySnapshot(stages);
+      if ('failed' in entry) return entry.failed;
+      const entrySnapshot = entry.tree;
       // The gate that sent the last attempt back, and the note it wrote.
       let rejection: { gateId: string; path: string | undefined } | undefined;
       for (let attempt = 1; attempt <= allowed; attempt++) {
@@ -1369,7 +1504,9 @@ export async function runWorkflow(opts: RunOptions): Promise<RunResult> {
       // Triage goes through the same preparation as a declared interactive
       // step, so it inherits the guidance, the end-of-session spec and (for
       // opencode) the support files without asking for them.
-      const triageSpec = await prepareInteractiveSpawn(adapter, triage);
+      const prepared = await prepareInteractiveSpawn(adapter, triage);
+      if ('failed' in prepared) return prepared.failed;
+      const triageSpec = prepared.spec;
       // Deliberately not a step: triage has no step:start/step:done lifecycle,
       // so it emits no step:spawn either — the journal would have no manifest
       // entry to hang one on (RunJournal's step:spawn branch only marks an

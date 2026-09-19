@@ -10,13 +10,14 @@ test('marker lives directly in the run dir, named after the step', () => {
   assert.equal(endMarkerPath('/w/.whiphand/runs/r1', 'plan'), join('/w/.whiphand/runs/r1', '.plan.done'));
 });
 
-test('a step id with path or shell characters is flattened to one safe segment', () => {
-  // This name is pasted into a shell command inside a runner's permission rule,
-  // and step ids are only validated as non-empty.
-  assert.equal(endMarkerName('../../etc/passwd'), '..._.._etc_passwd.done');
-  assert.equal(endMarkerName('a b;rm -rf /'), '.a_b_rm_-rf__.done');
-  const path = endMarkerPath('/w/.whiphand/runs/r1', '../escape');
-  assert.equal(dirname(path), join('/w/.whiphand/runs/r1'));
+test('a step id is used verbatim, and one that is not a legal segment is refused rather than flattened', () => {
+  // Distinct legal ids can never collide on one marker, which flattening allowed.
+  assert.equal(endMarkerName('plan'), '.plan.done');
+  assert.equal(endMarkerName('a b'), '.a b.done');
+  assert.notEqual(endMarkerName('a-b'), endMarkerName('a_b'));
+  assert.throws(() => endMarkerName('../../etc/passwd'), /invalid step id/);
+  assert.throws(() => endMarkerName('nul'), /reserved device name/);
+  assert.throws(() => endMarkerPath('/w/.whiphand/runs/r1', '../escape'), /invalid step id/);
 });
 
 test('isEndMarkerName tells markers apart from artifacts', () => {

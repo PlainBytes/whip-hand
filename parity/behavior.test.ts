@@ -10,13 +10,26 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_CONFIG, TOOL_GROUP_LABELS } from '@whiphand/core';
 import type { ToolGroup } from '@whiphand/core';
 import type { DoctorRow } from '@whiphand/agent/src/protocol.ts';
+import { mintVersionStubs, pathWith } from '@whiphand/test-support';
 
 const execFileAsync = promisify(execFile);
 
 const CLI_MAIN = fileURLToPath(new URL('../packages/cli/src/main.ts', import.meta.url));
 const AGENT_MAIN = fileURLToPath(new URL('../packages/agent/src/main.ts', import.meta.url));
 const FIXTURE_WORKSPACE = fileURLToPath(new URL('./fixtures/workspace', import.meta.url));
-const FIXTURE_BIN = fileURLToPath(new URL('./fixtures/bin', import.meta.url));
+// The doctor fixtures' stub runners, minted at start in the shape this platform
+// launches (see test-support) rather than the checked-in bash scripts, which need
+// the executable bit and are invisible to a Windows PATHEXT walk. Same versions.
+const FIXTURE_BIN = mintVersionStubs({
+  claude: '9.9.9-stub', codex: 'codex-cli 0.5.0', copilot: '9.9.9-stub', opencode: '9.9.9-stub',
+});
+
+/**
+ * The suite's real gate is time: every wait here is a budget for child
+ * processes to spawn, and a Windows runner spawns them far more slowly than
+ * the 5000 ms these used to hardcode. One knob, generous by default.
+ */
+const WAIT_MS = Number(process.env.WHIPHAND_PARITY_WAIT_MS ?? 20_000);
 
 // ---------------------------------------------------------------------------
 // Shared fixture plumbing
@@ -43,9 +56,23 @@ const ISOLATED_ENV: Record<string, string> = {
   WHIPHAND_APP_STATE_FILE: join(await mkdtemp(join(tmpdir(), 'whiphand-parity-app-state-')), 'app-state.json'),
 };
 
-/** `process.env` plus isolation, with per-call overrides winning over both. */
+/**
+ * The host variables a child genuinely needs, and no others. The wholesale
+ * `process.env` spread this replaces made every comparison pass by carrying the
+ * same host facts into both children — which is exactly what cancels out on one
+ * machine and cannot across two: a run that reads a variable it should not is
+ * invisible until the same scenario runs on another OS.
+ */
+const HOST_ENV = [
+  'PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'COMSPEC', 'ComSpec', 'HOME', 'USERPROFILE', 'TEMP', 'TMP', 'TMPDIR',
+  'APPDATA', 'LOCALAPPDATA', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'PROGRAMFILES', 'NODE_OPTIONS', 'LANG', 'LC_ALL',
+  'WHIPHAND_JOB_GUARD', 'WHIPHAND_NODE_PTY_DIR',
+];
+
+/** Host variables (allowlisted) plus isolation, with per-call overrides winning over both. */
 function childEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
-  return { ...process.env, ...ISOLATED_ENV, ...overrides };
+  const host = Object.fromEntries(HOST_ENV.filter(k => process.env[k] !== undefined).map(k => [k, process.env[k]]));
+  return { ...host, ...ISOLATED_ENV, ...overrides };
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +96,9 @@ interface SpawnSpecLike {
   cwd: string;
   env: Record<string, string>;
   interactive: boolean;
+  /** Prompts and settings travel in files now, so they are compared like argv always was. */
+  files?: Array<{ path: string; content: string }>;
+  stdinFile?: string;
 }
 
 function normalizeSpec(spec: SpawnSpecLike, dir: string, runId: string): SpawnSpecLike {
@@ -77,6 +107,10 @@ function normalizeSpec(spec: SpawnSpecLike, dir: string, runId: string): SpawnSp
     cwd: normalizeString(spec.cwd, dir, runId),
     env: Object.fromEntries(Object.entries(spec.env).map(([k, v]) => [k, normalizeString(v, dir, runId)])),
     interactive: spec.interactive,
+    ...(spec.files === undefined ? {} : {
+      files: spec.files.map(f => ({ path: normalizeString(f.path, dir, runId), content: normalizeString(f.content, dir, runId) })),
+    }),
+    ...(spec.stdinFile === undefined ? {} : { stdinFile: normalizeString(spec.stdinFile, dir, runId) }),
   };
 }
 
@@ -152,7 +186,7 @@ function startAgentProcess(env: Record<string, string> = {}): {
     child.stdin.write(`${JSON.stringify(obj)}\n`);
   }
 
-  function waitFor(pred: (m: AgentMessage) => boolean, timeoutMs = 5000): Promise<AgentMessage> {
+  function waitFor(pred: (m: AgentMessage) => boolean, timeoutMs = WAIT_MS): Promise<AgentMessage> {
     const existing = messages.find(pred);
     if (existing) return Promise.resolve(existing);
     return new Promise((resolvePromise, reject) => {
@@ -235,6 +269,13 @@ test('dry-run parity: CLI and agent produce identical normalized SpawnSpec seque
     'UUIDs, runIds, and workdir paths — see the diff above for the exact field.',
   );
 
+  // Event payload paths are workspace-relative, so none of them needed the
+  // workdir normalized away to agree.
+  for (const { spec } of [...cli.spawns, ...agent.spawns]) {
+    assert.equal(spec.cwd, '.');
+    for (const file of spec.files ?? []) assert.ok(!file.path.includes('<dir>') && !file.path.startsWith('/'), file.path);
+  }
+
   // The fixture's loop carries a disabled step ('notes'). Matching spawn lists
   // alone would not catch both sides wrongly agreeing to spawn it — this
   // proves neither one starts a session for a disabled step.
@@ -266,7 +307,9 @@ test('dry-run parity: CLI --attach and agent startRun attachments record the sam
   assert.deepEqual(await recorded(agentDir, agent.runId), cliList);
   // And the step that reads them is handed the same prompt by both.
   assert.deepEqual(cli.spawns, agent.spawns);
-  assert.ok(cli.spawns[0].spec.argv.some(a => a.includes('- attachments/bug-2.png: <dir>/')));
+  // The prompt is a file now (workspace-relative paths, one style), compared here in full.
+  const prompt = cli.spawns[0].spec.files?.map(f => f.content).join('\n') ?? '';
+  assert.match(prompt, /- attachments\/bug-2\.png: \.whiphand\/runs\/<runId>\/attachments\/bug-2\.png/);
 });
 
 // ---------------------------------------------------------------------------
@@ -378,7 +421,7 @@ function normalize(facts: DoctorFact[]): DoctorFact[] {
 }
 
 test('doctor parity: CLI human output and agent doctor() report the same tool facts', async () => {
-  const stubEnv = { PATH: `${FIXTURE_BIN}:${process.env.PATH}` };
+  const stubEnv = { PATH: pathWith(FIXTURE_BIN).PATH ?? '' };
 
   const { stdout } = await execFileAsync(process.execPath, [CLI_MAIN, 'doctor'], { env: childEnv(stubEnv) });
   const cliFacts = normalize(parseCliDoctorOutput(stdout));
@@ -386,7 +429,7 @@ test('doctor parity: CLI human output and agent doctor() report the same tool fa
   const agent = startAgentProcess(stubEnv);
   let agentFacts: DoctorFact[];
   try {
-    agent.send({ id: 1, method: 'doctor', params: {} });
+    agent.send({ id: 1, method: 'doctor', params: { workdir: process.cwd() } });
     const res = await agent.waitFor(m => m.id === 1);
     agentFacts = normalize(factsFromAgent(res.result as DoctorRow[]));
   } finally {
@@ -455,7 +498,9 @@ async function readManifest(dir: string, runId: string): Promise<unknown> {
 async function runCliToCompletion(dir: string, workflow: string, args: string[] = []): Promise<string> {
   await execFileAsync(process.execPath, [CLI_MAIN, 'run', workflow, '-C', dir, ...args], { env: childEnv() })
     .catch(() => {});
-  const [runId] = await readdir(join(dir, '.whiphand', 'runs'));
+  // An explicit lookup, not `readdir()[0]`: directory order is a filesystem detail (NTFS differs from ext4).
+  const runId = (await readdir(join(dir, '.whiphand', 'runs'), { withFileTypes: true }))
+    .filter(entry => entry.isDirectory()).map(entry => entry.name).sort().at(-1);
   assert.ok(runId, `expected a run directory under ${dir}`);
   return runId;
 }
@@ -476,7 +521,7 @@ async function resumeCliBudget(dir: string, runId: string, args: string[] = []):
 }
 
 /** Polls a mutable snapshot until `check` returns a defined value, or times out. */
-async function waitForCondition<T>(check: () => T | undefined, timeoutMs = 5000): Promise<T> {
+async function waitForCondition<T>(check: () => T | undefined, timeoutMs = WAIT_MS): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const value = check();

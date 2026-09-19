@@ -4,7 +4,7 @@
  */
 import { createBelScanner } from './bel.ts';
 import { resolveNodePty } from './native.ts';
-import { planLaunch, type SpawnSpec } from '@whiphand/core';
+import { msvcrtQuote, planLaunch, type Container, type SpawnSpec } from '@whiphand/core';
 
 export interface PtyHandle {
   /** `base64` is base64-decoded to raw text/bytes before being written to the pty. */
@@ -33,6 +33,24 @@ export interface StartPtyOpts {
    */
   onBell?(): void;
   signal?: AbortSignal;
+  /** The run's process container: the pty session is adopted into it, and an abort ends its whole tree. */
+  container?: Container;
+}
+
+/**
+ * The command line node-pty is handed on Windows, as one string. Always a
+ * string, on both branches, so node-pty's own array quoter — a genuinely
+ * independent MSVCRT implementation — is never reached and interactive and
+ * headless launches of the same argv agree. The wrapped (cmd.exe) branch uses
+ * the invocation's own line, unchanged; the unwrapped branch is quoted here
+ * with core's `msvcrtQuote`, which is what libuv's own quoting agrees with.
+ * Not forcing the wrapped path is deliberate: that is the cmd.exe path, and
+ * would bring `%VAR%` expansion and the 8191-character cap to the interactive
+ * frontend to fix a quoting difference.
+ */
+export function ptyArgs(plan: ReturnType<typeof planLaunch>, platform: NodeJS.Platform = process.platform): string | string[] {
+  if (plan.invocation !== null) return plan.invocation.commandLine;
+  return platform === 'win32' ? plan.args.map(msvcrtQuote).join(' ') : plan.args;
 }
 
 export function startPty(spec: SpawnSpec, opts: StartPtyOpts): PtyHandle {
@@ -46,7 +64,7 @@ export function startPty(spec: SpawnSpec, opts: StartPtyOpts): PtyHandle {
   // applies its own MSVCRT quoting to array elements and would escape ours a
   // second time.
   const plan = planLaunch(spec.argv);
-  const args = plan.invocation === null ? plan.args : plan.invocation.commandLine;
+  const args = ptyArgs(plan);
   const child = resolveNodePty().spawn(plan.file, args, {
     cwd: spec.cwd,
     env: { ...process.env, ...spec.env },
@@ -80,7 +98,14 @@ export function startPty(spec: SpawnSpec, opts: StartPtyOpts): PtyHandle {
     child.kill();
   };
 
-  const onAbort = (): void => killPty();
+  // A pty child is a session leader, so on POSIX it is its own process group;
+  // on Windows the guard assigns it to the run's job by pid.
+  opts.container?.adopt({ pid: child.pid, once: (_event, listener) => { child.onExit(() => listener()); } });
+
+  const onAbort = (): void => {
+    killPty();
+    void opts.container?.killAll();
+  };
   opts.signal?.addEventListener('abort', onAbort);
 
   const bells = createBelScanner();

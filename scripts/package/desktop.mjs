@@ -15,7 +15,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { runInherited, runSync } from '../../packages/core/src/exec.ts';
 import { repoRoot, distDir } from './sea.mjs';
 import { packageAgent } from './agent.mjs';
 import { smokeAgent } from './smoke.mjs';
@@ -28,7 +28,7 @@ import { buildWebResource } from './web-resource.mjs';
  * machine fails loudly instead of building a bundle with no sidecar in it.
  */
 function hostTargetTriple() {
-  const out = execFileSync('rustc', ['-vV'], { encoding: 'utf8' });
+  const out = runSync(['rustc', '-vV'], { stdio: ['ignore', 'pipe', 'inherit'], check: true }).stdout;
   const match = out.match(/^host:\s*(\S+)$/m);
   if (!match) throw new Error('could not read the host target triple from `rustc -vV`');
   return match[1];
@@ -99,15 +99,16 @@ export async function buildDesktopBundles() {
 
   clearStaleBundles({ bundleRoot, distDir, productName, bundleFormats, bundleExtensions });
 
-  // `npm` on Windows is `npm.cmd`, which execFileSync cannot launch without a
-  // shell — the same CVE-2024-27980 refusal resolveExecutable exists to work
-  // around, here on the one call site that isn't a runner CLI.
-  execFileSync('npm', ['run', 'tauri', '-w', 'desktop', '--', 'build', '--bundles', bundleFormats.join(',')], {
-    cwd: repoRoot,
-    stdio: 'inherit',
-    env: { ...process.env, WHIPHAND_PACKAGE: '1' },
-    shell: process.platform === 'win32',
-  });
+  // `npm` on Windows is `npm.cmd`, which cannot be launched without a shell —
+  // the CVE-2024-27980 refusal resolveExecutable exists to work around. It goes
+  // through the seam (invariant 1) instead of `shell: true`: the seam reads
+  // through the shim or wraps it correctly, and this script needs no
+  // allowlist entry.
+  const status = runInherited(
+    ['npm', 'run', 'tauri', '-w', 'desktop', '--', 'build', '--bundles', bundleFormats.join(',')],
+    { cwd: repoRoot, env: { ...process.env, WHIPHAND_PACKAGE: '1' } },
+  );
+  if (status !== 0) throw new Error(`tauri build exited with status ${status}`);
 
   return collectBundles({ bundleRoot, distDir, productName, version, isWindows, bundleFormats, bundleExtensions });
 }

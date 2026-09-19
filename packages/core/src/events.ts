@@ -7,6 +7,7 @@
  * next to the types they validate and the agent imports them.
  */
 import { z } from 'zod';
+import { DEGRADATION_IDS } from './degradations.ts';
 import type { LoopRef, ManualRequest, WhiphandEvent, Scope, SpawnSpec, StepProgress } from './types.ts';
 
 export const scopeSchema: z.ZodType<Scope> = z.enum(['project', 'global']);
@@ -41,6 +42,7 @@ export const spawnSpecSchema: z.ZodType<SpawnSpec> = z.object({
     format: z.enum(['claude-stream-json', 'copilot-jsonl', 'opencode-json']),
   }).optional(),
   files: z.array(z.object({ path: z.string(), content: z.string() })).optional(),
+  stdinFile: z.string().optional(),
 });
 
 export const manualChoiceSchema = z.enum(['continue', 'abort', 'retry']);
@@ -71,6 +73,7 @@ export const manualRequestSchema: z.ZodType<ManualRequest> = z.object({
   context: z.object({
     artifacts: z.array(z.object({ id: z.string(), path: z.string() })),
     diff: z.string().optional(),
+    diffUnavailable: z.string().optional(),
   }),
   defaultChoice: z.enum(['continue', 'abort']),
   loop: loopFrameSchema.optional(),
@@ -149,6 +152,8 @@ export const whiphandEventSchema: z.ZodType<WhiphandEvent> = z.discriminatedUnio
       id: z.string(), installed: z.boolean(), version: z.string().optional(),
     })),
     git: z.object({ sha: z.string(), dirty: z.boolean() }).optional(),
+    /** The POSIX shell command steps ran through, absolute forward-slash form. Absent on older logs and when none was found. */
+    shell: z.string().optional(),
   }),
   z.object({ type: z.literal('step:tree-delta'), stepId: z.string(), files: z.array(z.string()) }),
   z.object({
@@ -191,6 +196,9 @@ export const whiphandEventSchema: z.ZodType<WhiphandEvent> = z.discriminatedUnio
   }),
   z.object({ type: z.literal('stages:done'), id: z.string(), completed: z.number().int().nonnegative() }),
   z.object({ type: z.literal('guard:warning'), message: z.string(), stepId: z.string().optional() }),
+  z.object({
+    type: z.literal('run:degraded'), capability: z.enum(DEGRADATION_IDS), reason: z.string(), stepId: z.string().optional(),
+  }),
   z.object({ type: z.literal('run:done'), runId: z.string(), ok: z.boolean() }),
   z.object({ type: z.literal('run:error'), stepId: z.string().optional(), message: z.string() }),
   z.object({ type: z.literal('run:cancelled'), runId: z.string() }),

@@ -26,7 +26,7 @@ test('planExec: a native .exe on PATH needs no wrapping', () => {
   assert.deepEqual(options, {});
 });
 
-test('planExec: an unrecognized .cmd shim falls back to a quoted cmd.exe wrapper, not shell: true', () => {
+test('planExec: an unrecognized .cmd shim falls back to a quoted cmd.exe wrapper, not Node\'s shell option', () => {
   const dir = fs.mkdtempSync(path.join(tmpdir(), 'whiphand-sea-'));
   // Deliberately not an npm/pnpm/yarn node-shim shape, so resolveShim bails
   // and planLaunch has to fall back to the cmd.exe wrapper.

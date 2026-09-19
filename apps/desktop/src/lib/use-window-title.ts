@@ -6,14 +6,16 @@
  * workspace's title claim a run it isn't hosting.
  */
 import { useEffect } from 'react';
-import { useAppStore } from '../state/store.ts';
+import { jobInWorkspace, useAppStore } from '../state/store.ts';
 import { applyWindowTitle, formatWindowTitle } from './window-state.ts';
 
 export function useWindowTitle(): void {
   const jobs = useAppStore(state => state.jobs);
   const workspacePath = useAppStore(state => state.workspacePath);
+  const identityKey = useAppStore(state => state.workspaceIdentityKey);
   useEffect(() => {
-    const active = Object.values(jobs).filter(j => !j.finished && j.workdir === workspacePath);
+    const workspace = workspacePath === null ? null : { path: workspacePath, identityKey: identityKey ?? undefined };
+    const active = Object.values(jobs).filter(j => !j.finished && workspace !== null && jobInWorkspace(j, workspace));
     applyWindowTitle(formatWindowTitle(active.length, active.filter(j => j.awaiting).length));
-  }, [jobs, workspacePath]);
+  }, [jobs, workspacePath, identityKey]);
 }

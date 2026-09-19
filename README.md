@@ -74,6 +74,12 @@ Support tools
 marks a harness whiphand can see but has no adapter for — it will not be offered as a
 workflow's `runner:`.
 
+Run inside a project (or with `-C <dir>`; the desktop passes the open workspace), doctor also checks
+that folder and adds a row only when something is wrong with it: git refusing the repository
+(`detected dubious ownership` — the row carries the `git config --global --add safe.directory …` fix,
+and steps that need the write-guard fail until it is applied) and, on Windows, a path too long to leave
+headroom under the 260-character limit (open it through `subst` instead).
+
 ### Adding your own tools
 
 Doctor's built-in table lives in `packages/core/src/tools.ts`. To extend it on your own
@@ -166,7 +172,7 @@ steps:
 
               - id: tests     # a shell command: no runner, no tokens
                 kind: command
-                run: "{{ inputs.test_command }}"
+                run: eval "{{ inputs.test_command }}"
                 verdict: true            # non-zero exit sends test-fix round again
                 output: tests.log
 
@@ -228,8 +234,8 @@ Rejecting at the gate re-runs the whole stage, with the rejection handed to the 
 stage to you in a live session. `allow_paths` on a `writes: true` step fails it, naming the
 file, if it touched anything outside the given globs. See the shipped
 `staged-feature-development` workflow and `docs/design.md`'s "Stages" section for the rest.
-That workflow's commit steps are POSIX shell lines, so on Windows they do not run under the
-default `cmd.exe`.
+That workflow's commit steps are POSIX shell lines; command steps run through a POSIX shell on every
+OS (see *Windows* below), so it runs unchanged on Linux, macOS and Windows.
 
 **Attachments.** `--attach <path>` (repeatable — or the desktop's New Run dialog: pick,
 drop, or paste an image) copies a file into the run before step one; a step reads them by
@@ -322,6 +328,46 @@ Two differences from the desktop app:
 Runs already in progress replay in full when a browser attaches — the agent keeps a
 per-job transcript of terminal and log output, so checking in halfway through a run
 shows what already happened rather than an empty pane.
+
+## Windows
+
+whiphand treats Windows as one more platform with one way to do paths and processes, not a special case.
+
+- **A POSIX shell is required for command steps.** `command` steps run through `/bin/sh` on POSIX and,
+  on Windows, through the `sh.exe`/`bash.exe` that comes with **Git for Windows** — found by deriving it
+  from the `git` on your `PATH` (never a bare `bash` lookup, which on a WSL machine finds
+  `C:\Windows\System32\bash.exe`, a launcher into the wrong filesystem). `whiphand doctor` shows the shell it
+  resolved. With none installed, doctor is red and command steps refuse to run with the fix named; agent
+  steps still work. Write command steps for `/bin/sh`.
+- **Breaking changes** (Windows and, for 2–3, everywhere): (1) the default Windows shell is no longer
+  `cmd.exe`; (2) `{{ }}` in `run:` expands to a shell variable reference (`${WHIPHAND_RUN_NAME}`), so
+  single-quoted uses stop expanding — quote it as you would any shell variable (an input that is itself
+  a command, like the shipped templates' `test_command`, is run as `eval "{{ inputs.test_command }}"`;
+  `eval` only an input whose whole purpose is to be a command, never a run name or stage title); (3) an
+  explicit `shell:` of `cmd`/`cmd.exe`/PowerShell is rejected at parse time.
+- **Portable names.** Anything that becomes a file or directory name — a workflow name, step/loop/stage
+  id, a step's `output` (a *relative path*: `reports/plan.md` is fine, `..`, absolute paths and `\` are
+  not), an attachment name — is rejected at parse time on **every** platform if Windows would reject it:
+  `\ / : * ? " < > |`, control characters, reserved device names (`CON`, `NUL`, `COM1`…, also with an
+  extension), and a trailing dot or space. A workflow authored on Linux with `output: report:v1.md` is
+  refused where you write it.
+- **Prompts are not on the command line.** An agent's prompt travels in a file in the run directory (piped
+  on stdin to `claude -p`, or named by a one-line pointer for the other runners), and Claude's settings are
+  passed by path — so a `%VAR%`, a newline or a long prompt can no longer be eaten by `cmd.exe`.
+- **One path style.** Everything whiphand shows a model or writes to a manifest is workspace-relative
+  with forward slashes; `run.json` stores paths relative to the run directory, so a run directory that
+  moves still resumes.
+- **Nothing outlives the run.** A Windows Job Object per run (via the small `whiphand-job.exe` guard,
+  embedded in the CLI and the desktop agent) ends the whole process tree on cancel, timeout or crash. Liveness
+  is a heartbeat lease (renewed every 30 s, stale at 5 min), so a run whose process was killed is marked
+  crashed **at next start**. A host suspended for more than five minutes loses its run on wake, and a step
+  that deliberately left a process running does not keep it past the run.
+- **What is out of scope.** A workspace on a *typed* UNC path (`\\server\share\proj`) is refused with a
+  clear message — map the share to a drive letter instead. Paths over 260 characters are not guaranteed, but a
+  workspace deep enough to hit the limit warns when it is opened (`subst X: <folder>` is the escape hatch).
+  App state and run directories on redirected or network paths are best-effort and not tested in CI. The
+  remote-access token file is `0666` on Windows (`fs.chmod` only toggles read-only); `doctor` says so. WSL is
+  neither supported nor blocked — it is Linux as far as whiphand is concerned.
 
 ## Standalone binaries
 

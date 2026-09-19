@@ -1,3 +1,4 @@
+import { withStubBin } from '@whiphand/test-support';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -6,11 +7,14 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { opencodeAdapter, parseOpencodeModels, OPENCODE_QUIT_SEQUENCE } from './opencode.ts';
 import { interactiveGuidance } from '../engine/interactive-guidance.ts';
-import { endMarkerPath, shellPath } from '../engine/session-end.ts';
+import { endMarkerPath } from '../engine/session-end.ts';
+import { toFwd } from '../path-form.ts';
+import { SUGGEST_PROMPT_NAME, harvestPromptPath, promptPath } from '../engine/spawn-files.ts';
+import { harvestPrompt } from './common.ts';
 import { awaitStatePath } from '../engine/await-state.ts';
 import { sessionCapturePath } from '../engine/session-capture.ts';
 import { opencodeGuidancePath, opencodePluginPath } from '../engine/opencode-files.ts';
-import type { AgentStep, RunCtx } from '../types.ts';
+import type { AgentStep, RunCtx, SpawnSpec } from '../types.ts';
 
 const fixtureDir = fileURLToPath(new URL('../../../../parity/fixtures/models/', import.meta.url));
 
@@ -28,13 +32,23 @@ function configOf(spec: { env: Record<string, string> }): any {
   return JSON.parse(spec.env.OPENCODE_CONFIG_CONTENT);
 }
 
+/** What core writes at `path` before the spawn. */
+function fileOf(spec: SpawnSpec, path: string): string {
+  const file = spec.files?.find(f => f.path === path);
+  assert.ok(file, `the spec must carry a file at ${path}; it has ${JSON.stringify(spec.files?.map(f => f.path))}`);
+  return file.content;
+}
+
 // --- interactive ------------------------------------------------------
 
-test('interactive: fresh spawn has no session flags, --prompt auto-submits', () => {
+test('interactive: fresh spawn has no session flags, --prompt auto-submits the pointer', () => {
   const spec = opencodeAdapter.interactive(planStep, ctx);
   assert.deepEqual(spec.argv, [
-    'opencode', '--agent', 'whiphand', '-m', 'anthropic/claude', '--prompt', 'Plan it.',
+    'opencode', '--agent', 'whiphand', '-m', 'anthropic/claude',
+    '--prompt', 'Read and follow the instructions in .whiphand/runs/r1/.plan.prompt',
   ]);
+  assert.equal(fileOf(spec, promptPath(ctx.runDir, 'plan')), 'Plan it.');
+  assert.equal(spec.stdinFile, undefined);
   assert.equal(spec.cwd, '/w');
   assert.equal(spec.interactive, true);
 });
@@ -72,8 +86,18 @@ test('interactive: external_directory always names the run dir, for the marker t
 
 test('interactive: bash carve-out pre-approves exactly the marker touch command', () => {
   const config = configOf(opencodeAdapter.interactive(planStep, ctx));
-  const marker = shellPath(endMarkerPath(ctx.runDir, 'plan'));
-  assert.deepEqual(config.agent.whiphand.permission.bash, { [`touch ${marker}`]: 'allow' });
+  // Workspace-relative, the very string the guidance tells the model to run.
+  assert.deepEqual(config.agent.whiphand.permission.bash, { 'touch .whiphand/runs/r1/.plan.done': 'allow' });
+  const guidance = fileOf(opencodeAdapter.interactive(planStep, ctx), opencodeGuidancePath(ctx.runDir, 'plan'));
+  assert.ok(guidance.includes('touch .whiphand/runs/r1/.plan.done'));
+});
+
+test('interactive: a run dir with a space quotes the marker in the rule and the guidance alike', () => {
+  const spaced: RunCtx = { ...ctx, runDir: '/w/my runs/r1' };
+  const spec = opencodeAdapter.interactive(planStep, spaced);
+  assert.deepEqual(configOf(spec).agent.whiphand.permission.bash, { "touch 'my runs/r1/.plan.done'": 'allow' });
+  assert.ok(fileOf(spec, opencodeGuidancePath(spaced.runDir, 'plan')).includes("touch 'my runs/r1/.plan.done'"));
+  assert.deepEqual(spec.awaitState, { statePath: awaitStatePath(spaced.runDir, 'plan') });
 });
 
 test('interactive: model and effort land on the agent config, not just argv', () => {
@@ -90,9 +114,11 @@ test('interactive: instructions and plugin paths in the config match the files d
   const config = configOf(spec);
   const guidance = opencodeGuidancePath(ctx.runDir, 'plan');
   const plugin = opencodePluginPath(ctx.runDir, 'plan');
-  assert.deepEqual(config.instructions, [shellPath(guidance)]);
-  assert.deepEqual(config.plugin, [`file://${shellPath(plugin)}`]);
-  assert.deepEqual(spec.files?.map(f => f.path).sort(), [guidance, plugin].sort());
+  assert.deepEqual(config.instructions, [toFwd(guidance)]);
+  // A real file URL — `file://C:/…` would parse `C:` as the authority.
+  assert.deepEqual(config.plugin, [pathToFileURL(plugin).href]);
+  assert.match(config.plugin[0], /^file:\/\/\//);
+  assert.deepEqual(spec.files?.map(f => f.path).sort(), [guidance, plugin, promptPath(ctx.runDir, 'plan')].sort());
   const guidanceFile = spec.files!.find(f => f.path === guidance)!;
   assert.equal(guidanceFile.content, interactiveGuidance(planStep, ctx));
 });
@@ -114,15 +140,18 @@ test('headless: format json, agent flag, model and variant argv', () => {
   const spec = opencodeAdapter.headless(step, ctx);
   assert.deepEqual(spec.argv, [
     'opencode', 'run', '--format', 'json', '--agent', 'whiphand',
-    '-m', 'anthropic/claude', '--variant', 'max', 'Plan it.',
+    '-m', 'anthropic/claude', '--variant', 'max',
+    'Read and follow the instructions in .whiphand/runs/r1/.plan.prompt',
   ]);
+  assert.equal(fileOf(spec, promptPath(ctx.runDir, 'plan')), 'Plan it.');
+  assert.equal(spec.stdinFile, undefined, "opencode's stdin support for `run` is not verified");
   assert.equal(spec.interactive, false);
   assert.deepEqual(spec.progress, { format: 'opencode-json' });
 });
 
-test('headless: no support files — a headless step has no human to collaborate with', () => {
+test('headless: no support files beyond the prompt — a headless step has no human to collaborate with', () => {
   const step: AgentStep = { ...planStep, mode: 'headless' };
-  assert.equal(opencodeAdapter.headless(step, ctx).files, undefined);
+  assert.deepEqual(opencodeAdapter.headless(step, ctx).files?.map(f => f.path), [promptPath(ctx.runDir, 'plan')]);
 });
 
 test('headless: writes:false denies edit except the run-dir exception, so a read-only step can still write its artifact; writes:true allows it all', () => {
@@ -147,9 +176,13 @@ test('harvest: resumes by id, unconditionally allows edit regardless of the step
 test('harvest: prompt asks for the same artifact write claude/copilot harvest asks for', () => {
   const harvestCtx = { ...ctx, sessionIds: { plan: 'ses_xyz' } };
   const spec = opencodeAdapter.harvest(planStep, harvestCtx);
-  const prompt = spec.argv.at(-1)!;
-  assert.ok(prompt.includes('/w/.whiphand/runs/r1/plan.md'));
+  assert.equal(spec.argv.at(-1), 'Read and follow the instructions in .whiphand/runs/r1/.plan.harvest-prompt');
+  const prompt = fileOf(spec, harvestPromptPath(ctx.runDir, 'plan'));
+  assert.equal(prompt, harvestPrompt(planStep, harvestCtx));
+  assert.ok(prompt.includes(' .whiphand/runs/r1/plan.md.'), prompt);
+  assert.ok(!prompt.includes('/w/.whiphand'), 'workspace-relative, not absolute');
   assert.ok(prompt.includes("'plan.md'"));
+  assert.equal(spec.stdinFile, undefined);
 });
 
 test('harvest: throws when no session id has been captured yet', () => {
@@ -160,9 +193,56 @@ test('harvest: throws when no session id has been captured yet', () => {
 
 test('suggestName: its own agent denies everything, captures stdout only, no -m', () => {
   const spec = opencodeAdapter.suggestName!('name it', ctx, '/tmp/cap');
-  assert.deepEqual(spec.argv, ['opencode', 'run', '--agent', 'whiphand-name', 'name it']);
+  assert.deepEqual(spec.argv, [
+    'opencode', 'run', '--agent', 'whiphand-name',
+    'Read and follow the instructions in .whiphand/runs/r1/.name.suggest-prompt',
+  ]);
+  assert.deepEqual(spec.files, [{ path: join(ctx.runDir, SUGGEST_PROMPT_NAME), content: 'name it' }]);
+  assert.equal(spec.stdinFile, undefined);
   assert.deepEqual(configOf(spec), { agent: { 'whiphand-name': { mode: 'primary', permission: { '*': 'deny' } } } });
   assert.deepEqual(spec.capture, { path: '/tmp/cap', streams: 'stdout' });
+});
+
+// --- prompt off argv ---------------------------------------------------
+
+test('the pointer sentence is the same for interactive and headless of one step', () => {
+  const interactive = opencodeAdapter.interactive(planStep, ctx);
+  const headless = opencodeAdapter.headless({ ...planStep, mode: 'headless' }, ctx);
+  const a = interactive.argv[interactive.argv.indexOf('--prompt') + 1];
+  const b = headless.argv.at(-1);
+  assert.equal(a, b);
+  assert.equal(a, 'Read and follow the instructions in .whiphand/runs/r1/.plan.prompt');
+});
+
+test('an adversarial prompt is written to the file and never appears in argv or the config env', () => {
+  const adversarial =
+    `%COMSPEC% "double" 'single' \`tick\` $(id) & | > ^ ! \\ \n\nsecond line\n${'x'.repeat(20000)}`;
+  const specs: Array<[string, SpawnSpec]> = [
+    ['interactive', opencodeAdapter.interactive({ ...planStep, prompt: adversarial }, ctx)],
+    ['headless', opencodeAdapter.headless({ ...planStep, mode: 'headless', prompt: adversarial }, ctx)],
+  ];
+  for (const [label, spec] of specs) {
+    assert.ok(fileOf(spec, promptPath(ctx.runDir, 'plan')).includes(adversarial), `${label}: file carries the prompt`);
+    for (const a of spec.argv) {
+      assert.ok(a.length < 300, `${label}: an argv element is ${a.length} chars long`);
+      for (const bad of ['%COMSPEC%', '"double"', 'second line', 'xxxxxxxxxx', '$(id)']) {
+        assert.ok(!a.includes(bad), `${label}: argv carries ${bad}`);
+      }
+    }
+    assert.ok(!spec.env.OPENCODE_CONFIG_CONTENT.includes('second line'), `${label}: nor does the config`);
+  }
+});
+
+test('the plugin URL is a real file URL, including for a Windows-shaped run dir', () => {
+  // `file://${path}` made `file://D:/…`, which parses `D:` as the authority.
+  const winCtx: RunCtx = { ...ctx, workdir: 'D:\\w', runDir: 'D:\\w\\.whiphand\\runs\\r1' };
+  const spec = opencodeAdapter.interactive(planStep, winCtx);
+  const url = configOf(spec).plugin[0] as string;
+  assert.ok(url.startsWith('file:///'), url);
+  assert.ok(!url.includes('\\'), url);
+  assert.equal(url, pathToFileURL(opencodePluginPath(winCtx.runDir, 'plan')).href);
+  assert.equal(spec.argv[spec.argv.indexOf('--prompt') + 1],
+    'Read and follow the instructions in .whiphand/runs/r1/.plan.prompt');
 });
 
 // --- listModels ---------------------------------------------------------
@@ -225,28 +305,16 @@ async function tmpRunDir(): Promise<string> {
 }
 
 /**
- * The stub is a bash script, which Windows' PATHEXT lookup never finds — the
- * fallback would see no `opencode` at all, so the tests would either fail or
- * pass for the wrong reason. Same trade as claude-models.test.ts's stubs.
+ * The stub `opencode` is minted by test-support in the shape the platform
+ * launches — a `#!/bin/sh` script, or a `.cmd` in npm shim shape on Windows —
+ * with its behaviour written once, in JS. (It used to be a bash script that
+ * Windows' PATHEXT lookup never found, so these were skipped there.) The
+ * fallback cases assert `undefined`, which is also what "no opencode found"
+ * produces — but the first test's positive match proves the stub is reachable.
  */
-const posixStubs = {
-  skip: process.platform === 'win32' && 'stub binaries on PATH are POSIX-only; see the comment above posixStubs',
-};
-
-/** Puts a stub `opencode` answering `session list` ahead of PATH for the duration of `fn`. */
 async function withSessionListStub<T>(jsonBody: string, fn: () => Promise<T>): Promise<T> {
-  const dir = await mkdtemp(join(tmpdir(), 'whiphand-opencode-stub-'));
-  const script = `#!/usr/bin/env bash\nif [ "$1" = "session" ]; then cat <<'JSON'\n${jsonBody}\nJSON\nexit 0\nfi\nexit 1\n`;
-  const file = join(dir, 'opencode');
-  await writeFile(file, script, { mode: 0o755 });
-  const previousPath = process.env.PATH;
-  process.env.PATH = `${dir}:${previousPath}`;
-  try {
-    return await fn();
-  } finally {
-    process.env.PATH = previousPath;
-    await rm(dir, { recursive: true, force: true });
-  }
+  const script = `if (process.argv[2] === 'session') { process.stdout.write(${JSON.stringify(jsonBody)} + '\\n'); process.exit(0); }\nprocess.exit(1);`;
+  return withStubBin('opencode', script, () => fn());
 }
 
 test('captureSessionId: reads the plugin-written file first, never shelling out', async () => {
@@ -267,7 +335,7 @@ test('captureSessionId: reads the plugin-written file first, never shelling out'
   }
 });
 
-test('captureSessionId: with no file, falls back to session list; exactly one match wins', posixStubs, async () => {
+test('captureSessionId: with no file, falls back to session list; exactly one match wins', async () => {
   const runDir = await tmpRunDir();
   try {
     await writeFile(opencodeGuidancePath(runDir, 'plan'), 'guidance');
@@ -281,7 +349,7 @@ test('captureSessionId: with no file, falls back to session list; exactly one ma
   }
 });
 
-test('captureSessionId: two equally-plausible sessions is ambiguous, not a guess', posixStubs, async () => {
+test('captureSessionId: two equally-plausible sessions is ambiguous, not a guess', async () => {
   const runDir = await tmpRunDir();
   try {
     await writeFile(opencodeGuidancePath(runDir, 'plan'), 'guidance');
@@ -298,7 +366,7 @@ test('captureSessionId: two equally-plausible sessions is ambiguous, not a guess
   }
 });
 
-test('captureSessionId: no session in this directory created after the guidance file means undefined', posixStubs, async () => {
+test('captureSessionId: no session in this directory created after the guidance file means undefined', async () => {
   const runDir = await tmpRunDir();
   try {
     await writeFile(opencodeGuidancePath(runDir, 'plan'), 'guidance');

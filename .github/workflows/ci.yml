@@ -31,20 +31,31 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      # The process guard (crates/job-guard): the Windows job-object backend of
+      # the per-run container. container.win.test.ts kills a parent and asserts
+      # no survivors, grandchildren included — it needs the real binary.
+      - name: Build the process guard (Windows)
+        if: runner.os == 'Windows'
+        run: cargo build --release --manifest-path crates/job-guard/Cargo.toml
       - run: npm ci
       - run: npm run typecheck
+      # Includes scripts/invariants.test.mjs — the platform-gate allowlist and the
+      # grep-shaped invariant checks — so both legs enforce them.
       - run: npm test
 
   parity:
-    # Real spawns end to end. Linux-only, but the gap is narrower than it was:
-    # packages/core/src/exec.win.test.ts round-trips adversarial argv on the
-    # `test` job's Windows leg — through a readable npm shim, which is the
-    # path a runner actually takes, and through an unreadable one, which is
-    # the cmd.exe fallback and the only place cmd's parser still applies. So
-    # argument fidelity is now checked on Windows rather than reasoned about.
-    # What stays uncovered there is a whole workflow's worth of spawning.
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Real spawns end to end, on both platforms. The Windows leg is what closes
+    # the gap this job used to name out loud — "a whole workflow's worth of
+    # spawning" — and it is the leg that exercises the job object, the pty
+    # command-line string and the prompt path together. It also runs the one
+    # cross-OS scenario (parity/golden.test.ts): both legs compare their
+    # normalized artifact bundle byte for byte against ONE checked-in golden.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -52,7 +63,11 @@ jobs:
           node-version: 24
           cache: npm
       - name: Install build tools (node-pty source-build fallback)
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y build-essential python3
+      - name: Build the process guard (Windows)
+        if: runner.os == 'Windows'
+        run: cargo build --release --manifest-path crates/job-guard/Cargo.toml
       - run: npm ci
       - run: npm run test:parity
 

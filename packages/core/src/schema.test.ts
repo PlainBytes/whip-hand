@@ -1411,3 +1411,46 @@ steps:
 `;
   assert.deepEqual(unattendedProblems(parseWorkflow(workflow)), []);
 });
+
+// ---------------------------------------------------------------------------
+// Portable names (invariant 3) and the shell decision
+// ---------------------------------------------------------------------------
+
+function agent(id: string, extra = ''): string {
+  return `  - id: ${id}\n    runner: claude\n    mode: headless\n    writes: false\n    output: ${id}.md\n    prompt: hi\n${extra}`;
+}
+
+test('rejects step, loop and stage-step ids that Windows cannot use as a file name', () => {
+  for (const id of ['nul', 'con', 'a:b', 'plan.']) {
+    assert.throws(() => parseWorkflow(`name: w\nsteps:\n  - id: "${id}"\n    runner: claude\n    mode: headless\n    writes: false\n    output: out.md\n    prompt: hi\n`),
+      /id '.*' .*(reserved device name|not allow|ends with)/, id);
+  }
+  assert.throws(() => parseWorkflow(`name: w\nsteps:\n  - kind: loop\n    id: "aux"\n    until: v\n    steps:\n      - id: v\n        runner: claude\n        mode: headless\n        writes: false\n        verdict: true\n        output: v.md\n        prompt: hi\n`),
+    /loop id 'aux'/);
+});
+
+test('step output is a relative path: subdirectories pass, the rest are rejected where the author is standing', () => {
+  assert.doesNotThrow(() => parseWorkflow(`name: w\nsteps:\n  - id: a\n    runner: claude\n    mode: headless\n    writes: false\n    output: reports/plan.md\n    prompt: hi\n`));
+  for (const output of ['report:v1.md', '../plan.md', '/abs/plan.md', 'C:/plan.md', 'reports/nul.txt', 'a\\\\b.md']) {
+    assert.throws(() => parseWorkflow(`name: w\nsteps:\n  - id: a\n    runner: claude\n    mode: headless\n    writes: false\n    output: "${output}"\n    prompt: hi\n`),
+      /step 'a': output/, output);
+  }
+});
+
+test('an explicit cmd or PowerShell shell is refused, naming the breaking change', () => {
+  for (const shell of ['cmd', 'cmd.exe', 'C:\\\\Windows\\\\System32\\\\cmd.exe', 'powershell', 'PowerShell.exe', 'pwsh', 'pwsh.exe']) {
+    assert.throws(() => parseWorkflow(`name: w\nsteps:\n  - id: c\n    kind: command\n    run: echo hi\n    shell: '${shell}'\n`),
+      /shell '.*' is not supported.*breaking change/s, shell);
+  }
+  assert.doesNotThrow(() => parseWorkflow(`name: w\nsteps:\n  - id: c\n    kind: command\n    run: echo hi\n    shell: bash\n`));
+});
+
+test('two inputs that map to one env name are rejected, never resolved', () => {
+  assert.throws(() => parseWorkflow(`name: w\ninputs:\n  a-b: { required: false }\n  a_b: { required: false }\nsteps:\n${agent('s')}`),
+    /inputs 'a-b' and 'a_b' both map to WHIPHAND_INPUT_A_B/);
+});
+
+test('two command inputs whose artifact env names collide are rejected', () => {
+  assert.throws(() => parseWorkflow(`name: w\nsteps:\n${agent('a-b')}${agent('a_b')}  - id: c\n    kind: command\n    run: echo\n    inputs: [a-b, a_b]\n`),
+    /both map to WHIPHAND_ARTIFACT_A_B/);
+});

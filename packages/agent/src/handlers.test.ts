@@ -1,11 +1,12 @@
+import { withStubBin } from '@whiphand/test-support';
 import { test, before, after } from 'node:test';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { RunJournal } from '@whiphand/core';
+import { RunJournal, pathKey } from '@whiphand/core';
 import { createHandlers } from './handlers.ts';
 import { JobManager } from './jobs.ts';
 import { AppStateStore, EMPTY_APP_STATE } from './app-state.ts';
@@ -216,6 +217,87 @@ test('setWorkspacePinned sets and clears the flag, and ignores an unknown path',
   assert.equal(after.recentWorkspaces[0].pinned, undefined);
 });
 
+/** A real directory and a symlink to it: two spellings of one workspace that only realpath can tell are the same. */
+async function aliasedWorkspace(): Promise<{ real: string; alias: string; key: string }> {
+  const real = await mkdtemp(join(tmpdir(), 'whiphand-ws-real-'));
+  const alias = join(await mkdtemp(join(tmpdir(), 'whiphand-ws-alias-')), 'alias');
+  await symlink(real, alias, 'dir');
+  return { real, alias, key: pathKey(await realpath(real)) };
+}
+
+type RecentList = { recentWorkspaces: { path: string; identityKey?: string; pinned?: boolean }[] };
+
+test('touchRecentWorkspace stores the identity key and treats an alias of a listed workspace as the same one', async () => {
+  const appState = await tempAppState();
+  const handlers = createHandlers({ jobs: new JobManager(), notify: () => {}, appState });
+  const { real, alias, key } = await aliasedWorkspace();
+  const touch = (path: string) => handlers.touchRecentWorkspace({ path }, { notify: () => {} }) as Promise<RecentList>;
+
+  assert.equal((await touch(real)).recentWorkspaces[0].identityKey, key);
+  const { recentWorkspaces } = await touch(alias);
+
+  assert.equal(recentWorkspaces.length, 1, 'one workspace, not two with separate state');
+  // The spelling it was opened by this time; the operational path is never the canonical form.
+  assert.equal(recentWorkspaces[0].path, resolve(alias));
+  assert.equal(recentWorkspaces[0].identityKey, key);
+});
+
+test('touchRecentWorkspace adopts the key for an entry written before keys existed', async () => {
+  const appState = await tempAppState();
+  const { real, key } = await aliasedWorkspace();
+  await appState.mutate(s => ({ ...s, recentWorkspaces: [{ path: real, lastOpenedAt: 'then', pinned: true }] }));
+  const handlers = createHandlers({ jobs: new JobManager(), notify: () => {}, appState });
+
+  const { recentWorkspaces } = await handlers.touchRecentWorkspace({ path: real }, { notify: () => {} }) as RecentList;
+  assert.deepEqual(recentWorkspaces.map(r => [r.path, r.identityKey, r.pinned]), [[real, key, true]]);
+});
+
+test('setWorkspacePinned finds the entry by identity, and still by its exact path when the directory is gone', async () => {
+  const appState = await tempAppState();
+  const handlers = createHandlers({ jobs: new JobManager(), notify: () => {}, appState });
+  const { real, alias, key } = await aliasedWorkspace();
+  const pin = (path: string, pinned: boolean) =>
+    handlers.setWorkspacePinned({ path, pinned }, { notify: () => {} }) as Promise<RecentList>;
+  await handlers.touchRecentWorkspace({ path: real }, { notify: () => {} });
+
+  const viaAlias = await pin(alias, true);
+  assert.deepEqual(viaAlias.recentWorkspaces.map(r => [r.path, r.pinned]), [[real, true]]);
+
+  // Unmounted target: its key can no longer be recomputed, but the entry the client clicked is named by its own path.
+  await appState.mutate(s => ({
+    ...s, recentWorkspaces: [{ path: join(alias, 'gone'), identityKey: `${key}/gone`, lastOpenedAt: 'now', pinned: true }],
+  }));
+  assert.equal((await pin(join(alias, 'gone'), false)).recentWorkspaces[0].pinned, undefined);
+});
+
+test('startRun keys the job and its remembered inputs by identity, however the workspace was spelled', async () => {
+  const jobs = new JobManager();
+  const appState = await tempAppState();
+  const notes: Array<{ method: string; params: any }> = [];
+  const ctx = { notify: (method: string, params: unknown) => notes.push({ method, params }) };
+  const { startRun } = createHandlers({ jobs, notify: () => {}, appState });
+  const { real, alias, key } = await aliasedWorkspace();
+  await mkdir(join(real, '.whiphand', 'workflows'), { recursive: true });
+  await writeFile(join(real, '.whiphand', 'workflows', 'plain.yaml'),
+    'name: plain\nsteps:\n  - id: look\n    kind: command\n    run: "true"\n');
+
+  for (const workdir of [real, alias]) {
+    const { jobId } = await startRun({ workdir, workflow: 'plain', dryRun: true }, ctx) as { jobId: string };
+    const job = jobs.get(jobId)!;
+    await job.promise;
+    assert.equal(job.identityKey, key);
+    assert.equal(job.workdir, resolve(workdir), 'the operational path is the one the user opened');
+  }
+
+  const tagged = notes.filter(n => n.method === 'whiphandEvent' || n.method === 'runStateChanged');
+  assert.ok(tagged.length > 0);
+  for (const { params } of tagged) assert.equal(params.identityKey, key);
+
+  const state = await appState.get();
+  assert.equal(Object.keys(state.workspaces).length, 1);
+  assert.equal(state.workspaces[real]?.identityKey, key);
+});
+
 test('getAppState keeps a pinned workspace whose directory vanished', async () => {
   const appState = await tempAppState();
   const ws = await mkdtemp(join(tmpdir(), 'whiphand-ws-'));
@@ -290,6 +372,24 @@ test('listRecentRuns merges runs across recent workspaces, newest first', async 
   const runs = await handlers.listRecentRuns({}, { notify: () => {} }) as { runId: string; workspace: string }[];
   assert.deepEqual(runs.map(r => r.runId), ['run-b', 'run-a']);
   assert.equal(runs[0].workspace, wsB);
+});
+
+test('listRecentRuns tags each run with its workspace\'s identity key, when the entry has one', async () => {
+  const appState = await tempAppState();
+  const keyed = await mkdtemp(join(tmpdir(), 'whiphand-recent-'));
+  const legacy = await mkdtemp(join(tmpdir(), 'whiphand-recent-'));
+  await fixtureRunAt(keyed, 'run-k', '2026-01-03T00:00:00Z');
+  await fixtureRunAt(legacy, 'run-l', '2026-01-02T00:00:00Z');
+  await appState.mutate(s => ({
+    ...s,
+    recentWorkspaces: [
+      { path: keyed, identityKey: '/real/keyed', lastOpenedAt: 'x' },
+      { path: legacy, lastOpenedAt: 'x' },
+    ],
+  }));
+  const handlers = createHandlers({ jobs: new JobManager(), notify: () => {}, appState });
+  const runs = await handlers.listRecentRuns({}, { notify: () => {} }) as { identityKey?: string }[];
+  assert.deepEqual(runs.map(r => r.identityKey), ['/real/keyed', undefined]);
 });
 
 test('listRecentRuns respects the limit parameter', async () => {
@@ -762,7 +862,7 @@ test('pruneRuns: deletes oldest-first once the count exceeds max', async () => {
   await fixtureRunAt(workdir, 'run-c', '2026-01-03T00:00:00Z');
 
   const result = await pruneRuns({ workdir, max: 2 }, { notify: () => {} });
-  assert.deepEqual(result, { deleted: ['run-a'] });
+  assert.deepEqual(result, { deleted: ['run-a'], failed: [] });
   await assert.rejects(() => stat(join(workdir, '.whiphand', 'runs', 'run-a')));
   await stat(join(workdir, '.whiphand', 'runs', 'run-b'));
   await stat(join(workdir, '.whiphand', 'runs', 'run-c'));
@@ -953,37 +1053,23 @@ test('statArtifact: the same containment as readArtifact, symlink escape include
  * is fine here since these tests are about caching and invalidation, not
  * claude's own wire format (that's claude-models.test.ts).
  *
- * POSIX-only, and skipped on Windows for the same two reasons the equivalent
- * stubs in claude-models.test.ts are: PATH is `;`-delimited there, and the
- * PATHEXT walk in exec.ts cannot see an extensionless `copilot` anyway. The
- * caching and invalidation these pin are platform-independent, so nothing
- * about them is Windows-specific — only the way the probe is fed is.
+ * The stub is minted by test-support in the shape the platform launches (a
+ * `#!/bin/sh` script, or a `.cmd` in npm shim shape on Windows) with its
+ * behaviour written once, in JS — so these run on every leg instead of being
+ * skipped where an extensionless bash script is invisible to the PATHEXT walk.
  */
-const posixStubs = {
-  skip: process.platform === 'win32' && 'a stub `copilot` on PATH is POSIX-only; see the comment above stubCopilotPath',
-};
-
-async function stubCopilotPath(modelId: string): Promise<{ dir: string; rewrite: (nextModelId: string) => Promise<void> }> {
-  const dir = await mkdtemp(join(tmpdir(), 'whiphand-handlers-copilot-'));
-  const script = (id: string) => [
-    '#!/usr/bin/env bash',
-    'if [ "$1" = "--version" ]; then echo "9.9.9"; exit 0; fi',
-    'if [ "$1" = "help" ] && [ "$2" = "config" ]; then',
-    '  echo "  \\`model\\`: AI model to use."',
-    `  echo '    - "${id}"'`,
-    '  echo',
-    '  exit 0',
-    'fi',
-    'exit 1',
-    '',
+function copilotStub(id: string): string {
+  return [
+    "const [a, b] = process.argv.slice(2);",
+    "if (a === '--version') { console.log('9.9.9'); process.exit(0); }",
+    "if (a === 'help' && b === 'config') {",
+    "  console.log('  `model`: AI model to use.');",
+    `  console.log(${JSON.stringify(`    - "${id}"`)});`,
+    '  console.log();',
+    '  process.exit(0);',
+    '}',
+    'process.exit(1);',
   ].join('\n');
-  const file = join(dir, 'copilot');
-  await writeFile(file, script(modelId));
-  await promisify(execFile)('chmod', ['+x', file]);
-  return {
-    dir,
-    rewrite: async (nextModelId: string) => writeFile(file, script(nextModelId)),
-  };
 }
 
 test('listModels: returns one ModelList per adapter that offers listModels, keyed by runner id', async () => {
@@ -995,14 +1081,9 @@ test('listModels: returns one ModelList per adapter that offers listModels, keye
   }
 });
 
-test('listModels caches within the agent process; doctor invalidates it so the next call re-probes', posixStubs, async t => {
-  const { dir, rewrite } = await stubCopilotPath('model-a');
-  const previousPath = process.env.PATH;
-  // Prepended, not replaced: the stub script's own `#!/usr/bin/env bash`
-  // shebang needs `env` and `bash` still reachable on PATH.
-  process.env.PATH = `${dir}:${previousPath ?? ''}`;
-  t.after(async () => { process.env.PATH = previousPath; });
-
+test('listModels caches within the agent process; doctor invalidates it so the next call re-probes', async () => {
+  await withStubBin('copilot', copilotStub('model-a'), async stub => {
+  const rewrite = async (id: string): Promise<void> => stub.rewrite(copilotStub(id));
   const { listModels, doctor } = await setup();
 
   const first = await listModels({}, { notify: () => {} }) as Record<string, { models: { id: string }[] }>;
@@ -1017,18 +1098,17 @@ test('listModels caches within the agent process; doctor invalidates it so the n
 
   const third = await listModels({}, { notify: () => {} }) as Record<string, { models: { id: string }[] }>;
   assert.ok(third.copilot.models.some(m => m.id === 'model-b'), 'doctor invalidated the catalog: this call re-probed');
+  });
 });
 
-test('listModels: refresh: true re-probes even without a doctor call', posixStubs, async t => {
-  const { dir, rewrite } = await stubCopilotPath('model-a');
-  const previousPath = process.env.PATH;
-  process.env.PATH = `${dir}:${previousPath ?? ''}`;
-  t.after(async () => { process.env.PATH = previousPath; });
-
+test('listModels: refresh: true re-probes even without a doctor call', async () => {
+  await withStubBin('copilot', copilotStub('model-a'), async stub => {
+  const rewrite = async (id: string): Promise<void> => stub.rewrite(copilotStub(id));
   const { listModels } = await setup();
   await listModels({}, { notify: () => {} });
   await rewrite('model-b');
 
   const refreshed = await listModels({ refresh: true }, { notify: () => {} }) as Record<string, { models: { id: string }[] }>;
   assert.ok(refreshed.copilot.models.some(m => m.id === 'model-b'));
+  });
 });

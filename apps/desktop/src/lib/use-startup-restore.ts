@@ -34,7 +34,7 @@ export function useStartupRestore(client: AgentClient, caps?: NavCapabilities): 
         const restored = resolvePersistedPage(state.lastPage, caps);
         if (restored) store().setPage(restored);
         const latest = state.recentWorkspaces[0];
-        if (!store().workspacePath && latest) store().setWorkspacePath(latest.path);
+        if (!store().workspacePath && latest) store().setWorkspacePath(latest.path, latest.identityKey);
       } catch {
         // No app state (old agent, broken disk): behave exactly like today.
       } finally {

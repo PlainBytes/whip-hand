@@ -1,5 +1,5 @@
 import type { Workflow, RunnerAdapter, Step } from './types.ts';
-import { flattenSteps, isAgentStep, isManualStep } from './steps.ts';
+import { flattenSteps, isAgentStep, isCommandStep, isManualStep } from './steps.ts';
 import { claudeAdapter } from './adapters/claude.ts';
 import { copilotAdapter } from './adapters/copilot.ts';
 import { opencodeAdapter } from './adapters/opencode.ts';
@@ -66,6 +66,27 @@ export function validateWorkflowRunners(workflow: Workflow, registry: AdapterReg
 
 function allSteps(workflow: Workflow): Step[] {
   return flattenSteps(workflow.steps).map(f => f.step);
+}
+
+/**
+ * Command steps run through a POSIX shell, and on Windows that shell is a hard
+ * requirement rather than a preference: with none found, every enabled command
+ * step is refused up front with the remediation named, while agent steps —
+ * which do not need the shell — still run. Called on the *effective* workflow,
+ * so a disabled command step does not refuse the run. A step that names its own
+ * `shell:` does not need discovery, so it is not refused.
+ *
+ * `shell` is structural rather than an import of shell.ts's `ShellResult`, to
+ * keep this module free of node-only code.
+ */
+export function validateWorkflowShell(
+  workflow: Workflow, shell: { ok: true } | { ok: false; reason: string; remediation: string },
+): string[] {
+  if (shell.ok) return [];
+  return allSteps(workflow)
+    .filter(isCommandStep)
+    .filter(step => step.shell === undefined)
+    .map(step => `step '${step.id}': ${shell.reason}. ${shell.remediation}`);
 }
 
 /**

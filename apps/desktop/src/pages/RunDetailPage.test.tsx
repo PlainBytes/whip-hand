@@ -900,6 +900,68 @@ describe('RunDetailPage', () => {
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
   });
 
+  describe('degradations (invariant 7)', () => {
+    it('shows what a finished run lost, from its manifest: label, reason, and the step when scoped', async () => {
+      const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'r-deg');
+      await respondGetRun(transport, {
+        runId: 'r-deg', runDir: '/ws/.whiphand/runs/r-deg', status: 'succeeded', artifacts: [],
+        degradations: [
+          { capability: 'git-guard', reason: 'not a git repository', at: '2026-01-01T00:00:01Z' },
+          { capability: 'diff', reason: 'git is unavailable', stepId: 'build', at: '2026-01-01T00:00:02Z' },
+        ],
+      });
+
+      const panel = await screen.findByTestId('run-degraded');
+      expect(panel).toHaveTextContent('Degraded');
+      const lines = within(panel).getAllByTestId('run-degradation');
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toHaveTextContent('Read-only tree guard off (not a git repository) — not a git repository');
+      expect(lines[1]).toHaveTextContent('Step diff unavailable [build] — git is unavailable');
+    });
+
+    it('shows a live run:degraded as it arrives, and once when the manifest reports it too', async () => {
+      const { transport } = renderRunDetail('job-1', vi.fn(), vi.fn(), 'run-1');
+      act(() => {
+        emitWhiphandEvent(transport, 'job-1', 'run-1',
+          { type: 'run:start', runId: 'run-1', workflow: 'ship' }, 't1');
+        emitWhiphandEvent(transport, 'job-1', 'run-1',
+          { type: 'run:degraded', capability: 'hooks', reason: 'the runner rejected them', stepId: 'plan' }, 't2');
+      });
+      expect(await screen.findByTestId('run-degraded')).toHaveTextContent('Runner hooks dropped [plan] — the runner rejected them');
+
+      // run:start flipped the job's status, which re-fetched: answer the live request, not the one it replaced.
+      const req = transport.sentRequest(transport.sent.map(l => (JSON.parse(l) as { method?: string }).method).lastIndexOf('getRun'));
+      transport.emitLine({
+        id: req.id,
+        result: {
+          runId: 'run-1', runDir: '/ws/.whiphand/runs/run-1', status: 'running', name: 'Shipping', artifacts: [],
+          degradations: [{ capability: 'hooks', reason: 'the runner rejected them', stepId: 'plan', at: 't2' }],
+        },
+      });
+      // The manifest has landed once its name does; the loss is still one line.
+      await screen.findByText('Shipping');
+      expect(screen.getAllByTestId('run-degradation')).toHaveLength(1);
+    });
+
+    it('names a capability this build does not know by its raw id', async () => {
+      const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'r-new');
+      await respondGetRun(transport, {
+        runId: 'r-new', runDir: '/ws/.whiphand/runs/r-new', status: 'succeeded', artifacts: [],
+        degradations: [{ capability: 'from-the-future', reason: 'newer engine', at: 't' }],
+      });
+      expect(await screen.findByTestId('run-degradation')).toHaveTextContent('from-the-future — newer engine');
+    });
+
+    it('renders no panel at all for a run that lost nothing', async () => {
+      const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'r-clean');
+      await respondGetRun(transport, {
+        runId: 'r-clean', runDir: '/ws/.whiphand/runs/r-clean', status: 'succeeded', artifacts: [], degradations: [],
+      });
+      await screen.findByText('Run r-clean');
+      expect(screen.queryByTestId('run-degraded')).not.toBeInTheDocument();
+    });
+  });
+
   it('a run stopped in triage says which stage it stopped at', async () => {
     const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'r-triage');
     // What core records once a stage's retries run out: the stages row names
@@ -1153,6 +1215,25 @@ describe('RunDetailPage: cycles and manual steps', () => {
       return transport.sentRequest(index);
     });
   }
+
+  it('opens a workspace-relative artifact path from the request through the manifest\'s artifact by name', async () => {
+    const { transport } = renderRunDetail('job-rel', undefined, undefined, 'r1');
+    await respondGetRun(transport, {
+      runId: 'r1', runDir: '/ws/.whiphand/runs/r1', status: 'running',
+      artifacts: [{ name: 'plan.md', path: '/ws/.whiphand/runs/r1/plan.md' }],
+    });
+    transport.emitLine({
+      method: 'manualRequest',
+      params: {
+        jobId: 'job-rel', runId: 'r1',
+        request: { ...request, context: { artifacts: [{ id: 'plan', path: '.whiphand/runs/r1/plan.md' }] } },
+      },
+    });
+
+    fireEvent.click(await screen.findByTestId('review-source-plan'));
+    const req = await answerReadArtifact(transport, new Set<number>(), '# The plan');
+    expect(req.params).toEqual({ workdir: '/ws', runId: 'r1', name: 'plan.md' });
+  });
 
   it('takes the screen when the run parks on a human, and answers it over RPC', async () => {
     const { transport } = renderRunDetail('job-manual');

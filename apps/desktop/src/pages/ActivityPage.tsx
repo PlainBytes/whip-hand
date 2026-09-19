@@ -5,6 +5,7 @@ import {
 } from '@fluentui/react-components';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { liveStageProgress, useAppStore, waitingRunIds } from '../state/store.ts';
+import { sameWorkspace } from '../../../../packages/core/src/path-form.ts';
 import { openWorkspace } from '../lib/workspace-switch.ts';
 import { basename } from '../lib/workspace-identity.ts';
 import { WorkspaceDot } from '../components/WorkspaceDot.tsx';
@@ -23,7 +24,7 @@ const makeColumns = (
     renderHeaderCell: () => 'Workspace',
     renderCell: run => (
       <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <WorkspaceDot path={run.workspace} />
+        <WorkspaceDot path={run.workspace} identityKey={run.identityKey} />
         {basename(run.workspace)}
       </span>
     ),
@@ -43,6 +44,7 @@ const makeColumns = (
 export function ActivityPage({ onSelectRun }: ActivityPageProps) {
   const client = useAgentClient();
   const workspacePath = useAppStore(state => state.workspacePath);
+  const identityKey = useAppStore(state => state.workspaceIdentityKey);
   const jobs = useAppStore(state => state.jobs);
   const [runs, setRuns] = useState<RecentRun[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -78,7 +80,8 @@ export function ActivityPage({ onSelectRun }: ActivityPageProps) {
   }, [client]);
 
   async function openRun(entry: RecentRun): Promise<void> {
-    if (entry.workspace !== workspacePath) {
+    const here = workspacePath === null ? null : { path: workspacePath, identityKey: identityKey ?? undefined };
+    if (here === null || !sameWorkspace({ path: entry.workspace, identityKey: entry.identityKey }, here)) {
       try {
         await openWorkspace(client, entry.workspace);
       } catch {

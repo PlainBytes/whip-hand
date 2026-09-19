@@ -21,6 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { buildSingleExecutable, assertInjectableNode, repoRoot } from './sea.mjs';
 import { smokeAgent } from './smoke.mjs';
+import { guardAssets } from './guard.mjs';
 
 const nodePtyDir = path.join(repoRoot, 'node_modules/node-pty');
 
@@ -33,6 +34,9 @@ export async function packageAgent() {
     name: 'whiphand-agent',
     entry: path.join(repoRoot, 'packages/agent/src/main.ts'),
     external: ['node-pty', 'bufferutil', 'utf-8-validate'],
+    // Windows: the process guard, extracted on first use (see guard.mjs). Desktop
+    // runs are hosted by this sidecar, so it is the one that needs it.
+    assets: guardAssets(),
     define: { WHIPHAND_NODE_PTY_DIR_DEFAULT: JSON.stringify(nodePtyDir) },
   });
 }

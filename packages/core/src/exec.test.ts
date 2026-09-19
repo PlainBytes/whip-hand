@@ -6,6 +6,7 @@ import { pbkdf2 } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
+  crlfToLf,
   resolveExecutable, msvcrtQuote, cmdInvocation, planLaunch, spawnRunner, pipeChild, routeHeadless,
 } from './exec.ts';
 import type { SpawnSpec } from './types.ts';
@@ -156,14 +157,14 @@ test('planLaunch needs no cmd.exe on POSIX, nor for a Windows .exe', () => {
   assert.equal(planLaunch(['C:\\tools\\claude.exe', '-p'], { platform: 'win32', env: {} }).invocation, null);
 });
 
-test('planLaunch wraps a command step whose argv[0] is already cmd.exe', () => {
-  // commandSpec builds exactly this shape on Windows. The run line is a cmd
-  // command, not an MSVCRT argument, so it gets the outer quotes and nothing
-  // else — libuv's own escaping would turn `echo "hi"` into `echo \"hi\"`.
-  const inv = planLaunch(['cmd.exe', '/d', '/s', '/c', 'echo "hi"'], { platform: 'win32', env: {} }).invocation;
-  assert.ok(inv);
-  assert.equal(inv.file, 'cmd.exe');
-  assert.deepEqual(inv.args, ['/d', '/s', '/c', '"echo "hi""']);
+test('planLaunch no longer special-cases an argv[0] of cmd.exe', () => {
+  // Command steps used to reach cmd.exe as argv[0] and needed a verbatim
+  // `"…"`-wrapped run line. They run through a POSIX shell now, on every
+  // platform, so the cmd.exe hop exists only for a `.cmd` shim we could not
+  // read — and nothing here treats cmd.exe as a shell to quote for.
+  const plan = planLaunch(['cmd.exe', '/d', '/s', '/c', 'echo "hi"'], { platform: 'win32', env: {} });
+  assert.equal(plan.invocation, null);
+  assert.deepEqual([plan.file, ...plan.args], ['cmd.exe', '/d', '/s', '/c', 'echo "hi"']);
 });
 
 test('planLaunch leaves a non-cmd shell to libuv\'s ordinary quoting', () => {
@@ -396,29 +397,73 @@ function saturateThreadpool(): Promise<void> {
   return Promise.all(jobs).then(() => {});
 }
 
-test('pipeChild resolves only after the capture file is closed, whatever the unit', async () => {
+test('pipeChild resolves only after the capture file is closed', async () => {
   // The race the agent frontend lost: fs writes queue on the threadpool while
   // pipe reads do not, so with the pool busy as the last line arrives, the
   // child's 'close' comes long before that line reaches disk. A footer
   // appended synchronously at resolve time must still land after it.
   const dir = mkdtempSync(path.join(tmpdir(), 'whiphand-pipe-'));
   try {
-    for (const unit of ['chunk', 'line'] as const) {
-      const file = path.join(dir, `${unit}.log`);
-      let busy: Promise<void> = Promise.resolve();
-      const code = await pipeChild(nodeChild("console.log('first'); setTimeout(() => console.log('last'), 50)"), {
-        onChunk: chunk => { if (chunk.includes('last')) busy = saturateThreadpool(); },
-        onLine: line => { if (line === 'last') busy = saturateThreadpool(); },
-        capture: { path: file, streams: ['stdout'], unit },
-      });
-      assert.equal(code, 0);
-      appendFileSync(file, 'FOOTER\n');
-      assert.equal(readFileSync(file, 'utf8'), 'first\nlast\nFOOTER\n', `unit: ${unit}`);
-      await busy;
-    }
+    const file = path.join(dir, 'out.log');
+    let busy: Promise<void> = Promise.resolve();
+    const code = await pipeChild(nodeChild("console.log('first'); setTimeout(() => console.log('last'), 50)"), {
+      onChunk: chunk => { if (chunk.includes('last')) busy = saturateThreadpool(); },
+      onLine: line => { if (line === 'last') busy = saturateThreadpool(); },
+      capture: { path: file, streams: ['stdout'] },
+    });
+    assert.equal(code, 0);
+    appendFileSync(file, 'FOOTER\n');
+    assert.equal(readFileSync(file, 'utf8'), 'first\nlast\nFOOTER\n');
+    await busy;
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('crlfToLf folds CRLF, holds a CR across a chunk boundary, and keeps a lone CR', () => {
+  const fold = (chunks: string[]): string => {
+    const f = crlfToLf();
+    return Buffer.concat([...chunks.map(c => f.write(Buffer.from(c))), f.end()]).toString();
+  };
+  assert.equal(fold(['a\r\nb\r\n']), 'a\nb\n');
+  assert.equal(fold(['a\r', '\nb']), 'a\nb', 'CRLF split across chunks');
+  assert.equal(fold(['a\r', 'b']), 'a\rb', 'a CR that is not followed by LF survives');
+  assert.equal(fold(['spin\rspin\rdone\n']), 'spin\rspin\rdone\n', 'a spinner redraw is preserved');
+  assert.equal(fold(['end\r']), 'end\r', 'a trailing CR is released at the end of the stream');
+  assert.equal(fold(['\r\r\n']), '\r\n', 'a CR before a CRLF is the lone CR it always was');
+  assert.equal(fold(['x', '', 'y\r\n']), 'xy\n');
+});
+
+test('pipeChild captures artifacts LF-only while the live tee stays byte-exact', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'whiphand-pipe-'));
+  try {
+    const file = path.join(dir, 'out.log');
+    const live: Buffer[] = [];
+    const code = await pipeChild(
+      nodeChild("process.stdout.write('one\\r\\ntwo\\r'); setTimeout(() => process.stdout.write('\\nthree\\rspin\\r\\n'), 30)"),
+      { onChunk: chunk => live.push(chunk), capture: { path: file, streams: ['stdout'] } },
+    );
+    assert.equal(code, 0);
+    assert.equal(readFileSync(file, 'utf8'), 'one\ntwo\nthree\rspin\n');
+    assert.equal(Buffer.concat(live).toString(), 'one\r\ntwo\r\nthree\rspin\r\n', 'the terminal tee is untouched');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('pipeChild settles at once on abort when abortExitCode is set, without waiting for pipes an orphan holds', async () => {
+  const controller = new AbortController();
+  // The child spawns a grandchild that inherits the pipes and outlives it.
+  const child = nodeChild("require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 4000)'], { stdio: 'inherit' }); setTimeout(() => {}, 4000)");
+  const started = Date.now();
+  const settled = pipeChild(child, {
+    signal: controller.signal,
+    abortExitCode: 130,
+    onAbort: target => { target.kill('SIGKILL'); },
+  });
+  setTimeout(() => controller.abort(), 100);
+  assert.equal(await settled, 130);
+  assert.ok(Date.now() - started < 3000, 'did not wait for the grandchild to close the pipes');
 });
 
 test('pipeChild drains a stream nobody listens to, so a chatty child cannot block on a full pipe', async () => {

@@ -18,7 +18,7 @@
  * building the web bundle there would cost every local build for an artifact
  * only the packaged app needs.
  */
-import { execFileSync } from 'node:child_process';
+import { runInherited } from '../../packages/core/src/exec.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { repoRoot } from './sea.mjs';
@@ -31,11 +31,11 @@ export function buildWebResource() {
 
   // `--outDir` straight into the resource tree: no intermediate copy to keep
   // in sync, and `dist-web/` stays purely a developer convenience.
-  execFileSync(
-    'npm',
-    ['run', 'build:web', '-w', 'desktop', '--', '--outDir', targetDir, '--emptyOutDir'],
-    { cwd: repoRoot, stdio: 'inherit', shell: process.platform === 'win32' },
+  const status = runInherited(
+    ['npm', 'run', 'build:web', '-w', 'desktop', '--', '--outDir', targetDir, '--emptyOutDir'],
+    { cwd: repoRoot },
   );
+  if (status !== 0) throw new Error(`npm run build:web exited with status ${status}`);
 
   // The static server treats a missing index.html as "never built" and answers
   // 503, which would be discovered on someone's phone rather than here.

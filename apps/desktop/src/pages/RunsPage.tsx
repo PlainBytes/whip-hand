@@ -36,16 +36,21 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
   const setRuns = useAppStore(state => state.setRuns);
   const pendingRunAgain = useAppStore(state => state.pendingRunAgain);
   const jobs = useAppStore(state => state.jobs);
+  const identityKey = useAppStore(state => state.workspaceIdentityKey);
+  const workspace = useMemo(
+    () => (workspacePath === null ? undefined : { path: workspacePath, identityKey: identityKey ?? undefined }),
+    [workspacePath, identityKey],
+  );
   // useMemo rather than a Set-returning selector: zustand compares with
   // Object.is, so a fresh Set per call would re-render this grid on every
   // unrelated store write.
   const waiting = useMemo(
-    () => waitingRunIds(jobs, workspacePath ?? undefined),
-    [jobs, workspacePath],
+    () => waitingRunIds(jobs, workspace),
+    [jobs, workspace],
   );
   const stages = useMemo(
-    () => liveStageProgress(jobs, workspacePath ?? undefined),
-    [jobs, workspacePath],
+    () => liveStageProgress(jobs, workspace),
+    [jobs, workspace],
   );
   const [error, setError] = useState<string | null>(null);
   const [showDryRuns, setShowDryRuns] = useState(false);

@@ -6,7 +6,12 @@
  */
 import type { AdapterRegistry } from './registry.ts';
 import type { DetectResult } from './types.ts';
-import { execRunner } from './exec.ts';
+import { execRunner, resolveExecutable } from './exec.ts';
+import path from 'node:path';
+import { resolveShell, type ResolveShellOpts } from './shell.ts';
+import { toFwdAbs } from './path-form.ts';
+import { headroomWarning } from './canonicalize.ts';
+import { classifyGitFailure } from './engine/git-guard.ts';
 import { TOOL_GROUPS, type ToolGroup } from './tool-groups.ts';
 
 // Re-exported so `@whiphand/core` stays the one import for everything doctor-shaped;
@@ -245,6 +250,107 @@ export interface DoctorToolsConfig {
 
 export interface DetectToolsDeps {
   probe?: (probe: ToolProbe) => Promise<DetectResult>;
+  /** Machine-level facts appended to the support group; substituted by tests. Defaults to `machineChecks()`. */
+  machine?: () => ToolStatus[];
+  /**
+   * The workspace the report is about, when there is one. Doctor still answers
+   * "is this machine set up" with none; given one it also reports what is wrong
+   * with *that folder* — see `workspaceChecks`.
+   */
+  workdir?: string;
+  /** Substituted by tests. Defaults to `workspaceChecks(workdir)`. */
+  workspace?: (workdir: string) => Promise<ToolStatus[]>;
+}
+
+/**
+ * Machine-level facts that are not "is this binary installed" — the out-of-run
+ * degradations of invariant 7, in the same vocabulary the run manifest uses
+ * (`degradations.ts`). They belong in doctor, not in a log nobody reads:
+ *
+ *  - the POSIX shell command steps run through: red when none is found (command
+ *    steps will refuse to run; agent steps still work), and the resolved path
+ *    when found, so a wrong answer is visible rather than mysterious;
+ *  - `git` exposed as a `.cmd` wrapper (Windows), which used to make doctor read
+ *    green while the write-guard and the diff silently returned null;
+ *  - the remote token file's mode not being enforceable on Windows, where
+ *    `fs.chmod` only toggles read-only — a pre-existing gap, now stated rather
+ *    than invisible (an ACL / Credential Manager is the named follow-up).
+ */
+export function machineChecks(opts: ResolveShellOpts & { platform?: NodeJS.Platform } = {}): ToolStatus[] {
+  const platform = opts.platform ?? process.platform;
+  const rows: ToolStatus[] = [];
+  const shell = resolveShell({ ...opts, platform });
+  rows.push({
+    id: 'posix-shell', label: 'POSIX shell', group: 'support', runner: false, optional: false,
+    installed: shell.ok,
+    ...(shell.ok
+      ? { notes: [`command steps run through ${shell.path}`] }
+      : { notes: [shell.reason, shell.remediation] }),
+  });
+  if (platform === 'win32') {
+    const git = resolveExecutable('git', { platform, ...(opts.env === undefined ? {} : { env: opts.env }) });
+    if (git.usesShell) {
+      rows.push({
+        id: 'git-wrapper', label: 'git launcher', group: 'support', runner: false, optional: true, installed: false,
+        notes: [`git resolves to a .cmd wrapper (${toFwdAbs(git.file)}), which cannot be launched directly; the write-guard and the diff need a real git.exe`],
+      });
+    }
+    rows.push({
+      id: 'token-file-mode', label: 'Remote token file mode', group: 'support', runner: false, optional: true, installed: false,
+      notes: ['fs.chmod only toggles the read-only attribute on Windows, so the remote access token file cannot be made 0600 (a known gap; Credential Manager is the follow-up)'],
+    });
+  }
+  return rows;
+}
+
+export interface WorkspaceChecksOpts {
+  platform?: NodeJS.Platform;
+  /** Substituted by tests: rejects the way `execRunner` does when git refuses. Defaults to `git rev-parse --git-dir`. */
+  git?: (workdir: string) => Promise<unknown>;
+}
+
+/**
+ * The facts about one workspace that would otherwise surface only mid-run (or
+ * only as a warning at workspace open), reported the way machine facts are: a
+ * row appears **only when something is wrong**, so a healthy workspace adds
+ * nothing to the report.
+ *
+ *  - git refusing the repository (`detected dubious ownership`, routine on a
+ *    shared or network profile): red, because a `writes: false` step cannot run
+ *    without its write-guard, with the `safe.directory` remediation git itself
+ *    prints. Only that one wording qualifies — a non-repo, a missing git or a
+ *    timeout are different facts with their own rows or none.
+ *  - too little headroom under Windows' 260-character limit: amber, since the
+ *    run may well work, with `subst` as the escape hatch.
+ */
+export async function workspaceChecks(workdir: string, opts: WorkspaceChecksOpts = {}): Promise<ToolStatus[]> {
+  const platform = opts.platform ?? process.platform;
+  const root = (platform === 'win32' ? path.win32 : path).resolve(workdir);
+  const rows: ToolStatus[] = [];
+
+  try {
+    await (opts.git ?? (dir => execRunner(['git', 'rev-parse', '--git-dir'], { cwd: dir })))(root);
+  } catch (error) {
+    const failure = classifyGitFailure(error);
+    if (failure.kind === 'unavailable' && /dubious ownership/i.test(failure.reason)) {
+      rows.push({
+        id: 'git-ownership', label: 'Workspace git ownership', group: 'support', runner: false, optional: false, installed: false,
+        notes: [
+          failure.reason,
+          `git will not read this repository, so steps that need the write-guard fail. Trust it with: git config --global --add safe.directory ${toFwdAbs(root)}`,
+        ],
+      });
+    }
+  }
+
+  const headroom = platform === 'win32' ? headroomWarning(root) : null;
+  if (headroom !== null) {
+    rows.push({
+      id: 'long-path', label: 'Workspace path length', group: 'support', runner: false, optional: true, installed: false,
+      notes: [headroom],
+    });
+  }
+  return rows;
 }
 
 /**
@@ -324,5 +430,7 @@ export async function detectTools(
     };
   }));
 
-  return TOOL_GROUPS.flatMap(group => rows.filter(row => row.group === group));
+  const workspaceRows = deps.workdir === undefined ? [] : await (deps.workspace ?? workspaceChecks)(deps.workdir);
+  const all = [...rows, ...(deps.machine ?? machineChecks)(), ...workspaceRows];
+  return TOOL_GROUPS.flatMap(group => all.filter(row => row.group === group));
 }

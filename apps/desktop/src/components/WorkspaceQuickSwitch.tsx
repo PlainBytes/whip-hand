@@ -106,7 +106,7 @@ export function WorkspaceQuickSwitch({ onClose }: WorkspaceQuickSwitchProps) {
                         style={{ flex: 1, justifyContent: 'flex-start', minWidth: 0 }}
                       >
                         <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                          <WorkspaceDot path={entry.path} />
+                          <WorkspaceDot path={entry.path} identityKey={entry.identityKey} />
                           <Text weight="semibold">{basename(entry.path)}</Text>
                           <Text size={100} truncate wrap={false} style={{ color: 'var(--colorNeutralForeground3)' }}>
                             {entry.path}

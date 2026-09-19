@@ -15,6 +15,7 @@ const buildTimeDefault = typeof WHIPHAND_NODE_PTY_DIR_DEFAULT === 'undefined' ? 
 
 /** The subset of node-pty's `IPty` that pty.ts actually uses. */
 export interface NativePty {
+  readonly pid: number;
   onData(cb: (data: string) => void): void;
   onExit(cb: (event: { exitCode: number }) => void): void;
   write(data: string): void;

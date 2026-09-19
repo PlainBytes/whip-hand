@@ -1,7 +1,8 @@
-import { appendFile, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { appendFile, readdir, readFile, stat } from 'node:fs/promises';
 import { basename, join, relative, sep } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
+import { writeFileAtomic } from '../durable-fs.ts';
+import { isAbsoluteAnyPlatform, toFwdAbs, toNative, toRunRel } from '../path-form.ts';
 import type {
   RunAttachment, WhiphandEvent, LoopRef, Scope, StepKind, StepMode, StepProgress, WorkspaceConfig,
 } from '../types.ts';
@@ -9,6 +10,7 @@ import { isEndMarkerName } from './session-end.ts';
 import { isAwaitStateName } from './await-state.ts';
 import { isSessionCaptureName } from './session-capture.ts';
 import { isOpencodeSupportFileName } from './opencode-files.ts';
+import { SUGGEST_PROMPT_NAME, isSpawnFileName } from './spawn-files.ts';
 import { LOCK_MARKER_NAME, isRunLocked } from './run-lock.ts';
 import { NAME_MARKER_NAME, SUGGEST_CAPTURE_NAME, readRunName, setRunName } from './run-name.ts';
 import { RUN_LOG_NAME, DEFAULT_RUN_LOG_CAP_BYTES } from './run-log.ts';
@@ -182,7 +184,11 @@ export const runManifestSchema = z.object({
   workflow: z.string().min(1),
   workdir: z.string().min(1),
   dryRun: z.boolean(),
-  pid: z.number().int(),
+  // Informational only — never consulted for liveness, which is the heartbeat
+  // lease (a PID probe read EPERM as dead and could not tell a recycled PID from
+  // a live one). Still written because `cancelRun({ workdir, runId })` signals it
+  // to stop a run another process owns; optional so a manifest without one parses.
+  pid: z.number().int().optional(),
   startedAt: z.string(),
   updatedAt: z.string(),
   // Liveness ping, refreshed on a timer while the run is in flight. Distinct
@@ -231,15 +237,35 @@ export const runManifestSchema = z.object({
   /** Set while a manual/approval step is waiting on a human; cleared on answer. */
   manualPending: z.object({ stepId: z.string(), title: z.string() }).optional(),
   error: z.object({ stepId: z.string().optional(), message: z.string() }).optional(),
+  /**
+   * Why an `interrupted` run is interrupted, when that is more specific than
+   * the message: 'lease-expired' is a run whose owner stopped renewing its
+   * heartbeat (crashed, killed, or suspended past the window) and was repaired
+   * by whoever read the store next.
+   */
+  interruptedReason: z.string().optional(),
+  /**
+   * Capabilities that degraded while the run carried on (invariant 7), folded
+   * from `run:degraded` events and de-duplicated on (capability, stepId).
+   * `capability` is a plain string here, not the closed set: a manifest written
+   * by a newer version must still parse.
+   */
+  degradations: z.array(z.object({
+    capability: z.string(), reason: z.string(), stepId: z.string().optional(), at: z.string(),
+  })).optional(),
 });
 
 export type RunManifest = z.infer<typeof runManifestSchema>;
 type ManifestStep = RunManifest['steps'][number];
 
 /** How often a live run refreshes heartbeatAt on disk. */
-export const HEARTBEAT_INTERVAL_MS = 15_000;
-/** How far heartbeatAt may fall behind before the run counts as abandoned. */
-export const HEARTBEAT_STALE_MS = 60_000;
+export const HEARTBEAT_INTERVAL_MS = 30_000;
+/**
+ * How far heartbeatAt may fall behind before the lease is stale and the run
+ * counts as abandoned. Long enough to survive a laptop sleep-resume or a slow
+ * network git operation, short enough that a crashed run is not confusing for long.
+ */
+export const HEARTBEAT_STALE_MS = 5 * 60_000;
 
 export const INTERRUPTED_MESSAGE =
   'Run was interrupted — the process that owned it exited without finishing.';
@@ -264,6 +290,14 @@ export interface RunJournalInit {
   }>;
   /** Override for tests; production uses HEARTBEAT_INTERVAL_MS. */
   heartbeatIntervalMs?: number;
+  /**
+   * Called once when this journal discovers it no longer owns the run: before a
+   * renewal it re-reads run.json and finds a terminal status (someone judged
+   * the lease stale and repaired it — a suspended host, say). The owner must
+   * stop driving the run; the journal has by then stopped writing, and will
+   * never write `running` back over the other process's verdict.
+   */
+  onLeaseLost?: (reason: string) => void;
   /** Override for tests; production uses DEFAULT_RUN_LOG_CAP_BYTES. 0 disables the cap. */
   runLogCapBytes?: number;
 }
@@ -282,8 +316,6 @@ const TERMINAL_EVENTS = new Set<WhiphandEvent['type']>(['run:done', 'run:error',
  * was SIGKILLed, so no terminal event was ever written) from a live one whose
  * pid happens to have been reused — see readRunSummary.
  */
-let journalSeq = 0;
-const nextJournalSeq = (): number => (journalSeq += 1);
 
 /**
  * Clears an entry the resume is about to run again. `beginStep` already wipes
@@ -318,15 +350,11 @@ function resetUnfinished(step: ManifestStep): ManifestStep {
 export class RunJournal {
   readonly manifest: RunManifest;
   private readonly runDir: string;
-  /**
-   * Writes are tmp+rename, and the tmp name is per *instance*, not a shared
-   * constant: one journal's writes are serialized on its own `chain`, but two
-   * journals over the same run directory (a reopen alongside its original) are
-   * not, and a shared name lets one's rename delete the other's half-written
-   * file. planResume refuses a running run, so that pairing should not happen
-   * in production — this makes it harmless rather than relying on that.
-   */
-  private readonly tmpName: string;
+  /** What workspace-relative event paths resolve against. */
+  private readonly workdir: string;
+  private readonly onLeaseLost: ((reason: string) => void) | undefined;
+  /** Set once the lease is lost: from then on nothing is written, so the other process's verdict stands. */
+  private leaseLost = false;
   private chain: Promise<void> = Promise.resolve();
   private heartbeat: ReturnType<typeof setInterval> | undefined;
   /** Monotonic per-instance ordinal, assigned to every event that passes through `record()`. */
@@ -349,7 +377,8 @@ export class RunJournal {
   constructor(init: RunJournalInit, existing?: RunManifest) {
     const now = new Date().toISOString();
     this.runDir = init.runDir;
-    this.tmpName = `run.json.${process.pid}.${nextJournalSeq()}.tmp`;
+    this.workdir = init.workdir;
+    this.onLeaseLost = init.onLeaseLost;
     this.runLogCapBytes = init.runLogCapBytes ?? DEFAULT_RUN_LOG_CAP_BYTES;
     this.manifest = existing === undefined
       ? {
@@ -380,6 +409,7 @@ export class RunJournal {
       : {
           ...existing,
           pid: process.pid,
+          interruptedReason: undefined,
           status: 'running',
           updatedAt: now,
           heartbeatAt: now,
@@ -423,13 +453,17 @@ export class RunJournal {
    */
   static reopen(
     runDir: string, manifest: RunManifest,
-    opts: { heartbeatIntervalMs?: number; runLogCapBytes?: number } = {},
+    opts: {
+      /** The workspace this resume was opened in, which the recorded `workdir` may no longer be. */
+      workdir?: string;
+      heartbeatIntervalMs?: number; runLogCapBytes?: number; onLeaseLost?: (reason: string) => void;
+    } = {},
   ): RunJournal {
     return new RunJournal({
       runDir,
       runId: manifest.runId,
       workflow: manifest.workflow,
-      workdir: manifest.workdir,
+      workdir: opts.workdir ?? manifest.workdir,
       dryRun: manifest.dryRun,
       inputs: manifest.inputs,
       sessionIds: manifest.sessionIds,
@@ -437,18 +471,52 @@ export class RunJournal {
       steps: [],
       ...(opts.heartbeatIntervalMs === undefined ? {} : { heartbeatIntervalMs: opts.heartbeatIntervalMs }),
       ...(opts.runLogCapBytes === undefined ? {} : { runLogCapBytes: opts.runLogCapBytes }),
+      ...(opts.onLeaseLost === undefined ? {} : { onLeaseLost: opts.onLeaseLost }),
     }, manifest);
   }
 
   private startHeartbeat(intervalMs: number): void {
     this.heartbeat = setInterval(() => {
-      this.manifest.heartbeatAt = new Date().toISOString();
-      // A heartbeat is best-effort: its failure must not poison the write
-      // chain that real events depend on.
-      this.chain = this.chain.then(() => this.writeManifest().catch(() => {}));
+      // A renewal is best-effort: its failure must not poison the write chain
+      // that real events depend on.
+      this.chain = this.chain.then(() => this.renewLease().catch(() => {}));
     }, intervalMs);
     // Never hold the process open — a CLI run must still exit when it is done.
     this.heartbeat.unref?.();
+  }
+
+  /**
+   * The lease is fenced. Anyone reading the store may judge a lease stale and
+   * repair the run to a terminal state; a host that was merely suspended past
+   * the window then wakes up still believing it owns a running run. So before
+   * renewing, re-read run.json: a terminal status there means the lease is
+   * lost, and this journal stops rather than writing `running` back.
+   */
+  private async renewLease(): Promise<void> {
+    if (this.leaseLost || this.manifest.status !== 'running') return;
+    const onDisk = await this.statusOnDisk();
+    if (onDisk !== undefined && onDisk !== 'running') {
+      this.leaseLost = true;
+      this.close();
+      this.onLeaseLost?.(`lease lost (host suspended?): run.json says '${onDisk}'`);
+      return;
+    }
+    this.manifest.heartbeatAt = new Date().toISOString();
+    await this.writeManifest();
+  }
+
+  private async statusOnDisk(): Promise<string | undefined> {
+    try {
+      const parsed = JSON.parse(await readFile(join(this.runDir, 'run.json'), 'utf8')) as { status?: unknown };
+      return typeof parsed.status === 'string' ? parsed.status : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** True once this journal has found it no longer owns the run. */
+  get lostLease(): boolean {
+    return this.leaseLost;
   }
 
   /** Stops the heartbeat timer. Idempotent; safe to call after a terminal event. */
@@ -633,7 +701,8 @@ export class RunJournal {
         this.manifest.sessionIds[event.stepId] = event.sessionId;
         break;
       case 'step:artifact':
-        this.upsertStep(event.stepId, { artifact: event.path });
+        // Events carry workspace-relative paths; in memory the manifest means resolved ones.
+        this.upsertStep(event.stepId, { artifact: toNative(event.path, this.workdir) });
         break;
       case 'step:progress':
         // The fold still feeds the manifest step summary and run.json — see
@@ -746,6 +815,18 @@ export class RunJournal {
         break;
       case 'guard:warning':
         break; // updatedAt only
+      case 'run:degraded': {
+        // De-duplicated on (capability, stepId): the same loss reported by every
+        // iteration of a loop is one fact, not many.
+        const seen = this.manifest.degradations ?? [];
+        if (!seen.some(d => d.capability === event.capability && d.stepId === event.stepId)) {
+          this.manifest.degradations = [
+            ...seen,
+            { capability: event.capability, reason: event.reason, ...(event.stepId === undefined ? {} : { stepId: event.stepId }), at: now },
+          ];
+        }
+        break;
+      }
       case 'run:done':
         // A cancelled run's status is final; the run:done ok:false that
         // follows must not demote it back to 'failed'.
@@ -776,7 +857,9 @@ export class RunJournal {
   }
 
   private async writeManifest(): Promise<void> {
-    await writeManifestAtomic(this.runDir, this.manifest, this.tmpName);
+    // Fenced: a journal that lost its lease writes nothing, `running` above all.
+    if (this.leaseLost) return;
+    await writeManifestAtomic(this.runDir, this.manifest);
   }
 
   /**
@@ -791,7 +874,7 @@ export class RunJournal {
     if (event.type === 'step:log' || event.type === 'step:progress') {
       if (this.manifest.dryRun) return; // same "bookkeeping only" contract as below
       const logLine = formatLogLine({ seq, ts, ...summarizeEvent(event) });
-      this.chain = this.chain.then(() => this.appendRunLog(logLine, true));
+      this.chain = this.chain.then(() => (this.leaseLost ? undefined : this.appendRunLog(logLine, true)));
       return;
     }
     const line = `${JSON.stringify({ ts, seq, event })}\n`;
@@ -805,6 +888,7 @@ export class RunJournal {
     // "bookkeeping only" (events.ndjson, run.json, the workflow snapshot).
     const skipRunLog = this.manifest.dryRun;
     this.chain = this.chain.then(async () => {
+      if (this.leaseLost) return;
       await appendFile(join(this.runDir, 'events.ndjson'), line, 'utf8');
       if (!skipRunLog) {
         await this.appendRunLog(logLine, false);
@@ -820,7 +904,8 @@ export class RunJournal {
           );
         }
       }
-      await writeManifestAtomic(this.runDir, snapshot, this.tmpName);
+      if (this.leaseLost) return;
+      await writeManifestAtomic(this.runDir, snapshot);
     });
   }
 
@@ -858,7 +943,7 @@ export class RunJournal {
   /** Schedules one atomic write of the manifest as it stands right now. */
   private persist(): void {
     const snapshot = structuredClone(this.manifest);
-    this.chain = this.chain.then(() => writeManifestAtomic(this.runDir, snapshot, this.tmpName));
+    this.chain = this.chain.then(() => (this.leaseLost ? undefined : writeManifestAtomic(this.runDir, snapshot)));
   }
 
   flush(): Promise<void> {
@@ -867,50 +952,36 @@ export class RunJournal {
 }
 
 /**
- * POSIX rename(2) replaces the target atomically however many others are
- * renaming onto it. Windows does not: MoveFileEx fails outright when the
- * target is held for even a moment — by another journal's rename over the same
- * run dir, which the per-instance tmpName above already accounts for, or by a
- * virus scanner or search indexer that opened run.json to read it. All of
- * those clear in milliseconds, and a lost manifest write does not, so retry
- * briefly before giving up. Inert on POSIX, where none of these arise.
+ * On disk, path fields are run-dir-relative and `/`-separated, so a run
+ * directory that moves — another drive, a copy to another machine — still
+ * resumes, and a run's bytes do not depend on where it happened. In memory a
+ * `RunManifest` means *resolved* paths: this is the one place the conversion
+ * happens on the way out, and `resolveManifestPaths` the one on the way in.
+ * `workdir` is the exception: stored absolute, `/`-form, informational.
  */
-const TRANSIENT_RENAME_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
-const RENAME_ATTEMPTS = 20;
-const RENAME_RETRY_MS = 10;
-
-/** Exported for its own test — nothing else should need to substitute `op`. */
-export async function renameReplacing(
-  from: string, to: string, op: (f: string, t: string) => Promise<void> = rename,
-): Promise<void> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      await op(from, to);
-      return;
-    } catch (error) {
-      const { code } = error as NodeJS.ErrnoException;
-      if (attempt >= RENAME_ATTEMPTS || code === undefined || !TRANSIENT_RENAME_CODES.has(code)) throw error;
-      await delay(RENAME_RETRY_MS);
-    }
-  }
+function toDiskForm(manifest: RunManifest, runDir: string): RunManifest {
+  return {
+    ...manifest,
+    workdir: toFwdAbs(manifest.workdir),
+    steps: manifest.steps.map(step =>
+      step.artifact === undefined ? step : { ...step, artifact: toRunRel(step.artifact, runDir) }),
+  };
 }
 
-/** tmp+rename so a reader never observes a half-written manifest. */
-async function writeManifestAtomic(
-  runDir: string, manifest: RunManifest, tmpName: string,
-): Promise<void> {
-  const tmpPath = join(runDir, tmpName);
-  await writeFile(tmpPath, JSON.stringify(manifest, null, 2), 'utf8');
-  await renameReplacing(tmpPath, join(runDir, 'run.json'));
+/** Back-compat both ways: an absolute value (written before paths went relative) is kept as-is; a relative one resolves under the run dir. */
+function resolveManifestPaths(manifest: RunManifest, runDir: string): RunManifest {
+  return {
+    ...manifest,
+    steps: manifest.steps.map(step =>
+      step.artifact === undefined || isAbsoluteAnyPlatform(step.artifact)
+        ? step
+        : { ...step, artifact: toNative(step.artifact, runDir) }),
+  };
 }
 
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+/** Atomic (tmp + rename, retried through a scanner holding the file) so a reader never observes a half-written manifest. */
+async function writeManifestAtomic(runDir: string, manifest: RunManifest): Promise<void> {
+  await writeFileAtomic(join(runDir, 'run.json'), JSON.stringify(toDiskForm(manifest, runDir), null, 2));
 }
 
 export interface RunSummaryKnown extends RunManifest {
@@ -945,19 +1016,18 @@ export type RunSummary = RunSummaryKnown | RunSummaryUnknown;
 export type RunDetail = RunSummary & { artifacts: Array<{ name: string; path: string }> };
 
 /**
- * A manifest still claiming 'running' is abandoned when the process that owned
- * it is gone. Two independent arms, because neither alone is sufficient:
- *  - a dead pid catches the ordinary crash/SIGKILL;
- *  - a stalled heartbeat catches a recycled pid (which makes a dead run look
- *    alive) and a run whose owner is still up but stopped driving it.
- * The heartbeat arm only applies when heartbeatAt is present, so manifests
- * written before heartbeats existed fall back to the pid check alone.
+ * A manifest still claiming 'running' is abandoned when its lease has expired:
+ * `heartbeatAt` is renewed every HEARTBEAT_INTERVAL_MS by the run's owner and
+ * stale after HEARTBEAT_STALE_MS. A lease, not a PID probe — `process.kill(pid, 0)`
+ * reads EPERM as dead (a run owned by another user, or elevated, was marked
+ * abandoned while alive), and Windows recycles PIDs aggressively enough that a
+ * dead run's PID reads as alive. A manifest written before heartbeats existed
+ * is judged by `updatedAt` against the same window.
  */
-function isAbandoned(manifest: RunManifest, now: number): boolean {
+export function isAbandoned(manifest: RunManifest, now: number): boolean {
   if (manifest.status !== 'running') return false;
-  if (!isAlive(manifest.pid)) return true;
-  if (manifest.heartbeatAt === undefined) return false;
-  return now - Date.parse(manifest.heartbeatAt) > HEARTBEAT_STALE_MS;
+  const lastSeen = Date.parse(manifest.heartbeatAt ?? manifest.updatedAt);
+  return !(now - lastSeen <= HEARTBEAT_STALE_MS);
 }
 
 /**
@@ -976,6 +1046,7 @@ function repairAbandoned(manifest: RunManifest): RunManifest {
     steps: manifest.steps.map(s =>
       s.status === 'running' ? { ...s, status: 'interrupted' as const, endedAt } : s),
     error: manifest.error ?? { stepId: interruptedStep?.id, message: INTERRUPTED_MESSAGE },
+    interruptedReason: 'lease-expired',
   };
 }
 
@@ -1001,22 +1072,17 @@ async function readRunSummary(runDir: string, dirName: string, mtimeMs = 0): Pro
   if (!parsed.success) {
     return { runId: dirName, runDir, status: 'unknown', locked, mtimeMs, ...name };
   }
-  const manifest = parsed.data;
+  const manifest = resolveManifestPaths(parsed.data, runDir);
   if (!isAbandoned(manifest, Date.now())) return { ...manifest, runDir, locked, ...name };
 
   const repaired = repairAbandoned(manifest);
-  // Write the repair back so the state is final: readers stop re-deriving it,
-  // and a later pid reuse can't resurrect the run. Idempotent — the repaired
-  // status is terminal, so a subsequent read never reaches here. Best-effort:
-  // an unwritable run dir must not break listRuns, so the caller still gets
-  // the repaired view either way. A distinct tmp name keeps this from ever
-  // colliding with a live journal's own run.json.tmp.
-  const tmpName = `run.json.repair.${process.pid}.tmp`;
-  try {
-    await writeManifestAtomic(runDir, repaired, tmpName);
-  } catch {
-    await unlink(join(runDir, tmpName)).catch(() => {});
-  }
+  // Write the repair back so the state is final: readers stop re-deriving it.
+  // Idempotent — the repaired status is terminal, so a subsequent read never
+  // reaches here. Best-effort: an unwritable run dir must not break listRuns,
+  // so the caller still gets the repaired view either way. The temp name is
+  // unique per write (durable-fs), so this can never collide with a live
+  // journal's own write.
+  await writeManifestAtomic(runDir, repaired).catch(() => {});
   return { ...repaired, runDir, locked, ...name };
 }
 
@@ -1066,7 +1132,8 @@ function isBookkeepingFile(name: string): boolean {
     || name === SUGGEST_CAPTURE_NAME
     || name === WORKFLOW_SNAPSHOT_NAME
     || isEndMarkerName(name) || isAwaitStateName(name)
-    || isSessionCaptureName(name) || isOpencodeSupportFileName(name);
+    || isSessionCaptureName(name) || isOpencodeSupportFileName(name)
+    || isSpawnFileName(name) || name === SUGGEST_PROMPT_NAME;
 }
 
 export async function getRun(

@@ -8,6 +8,8 @@ export const uiActions: Record<string, Record<string, string>> = {
     // nav.ts's PageId 'doctor' — the Doctor page, listing adapters and
     // driving the same `doctor()` report as `whiphand doctor`.
     _command: 'page:doctor',
+    // The Doctor page asks about the workspace the switcher has open.
+    '-C': 'sidebar:workspaceSwitcher',
   },
   run: {
     // RunsPage's "New run" button, opening NewRunDialog.

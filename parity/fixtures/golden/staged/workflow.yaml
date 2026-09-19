@@ -1,0 +1,24 @@
+name: staged
+steps:
+  - kind: stages
+    id: build
+    items: plans/*.md
+    steps:
+      - id: execute
+        kind: command
+        run: "true"
+        output: execute.md
+      - id: verdict
+        verdict: true
+        kind: command
+        run: exit 0
+        output: verdict.md
+      - id: accept
+        inputs:
+          - stage
+          - verdict
+        kind: approval
+        title: Accept {{ stage.title }}?
+        instructions: Look at the work and accept the stage.
+        default: continue
+        output: accept.md

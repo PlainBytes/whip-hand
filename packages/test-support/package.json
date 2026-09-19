@@ -1,0 +1,8 @@
+{
+  "name": "@whiphand/test-support",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared test helpers. A private workspace, deliberately not a `./testing` subpath on @whiphand/core's exports, so no test helper ships in core's public surface.",
+  "exports": { ".": "./src/index.ts" }
+}

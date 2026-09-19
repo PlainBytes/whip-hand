@@ -73,7 +73,24 @@ test('buildPrompt appends artifact section for steps with inputs', () => {
   const p = buildPrompt(step, ctx);
   assert.ok(p.startsWith('Implement oauth.'));
   assert.ok(p.includes('## Input artifacts'));
-  assert.ok(p.includes('- plan: /w/.whiphand/runs/r1/plan.md'));
+  assert.ok(p.includes('- plan: .whiphand/runs/r1/plan.md'));
+});
+
+test('buildPrompt shows input artifacts workspace-relative with forward slashes, absolute only outside the workspace', () => {
+  const step: AgentStep = { kind: 'agent',
+    id: 'execute', runner: 'claude', mode: 'headless', writes: true,
+    prompt: 'Go.', inputs: ['plan', 'other'], output: 'report.md',
+  };
+  const win: RunCtx = {
+    ...ctx, workdir: 'D:\\w', runDir: 'D:\\w\\.whiphand\\runs\\r1',
+    artifacts: {
+      plan: 'D:\\w\\.whiphand\\runs\\r1\\plan.md',
+      other: 'E:\\elsewhere\\notes.md',
+    },
+  };
+  assert.equal(buildPrompt(step, win), 'Go.\n\n## Input artifacts (read these files first)\n'
+    + '- plan: .whiphand/runs/r1/plan.md\n'
+    + '- other: E:/elsewhere/notes.md');
 });
 
 test('buildPrompt omits artifact section when step has no inputs', () => {
@@ -94,8 +111,8 @@ test('buildPrompt expands attachments to one line per attached file', () => {
     attachments: ['/w/.whiphand/runs/r1/attachments/bug.png', '/w/.whiphand/runs/r1/attachments/server.log'],
   };
   assert.equal(buildPrompt(step, withFiles), 'Plan it.\n\n## Input artifacts (read these files first)\n'
-    + '- attachments/bug.png: /w/.whiphand/runs/r1/attachments/bug.png\n'
-    + '- attachments/server.log: /w/.whiphand/runs/r1/attachments/server.log');
+    + '- attachments/bug.png: .whiphand/runs/r1/attachments/bug.png\n'
+    + '- attachments/server.log: .whiphand/runs/r1/attachments/server.log');
 });
 
 test('buildPrompt labels an input artifact with its verdict, pass or fail', () => {
@@ -109,13 +126,13 @@ test('buildPrompt labels an input artifact with its verdict, pass or fail', () =
     verdicts: { tests: 'fail' },
   };
   assert.equal(buildPrompt(step, failing), 'Fix it.\n\n## Input artifacts (read these files first)\n'
-    + '- plan: /w/.whiphand/runs/r1/plan.md\n'
-    + '- tests: /w/.whiphand/runs/r1/tests.log (VERDICT: FAIL)');
+    + '- plan: .whiphand/runs/r1/plan.md\n'
+    + '- tests: .whiphand/runs/r1/tests.log (VERDICT: FAIL)');
 
   const passing: RunCtx = { ...failing, verdicts: { tests: 'pass' } };
   assert.equal(buildPrompt(step, passing), 'Fix it.\n\n## Input artifacts (read these files first)\n'
-    + '- plan: /w/.whiphand/runs/r1/plan.md\n'
-    + '- tests: /w/.whiphand/runs/r1/tests.log (VERDICT: PASS)');
+    + '- plan: .whiphand/runs/r1/plan.md\n'
+    + '- tests: .whiphand/runs/r1/tests.log (VERDICT: PASS)');
 });
 
 test('buildPrompt leaves attachments unlabelled even when a verdict is recorded under that name', () => {
@@ -129,7 +146,7 @@ test('buildPrompt leaves attachments unlabelled even when a verdict is recorded 
     verdicts: { 'attachments/bug.png': 'fail' },
   };
   assert.equal(buildPrompt(step, withFiles), 'Plan it.\n\n## Input artifacts (read these files first)\n'
-    + '- attachments/bug.png: /w/.whiphand/runs/r1/attachments/bug.png');
+    + '- attachments/bug.png: .whiphand/runs/r1/attachments/bug.png');
 });
 
 test('buildPrompt lists nothing for attachments when the run has none', () => {
@@ -138,6 +155,6 @@ test('buildPrompt lists nothing for attachments when the run has none', () => {
     prompt: 'Do it.', inputs: ['attachments', 'plan'], output: 'report.md',
   };
   assert.equal(buildPrompt(step, ctx),
-    'Do it.\n\n## Input artifacts (read these files first)\n- plan: /w/.whiphand/runs/r1/plan.md');
+    'Do it.\n\n## Input artifacts (read these files first)\n- plan: .whiphand/runs/r1/plan.md');
   assert.equal(buildPrompt({ ...step, inputs: ['attachments'] }, ctx), 'Do it.');
 });

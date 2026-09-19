@@ -24,7 +24,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { runSync } from '../../packages/core/src/exec.ts';
 import { buildDesktopBundles } from './desktop.mjs';
 import { repoRoot } from './sea.mjs';
 
@@ -41,8 +41,7 @@ const sudo = process.getuid() === 0 ? [] : ['sudo'];
 
 /** Runs a command through to the terminal — `sudo`'s password prompt included. */
 function run(argv) {
-  const [command, ...args] = argv;
-  execFileSync(command, args, { stdio: 'inherit' });
+  runSync(argv, { stdio: 'inherit', check: true });
 }
 
 /**
@@ -52,11 +51,7 @@ function run(argv) {
  * fault — hence `quiet`.
  */
 function capture(argv, { quiet = false } = {}) {
-  const [command, ...args] = argv;
-  return execFileSync(command, args, {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', quiet ? 'ignore' : 'inherit'],
-  }).trim();
+  return runSync(argv, { stdio: ['ignore', 'pipe', quiet ? 'ignore' : 'inherit'], check: true }).stdout.trim();
 }
 
 /**

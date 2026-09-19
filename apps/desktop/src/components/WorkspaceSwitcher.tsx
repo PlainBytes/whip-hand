@@ -6,6 +6,7 @@ import {
   ChevronUpDownRegular, FolderOpenRegular, PinOffRegular, PinRegular,
 } from '@fluentui/react-icons';
 import { useAppStore } from '../state/store.ts';
+import { sameWorkspace } from '../../../../packages/core/src/path-form.ts';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useCapabilities } from '../capabilities.tsx';
 import { OpenPathField } from './OpenPathField.tsx';
@@ -31,13 +32,16 @@ export function WorkspaceSwitcher() {
   const client = useAgentClient();
   const { pickDirectory } = useCapabilities();
   const workspacePath = useAppStore(state => state.workspacePath);
+  const identityKey = useAppStore(state => state.workspaceIdentityKey);
   const recents = useAppStore(state => state.appState?.recentWorkspaces ?? EMPTY_RECENTS);
   const patchAppState = useAppStore(state => state.patchAppState);
   const [error, setError] = useState<string | null>(null);
   const [promptingPath, setPromptingPath] = useState(false);
 
   const sorted = sortWorkspaces(recents);
-  const current = recents.find(r => r.path === workspacePath);
+  const current = workspacePath === null
+    ? undefined
+    : recents.find(r => sameWorkspace(r, { path: workspacePath, identityKey: identityKey ?? undefined }));
 
   async function switchTo(path: string): Promise<void> {
     setError(null);
@@ -77,7 +81,7 @@ export function WorkspaceSwitcher() {
                 between the two lines. */}
             <span style={{ display: 'flex', alignItems: 'flex-start', minWidth: 0, width: '100%' }}>
               <RowGlyph>
-                {workspacePath && <WorkspaceDot path={workspacePath} />}
+                {workspacePath && <WorkspaceDot path={workspacePath} identityKey={identityKey ?? current?.identityKey} />}
               </RowGlyph>
               <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                 <Text weight="semibold" truncate wrap={false}>
@@ -100,7 +104,7 @@ export function WorkspaceSwitcher() {
             {sorted.map(r => (
               <MenuItem
                 key={r.path}
-                icon={<WorkspaceDot path={r.path} />}
+                icon={<WorkspaceDot path={r.path} identityKey={r.identityKey} />}
                 secondaryContent={r.pinned ? 'Pinned' : undefined}
                 onClick={() => void switchTo(r.path)}
               >

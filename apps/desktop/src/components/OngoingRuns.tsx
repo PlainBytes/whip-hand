@@ -103,7 +103,7 @@ export function OngoingRuns({ jobs, onOpenRun, onShowMore }: OngoingRunsProps) {
             >
               <span style={{ display: 'flex', alignItems: 'center', width: '100%', minWidth: 0 }}>
                 <RowGlyph>
-                  {job.workdir && <WorkspaceDot path={job.workdir} />}
+                  {job.workdir && <WorkspaceDot path={job.workdir} identityKey={job.identityKey} />}
                 </RowGlyph>
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
                   {name}

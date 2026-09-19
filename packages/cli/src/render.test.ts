@@ -83,7 +83,7 @@ test('the existing per-event rendering is unchanged', () => {
   const { out, err, render } = capture();
   render({ type: 'run:start', runId: 'r1', workflow: 'cycle' });
   render(startHeadless);
-  render({ type: 'step:artifact', stepId: 'impl', path: '/w/.whiphand/runs/r1/impl.md' });
+  render({ type: 'step:artifact', stepId: 'impl', path: '.whiphand/runs/r1/impl.md' });
   render({ type: 'step:verdict', stepId: 'impl', verdict: 'pass' });
   render({ type: 'loop:iteration', loopId: 'fix', iteration: 2, maxIterations: 5 });
   render({ type: 'guard:warning', message: 'uncommitted changes' });
@@ -91,7 +91,7 @@ test('the existing per-event rendering is unchanged', () => {
   assert.deepEqual(out, [
     "whiphand run r1 — workflow 'cycle'",
     '→ step impl (claude · opus, headless)',
-    '  ✔ artifact /w/.whiphand/runs/r1/impl.md',
+    '  ✔ artifact .whiphand/runs/r1/impl.md',
     '  verdict: PASS',
     '↻ fix — iteration 2/5',
     '✔ run complete',
@@ -194,4 +194,25 @@ test('a dry run also names where each attachment would have been copied', () => 
   const render = createRenderer({ out: l => out.push(l), err: () => {} }, { runDirOf: id => `/ws/.whiphand/runs/${id}` });
   render({ type: 'run:start', runId: 'r1', workflow: 'feature', attachments: [{ name: 'bug.png', size: 12 }] });
   assert.deepEqual(out.slice(1), ['📎 bug.png 12 B', `  → ${join('/ws/.whiphand/runs/r1', 'attachments', 'bug.png')}`]);
+});
+
+test('degradations are held and printed as a summary once the run ends, one line each', () => {
+  const { out, err, render } = capture();
+  render({ type: 'run:start', runId: 'r1', workflow: 'w' });
+  render({ type: 'run:degraded', capability: 'git-guard', stepId: 'look', reason: 'not a git repository: read-only tree assertion disabled' });
+  render({ type: 'run:degraded', capability: 'process-containment', reason: 'the process guard (whiphand-job.exe) was not found' });
+  assert.deepEqual(err, [], 'nothing between steps');
+  render({ type: 'run:done', runId: 'r1', ok: true });
+  assert.deepEqual(out.at(-1), '✔ run complete');
+  assert.deepEqual(err, [
+    '  ⚠ degraded: Read-only tree guard off (not a git repository) [look] — not a git repository: read-only tree assertion disabled',
+    '  ⚠ degraded: Process containment unavailable — the process guard (whiphand-job.exe) was not found',
+  ]);
+});
+
+test('a degradation that arrives after run:done (teardown) is printed as it comes', () => {
+  const { err, render } = capture();
+  render({ type: 'run:done', runId: 'r1', ok: true });
+  render({ type: 'run:degraded', capability: 'retention', reason: 'could not prune r0: EBUSY' });
+  assert.deepEqual(err, ['  ⚠ degraded: Old run directories could not be pruned — could not prune r0: EBUSY']);
 });

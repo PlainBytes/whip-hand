@@ -39,7 +39,7 @@ export async function openWorkspace(client: AgentClient, path: string): Promise<
   const { recentWorkspaces } = await client.request('touchRecentWorkspace', { path });
   const store = useAppStore.getState();
   // The agent resolved the path; adopt its canonical form (list head).
-  store.setWorkspacePath(recentWorkspaces[0]?.path ?? path);
+  store.setWorkspacePath(recentWorkspaces[0]?.path ?? path, recentWorkspaces[0]?.identityKey);
   store.patchAppState({ recentWorkspaces });
   return true;
 }

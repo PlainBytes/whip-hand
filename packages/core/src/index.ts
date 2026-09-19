@@ -17,13 +17,13 @@ export {
 export { renderTemplate, buildPrompt, inputArtifacts, TemplateError } from './template.ts';
 export type { Templated, TemplateScope } from './template.ts';
 export {
-  AdapterRegistry, validateWorkflowRunners, validateWorkflowFrontend, defaultRegistry,
+  AdapterRegistry, validateWorkflowRunners, validateWorkflowFrontend, validateWorkflowShell, defaultRegistry,
 } from './registry.ts';
 export { ModelCatalog } from './model-catalog.ts';
 export type { ModelCatalogGetOptions } from './model-catalog.ts';
 export {
   BUILTIN_TOOLS, TOOL_GROUPS, TOOL_GROUP_LABELS, VERSION_RE, PROBE_TIMEOUT_MS,
-  detectTools, probeTool, resolveToolTable, parseToolVersion,
+  detectTools, machineChecks, workspaceChecks, probeTool, resolveToolTable, parseToolVersion,
 } from './tools.ts';
 export type { ToolProbe, ToolStatus, DoctorToolsConfig } from './tools.ts';
 export type { ToolGroup } from './tool-groups.ts';
@@ -68,20 +68,24 @@ export type { WorkingDiff, DiffFileEntry, DiffStatus } from './engine/diff.ts';
 export {
   parseVerdict, verdictFromExit, verdictFromChoice, VERDICT_INSTRUCTION, DEFAULT_EXPECT_EXIT,
 } from './engine/verdict.ts';
-export { commandSpec, captureHeader, captureFooter, DEFAULT_SHELL, shellFlags } from './engine/command.ts';
+export { commandSpec, captureHeader, captureFooter, envValueLimit } from './engine/command.ts';
+export { resolveShell, shellRefusal, isWslLauncher } from './shell.ts';
+export type { ShellResult } from './shell.ts';
+export { bindings, renderReferences, referencedRefs, artifactEnvName, inputEnvName } from './template.ts';
+export type { Binding } from './template.ts';
 export {
-  resolveExecutable, spawnRunner, execRunner, planLaunch, cmdInvocation, msvcrtQuote,
-  pipeChild, routeHeadless,
+  resolveExecutable, spawnRunner, execRunner, runInherited, runSync, openStdin, planLaunch, cmdInvocation, msvcrtQuote,
+  pipeChild, routeHeadless, crlfToLf,
 } from './exec.ts';
 export type {
-  ResolvedExecutable, ResolveExecutableOpts, CmdInvocation, LaunchPlan,
+  ResolvedExecutable, ResolveExecutableOpts, SpawnDeps, CmdInvocation, LaunchPlan,
   ChildStream, HeadlessRouting, PipeChildOptions,
 } from './exec.ts';
 export {
   buildManualRequest, manualChoices, noteArtifact, reviewArtifact, workingDiff, DIFF_LINE_LIMIT,
 } from './engine/manual.ts';
 export {
-  endMarkerName, endMarkerPath, isEndMarkerName, clearEndMarker, sanitizeStepId,
+  endMarkerName, endMarkerPath, isEndMarkerName, clearEndMarker,
 } from './engine/session-end.ts';
 export {
   awaitStateName, awaitStatePath, isAwaitStateName, parseAwaitState, clearAwaitState,
@@ -113,7 +117,22 @@ export type { ResumePlan, DoneExecution, LoopBudget, ResumeOptions } from './eng
 export {
   initWorkspace, createWorkflow, updateWorkflow, deleteWorkflow, cloneWorkflow, workflowTemplate,
 } from './scaffold.ts';
-export { WORKFLOW_NAME_RE } from './workflow-name.ts';
+export {
+  createContainer, locateGuard, isPackagedBuild, PosixContainer, GuardContainer, ContainerError, DEFAULT_KILL_GRACE_MS,
+} from './container.ts';
+export type { Container, Adoptable, AdoptOptions } from './container.ts';
+export {
+  openWorkspace, assertNotUnc, headroomWarning, WorkspaceRefusal, WINDOWS_MAX_PATH, ENGINE_PATH_BUDGET,
+} from './canonicalize.ts';
+export type { OpenedWorkspace } from './canonicalize.ts';
+export { writeFileAtomic, removeTree, renameReplacing } from './durable-fs.ts';
+export { pathKey, samePath, sameWorkspace, findWorkspaceKey, contains, toFwd, toFwdAbs, toWorkspace, toRunRel, toNative, shQuote, isUncPath, isWindowsAbsolute, isAbsoluteAnyPlatform } from './path-form.ts';
+export type { WsPath, RunPath, FwdAbsPath, WorkspaceRef } from './path-form.ts';
+export { DEGRADATION_IDS, DEGRADATION_LABELS, isDegradationId, degradationLine } from './degradations.ts';
+export type { DegradationId } from './degradations.ts';
+export { WORKFLOW_NAME_RE, isValidWorkflowName, workflowNameProblem } from './workflow-name.ts';
+export { validateSegment, isValidSegment, assertSegment, validateRelativePath } from './segment.ts';
+export type { SegmentResult } from './segment.ts';
 export {
   isEnabled, disabledRoots, disabledIds, pruneDisabled, droppedRefs, droppedRefSentence, untilTargetOf,
 } from './enabled.ts';

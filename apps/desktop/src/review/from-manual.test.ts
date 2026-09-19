@@ -41,6 +41,20 @@ describe('fromManualRequest', () => {
     ]);
   });
 
+  it('resolves the workspace-relative paths a request carries against the workspace root', () => {
+    const relative = request({
+      context: { artifacts: [{ id: 'plan', path: '.whiphand/runs/r1/plan.md' }, { id: 'out', path: '/elsewhere/out.md' }] },
+    });
+    expect(fromManualRequest(relative, '/ws/proj').sources).toEqual([
+      { kind: 'artifact', id: 'plan', path: '/ws/proj/.whiphand/runs/r1/plan.md', label: 'plan.md' },
+      { kind: 'artifact', id: 'out', path: '/elsewhere/out.md', label: 'out.md' },
+    ]);
+    // a Windows workspace gets the native form the manifest's own artifact paths have
+    expect(fromManualRequest(relative, 'C:\\Proj').sources[0]).toMatchObject({
+      path: 'C:\\Proj\\.whiphand\\runs\\r1\\plan.md', label: 'plan.md',
+    });
+  });
+
   it('labels a Windows path by its basename too', () => {
     const result = fromManualRequest(request({
       context: { artifacts: [{ id: 'plan', path: 'C:\\runs\\r1\\plan.md' }] },

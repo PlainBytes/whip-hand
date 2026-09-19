@@ -7,12 +7,26 @@
 import { joinPath, separatorOf } from '../files/tree-model.ts';
 import { isImagePath } from '../files/file-kind.ts';
 import type { DocResolution } from './types.ts';
+import { contains, isWindowsAbsolute } from '../../../../packages/core/src/path-form.ts';
 
 const EXTERNAL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 
-/** True for anything carrying a scheme — those go to the system browser. */
+/**
+ * A single ASCII letter, `:`, then a separator is a Windows drive path, not a
+ * URL whose scheme is that letter. Two or more letters (`http:`, `file:`) never
+ * match, and neither does `C:foo` (drive-relative, not something we emit).
+ */
+const WINDOWS_DRIVE_PATH = /^[A-Za-z]:[\\/]/;
+
+/**
+ * True for anything carrying a scheme — those go to the system browser. Not a
+ * Windows-absolute path: `C:/docs/plan.md` used to parse as scheme `c`, so an
+ * absolute image or link in an artifact went to the browser and rendered broken
+ * under the app's CSP. whiphand stops *emitting* such paths, but user-authored
+ * markdown still contains them; they route to the file port instead.
+ */
 export function isExternal(target: string): boolean {
-  return EXTERNAL_SCHEME.test(target);
+  return EXTERNAL_SCHEME.test(target) && !WINDOWS_DRIVE_PATH.test(target);
 }
 
 /**
@@ -67,13 +81,19 @@ export function resolveInWorkspace(baseDir: string, root: string, target: string
 
   const sep = separatorOf(root);
   const startsAtRoot = cleaned.startsWith('/') || cleaned.startsWith('\\');
-  const absolute = startsAtRoot
-    ? joinPath(root, cleaned.replace(/^[\\/]+/, ''))
-    : joinPath(baseDir, cleaned);
+  // A Windows-absolute target is a whole path already; it is not joined under
+  // anything, and it goes through the same containment check as the rest.
+  const absolute = isWindowsAbsolute(cleaned)
+    ? cleaned
+    : startsAtRoot
+      ? joinPath(root, cleaned.replace(/^[\\/]+/, ''))
+      : joinPath(baseDir, cleaned);
   const path = normalize(absolute, sep);
 
-  const normalizedRoot = normalize(root, sep);
-  if (path !== normalizedRoot && !path.startsWith(normalizedRoot + sep)) return null;
+  // The pure comparator (invariant 4): case-folded and separator-blind on a
+  // Windows-shaped path, so `c:\proj` is inside `C:\Proj`; lexical, so it works
+  // on a path that does not exist and cannot fail open.
+  if (!contains(root, path)) return null;
 
   return { path, kind: kindOf(path) };
 }

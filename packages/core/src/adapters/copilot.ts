@@ -6,7 +6,10 @@ import { buildPrompt } from '../template.ts';
 import { interactiveGuidance } from '../engine/interactive-guidance.ts';
 import { endMarkerPath } from '../engine/session-end.ts';
 import { probeRunner } from '../tools.ts';
-import { flagArgs, harvestPrompt, isResumedStep, listModelsVia, requireSessionId, spawnSpec } from './common.ts';
+import {
+  flagArgs, harvestPrompt, isResumedStep, lf, listModelsVia, promptPointer, requireSessionId, spawnSpec,
+} from './common.ts';
+import { SUGGEST_PROMPT_NAME, harvestPromptPath, promptPath } from '../engine/spawn-files.ts';
 
 /** `/exit` quits copilot cleanly. */
 export const COPILOT_QUIT_SEQUENCE = '/exit\r';
@@ -108,8 +111,11 @@ export const copilotAdapter: RunnerAdapter = {
       : ['--session-id', sessionId(step, ctx)];
     // copilot has no system-prompt flag, so the guidance rides in front of the
     // task prompt; the separator keeps the two from bleeding into each other.
+    // The guidance and the task both live in the prompt file, which is what the
+    // argv pointer names; the separator keeps the two from bleeding together.
+    const prompt = promptPath(ctx.runDir, step.id);
     const argv = [
-      'copilot', '-i', `${interactiveGuidance(step, ctx)}\n\n---\n\n${buildPrompt(step, ctx)}`,
+      'copilot', '-i', promptPointer(prompt, ctx),
       ...sessionArgs, ...modelArgs(step), ...effortArgs(step),
       ...(step.writes ? [] : ['--deny-tool=write']),
       // A shell rule matches the command name only; naming the marker path
@@ -118,6 +124,7 @@ export const copilotAdapter: RunnerAdapter = {
     ];
     return {
       ...spawnSpec(ctx, argv, true),
+      files: [{ path: prompt, content: lf(`${interactiveGuidance(step, ctx)}\n\n---\n\n${buildPrompt(step, ctx)}`) }],
       endSession: { markerPath: marker, quitSequence: COPILOT_QUIT_SEQUENCE },
     };
   },
@@ -131,8 +138,11 @@ export const copilotAdapter: RunnerAdapter = {
    */
   headless(step: AgentStep, ctx: RunCtx): SpawnSpec {
     const artifact = ctx.artifacts[step.id] ?? join(ctx.runDir, step.output);
+    // `copilot -p` with piped stdin says "No task was provided" (verified against
+    // 1.0.83), so stdin is not an option here: the pointer it is.
+    const prompt = promptPath(ctx.runDir, step.id);
     const argv = [
-      'copilot', '-p', buildPrompt(step, ctx),
+      'copilot', '-p', promptPointer(prompt, ctx),
       ...modelArgs(step), ...effortArgs(step),
       ...(step.writes
         ? ['--allow-all-tools']
@@ -140,17 +150,26 @@ export const copilotAdapter: RunnerAdapter = {
       '--output-format', 'json', '--stream', 'on',
       '--no-color',
     ];
-    return { ...spawnSpec(ctx, argv, false), progress: { format: 'copilot-jsonl' } };
+    return {
+      ...spawnSpec(ctx, argv, false),
+      files: [{ path: prompt, content: lf(buildPrompt(step, ctx)) }],
+      progress: { format: 'copilot-jsonl' },
+    };
   },
 
   /** See claudeAdapter.suggestName — same contract, copilot's flags. */
   suggestName(prompt: string, ctx: RunCtx, capturePath: string): SpawnSpec {
+    const file = join(ctx.runDir, SUGGEST_PROMPT_NAME);
     const argv = [
-      'copilot', '-p', prompt,
+      'copilot', '-p', promptPointer(file, ctx),
       '--model', 'gpt-5-mini', '--deny-tool=write', '--deny-tool=shell',
       '--no-color',
     ];
-    return { ...spawnSpec(ctx, argv, false), capture: { path: capturePath, streams: 'stdout' } };
+    return {
+      ...spawnSpec(ctx, argv, false),
+      files: [{ path: file, content: lf(prompt) }],
+      capture: { path: capturePath, streams: 'stdout' },
+    };
   },
 
   // No guidance/settings here, despite resuming the same session: a headless
@@ -159,11 +178,16 @@ export const copilotAdapter: RunnerAdapter = {
   // write lands and the events stream cleanly around it), so a harvest step
   // reports progress exactly like any other headless spawn.
   harvest(step: AgentStep, ctx: RunCtx): SpawnSpec {
+    const file = harvestPromptPath(ctx.runDir, step.id);
     const argv = [
-      'copilot', '-p', harvestPrompt(step, ctx), `--resume=${sessionId(step, ctx)}`,
+      'copilot', '-p', promptPointer(file, ctx), `--resume=${sessionId(step, ctx)}`,
       ...modelArgs(step), '--allow-all-tools', '--output-format', 'json', '--stream', 'on', '--no-color',
     ];
-    return { ...spawnSpec(ctx, argv, false), progress: { format: 'copilot-jsonl' } };
+    return {
+      ...spawnSpec(ctx, argv, false),
+      files: [{ path: file, content: lf(harvestPrompt(step, ctx)) }],
+      progress: { format: 'copilot-jsonl' },
+    };
   },
 
   /**

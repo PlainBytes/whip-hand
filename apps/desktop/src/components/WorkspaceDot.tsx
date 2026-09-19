@@ -8,7 +8,7 @@ import { workspaceColorVar } from '../lib/workspace-identity.ts';
  * 16px by default — big enough to read as a colour at a glance, while still
  * centring inside the 20px `RowGlyph` slot so it stays on the nav icon column.
  */
-export function WorkspaceDot({ path, size = 16 }: { path: string; size?: number }) {
+export function WorkspaceDot({ path, identityKey, size = 16 }: { path: string; identityKey?: string | undefined; size?: number }) {
   return (
     <span
       aria-hidden
@@ -16,7 +16,7 @@ export function WorkspaceDot({ path, size = 16 }: { path: string; size?: number 
         width: size,
         height: size,
         borderRadius: '50%',
-        background: `var(${workspaceColorVar(path)})`,
+        background: `var(${workspaceColorVar(path, identityKey)})`,
         flexShrink: 0,
       }}
     />

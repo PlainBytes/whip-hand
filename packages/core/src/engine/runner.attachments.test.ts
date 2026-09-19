@@ -9,6 +9,7 @@ import { planResume, ResumeError } from './resume.ts';
 import { getRun } from './manifest.ts';
 import { AttachmentError } from './attachments.ts';
 import { buildPrompt } from '../template.ts';
+import { toWorkspace } from '../path-form.ts';
 import { AdapterRegistry } from '../registry.ts';
 import { DEFAULT_CONFIG } from '../config.ts';
 import type {
@@ -89,8 +90,10 @@ test('copies attachments into the run and hands them to the step that reads them
   assert.equal(await readFile(join(dir, 'bug.png'), 'utf8'), 'PNG');
 
   assert.match(prompts[0], /## Input artifacts \(read these files first\)/);
-  assert.ok(prompts[0].includes(`- attachments/bug.png: ${join(dir, 'bug.png')}`));
-  assert.ok(prompts[0].includes(`- attachments/server.log: ${join(dir, 'server.log')}`));
+  // Workspace-relative with forward slashes: the one path style every prompt uses.
+  assert.ok(prompts[0].includes(`- attachments/bug.png: ${toWorkspace(join(dir, 'bug.png'), workdir)}`));
+  assert.ok(prompts[0].includes(`- attachments/server.log: ${toWorkspace(join(dir, 'server.log'), workdir)}`));
+  assert.ok(prompts[0].includes('- attachments/bug.png: .whiphand/runs/'), prompts[0]);
   assert.ok(!prompts[1].includes('attachments/'), 'only the step that names the ref receives them');
 
   const start = events.find(e => e.type === 'run:start');
@@ -156,7 +159,7 @@ test('a dry run records the list and copies nothing', async () => {
 
   const spawn = events.find(e => e.type === 'step:spawn' && e.stepId === 'plan');
   assert.ok(spawn?.type === 'step:spawn'
-    && spawn.spec.argv.at(-1)!.includes(join(result.runDir, 'attachments', 'bug.png')));
+    && spawn.spec.argv.at(-1)!.includes(toWorkspace(join(result.runDir, 'attachments', 'bug.png'), workdir)));
   const detail = await getRun(workdir, DEFAULT_CONFIG, result.runId);
   assert.ok(detail !== null && detail.status !== 'unknown');
   assert.deepEqual(detail.attachments?.map(a => a.name), ['bug.png']);
@@ -219,7 +222,7 @@ test('inside a loop, attachments are still delivered — they are not a previous
 
 test('a manual step naming attachments gets one context entry per file', async () => {
   const { workdir, src } = await workspaceWith({ 'a.png': '1', 'b.log': '2' });
-  const { frontend, manual } = collector();
+  const { events, frontend, manual } = collector();
   const gate: Workflow = {
     name: 'gate',
     steps: [{ id: 'look', kind: 'approval', title: 'Look', instructions: 'Look at them.', inputs: ['attachments'] }],
@@ -230,9 +233,13 @@ test('a manual step naming attachments gets one context entry per file', async (
   });
   assert.equal(result.ok, true);
   assert.deepEqual(manual[0].context.artifacts, [
-    { id: 'attachments/a.png', path: join(result.runDir, 'attachments', 'a.png') },
-    { id: 'attachments/b.log', path: join(result.runDir, 'attachments', 'b.log') },
+    { id: 'attachments/a.png', path: toWorkspace(join(result.runDir, 'attachments', 'a.png'), workdir) },
+    { id: 'attachments/b.log', path: toWorkspace(join(result.runDir, 'attachments', 'b.log'), workdir) },
   ]);
+  assert.match(manual[0].context.artifacts[0].path, /^\.whiphand\/runs\/[^/]+\/attachments\/a\.png$/);
+  // the recorded event says exactly what the frontend was asked
+  const asked = events.find(e => e.type === 'step:manual');
+  assert.deepEqual(asked?.type === 'step:manual' && asked.request.context.artifacts, manual[0].context.artifacts);
 });
 
 test('a resume refuses new attachments', async () => {
@@ -271,7 +278,7 @@ test('a resume re-seeds the attachments the run was started with', async () => {
     frontend: collector().frontend, resume: plan, spawnHeadless: spawner(prompts),
   });
   assert.equal(resumed.ok, true);
-  assert.ok(prompts[0].includes(`- attachments/bug.png: ${join(first.runDir, 'attachments', 'bug.png')}`));
+  assert.ok(prompts[0].includes(`- attachments/bug.png: ${toWorkspace(join(first.runDir, 'attachments', 'bug.png'), workdir)}`));
   const detail = await getRun(workdir, DEFAULT_CONFIG, first.runId);
   assert.ok(detail !== null && detail.status !== 'unknown');
   assert.deepEqual(detail.attachments?.map(a => a.name), ['bug.png'], 'the reopened manifest keeps the list');

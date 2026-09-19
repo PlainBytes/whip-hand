@@ -1,12 +1,24 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { pbkdf2 } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { SpawnSpec } from '@whiphand/core';
-import { createSpawnHeadless } from './spawn.ts';
+import { PosixContainer, type SpawnSpec } from '@whiphand/core';
+import { ABORTED_EXIT_CODE, createSpawnHeadless } from './spawn.ts';
+
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+async function waitFor(check: () => boolean, ms = 5000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error('timed out waiting for condition');
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+}
 
 /**
  * `node -e` rather than `/bin/sh -c`: these tests are about how spawn.ts
@@ -24,6 +36,9 @@ function nodeSpec(script: string): SpawnSpec {
  * so there is no behaviour to assert rather than a behaviour that differs.
  */
 const posixSignals = { skip: process.platform === 'win32' ? 'POSIX signal semantics' : false };
+const windowsCounterpart = {
+  skip: process.platform !== 'win32' ? 'Windows only: the counterpart of the POSIX signal-disposition tests' : false,
+};
 
 function collectNotify(): { calls: Array<{ method: string; params: any }>; notify: (m: string, p: unknown) => void } {
   const calls: Array<{ method: string; params: any }> = [];
@@ -75,7 +90,7 @@ test('an ordinary (non-progress) spec still hands every line to onLine too, tagg
   assert.equal(calls.filter(c => c.method === 'stepLog').length, 2);
 });
 
-test('abort sends SIGTERM and the promise resolves once the child exits', posixSignals, async () => {
+test('abort settles at once with the sentinel exit code and still signals the child', posixSignals, async () => {
   const { notify } = collectNotify();
   let onReady: () => void;
   const ready = new Promise<void>(resolve => { onReady = resolve; });
@@ -84,22 +99,48 @@ test('abort sends SIGTERM and the promise resolves once the child exits', posixS
     if (method === 'stepLog' && (params as { line?: string }).line === 'ready') onReady();
   }, { killGraceMs: 200 });
   const controller = new AbortController();
-  // The backgrounded sleep's stdio is redirected away from the inherited
-  // pipe fds (>/dev/null) so it can't keep resolving on 'close' waiting on
-  // it — with the sh process (fd holder) exiting on trap, 'close' fires as
-  // soon as that happens rather than waiting out an unrelated orphan.
-  // The 'ready' echo guarantees the trap is installed before we abort;
-  // aborting immediately after spawn can deliver SIGTERM before /bin/sh
-  // has set the trap, killing it with the default disposition.
+  // The trap file proves the child was actually told to stop, not just abandoned:
+  // settling at once must not mean leaving it running.
+  const dir = mkdtempSync(join(tmpdir(), 'whiphand-abort-'));
+  const trapFile = join(dir, 'terminated');
   const shSpec: SpawnSpec = {
-    argv: ['/bin/sh', '-c', 'trap "exit 7" TERM; echo ready; sleep 5 >/dev/null 2>&1 & wait'],
+    argv: ['/bin/sh', '-c', `trap "echo x > '${trapFile}'; exit 7" TERM; echo ready; sleep 5 >/dev/null 2>&1 & wait`],
     cwd: process.cwd(), env: {}, interactive: false,
   };
   const promise = spawnHeadless(shSpec, controller.signal);
   await ready;
   controller.abort();
-  const code = await promise;
-  assert.equal(code, 7);
+  // Not the child's own 7: a cancel settles without waiting for 'close', which
+  // waits on pipes an orphan may hold, so its exit status is not the result.
+  assert.equal(await promise, ABORTED_EXIT_CODE);
+  await waitFor(() => existsSync(trapFile));
+});
+
+test('a cancelled step in a container ends the whole tree, grandchildren included', posixSignals, async () => {
+  const { notify } = collectNotify();
+  const container = new PosixContainer(200);
+  let onReady: () => void;
+  const ready = new Promise<void>(resolve => { onReady = resolve; });
+  const dir = mkdtempSync(join(tmpdir(), 'whiphand-tree-'));
+  const pidFile = join(dir, 'grandchild.pid');
+  const spawnHeadless = createSpawnHeadless('job-1', (method, params) => {
+    notify(method, params);
+    if (method === 'stepLog' && (params as { line?: string }).line === 'ready') onReady();
+  }, { container });
+  const controller = new AbortController();
+  // A shell that starts a long-lived grandchild and waits, as a command step does.
+  const spec: SpawnSpec = {
+    argv: ['/bin/sh', '-c', `sleep 100 & echo $! > '${pidFile}'; echo ready; wait`],
+    cwd: process.cwd(), env: {}, interactive: false,
+  };
+  const promise = spawnHeadless(spec, controller.signal);
+  await ready;
+  const grandchild = Number(readFileSync(pidFile, 'utf8').trim());
+  assert.ok(pidAlive(grandchild), 'the grandchild is running');
+  controller.abort();
+  assert.equal(await promise, ABORTED_EXIT_CODE);
+  await container.dispose();
+  await waitFor(() => !pidAlive(grandchild));
 });
 
 test('abort escalates to SIGKILL after the grace period if the child ignores SIGTERM', posixSignals, async () => {
@@ -225,4 +266,20 @@ test('the capture file is complete and closed by the time the promise resolves',
   assert.equal(await readFile(path, 'utf8'), 'first\nlast\nFOOTER\n');
   await Promise.all(busy);
   await rm(dir, { recursive: true, force: true });
+});
+
+test('abort on Windows settles at once and terminates the child — there is no signal disposition to honour', windowsCounterpart, async () => {
+  // The Windows half of the two POSIX tests above: `child.kill` is
+  // TerminateProcess, which nothing can catch, so there is no trap to assert and
+  // no escalation to wait for. What must still hold is what holds everywhere:
+  // the cancel settles with the sentinel, and the child does not survive it.
+  const { notify, calls } = collectNotify();
+  const spawnHeadless = createSpawnHeadless('job-1', notify, { killGraceMs: 200 });
+  const controller = new AbortController();
+  const promise = spawnHeadless(nodeSpec("console.log('pid ' + process.pid); setInterval(() => {}, 1000)"), controller.signal);
+  await waitFor(() => calls.some(c => c.method === 'stepLog' && /^pid \d+$/.test(c.params.line)));
+  const pid = Number(/pid (\d+)/.exec(calls.find(c => c.method === 'stepLog')!.params.line)![1]);
+  controller.abort();
+  assert.equal(await promise, ABORTED_EXIT_CODE);
+  await waitFor(() => !pidAlive(pid));
 });

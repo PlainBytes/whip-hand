@@ -6,6 +6,7 @@ line: `severity · file:line · problem · proposed fix · effort (S/M/L)`.
 
 ## Security leftovers from section 1
 
+- **RESOLVED by the Windows plan (invariant 8) — `{{ }}` in `run:` now expands to a shell variable reference (`${WHIPHAND_X}`), never the value; see `docs/design.md` "Command steps and shell injection". The original finding follows.**
 - **high · `packages/core/src/engine/command.ts:39,49` + `packages/core/src/template.ts:25`
   · a `kind: command` step's `run:` is rendered by `renderTemplate` (plain string
   substitution, no escaping) and then handed to `/bin/sh -c`/`cmd.exe` as one string, so a
@@ -52,6 +53,11 @@ line: `severity · file:line · problem · proposed fix · effort (S/M/L)`.
   group reaches grandchildren, and mirror `shutdown()`'s abort in the crash handlers with a
   bounded timeout. Deferred: process-group semantics differ enough between POSIX and Windows
   that getting this right needs its own design pass, not a quick patch · effort: M.
+  **Addressed by the Windows plan (invariant 6): every runner child is adopted into a per-run
+  container — a process group on POSIX, a Job Object with kill-on-close on Windows — that cancel,
+  timeout, lease loss and run end all kill, so a single abort now reaches grandchildren. A crash of the
+  owning process is contained on Windows (the guard's parent-handle wait); on POSIX a SIGKILLed
+  owner still leaves its groups behind, which the plan accepts.**
 
 ## Engine (`packages/core/src/engine/`)
 

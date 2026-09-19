@@ -14,13 +14,17 @@
  * `OPENCODE_CONFIG_CONTENT` — see adapters/opencode.ts).
  */
 import type { AgentStep, RunCtx } from '../types.ts';
-import { endMarkerPath, shellPath } from './session-end.ts';
+import { endMarkerPath } from './session-end.ts';
+import { shQuote, toWorkspace } from '../path-form.ts';
 
 export function interactiveGuidance(step: AgentStep, ctx: RunCtx): string {
   // The runner is told to run this as a shell command, and the adapters
   // pre-approve the same string — so it has to be shell-readable, and it has
-  // to be rendered the one way both sides render it.
-  const marker = shellPath(endMarkerPath(ctx.runDir, step.id));
+  // to be rendered the one way both sides render it: workspace-relative with
+  // forward slashes (one path style in every prompt; the runner's cwd is the
+  // workspace root), quoted by the one quoting helper.
+  const marker = shQuote(toWorkspace(endMarkerPath(ctx.runDir, step.id), ctx.workdir));
+  const runDir = toWorkspace(ctx.runDir, ctx.workdir);
 
   const scope =
     `You are running as step '${step.id}' of a Whiphand workflow, in an interactive ` +
@@ -41,7 +45,7 @@ export function interactiveGuidance(step: AgentStep, ctx: RunCtx): string {
   // artifact into the run dir. Without the carve-out that request contradicts the
   // read-only rule we just gave, and the model may refuse it.
   const carveOut =
-    `Whiphand's own run directory (${ctx.runDir}) is not part of the working tree and is ` +
+    `Whiphand's own run directory (${runDir}) is not part of the working tree and is ` +
     `exempt from the rule above: the marker file below, and the artifact you will be asked to ` +
     `write once this session ends, are expected there.`;
 

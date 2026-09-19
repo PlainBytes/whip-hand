@@ -8,6 +8,7 @@
 import type { CaptureSpec, ManualChoice, ManualRequest } from '../../../../packages/core/src/types.ts';
 import { ancestorLoops, executionKey } from '../../../../packages/core/src/execution-key.ts';
 import { stageLabel } from '../../../../packages/core/src/format.ts';
+import { toNative } from '../../../../packages/core/src/path-form.ts';
 import { manualLabel } from '../lib/await-copy.ts';
 import { DIFF_SOURCE_ID, type ReviewChoice, type ReviewRequest, type ReviewSource } from './model.ts';
 
@@ -44,7 +45,12 @@ function labelFor(artifactPath: string, id: string): string {
   return name === undefined || name === '' ? id : name;
 }
 
-export function fromManualRequest(request: ManualRequest): ReviewRequest {
+/**
+ * `root` is the workspace the request's workspace-relative artifact paths are
+ * relative to; the review screen opens them through the artifact port, which
+ * addresses files by the resolved paths the run's manifest lists.
+ */
+export function fromManualRequest(request: ManualRequest, root?: string): ReviewRequest {
   const sources: ReviewSource[] = [];
 
   // Only when the workflow author asked for it with `show_diff: true`. Core
@@ -55,7 +61,8 @@ export function fromManualRequest(request: ManualRequest): ReviewRequest {
   }
   for (const artifact of request.context.artifacts) {
     sources.push({
-      kind: 'artifact', id: artifact.id, path: artifact.path,
+      kind: 'artifact', id: artifact.id,
+      path: root === undefined ? artifact.path : toNative(artifact.path, root),
       label: labelFor(artifact.path, artifact.id),
     });
   }

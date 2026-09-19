@@ -1,7 +1,8 @@
 import { readFile, access, readdir } from 'node:fs/promises';
 import { resolve, join, basename, extname } from 'node:path';
 import { globalWorkflowsDir } from './config-home.ts';
-import { WORKFLOW_NAME_RE, assertValidWorkflowName } from './scaffold.ts';
+import { assertValidWorkflowName } from './scaffold.ts';
+import { isValidWorkflowName } from './workflow-name.ts';
 import { parseWorkflow } from './schema.ts';
 import type { Scope, Workflow } from './types.ts';
 
@@ -80,7 +81,7 @@ export async function resolveWorkflowPath(workflowRef: string, workdir: string):
   // Not a name we'd ever have written, so there is nothing to look up under
   // either scope — report the same "not found" the lookup would have, rather
   // than building paths out of it.
-  if (!WORKFLOW_NAME_RE.test(workflowRef)) {
+  if (!isValidWorkflowName(workflowRef)) {
     throw new Error(`workflow '${workflowRef}' not found — no such file, and not a valid workflow name`);
   }
 

@@ -1,0 +1,9 @@
+name: smoke-command
+# A real (non-dry) run of one command step: in a packaged Windows build this can
+# only succeed if the embedded process guard was extracted and started — a build
+# that lost it refuses to run at all — and if a POSIX shell was found.
+steps:
+  - id: check
+    kind: command
+    run: "true"
+    output: check.log

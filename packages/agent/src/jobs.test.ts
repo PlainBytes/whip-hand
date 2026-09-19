@@ -29,3 +29,9 @@ test('a fresh job has no live session: what handlers.endSession checks before ac
   assert.equal(job.pty, undefined);
   assert.equal(job.endSession, undefined);
 });
+
+test('a job carries the identity key its workspace was opened under, when there is one', () => {
+  const jobs = new JobManager();
+  assert.equal(jobs.create('/ws').identityKey, undefined);
+  assert.equal(jobs.create('/link', '/real/ws').identityKey, '/real/ws');
+});

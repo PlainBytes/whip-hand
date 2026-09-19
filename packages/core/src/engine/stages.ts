@@ -7,6 +7,7 @@
 import { glob, readFile } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import type { Stage } from '../types.ts';
+import { validateSegment } from '../segment.ts';
 
 export class StageError extends Error {}
 
@@ -62,6 +63,10 @@ export async function discoverStages(workdir: string, pattern: string): Promise<
       throw new StageError(
         `stage file '${file}': a stage name cannot contain '@', '#', '/' or '\\'`);
     }
+    // A stage id becomes a directory in the run (invariant 3), so it is held to
+    // what Windows accepts on every platform.
+    const segment = validateSegment(id);
+    if (!segment.ok) throw new StageError(`stage file '${file}': its id '${id}' ${segment.reason}`);
     // The plan directory is the author's, and it may change mid-run: a match
     // that is a directory, or a file removed between the glob and this read,
     // is a problem with the plan to name, not a crash.

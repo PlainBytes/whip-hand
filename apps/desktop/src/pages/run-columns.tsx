@@ -10,7 +10,7 @@ import type { RunSummary } from '../agent/client.ts';
 import { StatusBadge } from '../components/StatusBadge.tsx';
 import { elapsedMs, formatElapsed } from '../../../../packages/core/src/format.ts';
 
-export type RecentRun = RunSummary & { workspace: string };
+export type RecentRun = RunSummary & { workspace: string; identityKey?: string };
 
 export const POLL_INTERVAL_MS = 5000;
 

@@ -11,7 +11,7 @@ import { DEFAULT_CONFIG } from './config.ts';
 import { WorkflowError, parseWorkflow, validateWorkflowSemantics } from './schema.ts';
 import { mergeWorkflow } from './workflow-write.ts';
 import type { Scope, Workflow } from './types.ts';
-import { WORKFLOW_NAME_RE } from './workflow-name.ts';
+import { WORKFLOW_NAME_RE, workflowNameProblem } from './workflow-name.ts';
 
 export { WORKFLOW_NAME_RE } from './workflow-name.ts';
 
@@ -24,9 +24,8 @@ export { WORKFLOW_NAME_RE } from './workflow-name.ts';
  * name into the same two directories from the read side.
  */
 export function assertValidWorkflowName(name: string): void {
-  if (!WORKFLOW_NAME_RE.test(name)) {
-    throw new Error(`invalid workflow name '${name}' (want ${WORKFLOW_NAME_RE})`);
-  }
+  const problem = workflowNameProblem(name);
+  if (problem !== null) throw new Error(`invalid workflow name '${name}' (${problem})`);
 }
 
 export function workflowTemplate(name: string): string {
@@ -70,7 +69,7 @@ steps:
         steps:
           # Repeats until the tests pass, handing the failing log back to
           # 'execute' each time. 'review' only runs once they are green. A
-          # blank test_command runs 'sh -c ""', which exits 0, so tests pass
+          # blank test_command runs eval "", which exits 0, so tests pass
           # immediately and are effectively skipped.
           - id: test-fix
             kind: loop
@@ -95,7 +94,7 @@ steps:
                   every point.
               - id: tests
                 kind: command
-                run: "{{ inputs.test_command }}"
+                run: eval "{{ inputs.test_command }}"
                 verdict: true         # a failing exit sends the loop round again, not a crash
                 output: tests.log
                 timeout_ms: 1800000   # a hung suite fails the run (resumable) rather than blocking forever
@@ -230,7 +229,7 @@ steps:
         steps:
           # Repeats until the tests pass, handing the failing log back to
           # 'execute' each time. 'review' only runs once they are green. A
-          # blank test_command runs 'sh -c ""', which exits 0, so tests pass
+          # blank test_command runs eval "", which exits 0, so tests pass
           # immediately and are effectively skipped.
           - id: test-fix
             kind: loop
@@ -257,7 +256,7 @@ steps:
                   address every requested change.
               - id: tests
                 kind: command
-                run: "{{ inputs.test_command }}"
+                run: eval "{{ inputs.test_command }}"
                 verdict: true         # a failing exit sends the loop round again, not a crash
                 output: tests.log
                 timeout_ms: 1800000   # a hung suite fails the run (resumable) rather than blocking forever
@@ -357,7 +356,7 @@ steps:
         steps:
           # Repeats until the tests pass, handing the failing log back to
           # 'execute' each time. 'review' only runs once they are green. A
-          # blank test_command runs 'sh -c ""', which exits 0, so tests pass
+          # blank test_command runs eval "", which exits 0, so tests pass
           # immediately and are effectively skipped.
           - id: test-fix
             kind: loop
@@ -384,7 +383,7 @@ steps:
                 output: execute-report.md
               - id: tests
                 kind: command
-                run: "{{ inputs.test_command }}"
+                run: eval "{{ inputs.test_command }}"
                 verdict: true         # a failing exit sends the loop round again, not a crash
                 output: tests.log
                 timeout_ms: 1800000   # a hung suite fails the run (resumable) rather than blocking forever
@@ -565,7 +564,7 @@ steps:
                   are attached, address every point.
               - id: tests
                 kind: command
-                run: "{{ inputs.test_command }}"
+                run: eval "{{ inputs.test_command }}"
                 verdict: true
                 output: tests.log
                 timeout_ms: 1800000

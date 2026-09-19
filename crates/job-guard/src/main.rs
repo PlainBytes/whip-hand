@@ -14,8 +14,9 @@
 //!
 //! Protocol, line-based. The parent writes on stdin:
 //!   `assign <pid>`  put that process (and whatever it starts) in the job
-//!   `kill`          terminate every process in the job; the job stays usable,
-//!                   because a run goes on after a step times out
+//!   `kill`          terminate every process in the job, then replace it with a
+//!                   fresh one, because a run goes on after a step times out —
+//!                   and a terminated job refuses new members (ERROR_ACCESS_DENIED)
 //!   EOF             close the job — kill-on-close ends every member
 //! and the guard answers on stdout: `ready` once the job exists, `ok <pid>` or
 //! `err <pid> <win32 error>` per assign, `killed` after a kill (or
@@ -23,8 +24,8 @@
 //!
 //! Crash containment: the guard waits on its parent process. When the parent dies
 //! by any means (Task Manager, a crash — nothing of ours runs then) that wait
-//! fires, the guard closes the job handle, kill-on-close ends every member, and
-//! the guard exits. If the guard itself is killed its handle closes with it and
+//! fires and the guard exits; exiting closes its handle to whichever job is
+//! current, and kill-on-close ends every member. If the guard itself is killed its handle closes with it and
 //! the job kills its members anyway.
 //!
 //! The guard is deliberately *not* a member of its own job: `kill` must not end
@@ -51,10 +52,33 @@ mod imp {
         PROCESS_TERMINATE, PROCESS_SYNCHRONIZE,
     };
 
-    /// A raw handle that may cross to the watcher thread: it is only ever waited on / closed.
+    /// A raw handle that may cross to the watcher thread: it is only ever waited on.
     #[derive(Clone, Copy)]
     struct SendHandle(HANDLE);
     unsafe impl Send for SendHandle {}
+
+    /// A job with KILL_ON_JOB_CLOSE only. Breakaway is off (no BREAKAWAY_OK, no
+    /// SILENT_BREAKAWAY_OK): that is the whole mechanism.
+    unsafe fn create_job() -> Result<HANDLE, String> {
+        let job = CreateJobObjectW(null(), null());
+        if job.is_null() {
+            return Err(format!("CreateJobObjectW failed: {}", GetLastError()));
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let ok = SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const _,
+            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        );
+        if ok == 0 {
+            let error = GetLastError();
+            CloseHandle(job);
+            return Err(format!("SetInformationJobObject failed: {error}"));
+        }
+        Ok(job)
+    }
 
     fn say(line: &str) {
         let stdout = std::io::stdout();
@@ -73,25 +97,13 @@ mod imp {
         };
 
         unsafe {
-            let job = CreateJobObjectW(null(), null());
-            if job.is_null() {
-                eprintln!("CreateJobObjectW failed: {}", GetLastError());
-                return 1;
-            }
-            // KILL_ON_JOB_CLOSE only. Breakaway is off (no BREAKAWAY_OK, no
-            // SILENT_BREAKAWAY_OK): that is the whole mechanism.
-            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
-            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-            let ok = SetInformationJobObject(
-                job,
-                JobObjectExtendedLimitInformation,
-                &info as *const _ as *const _,
-                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-            );
-            if ok == 0 {
-                eprintln!("SetInformationJobObject failed: {}", GetLastError());
-                return 1;
-            }
+            let mut job = match create_job() {
+                Ok(job) => job,
+                Err(message) => {
+                    eprintln!("{message}");
+                    return 1;
+                }
+            };
 
             // Parent death ends the job (and us) whatever else is happening.
             let parent = OpenProcess(PROCESS_SYNCHRONIZE, 0, parent_pid);
@@ -99,11 +111,12 @@ mod imp {
                 eprintln!("OpenProcess(parent {parent_pid}) failed: {}", GetLastError());
                 return 1;
             }
-            let (watch_parent, watch_job) = (SendHandle(parent), SendHandle(job));
+            // The job handle is not handed over: `kill` replaces it, and exiting
+            // closes whichever one is current — kill-on-close ends every member.
+            let watch_parent = SendHandle(parent);
             std::thread::spawn(move || {
-                let (parent, job) = (watch_parent, watch_job);
+                let parent = watch_parent;
                 WaitForSingleObject(parent.0, INFINITE);
-                CloseHandle(job.0); // kill-on-close ends every member
                 ExitProcess(0);
             });
 
@@ -133,8 +146,16 @@ mod imp {
                 } else if line == "kill" {
                     if TerminateJobObject(job, 1) == 0 {
                         say(&format!("err kill {}", GetLastError()));
-                    } else {
-                        say("killed");
+                        continue;
+                    }
+                    // A terminated job refuses new members, so the next step gets a fresh one.
+                    match create_job() {
+                        Ok(fresh) => {
+                            CloseHandle(job);
+                            job = fresh;
+                            say("killed");
+                        }
+                        Err(message) => say(&format!("err kill {message}")),
                     }
                 }
             }

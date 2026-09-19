@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { withStubBin } from '@whiphand/test-support';
+import { fromPosix, withStubBin } from '@whiphand/test-support';
 import { ContainerError, GUARD_FILE_NAME, PosixContainer, createContainer, locateGuard } from './container.ts';
 
 const posixOnly = { skip: process.platform === 'win32' ? 'POSIX process groups' : false };
@@ -172,9 +172,10 @@ test('locateGuard: WHIPHAND_JOB_GUARD wins, then a binary beside the executable,
   const none = (): undefined => undefined;
   assert.equal(locateGuard({ env: {}, execPath: '/app/whiphand', exists, seaAsset: none }), null);
 
-  present.add(`/app/resources/${GUARD_FILE_NAME}`);
+  const resource = fromPosix(`/app/resources/${GUARD_FILE_NAME}`);
+  present.add(resource);
   assert.deepEqual(locateGuard({ env: {}, execPath: '/app/whiphand', exists, seaAsset: none }),
-    { path: `/app/resources/${GUARD_FILE_NAME}`, source: 'resource' });
+    { path: resource, source: 'resource' });
 
   present.add('/custom/guard.exe');
   assert.deepEqual(locateGuard({ env: { WHIPHAND_JOB_GUARD: '/custom/guard.exe' }, execPath: '/app/whiphand', exists, seaAsset: none }),

@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnRunner } from './exec.ts';
-import { locateGuard } from './container.ts';
+import { GuardContainer, locateGuard } from './container.ts';
 
 const windowsOnly = { skip: process.platform !== 'win32' && 'Windows only: needs the real whiphand-job.exe and Job Objects' };
 
@@ -77,6 +77,8 @@ test('cancel: killAll ends the whole tree while the guard stays usable for the n
   const grandchild = await first.grandchild;
   assert.ok(alive(grandchild));
   await container.killAll();
+  assert.ok(container instanceof GuardContainer, container.degraded ?? 'the guard was found and started');
+  assert.equal(container.lastKillError, undefined, 'TerminateJobObject failed (win32 error)');
   await until(() => !alive(first.pid) && !alive(grandchild), 20_000);
 
   // The run goes on after a step is killed (a timeout, a loop iteration): the next step is contained too.

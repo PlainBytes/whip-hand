@@ -103,12 +103,13 @@ test('interactive: every hook command exits 0', () => {
 });
 
 test('interactive: hooks touch the await path and nothing else', () => {
-  const awaitPath = awaitStatePath(ctx.runDir, 'plan');
+  // Hooks run in a POSIX shell, so they name the forward-slash form (`D:/w/…` on Windows).
+  const awaitPath = toFwdAbs(awaitStatePath(ctx.runDir, 'plan'));
   const { hooks } = settingsOf(claudeAdapter.interactive(planStep, ctx));
   for (const [event, entry] of Object.entries(hooks)) {
     const { command } = entry[0].hooks[0];
     assert.ok(command.includes(awaitPath), `${event} writes the await path`);
-    const paths = (command.match(/\/[^\s'"]*/g) ?? [])
+    const paths = (command.match(/(?:[A-Za-z]:)?\/[^\s'"]*/g) ?? [])
       .map(x => x.replace(/[;&|]+$/, ''))
       .filter(x => x !== '/dev/null');
     assert.deepEqual(paths, [awaitPath], `${event} names no path but the await file`);

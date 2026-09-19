@@ -17,6 +17,7 @@ import { NAME_MARKER_NAME, setRunName } from './run-name.ts';
 import { RUN_LOG_NAME } from './run-log.ts';
 import { parseLogLine } from '../log-rows.ts';
 import type { WhiphandEvent } from '../types.ts';
+import { fromPosix } from '@whiphand/test-support';
 
 async function tmpRunDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'whiphand-manifest-'));
@@ -104,7 +105,7 @@ test('reducer: realistic event sequence builds final manifest fields', async () 
   const a = m.steps.find(s => s.id === 'a')!;
   assert.equal(a.status, 'done');
   assert.equal(a.exitCode, 0);
-  assert.equal(a.artifact, '/work/.whiphand/runs/run-1/a.md');
+  assert.equal(a.artifact, fromPosix('/work/.whiphand/runs/run-1/a.md'));
   const b = m.steps.find(s => s.id === 'b')!;
   assert.equal(b.status, 'done');
   assert.equal(b.verdict, 'pass');
@@ -461,7 +462,7 @@ test('reducer: blame lands on the execution in flight, not an earlier iteration'
   const rows = journal.manifest.steps.filter(s => s.id === 'a');
   assert.equal(rows.length, 2);
   assert.equal(rows[0].status, 'done', 'iteration 1 completed; its history stands');
-  assert.equal(rows[0].artifact, '/r/fix/iter-1/a.md');
+  assert.equal(rows[0].artifact, fromPosix('/r/fix/iter-1/a.md'));
   assert.equal(rows[1].status, 'failed');
 });
 
@@ -859,7 +860,7 @@ test('reducer: each loop iteration adds its own step entry, grouped by id', asyn
   const executes = journal.manifest.steps.filter(s => s.id === 'execute');
   assert.equal(executes.length, 2, 'one entry per execution, not one per declared step');
   assert.deepEqual(executes.map(s => s.iteration), [1, 2]);
-  assert.deepEqual(executes.map(s => s.artifact), ['/a/iter-1/e.md', '/a/iter-2/e.md']);
+  assert.deepEqual(executes.map(s => s.artifact), ['/a/iter-1/e.md', '/a/iter-2/e.md'].map(fromPosix));
   assert.deepEqual(executes.map(s => s.loopId), ['fix', 'fix']);
 
   const tests = journal.manifest.steps.filter(s => s.id === 'tests');

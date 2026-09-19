@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_CONFIG, TOOL_GROUP_LABELS } from '@whiphand/core';
 import type { ToolGroup } from '@whiphand/core';
 import type { DoctorRow } from '@whiphand/agent/src/protocol.ts';
-import { mintVersionStubs, pathWith } from '@whiphand/test-support';
+import { mintVersionStubs, pathWith, posix } from '@whiphand/test-support';
 
 const execFileAsync = promisify(execFile);
 
@@ -88,7 +88,10 @@ function childEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 
 function normalizeString(value: string, dir: string, runId: string): string {
-  return value.split(dir).join('<dir>').split(runId).join('<runId>').replace(UUID_RE, '<uuid>');
+  // Emitted paths are workspace-relative or forward-slash absolute (`C:/Users/…` on Windows),
+  // so the native spelling of `dir` alone would leave the Windows temp dir in place.
+  return value.split(dir).join('<dir>').split(posix(dir)).join('<dir>')
+    .split(runId).join('<runId>').replace(UUID_RE, '<uuid>');
 }
 
 interface SpawnSpecLike {

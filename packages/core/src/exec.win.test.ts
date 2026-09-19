@@ -162,7 +162,7 @@ test('a defined %VAR% can no longer reach a runner: prompts are not on the comma
   // interactive: what is left on argv is flags, a model name, short paths and
   // one fixed pointer sentence, none of which carries a `%`, a newline or a
   // metacharacter — so it round-trips through the cmd.exe fallback intact.
-  const hostile = '%COMSPEC% %PATH% "quoted" & piped | redirected > x\nsecond line ^ caret ! bang ' + 'lorem ipsum '.repeat(1200);
+  const hostile = '%COMSPEC% %PATH% "quoted" & piped | redirected > x\nsecond line ^ caret ! bang ' + 'lorem ipsum '.repeat(1200).trimEnd(); // buildPrompt trims
   const ctx = {
     workdir: 'C:\\Users\\me\\proj', runId: 'r1', runDir: 'C:\\Users\\me\\proj\\.whiphand\\runs\\r1', runSlug: 'r1',
     sessionIds: { s: '11111111-1111-4111-8111-111111111111' }, artifacts: {}, attempts: {}, verdicts: {}, inputs: {},

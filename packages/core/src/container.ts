@@ -191,7 +191,7 @@ export class PosixContainer implements Container {
 /**
  * Protocol, line-based: the parent writes `assign <pid>`, `kill`, or closes
  * stdin; the guard answers `ready` once its job exists, `ok <pid>` / `err <pid>
- * <reason>` per assign, and `killed` after a `kill`. EOF closes the job, which
+ * <reason>` per assign, and `killed` (or `err kill <reason>`) after a `kill`. EOF closes the job, which
  * kills every member.
  */
 export class GuardContainer implements Container {
@@ -202,6 +202,8 @@ export class GuardContainer implements Container {
   private readonly waiters: Array<(line: string) => void> = [];
   private readonly guard: ChildProcess;
   private readonly timeoutMs: number;
+  /** Why the last `kill` failed, as the guard reported it; cleared by one that succeeds. */
+  lastKillError: string | undefined;
 
   constructor(guard: ChildProcess, timeoutMs: number = GUARD_TIMEOUT_MS) {
     this.guard = guard;
@@ -244,7 +246,8 @@ export class GuardContainer implements Container {
     if (!this.dirty || this.guard.exitCode !== null || this.guard.stdin === null || this.guard.stdin.destroyed) return;
     this.dirty = false;
     this.guard.stdin.write('kill\n');
-    await this.nextLine(line => line === 'killed').catch(() => {});
+    const answer = await this.nextLine(line => line === 'killed' || line.startsWith('err kill ')).catch(() => undefined);
+    this.lastKillError = answer?.startsWith('err kill ') === true ? answer.slice('err kill '.length) : undefined;
   }
 
   async dispose(): Promise<void> {

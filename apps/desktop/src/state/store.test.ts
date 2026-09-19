@@ -4,6 +4,7 @@ import {
 } from './store.ts';
 import type { WhiphandEvent } from '../../../../packages/core/src/types.ts';
 import { EMPTY_APP_STATE } from '../../../../packages/agent/src/app-state.ts';
+import { fromPosix } from '../../../../packages/test-support/src/paths.ts';
 
 /** A JobState with the fields these selector tests do not care about filled in. */
 function baseJob(jobId: string): JobState {
@@ -234,7 +235,7 @@ describe('useAppStore reducers', () => {
       jobId: 'j-rel', workdir: '/ws/proj',
       event: { type: 'step:artifact', stepId: 'plan', path: '.whiphand/runs/r1/plan.md' }, ts: 't1',
     });
-    expect(useAppStore.getState().jobs['j-rel'].steps.plan.artifact).toBe('/ws/proj/.whiphand/runs/r1/plan.md');
+    expect(useAppStore.getState().jobs['j-rel'].steps.plan.artifact).toBe(fromPosix('/ws/proj/.whiphand/runs/r1/plan.md'));
   });
 
   it('resolves against a Windows-shaped workdir into its native form', () => {
@@ -246,7 +247,7 @@ describe('useAppStore reducers', () => {
     expect(useAppStore.getState().jobs['j-win'].steps.plan.artifact).toBe('C:\\Proj\\.whiphand\\runs\\r1\\plan.md');
   });
 
-  it('keeps an absolute artifact path as it is, and a relative one when no workdir is known yet', () => {
+  it('keeps an absolute artifact path where it points (in the host\'s form), and a relative one when no workdir is known yet', () => {
     const apply = useAppStore.getState().applyWhiphandEvent;
     apply({
       jobId: 'j-abs', workdir: '/ws/proj',
@@ -255,7 +256,7 @@ describe('useAppStore reducers', () => {
     apply({
       jobId: 'j-nowd', event: { type: 'step:artifact', stepId: 'plan', path: '.whiphand/runs/r1/plan.md' }, ts: 't1',
     });
-    expect(useAppStore.getState().jobs['j-abs'].steps.plan.artifact).toBe('/elsewhere/plan.md');
+    expect(useAppStore.getState().jobs['j-abs'].steps.plan.artifact).toBe(fromPosix('/elsewhere/plan.md'));
     expect(useAppStore.getState().jobs['j-nowd'].steps.plan.artifact).toBe('.whiphand/runs/r1/plan.md');
   });
 
@@ -1099,8 +1100,8 @@ describe('the same folder opened two ways is one workspace', () => {
   it('still ignores a notification for a genuinely different workspace', () => {
     const runs = [{ runId: 'r1', runDir: '/ws/a/.whiphand/runs/r1', status: 'running' }];
     useAppStore.setState({ workspacePath: '/ws/a', runs });
-    useAppStore.getState().applyRunStateChanged({ jobId: 'j1', workdir: '/ws/A', runId: 'r1', status: 'succeeded' } as never);
-    // POSIX paths are case-sensitive: /ws/A is another folder.
+    useAppStore.getState().applyRunStateChanged({ jobId: 'j1', workdir: '/ws/b', runId: 'r1', status: 'succeeded' } as never);
+    // Another folder on every host (case alone would not do: a Windows host folds it).
     expect(useAppStore.getState().runs[0].status).toBe('running');
   });
 });

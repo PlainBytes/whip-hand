@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { fromManualRequest } from './from-manual.ts';
 import { DIFF_SOURCE_ID } from './model.ts';
 import type { ManualRequest } from '../../../../packages/core/src/types.ts';
+import { fromPosix } from '../../../../packages/test-support/src/paths.ts';
 
 function request(overrides: Partial<ManualRequest> = {}): ManualRequest {
   return {
@@ -46,8 +47,8 @@ describe('fromManualRequest', () => {
       context: { artifacts: [{ id: 'plan', path: '.whiphand/runs/r1/plan.md' }, { id: 'out', path: '/elsewhere/out.md' }] },
     });
     expect(fromManualRequest(relative, '/ws/proj').sources).toEqual([
-      { kind: 'artifact', id: 'plan', path: '/ws/proj/.whiphand/runs/r1/plan.md', label: 'plan.md' },
-      { kind: 'artifact', id: 'out', path: '/elsewhere/out.md', label: 'out.md' },
+      { kind: 'artifact', id: 'plan', path: fromPosix('/ws/proj/.whiphand/runs/r1/plan.md'), label: 'plan.md' },
+      { kind: 'artifact', id: 'out', path: fromPosix('/elsewhere/out.md'), label: 'out.md' },
     ]);
     // a Windows workspace gets the native form the manifest's own artifact paths have
     expect(fromManualRequest(relative, 'C:\\Proj').sources[0]).toMatchObject({

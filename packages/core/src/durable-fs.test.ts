@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readdir, readFile, stat, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { posix } from '@whiphand/test-support';
 import { RETRY_ATTEMPTS, removeTree, renameReplacing, tempNameFor, writeFileAtomic } from './durable-fs.ts';
 
 const noSleep = { sleep: async () => {} };
@@ -49,7 +50,7 @@ test('tempNameFor is unique per call and lives beside the target', () => {
   const a = tempNameFor('/d/run.json');
   const b = tempNameFor('/d/run.json');
   assert.notEqual(a, b);
-  assert.match(a, /^\/d\/run\.json\.\d+\.[0-9a-f]{8}\.tmp$/);
+  assert.match(posix(a), /^\/d\/run\.json\.\d+\.[0-9a-f]{8}\.tmp$/);
 });
 
 test('writeFileAtomic replaces the target and leaves no temp behind', async () => {

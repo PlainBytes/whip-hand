@@ -18,7 +18,8 @@
 //!                   because a run goes on after a step times out
 //!   EOF             close the job — kill-on-close ends every member
 //! and the guard answers on stdout: `ready` once the job exists, `ok <pid>` or
-//! `err <pid> <win32 error>` per assign, `killed` after a kill.
+//! `err <pid> <win32 error>` per assign, `killed` after a kill (or
+//! `err kill <win32 error>` when the job could not be terminated).
 //!
 //! Crash containment: the guard waits on its parent process. When the parent dies
 //! by any means (Task Manager, a crash — nothing of ours runs then) that wait
@@ -130,8 +131,11 @@ mod imp {
                         Err(_) => say(&format!("err {pid} invalid")),
                     }
                 } else if line == "kill" {
-                    TerminateJobObject(job, 1);
-                    say("killed");
+                    if TerminateJobObject(job, 1) == 0 {
+                        say(&format!("err kill {}", GetLastError()));
+                    } else {
+                        say("killed");
+                    }
                 }
             }
             // EOF: the parent closed our stdin — close the job, which ends its members.

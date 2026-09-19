@@ -9,6 +9,7 @@ import { useAppStore } from '../state/store.ts';
 import { AWAIT_LABEL } from '../lib/await-copy.ts';
 import { encodeToBase64 } from '../lib/base64.ts';
 import type { WhiphandEvent } from '../../../../packages/core/src/types.ts';
+import { fromPosix } from '../../../../packages/test-support/src/paths.ts';
 
 // RunDetailPage only needs to exercise its own show/hide/collapse logic here —
 // the real xterm wiring (encoding, buffering, resize debounce) is covered in
@@ -1220,7 +1221,8 @@ describe('RunDetailPage: cycles and manual steps', () => {
     const { transport } = renderRunDetail('job-rel', undefined, undefined, 'r1');
     await respondGetRun(transport, {
       runId: 'r1', runDir: '/ws/.whiphand/runs/r1', status: 'running',
-      artifacts: [{ name: 'plan.md', path: '/ws/.whiphand/runs/r1/plan.md' }],
+      // The manifest's paths are native: that is what the request's relative path must resolve to.
+      artifacts: [{ name: 'plan.md', path: fromPosix('/ws/.whiphand/runs/r1/plan.md') }],
     });
     transport.emitLine({
       method: 'manualRequest',

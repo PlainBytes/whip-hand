@@ -19,6 +19,7 @@ import {
   MenuTrigger,
   MessageBar,
   MessageBarBody,
+  MessageBarTitle,
   SplitButton,
   Spinner,
   Tab,
@@ -56,6 +57,8 @@ import { FilePreview } from '../components/FilePreview.tsx';
 import { RECESSED_SURFACE } from '../components/recessed-surface.ts';
 import { resolveInArtifacts } from '../markdown/resolve.ts';
 import { elapsedMs, formatElapsed, stageLabel } from '../../../../packages/core/src/format.ts';
+import { degradationLine } from '../../../../packages/core/src/degradations.ts';
+import { mergeDegradations } from '../lib/run-degradations.ts';
 import { parsePositiveInt } from '../lib/parse-number.ts';
 import { useOpenExternal } from '../lib/open-external.tsx';
 import type { FileComment, ManualChoice, Scope } from '../../../../packages/core/src/types.ts';
@@ -465,6 +468,10 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
   // never surfaced before, which is where the interrupted reason lands.
   const manifestRunError = (manifest?.error as { message?: string } | undefined)?.message;
   const runErrorMessage = job?.errorMessage ?? manifestRunError;
+  // Invariant 7: what the run lost and carried on without, live and on disk.
+  const degradations = useMemo(
+    () => mergeDegradations(manifest?.degradations, job?.degradations), [manifest?.degradations, job?.degradations],
+  );
   // Only once the run is over: a live run in triage has not stopped anywhere yet.
   const stageStop = useMemo(
     () => (isRunning ? undefined : stageStopSentence(steps)), [isRunning, steps],
@@ -929,8 +936,8 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
    * here knows it came from a manual step.
    */
   const reviewRequest = useMemo(
-    () => (job?.pendingManual ? fromManualRequest(job.pendingManual) : undefined),
-    [job?.pendingManual],
+    () => (job?.pendingManual ? fromManualRequest(job.pendingManual, workspacePath ?? job.workdir) : undefined),
+    [job?.pendingManual, job?.workdir, workspacePath],
   );
   const reviewKey = reviewRequest?.key;
   /** The step the answer has to name. The review model deliberately doesn't carry it. */
@@ -1300,6 +1307,20 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
               </MessageBarBody>
             </MessageBar>
           )}
+        </div>
+      )}
+
+      {/* Shown, not just logged: a capability that degraded is part of the run's summary. */}
+      {degradations.length > 0 && (
+        <div style={{ flexShrink: 0, paddingTop: 8 }}>
+          <MessageBar intent="warning" data-testid="run-degraded">
+            <MessageBarBody>
+              <MessageBarTitle>Degraded</MessageBarTitle>
+              {degradations.map(d => (
+                <div key={`${d.capability}:${d.stepId ?? ''}`} data-testid="run-degradation">{degradationLine(d)}</div>
+              ))}
+            </MessageBarBody>
+          </MessageBar>
         </div>
       )}
 

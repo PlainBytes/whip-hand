@@ -109,6 +109,7 @@ export function DoctorPage() {
   const client = useAgentClient();
   const agentStatus = useAppStore(state => state.agentStatus);
   const tools = useAppStore(state => state.doctorResult);
+  const workspacePath = useAppStore(state => state.workspacePath);
   const setDoctorResult = useAppStore(state => state.setDoctorResult);
   const setModelCatalog = useAppStore(state => state.setModelCatalog);
   const [error, setError] = useState<string | null>(null);
@@ -118,7 +119,7 @@ export function DoctorPage() {
     setLoading(true);
     setError(null);
     client
-      .request('doctor', {})
+      .request('doctor', workspacePath === null ? {} : { workdir: workspacePath })
       .then(result => {
         setDoctorResult(result);
         // The agent's `doctor` handler invalidates its own model-catalog
@@ -132,13 +133,13 @@ export function DoctorPage() {
       })
       .catch((err: unknown) => setError(errorMessage(err)))
       .finally(() => setLoading(false));
-  }, [client, setDoctorResult, setModelCatalog]);
+  }, [client, workspacePath, setDoctorResult, setModelCatalog]);
 
   useEffect(() => {
     if (agentStatus !== 'connected') return;
     runDoctor();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh only on connect; the Refresh button covers manual re-checks
-  }, [agentStatus]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh on connect and on a workspace switch (its rows are about that folder); the Refresh button covers manual re-checks
+  }, [agentStatus, workspacePath]);
 
   if (agentStatus !== 'connected') {
     return <Text>Waiting for the whiphand agent to connect…</Text>;

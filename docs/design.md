@@ -425,22 +425,72 @@ labelled, so a prompt never has to guess whether an attached log is the one that
 
 ### Command steps and shell injection
 
-A `command` step's `run:` goes through a real shell (`command.ts`'s `SHELL_FLAGS` table —
-`sh -c` on POSIX, `cmd.exe /d /s /c` on Windows by default; `shell:` names a different one
-per step), and `{{ inputs.* }}` / `{{ run.* }}` template values are substituted into it as
-plain text *before* the shell parses the line. A run input containing shell metacharacters
-(`; | & $( ) \` "` …) can therefore inject arbitrary shell syntax — quoting the reference in
-the workflow YAML does not help, since the substitution happens first, not the shell's own
-parsing of the author's quotes.
+A `command` step's `run:` goes through **one POSIX shell dialect on every OS**: `/bin/sh` on
+POSIX, and on Windows the `sh.exe` (or `bash.exe`) that Git for Windows brings, discovered
+by *derivation from the resolved `git`* (`<git>\..\..\usr\bin\sh.exe`, `bin\sh.exe`, then
+`bash.exe` in the same places, then `%PROGRAMFILES%\Git`) — never a bare `PATH` lookup for
+`bash`, which on a machine with WSL finds `C:\Windows\System32\bash.exe`, a launcher that
+runs the command inside the WSL filesystem where the workspace and every path we pass mean
+nothing (that path is rejected by name even when found). `whiphand doctor` reports the shell it
+resolved. With none present, doctor is red and command steps refuse to run, naming the
+remediation; agent steps still work. Write command steps for `/bin/sh`: Git's `sh.exe` is bash in
+POSIX mode and accepts most bashisms, so on Windows it will not catch a bashism, but the Linux
+legs (dash) will.
 
-This is a known, accepted risk rather than an oversight: safely escaping an arbitrary
-template value across three shell dialects (POSIX `sh`, `cmd.exe`, PowerShell), plus an
-operator-overridable `shell:`, is not a small fix, and getting the escaping subtly wrong
-per-dialect would be worse than the current, well-understood behavior. Treat a `command`
-step's inputs the way you would any other shell script: only interpolate values you already
-trust into `run:`, and prefer reading untrusted ones from an environment variable (`env:`)
-instead, since a shell only re-parses `$VAR` expansions, not the variable's contents. See
-`docs/review-backlog.md` for the tracked follow-up.
+**Values are data, never syntax.** `{{ }}` in a `run:` line does **not** expand to the value: it
+expands to a *variable reference* — `{{ run.name }}` becomes `${WHIPHAND_RUN_NAME}`,
+`{{ inputs.base }}` becomes `${WHIPHAND_INPUT_BASE}` — and the shell substitutes it, where it is
+data. Parameter expansion never re-parses a value, so a run named `; rm -rf ~` or an input of
+`$(touch pwned)` is inert in every context. The reference is unquoted, so as a bare word it
+splits and globs like any unquoted shell variable: **quote it the way you would any shell
+variable** (`"{{ inputs.base }}"`). Everything else a step declares — `cwd`, `env` values, an
+agent prompt — is data we read, not a shell line, so those still get the value itself.
+
+Every placeholder has one environment binding, from one table:
+
+| Placeholder | Variable | Exported |
+|---|---|---|
+| `run.id` / `run.slug` | `WHIPHAND_RUN_ID` / `WHIPHAND_RUN_SLUG` | always |
+| `run.name` | `WHIPHAND_RUN_NAME` (an unnamed run's name *is* its id, so it refers to `WHIPHAND_RUN_ID`) | when named |
+| `stage.index` / `total` / `id` / `title` | `WHIPHAND_STAGE_*` | inside a stages step |
+| `loop.iteration` / `loop.max_iterations` | `WHIPHAND_LOOP_ITERATION` / `WHIPHAND_LOOP_MAX_ITERATIONS` | inside a loop |
+| `inputs.<key>` | `WHIPHAND_INPUT_<KEY>` (upper-cased, `-` → `_`) | **only when the step references it** |
+
+An input is exported only when the step's `run`, `env` or `cwd` names it, so "exported equals
+referenced" holds by construction. A referenced input over the platform's environment limit
+(128 KiB per variable on Linux, 32,767 characters on Windows) fails the step *before* spawn,
+naming the input and its size. Two input keys that map to one variable (`a-b` and `a_b`), and two
+`inputs:` step ids that map to one `WHIPHAND_ARTIFACT_*` name, are rejected at parse time.
+
+**Three breaking changes**, in the changelog and the README:
+
+1. On Windows the default shell is no longer `cmd.exe`. A workflow that implicitly assumed `cmd`
+   must be rewritten for `/bin/sh`.
+2. `{{ }}` inside single quotes in `run:` stops expanding: `run: echo '{{ run.name }}'` prints
+   `${WHIPHAND_RUN_NAME}` literally. Quote it as you would any shell variable.
+3. An explicit `shell:` of `cmd`, `cmd.exe`, `powershell`, `powershell.exe`, `pwsh` or `pwsh.exe`
+   is rejected at parse time. Any other explicit shell gets `-c` — the author's own choice, which
+   we neither reason about nor test.
+
+**Decision: a whole-command input is run with an explicit `eval`, written by the author.** The
+reference renderer never re-parses a value, which is what makes `{{ run.name }}` inert — and it is
+also why a workflow whose input *is* a command (the shipped templates' `test_command`, typically
+`cd app && npm test`) cannot use the bare reference: `${WHIPHAND_INPUT_TEST_COMMAND}` word-splits
+into a command named `cd` with `&&` as an argument. The shipped templates, `whiphand init`'s
+scaffolds and this repo's own workflows therefore say so in the `run:` line:
+`run: eval "{{ inputs.test_command }}"`.
+
+- **No new capability.** Before this change the input was spliced into the shell line as text, which
+  was already code execution; `eval` preserves that, and the difference is that it now happens only
+  where the author wrote the word, on an input the author named.
+- **The rule for authors:** `eval` an input only when its whole purpose is to be a command someone
+  typed. Never `eval` a run name, a stage title, or any free text that arrives from a plan file or
+  another step — those stay plain references, which is the invariant-8 guarantee.
+- **Considered and not built:** an input flag (`code: true`) that makes the renderer emit the `eval`
+  itself, and `sh -c "$WHIPHAND_INPUT_X"`. Both move the trust decision out of the `run:` line the
+  author is reading and into schema metadata, and both need a schema addition the plan did not agree
+  to. If the explicit `eval` proves too easy to misuse, the flag is the follow-up.
+- A blank `test_command` runs `eval ""`, which exits 0 — the templates' comments say so.
 
 A `command` step also reaches its own `inputs:` this way rather than through `{{ }}`
 templating: each entry with a recorded artifact is exported as
@@ -733,15 +783,11 @@ staged. A real commit failure — a rejecting hook, a bad message file — still
 and fails the run loudly, exactly as every later stage's assumption that history is clean
 requires; nothing here blanket-forgives a failing commit the way `expect_exit: [0, 1]` would.
 
-**The shipped staged workflow needs a POSIX shell.** Its `commit-plan` and per-stage `commit`
-steps read `$WHIPHAND_RUN_NAME`, `$WHIPHAND_RUN_SLUG` and `$WHIPHAND_ARTIFACT_COMMIT_MESSAGE`
-and chain with `&&`/`||` beside quoted arguments. Under `cmd.exe`, the Windows default, those
-lines are refused before spawning (a `"` next to `&` cannot be carried through cmd) and
-`$VAR` would not expand anyway. A dialect-neutral rewrite needs core support that does not
-exist yet: no `{{ }}` placeholder names a stage attempt's artifact path, a command step has no
-condition to skip the commit on an empty index, and interpolating the run name into `run:` is
-the injection hazard described under "Command steps and shell injection". Until then, the
-tests that execute those steps are skipped on Windows.
+**The shipped staged workflow runs unchanged on every OS.** Its `commit-plan` and per-stage
+`commit` steps are POSIX shell lines (`$VAR`, `&&`/`||` beside quoted arguments), and command
+steps run through a POSIX shell everywhere now — see "Command steps and shell injection" — so the
+templates are identical bytes on Linux, macOS and Windows, and the tests that execute them run on
+every CI leg.
 
 **Nesting.** A `stages` step cannot sit inside a loop, and cannot sit inside another `stages`
 step. A loop's `until` can never name a `stages` step either — `until` needs a non-container

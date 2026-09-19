@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { readFile, readFile as readFileP } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { withStubBin } from '@whiphand/test-support';
 import { parseInitializeReply, mergeWithAliases, probeClaudeModels } from './claude-models.ts';
 
 const fixtureDir = fileURLToPath(new URL('../../../../parity/fixtures/models/', import.meta.url));
@@ -77,113 +78,106 @@ test('mergeWithAliases: an empty live list is just the aliases', () => {
  * `--no-session-persistence` or `CLAUDE_CODE_SAFE_MODE` behind a typo.
  */
 /**
- * These stubs are POSIX-only, for two independent reasons, so they are skipped
- * on Windows rather than papered over: PATH there is `;`-delimited, and even
- * spelled correctly an extensionless `claude` is invisible to the PATHEXT walk
- * in exec.ts — a `.cmd` would be found, but then cmd.exe runs it, and a
- * `#!/usr/bin/env bash` body is not a batch file. Skipped rather than left to
- * run because the fallback cases below would otherwise pass vacuously: on
- * Windows the probe finds no stub at all, which is the same `fallback` they
- * assert, so they would be green without exercising anything.
+ * The stubs are real `claude` binaries minted in the shape the platform
+ * launches — a `#!/bin/sh` script on POSIX, a `.cmd` in npm shim shape on
+ * Windows (test-support's `withStubBin`), with the behaviour written once, in
+ * JS. That is what makes these run on the Windows leg instead of being skipped,
+ * and it is also the only shape that exercises the shim path exec.ts really
+ * takes there.
  *
- * The way to get these back is a stub pair — `claude.cmd` shelling to a
- * `node` script beside it — which is also the only shape that would exercise
- * the shim path exec.ts actually takes on Windows. "claude missing from PATH
- * entirely" below is deliberately not skipped: it needs no stub and the
- * behaviour it pins is the same on both platforms.
+ * Every stub records that it was *invoked*. The fallback cases below assert
+ * `fallback`, which is also what "the probe found no stub at all" produces — so
+ * without that marker they would pass vacuously wherever the stub cannot be
+ * found, which is exactly how they used to be green on Windows while testing
+ * nothing.
  */
-const posixStubs = {
-  skip: process.platform === 'win32' && 'stub binaries on PATH are POSIX-only; see the comment above stubBinDir',
-};
+const reply = JSON.stringify({
+  type: 'control_response',
+  response: {
+    subtype: 'success', request_id: 'req_1',
+    response: { models: [{ value: 'sonnet', resolvedModel: 'claude-sonnet-5', displayName: 'Sonnet' }] },
+  },
+});
 
-function stubBinDir(t: import('node:test').TestContext): string {
-  const dir = mkdtempSync(join(tmpdir(), 'whiphand-claude-stub-'));
-  const previousPath = process.env.PATH;
-  process.env.PATH = `${dir}:${previousPath ?? ''}`;
-  t.after(() => {
-    process.env.PATH = previousPath;
+/** JS for a stub that notes its invocation, then reads one line of stdin and behaves as `after` says. */
+function stub(dir: string, after: string, extra = ''): string {
+  return [
+    "const fs = require('node:fs');",
+    `fs.writeFileSync(${JSON.stringify(join(dir, 'invoked.txt'))}, 'yes');`,
+    extra,
+    "require('node:readline').createInterface({ input: process.stdin }).once('line', () => {",
+    after,
+    '});',
+  ].join('\n');
+}
+
+/** withStubBin needs the directory before the script is written, so mint it first and hand the script a path inside it. */
+async function withClaude<T>(
+  build: (dir: string) => string, fn: (dir: string) => Promise<T>,
+): Promise<T> {
+  const dir = mkdtempSync(join(tmpdir(), 'whiphand-claude-stub-state-'));
+  try {
+    return await withStubBin('claude', build(dir), () => fn(dir));
+  } finally {
     rmSync(dir, { recursive: true, force: true });
-  });
-  return dir;
+  }
 }
 
-function writeStub(dir: string, script: string): void {
-  const file = join(dir, 'claude');
-  writeFileSync(file, script);
-  chmodSync(file, 0o755);
-}
+const invoked = (dir: string): boolean => existsSync(join(dir, 'invoked.txt'));
 
-test('probeClaudeModels: a real reply -> live, merged with aliases; argv and env are correct', posixStubs, async t => {
-  const dir = stubBinDir(t);
-  const argvFile = join(dir, 'argv.txt');
-  const envFile = join(dir, 'env.txt');
-  writeStub(dir, [
-    '#!/usr/bin/env bash',
-    `printf '%s\\n' "$*" > '${argvFile}'`,
-    `printf '%s\\n' "$CLAUDE_CODE_SAFE_MODE" > '${envFile}'`,
-    'IFS= read -r _line',
-    `printf '%s\\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_1",` +
-      `"response":{"models":[{"value":"sonnet","resolvedModel":"claude-sonnet-5","displayName":"Sonnet"}]}}}'`,
-    'exit 0',
-    '',
-  ].join('\n'));
+test('probeClaudeModels: a real reply -> live, merged with aliases; argv and env are correct', async () => {
+  await withClaude(dir => stub(
+    dir,
+    `process.stdout.write(${JSON.stringify(`${reply}\n`)}); process.exit(0);`,
+    `fs.writeFileSync(${JSON.stringify(join(dir, 'argv.txt'))}, process.argv.slice(2).join(' ') + '\\n');`
+      + `fs.writeFileSync(${JSON.stringify(join(dir, 'env.txt'))}, (process.env.CLAUDE_CODE_SAFE_MODE || '') + '\\n');`,
+  ), async dir => {
+    const result = await probeClaudeModels();
+    assert.equal(result.source, 'live');
+    assert.ok(result.models.some(m => m.id === 'sonnet' && m.resolves === 'claude-sonnet-5'));
+    assert.ok(result.models.some(m => m.id === 'opus'), 'static alias merged in alongside the live reply');
 
-  const result = await probeClaudeModels();
-  assert.equal(result.source, 'live');
-  assert.ok(result.models.some(m => m.id === 'sonnet' && m.resolves === 'claude-sonnet-5'));
-  assert.ok(result.models.some(m => m.id === 'opus'), 'static alias merged in alongside the live reply');
-
-  const argv = (await readFileP(argvFile, 'utf8')).trim();
-  assert.ok(argv.includes('--no-session-persistence'), `argv was: ${argv}`);
-  assert.ok(argv.includes('--input-format stream-json'), `argv was: ${argv}`);
-  const env = (await readFileP(envFile, 'utf8')).trim();
-  assert.equal(env, '1', 'CLAUDE_CODE_SAFE_MODE=1 must reach the child — it is load-bearing (no hooks, no transcript)');
-});
-
-test('probeClaudeModels: a hanging claude times out to the fallback, and the child is killed', posixStubs, async t => {
-  const dir = stubBinDir(t);
-  const aliveMarker = join(dir, 'still-alive.txt');
-  writeStub(dir, [
-    '#!/usr/bin/env bash',
-    'IFS= read -r _line',
-    'sleep 2',
-    `printf 'yes' > '${aliveMarker}'`,
-    '',
-  ].join('\n'));
-
-  const result = await probeClaudeModels({ timeoutMs: 100 });
-  assert.deepEqual(result, {
-    source: 'fallback', models: result.models, note: "couldn't query claude; showing built-in aliases",
+    const argv = (await readFileP(join(dir, 'argv.txt'), 'utf8')).trim();
+    assert.ok(argv.includes('--no-session-persistence'), `argv was: ${argv}`);
+    assert.ok(argv.includes('--input-format stream-json'), `argv was: ${argv}`);
+    const env = (await readFileP(join(dir, 'env.txt'), 'utf8')).trim();
+    assert.equal(env, '1', 'CLAUDE_CODE_SAFE_MODE=1 must reach the child — it is load-bearing (no hooks, no transcript)');
   });
-  assert.equal(result.source, 'fallback');
-
-  // Give the sleeping stub time to reach its post-sleep line if it were still
-  // running; the marker must never appear, because the timeout kills it first.
-  await new Promise(r => setTimeout(r, 2200));
-  await assert.rejects(readFileP(aliveMarker, 'utf8'), 'the child must have been killed before it could write this');
 });
 
-test('probeClaudeModels: claude exiting non-zero with no reply -> fallback', posixStubs, async t => {
-  const dir = stubBinDir(t);
-  writeStub(dir, ['#!/usr/bin/env bash', 'IFS= read -r _line', 'exit 1', ''].join('\n'));
+test('probeClaudeModels: a hanging claude times out to the fallback, and the child is killed', async () => {
+  await withClaude(dir => stub(
+    dir,
+    `setTimeout(() => { fs.writeFileSync(${JSON.stringify(join(dir, 'still-alive.txt'))}, 'yes'); process.exit(0); }, 2000);`,
+  ), async dir => {
+    const result = await probeClaudeModels({ timeoutMs: 1000 });
+    assert.deepEqual(result, {
+      source: 'fallback', models: result.models, note: "couldn't query claude; showing built-in aliases",
+    });
+    assert.ok(invoked(dir), 'the stub really ran — this is not the "no claude found" fallback');
 
-  const result = await probeClaudeModels();
-  assert.equal(result.source, 'fallback');
-  assert.equal(result.note, "couldn't query claude; showing built-in aliases");
+    // Give the sleeping stub time to reach its post-sleep line if it were still
+    // running; the marker must never appear, because the timeout kills it first.
+    await new Promise(r => setTimeout(r, 2500));
+    await assert.rejects(readFileP(join(dir, 'still-alive.txt'), 'utf8'), 'the child must have been killed before it could write this');
+  });
 });
 
-test('probeClaudeModels: a malformed reply -> fallback', posixStubs, async t => {
-  const dir = stubBinDir(t);
-  writeStub(dir, [
-    '#!/usr/bin/env bash',
-    'IFS= read -r _line',
-    "printf '%s\\n' 'not a json line at all'",
-    'exit 0',
-    '',
-  ].join('\n'));
+test('probeClaudeModels: claude exiting non-zero with no reply -> fallback', async () => {
+  await withClaude(dir => stub(dir, 'process.exit(1);'), async dir => {
+    const result = await probeClaudeModels();
+    assert.ok(invoked(dir), 'the stub really ran');
+    assert.equal(result.source, 'fallback');
+    assert.equal(result.note, "couldn't query claude; showing built-in aliases");
+  });
+});
 
-  const result = await probeClaudeModels();
-  assert.equal(result.source, 'fallback');
+test('probeClaudeModels: a malformed reply -> fallback', async () => {
+  await withClaude(dir => stub(dir, "process.stdout.write('not a json line at all\\n'); process.exit(0);"), async dir => {
+    const result = await probeClaudeModels();
+    assert.ok(invoked(dir), 'the stub really ran');
+    assert.equal(result.source, 'fallback');
+  });
 });
 
 test('probeClaudeModels: claude missing from PATH entirely -> fallback, never throws', async () => {

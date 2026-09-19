@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
 import { basename } from 'node:path';
 import type { SpawnSpec } from '@whiphand/core';
-import { startPty } from './pty.ts';
+import { msvcrtQuote, planLaunch } from '@whiphand/core';
+import { ptyArgs, startPty } from './pty.ts';
 
 function ptySpec(argv: string[]): SpawnSpec {
   return { argv, cwd: process.cwd(), env: {}, interactive: true };
@@ -146,4 +147,32 @@ test('onBell fires for a real beep but not for a window-title sequence', async (
     );
   });
   assert.equal(bells.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Interactive and headless launches of one argv agree
+// ---------------------------------------------------------------------------
+
+test('on Windows the unwrapped pty branch hands node-pty ONE msvcrt-quoted string, so its own array quoter is never reached', () => {
+  // An argv with spaces, quotes and backslashes — what a path under a profile with a space looks like.
+  const argv = ['C:\\tools\\claude.exe', '--settings', 'C:/Users/me/My Docs/.plan.settings.json', '--flag', 'say "hi"', 'back\\slash\\', ''];
+  const plan = planLaunch(argv, { platform: 'win32', env: {} });
+  assert.equal(plan.invocation, null, 'a real .exe: no cmd.exe involved');
+  const string = ptyArgs(plan, 'win32');
+  assert.equal(typeof string, 'string');
+  // The same encoding libuv builds the headless command line from (msvcrtQuote is
+  // what core's exec.ts uses for the cmd fallback and documents libuv agreeing with).
+  assert.equal(string, plan.args.map(msvcrtQuote).join(' '));
+  assert.equal(string, '--settings "C:/Users/me/My Docs/.plan.settings.json" --flag "say \\"hi\\"" back\\slash\\ ""');
+});
+
+test('the wrapped (cmd.exe) branch is unchanged: it keeps its own command line', () => {
+  const opaque = planLaunch(['C:\\tools\\thing.cmd', '-i', 'hello there'], { platform: 'win32', env: {} });
+  // Not a readable shim on this host, so it falls back to a cmd.exe wrapper (or resolves plainly if the file is absent).
+  if (opaque.invocation !== null) assert.equal(ptyArgs(opaque, 'win32'), opaque.invocation.commandLine);
+});
+
+test('on POSIX the args stay an array — nothing changes', () => {
+  const plan = planLaunch(['claude', '--flag', 'a b'], { platform: 'linux' });
+  assert.deepEqual(ptyArgs(plan, 'linux'), ['--flag', 'a b']);
 });

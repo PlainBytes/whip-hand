@@ -9,4 +9,10 @@ describe('WorkspaceDot', () => {
     expect(dot.style.width).toBe('16px');
     expect(dot.style.height).toBe('16px');
   });
+
+  it('paints one workspace one colour by its identity key, whatever path it was opened by', () => {
+    const paint = (path: string) => (render(<WorkspaceDot path={path} identityKey="c:/program files/proj" />)
+      .container.firstChild as HTMLElement).style.background;
+    expect(paint('C:\\PROGRA~1\\Proj')).toBe(paint('C:\\Program Files\\Proj'));
+  });
 });

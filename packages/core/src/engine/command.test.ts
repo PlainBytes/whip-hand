@@ -1,18 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolve } from 'node:path';
-import { commandSpec, captureHeader, captureFooter, DEFAULT_SHELL, shellFlags } from './command.ts';
+import { existsSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { commandSpec, captureHeader, captureFooter, envValueLimit } from './command.ts';
 import { verdictFromExit, verdictFromChoice } from './verdict.ts';
+import { execRunner } from '../exec.ts';
+import { resolveShell } from '../shell.ts';
+import { TemplateError } from '../template.ts';
 import type { CommandStep, RunCtx } from '../types.ts';
 
-// `DEFAULT_SHELL` is `cmd.exe` on Windows and `/bin/sh` elsewhere, and the two
-// take different flags — so a test about *templating* has no business pinning
-// the flags too. What flag each shell gets is pinned exactly, per shell, by
-// 'the flag that runs an inline command varies with the shell' below.
-const defaultShell = (run: string): string[] => [DEFAULT_SHELL, ...shellFlags(DEFAULT_SHELL), run];
+// Command steps run through a POSIX shell on every OS. The tests below pass the
+// shell on the ctx, as `runWorkflow` does after resolving it once per run.
+const SH = '/bin/sh';
+const defaultShell = (run: string): string[] => [SH, '-c', run];
 
 const ctx: RunCtx = {
-  workdir: '/w', runId: 'r1', runDir: '/w/.whiphand/runs/r1', runSlug: 'r1',
+  workdir: '/w', runId: 'r1', runDir: '/w/.whiphand/runs/r1', runSlug: 'r1', shell: SH,
   sessionIds: {}, artifacts: {}, attempts: {}, verdicts: {},
   inputs: { suite: 'unit' },
 };
@@ -27,15 +31,56 @@ test('a command resolves to an ordinary non-interactive SpawnSpec', () => {
   assert.equal(spec.capture, undefined);
 });
 
-test('the command line is templated like a prompt', () => {
+test('`{{ x }}` in `run` becomes a variable reference, not the value (invariant 8)', () => {
   const spec = commandSpec({ ...step, run: 'npm test -- {{ inputs.suite }}' }, ctx);
-  assert.deepEqual(spec.argv, defaultShell('npm test -- unit'));
+  assert.deepEqual(spec.argv, defaultShell('npm test -- ${WHIPHAND_INPUT_SUITE}'));
+  assert.equal(spec.env.WHIPHAND_INPUT_SUITE, 'unit');
 });
 
-test('loop.iteration is available to a command inside a loop', () => {
+test('loop.iteration is a reference too, and is exported inside a loop', () => {
   const looped = { ...ctx, loop: { id: 'fix', iteration: 2, maxIterations: 3 } };
-  const spec = commandSpec({ ...step, run: 'echo attempt {{ loop.iteration }}' }, looped);
-  assert.deepEqual(spec.argv, defaultShell('echo attempt 2'));
+  const spec = commandSpec({ ...step, run: 'echo attempt {{ loop.iteration }} of {{ loop.max_iterations }}' }, looped);
+  assert.deepEqual(spec.argv, defaultShell('echo attempt ${WHIPHAND_LOOP_ITERATION} of ${WHIPHAND_LOOP_MAX_ITERATIONS}'));
+  assert.equal(spec.env.WHIPHAND_LOOP_ITERATION, '2');
+  assert.equal(spec.env.WHIPHAND_LOOP_MAX_ITERATIONS, '3');
+});
+
+test('loop and stage variables are absent outside their constructs', () => {
+  const env = commandSpec(step, ctx).env;
+  assert.equal(Object.keys(env).some(k => k.startsWith('WHIPHAND_LOOP_') || k.startsWith('WHIPHAND_STAGE_')), false);
+});
+
+test('an input is exported only when this step references it, by run, env or cwd', () => {
+  const many: RunCtx = { ...ctx, inputs: { a: '1', b: '2', c: '3', d: '4' } };
+  const spec = commandSpec(
+    { kind: 'command', id: 'c', run: 'echo {{ inputs.a }}', cwd: '{{ inputs.b }}', env: { X: '{{ inputs.c }}' } }, many);
+  assert.equal(spec.env.WHIPHAND_INPUT_A, '1');
+  assert.equal(spec.env.WHIPHAND_INPUT_B, '2');
+  assert.equal(spec.env.WHIPHAND_INPUT_C, '3');
+  assert.equal('WHIPHAND_INPUT_D' in spec.env, false, 'exported equals referenced');
+  assert.equal(spec.env.X, '3', 'env values are data, so they get the value itself');
+});
+
+test('an input key with a dash maps to an underscore in its variable name', () => {
+  const spec = commandSpec({ ...step, run: 'echo {{ inputs.test-command }}' }, { ...ctx, inputs: { 'test-command': 'npm test' } });
+  assert.match(spec.argv[2], /\$\{WHIPHAND_INPUT_TEST_COMMAND\}/);
+  assert.equal(spec.env.WHIPHAND_INPUT_TEST_COMMAND, 'npm test');
+});
+
+test('a referenced input over the environment limit fails the step before spawn, naming the input and its size', () => {
+  const huge = 'x'.repeat(envValueLimit() + 1);
+  assert.throws(
+    () => commandSpec({ ...step, run: 'echo {{ inputs.blob }}' }, { ...ctx, inputs: { blob: huge } }),
+    (error: Error) => error instanceof TemplateError && /input 'blob' is \d+ (bytes|characters), over the \d+/.test(error.message),
+  );
+  // Unreferenced, the same input is never exported, so it cannot fail anything.
+  assert.doesNotThrow(() => commandSpec(step, { ...ctx, inputs: { blob: huge } }));
+  assert.equal(envValueLimit('win32'), 32_767);
+  assert.equal(envValueLimit('linux'), 128 * 1024);
+});
+
+test('an unknown input is refused, as it always was', () => {
+  assert.throws(() => commandSpec({ ...step, run: 'echo {{ inputs.nope }}' }, ctx), /unknown input 'nope'/);
 });
 
 test('cwd resolves relative to the workdir, and an explicit shell is honoured', () => {
@@ -44,30 +89,18 @@ test('cwd resolves relative to the workdir, and an explicit shell is honoured', 
   assert.equal(commandSpec({ ...step, shell: '/bin/bash' }, ctx).argv[0], '/bin/bash');
 });
 
-test('the flag that runs an inline command varies with the shell, not just its name', () => {
-  assert.deepEqual(
-    commandSpec({ ...step, shell: 'cmd.exe' }, ctx).argv,
-    ['cmd.exe', '/d', '/s', '/c', 'npm test'],
-  );
-  assert.deepEqual(
-    commandSpec({ ...step, shell: 'C:\\Windows\\System32\\cmd.exe' }, ctx).argv,
-    ['C:\\Windows\\System32\\cmd.exe', '/d', '/s', '/c', 'npm test'],
-  );
-  assert.deepEqual(
-    commandSpec({ ...step, shell: 'powershell' }, ctx).argv,
-    ['powershell', '-NoProfile', '-Command', 'npm test'],
-  );
-  assert.deepEqual(
-    commandSpec({ ...step, shell: 'pwsh' }, ctx).argv,
-    ['pwsh', '-NoProfile', '-Command', 'npm test'],
-  );
+test('every shell takes -c: there is one dialect, so no per-shell flags', () => {
+  // cmd and PowerShell are refused at parse time (schema.ts); anything else is the author's own choice.
+  for (const shell of ['/bin/bash', 'bash', 'zsh', 'fish', 'C:/Program Files/Git/usr/bin/sh.exe']) {
+    assert.deepEqual(commandSpec({ ...step, shell }, ctx).argv, [shell, '-c', 'npm test'], shell);
+  }
 });
 
-test('an unrecognized shell falls back to -c rather than guessing wrong', () => {
-  assert.deepEqual(
-    commandSpec({ ...step, shell: 'fish' }, ctx).argv,
-    ['fish', '-c', 'npm test'],
-  );
+test('with no shell on the ctx, the step resolves one itself rather than defaulting to cmd.exe', () => {
+  const bare: RunCtx = { ...ctx, shell: undefined };
+  const resolved = resolveShell();
+  if (!resolved.ok) return; // a Windows box with no Git: nothing to assert
+  assert.equal(commandSpec(step, bare).argv[0], resolved.path);
 });
 
 test('capture rides on the spec so the frontend can tee output to a file', () => {
@@ -83,6 +116,13 @@ test('step env is merged with the run-dir pointers, and does not leak process en
   });
 });
 
+test('env paths are absolute with forward slashes, whatever the platform wrote them as', () => {
+  const win: RunCtx = { ...ctx, runDir: 'C:\\Users\\me\\proj\\.whiphand\\runs\\r1', artifacts: { plan: 'C:\\Users\\me\\proj\\.whiphand\\runs\\r1\\plan.md' } };
+  const spec = commandSpec({ kind: 'command', id: 'c', run: 'true', inputs: ['plan'] }, win);
+  assert.equal(spec.env.WHIPHAND_RUN_DIR, 'C:/Users/me/proj/.whiphand/runs/r1');
+  assert.equal(spec.env.WHIPHAND_ARTIFACT_PLAN, 'C:/Users/me/proj/.whiphand/runs/r1/plan.md');
+});
+
 test('a named run passes its name and slug to the shell', () => {
   const named: RunCtx = { ...ctx, runName: 'OAuth support', runSlug: 'oauth-support' };
   const spec = commandSpec(step, named);
@@ -90,8 +130,11 @@ test('a named run passes its name and slug to the shell', () => {
   assert.equal(spec.env.WHIPHAND_RUN_SLUG, 'oauth-support');
 });
 
-test('WHIPHAND_RUN_NAME is absent rather than empty for an unnamed run', () => {
+test('WHIPHAND_RUN_NAME is absent rather than empty for an unnamed run, and {{ run.name }} then refers to the id', () => {
   assert.ok(!('WHIPHAND_RUN_NAME' in commandSpec(step, ctx).env));
+  const spec = commandSpec({ ...step, run: 'echo {{ run.name }}' }, ctx);
+  assert.equal(spec.argv[2], 'echo ${WHIPHAND_RUN_ID}');
+  assert.equal(spec.env.WHIPHAND_RUN_ID, 'r1');
 });
 
 test('run.slug renders in the shell line and in cwd, so a worktree step works', () => {
@@ -102,8 +145,9 @@ test('run.slug renders in the shell line and in cwd, so a worktree step works', 
     run: 'git worktree add -b whiphand/{{ run.slug }} .',
   };
   const spec = commandSpec(wt, named);
-  // The run line is always last, however many flags the platform's shell took.
-  assert.equal(spec.argv[spec.argv.length - 1], 'git worktree add -b whiphand/oauth-support .');
+  // `run` is a reference; `cwd` is data, so it gets the value.
+  assert.equal(spec.argv[spec.argv.length - 1], 'git worktree add -b whiphand/${WHIPHAND_RUN_SLUG} .');
+  assert.equal(spec.env.WHIPHAND_RUN_SLUG, 'oauth-support');
   assert.equal(spec.cwd, resolve('/w', '../wt-oauth-support'));
 });
 
@@ -174,4 +218,63 @@ test('a manual verdict is the human answer; retry is a deliberate fail', () => {
   assert.equal(verdictFromChoice('continue'), 'pass');
   assert.equal(verdictFromChoice('retry'), 'fail');
   assert.equal(verdictFromChoice('abort'), 'fail');
+});
+
+// ---------------------------------------------------------------------------
+// Injection inertness: values are data, never syntax — proven with a real shell.
+// ---------------------------------------------------------------------------
+
+const shell = resolveShell();
+const hasShell = { skip: shell.ok ? false : 'no POSIX shell on this machine' };
+
+/** Runs a command step's real argv through the resolved shell, in an empty directory. */
+async function runStep(run: string, values: RunCtx['inputs'], extra: Partial<RunCtx> = {}): Promise<string> {
+  const dir = mkdtempSync(join(tmpdir(), 'wh-inject-'));
+  const real: RunCtx = {
+    ...ctx, workdir: dir, runDir: dir, shell: shell.ok ? shell.path : SH, inputs: values, ...extra,
+  };
+  const spec = commandSpec({ kind: 'command', id: 'c', run }, real);
+  const { stdout } = await execRunner(spec.argv, { cwd: dir, env: { ...process.env, ...spec.env } });
+  return stdout;
+}
+
+const HOSTILE = ['; touch pwned', '$(touch pwned)', '`touch pwned`', "'; touch pwned; '", '"; touch pwned; "', '* ?', '&& touch pwned', '| touch pwned', '\\', 'a\nb'];
+
+test('a hostile value is inert in a double-quoted context', hasShell, async () => {
+  for (const value of HOSTILE) {
+    assert.equal(await runStep('printf %s "{{ inputs.v }}"', { v: value }), value, JSON.stringify(value));
+  }
+});
+
+test('a hostile value is inert as a bare word — it may split or glob, but nothing in it is executed', hasShell, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wh-inject-'));
+  for (const value of ['; touch pwned', '$(touch pwned)', '`touch pwned`', '&& touch pwned', '| touch pwned']) {
+    const spec = commandSpec({ kind: 'command', id: 'c', run: 'echo {{ inputs.v }} > out.txt' },
+      { ...ctx, workdir: dir, runDir: dir, shell: shell.ok ? shell.path : SH, inputs: { v: value } });
+    await execRunner(spec.argv, { cwd: dir, env: { ...process.env, ...spec.env } });
+    assert.equal(existsSync(join(dir, 'pwned')), false, `${JSON.stringify(value)} was executed`);
+  }
+});
+
+test('a hostile value is inert inside a heredoc', hasShell, async () => {
+  const out = await runStep('cat <<EOF\n{{ inputs.v }}\nEOF', { v: '$(touch pwned); `touch pwned`' });
+  assert.equal(out, '$(touch pwned); `touch pwned`\n');
+});
+
+test('a stage title of `*` is not globbed when it is quoted, and a hostile run name is inert', hasShell, async () => {
+  const stage = { index: 1, total: 1, id: '01-a', title: '*', path: '/p/01-a.md' };
+  const out = await runStep('printf %s "{{ stage.title }}"', {}, { frame: { kind: 'stages', id: 'build', stage, attempt: 1, maxAttempts: 1 } });
+  assert.equal(out, '*');
+  const named = await runStep('printf %s "{{ run.name }}"', {}, { runName: '; rm -rf ~', runSlug: 'rm' });
+  assert.equal(named, '; rm -rf ~');
+});
+
+test('the documented breaking change: inside single quotes the reference is literal', hasShell, async () => {
+  const out = await runStep("printf %s '{{ run.name }}'", {}, { runName: 'demo', runSlug: 'demo' });
+  assert.equal(out, '${WHIPHAND_RUN_NAME}');
+});
+
+test('a shipped-template style whole-command input runs through eval, and stays correct with quotes and &&', hasShell, async () => {
+  const out = await runStep('eval "{{ inputs.test_command }}"', { test_command: 'cd . && printf "%s" "a b"' });
+  assert.equal(out, 'a b');
 });

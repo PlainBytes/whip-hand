@@ -9,6 +9,17 @@ describe('isExternal', () => {
     expect(isExternal('mailto:a@b.c')).toBe(true);
   });
 
+  it('does not treat a Windows-absolute path as a URL with a one-letter scheme', () => {
+    // `C:/docs/plan.md` used to parse as scheme `c` and go to the browser.
+    expect(isExternal('C:/docs/plan.md')).toBe(false);
+    expect(isExternal('c:\\docs\\plan.md')).toBe(false);
+    expect(isExternal('D:/img/a.png')).toBe(false);
+    // A drive-relative `C:foo` is not something we emit and stays a scheme; longer schemes always do.
+    expect(isExternal('C:foo')).toBe(true);
+    expect(isExternal('file:///C:/x')).toBe(true);
+    expect(isExternal('ab:/x')).toBe(true);
+  });
+
   it('does not treat a relative path or fragment as external', () => {
     expect(isExternal('./review.md')).toBe(false);
     expect(isExternal('docs/plan.md')).toBe(false);
@@ -69,6 +80,26 @@ describe('resolveInWorkspace', () => {
   it('works with Windows separators', () => {
     expect(resolveInWorkspace('C:\\ws\\docs', 'C:\\ws', '../plan.md'))
       .toEqual({ path: 'C:\\ws\\plan.md', kind: 'link' });
+  });
+
+  it('routes a Windows-absolute target to the file port, through the same containment check', () => {
+    expect(resolveInWorkspace('C:\\Proj\\docs', 'C:\\Proj', 'C:/Proj/docs/plan.md'))
+      .toEqual({ path: 'C:\\Proj\\docs\\plan.md', kind: 'link' });
+    expect(resolveInWorkspace('C:\\Proj\\docs', 'C:\\Proj', 'C:\\Proj\\img\\a.png'))
+      .toEqual({ path: 'C:\\Proj\\img\\a.png', kind: 'image' });
+    // Outside the workspace, another drive, and a sibling that merely shares the prefix are all refused.
+    expect(resolveInWorkspace('C:\\Proj\\docs', 'C:\\Proj', 'C:/Windows/win.ini')).toBeNull();
+    expect(resolveInWorkspace('C:\\Proj\\docs', 'C:\\Proj', 'D:/Proj/plan.md')).toBeNull();
+    expect(resolveInWorkspace('C:\\Proj\\docs', 'C:\\Proj', 'C:/Project/plan.md')).toBeNull();
+    expect(resolveInWorkspace('C:\\Proj\\docs', 'C:\\Proj', 'C:/Proj/../Other/x.md')).toBeNull();
+  });
+
+  it('compares case-blind on Windows: C:\\Proj and c:\\proj are the same workspace', () => {
+    expect(resolveInWorkspace('C:\\Proj\\docs', 'C:\\Proj', 'c:/proj/docs/plan.md')?.kind).toBe('link');
+  });
+
+  it('refuses a Windows-absolute target when the workspace is POSIX', () => {
+    expect(resolveInWorkspace('/ws/docs', '/ws', 'C:/x/y.md')).toBeNull();
   });
 
   it('refuses a sibling directory whose name starts with the root', () => {

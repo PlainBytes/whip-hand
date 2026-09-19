@@ -358,9 +358,9 @@ test('a body step gets one manifest row per stage, not one overwritten in place'
   const manifest = await manifestOf(result.runDir);
   const rowsOf = (id: string) => manifest.steps.filter(s => s.id === id);
   assert.deepEqual(rowsOf('accept').map(r => [r.stage, r.status]), [['01-schema', 'done'], ['02-api', 'done']]);
+  // run-dir-relative on disk (manifestOf reads the raw file), so the run can move.
   assert.deepEqual(rowsOf('accept').map(r => r.artifact),
-    [join(result.runDir, 'build', '01-schema', 'attempt-1', 'accept.md'),
-      join(result.runDir, 'build', '02-api', 'attempt-1', 'accept.md')]);
+    ['build/01-schema/attempt-1/accept.md', 'build/02-api/attempt-1/accept.md']);
   assert.deepEqual(rowsOf('execute').map(r => r.outerLoops), [
     [{ id: 'build', iteration: 1, stage: '01-schema' }],
     [{ id: 'build', iteration: 1, stage: '02-api' }],

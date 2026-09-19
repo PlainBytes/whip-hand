@@ -38,8 +38,8 @@ const WORKSPACE_COLOR_VARS = [
 ] as const;
 
 /**
- * FNV-1a over the path's UTF-16 code units. Math.imul keeps the multiply
- * exactly 32-bit, so a path yields the same colour on every platform and in
+ * FNV-1a over the string's UTF-16 code units. Math.imul keeps the multiply
+ * exactly 32-bit, so a string yields the same colour on every platform and in
  * every session — no Date, no Math.random, no locale.
  */
 function hashPath(path: string): number {
@@ -51,9 +51,13 @@ function hashPath(path: string): number {
   return h;
 }
 
-/** The CSS custom property name (not a resolved colour) for this workspace. */
-export function workspaceColorVar(path: string): string {
-  return WORKSPACE_COLOR_VARS[hashPath(path) % WORKSPACE_COLOR_VARS.length];
+/**
+ * The CSS custom property name (not a resolved colour) for this workspace.
+ * Hashes the agent's identity key when there is one, so a workspace is one
+ * colour however it was spelled; the path is all an entry without a key has.
+ */
+export function workspaceColorVar(path: string, identityKey?: string): string {
+  return WORKSPACE_COLOR_VARS[hashPath(identityKey ?? path) % WORKSPACE_COLOR_VARS.length];
 }
 
 /**

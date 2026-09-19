@@ -106,6 +106,76 @@ test('rememberRun records lastWorkflow and per-workflow inputs without clobberin
   assert.deepEqual(EMPTY_APP_STATE.workspaces, {});
 });
 
+test('touchRecent treats two spellings sharing an identity key as one workspace', () => {
+  const first = touchRecent([], 'C:\\PROGRA~1\\Proj', '2026-01-01T00:00:00Z', 'c:/program files/proj');
+  assert.deepEqual(first, [{ path: 'C:\\PROGRA~1\\Proj', identityKey: 'c:/program files/proj', lastOpenedAt: '2026-01-01T00:00:00Z' }]);
+
+  const pinned = [{ ...first[0], pinned: true }];
+  const again = touchRecent(pinned, 'C:\\Program Files\\Proj', '2026-01-02T00:00:00Z', 'c:/program files/proj');
+  // One entry, under the spelling it was opened by this time, with its pin kept.
+  assert.deepEqual(again, [{
+    path: 'C:\\Program Files\\Proj', identityKey: 'c:/program files/proj',
+    lastOpenedAt: '2026-01-02T00:00:00Z', pinned: true,
+  }]);
+});
+
+test('touchRecent keeps two different directories apart even when their spellings look alike', () => {
+  const list = touchRecent(
+    touchRecent([], '/a/link', '2026-01-01T00:00:00Z', '/real/one'), '/a/Link', '2026-01-02T00:00:00Z', '/real/two');
+  assert.equal(list.length, 2);
+});
+
+test('touchRecent adopts the key for an entry written before keys existed, matching it by path', () => {
+  const old = [{ path: '/ws', lastOpenedAt: '2026-01-01T00:00:00Z', pinned: true }];
+  assert.deepEqual(touchRecent(old, '/ws', '2026-01-02T00:00:00Z', '/real/ws'), [
+    { path: '/ws', identityKey: '/real/ws', lastOpenedAt: '2026-01-02T00:00:00Z', pinned: true },
+  ]);
+});
+
+test('rememberRun keeps one memory entry per workspace however it was spelled', () => {
+  let s = rememberRun(EMPTY_APP_STATE, 'C:\\PROGRA~1\\Proj', 'feature', { ticket: 'T-1' }, 'c:/program files/proj');
+  s = rememberRun(s, 'C:\\Program Files\\Proj', 'review', { pr: '42' }, 'c:/program files/proj');
+  assert.deepEqual(Object.keys(s.workspaces), ['C:\\PROGRA~1\\Proj']);
+  const memory = s.workspaces['C:\\PROGRA~1\\Proj'];
+  assert.equal(memory.identityKey, 'c:/program files/proj');
+  assert.equal(memory.lastWorkflow, 'review');
+  assert.deepEqual(memory.lastInputs, { feature: { ticket: 'T-1' }, review: { pr: '42' } });
+});
+
+test('rememberRun finds a memory entry written before keys existed by its path, and stamps the key on it', () => {
+  const old: AppState = {
+    ...EMPTY_APP_STATE, workspaces: { '/ws': { lastWorkflow: 'feature', lastInputs: { feature: { ticket: 'T-1' } } } },
+  };
+  const next = rememberRun(old, '/ws', 'review', { pr: '42' }, '/real/ws');
+  assert.deepEqual(Object.keys(next.workspaces), ['/ws']);
+  assert.equal(next.workspaces['/ws'].identityKey, '/real/ws');
+  assert.deepEqual(next.workspaces['/ws'].lastInputs, { feature: { ticket: 'T-1' }, review: { pr: '42' } });
+});
+
+test('an app-state file carrying identity keys parses, and one without them still does', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'whiphand-app-state-'));
+  const file = join(dir, 'app-state.json');
+  const write = (state: object) => writeFile(file, JSON.stringify({
+    schemaVersion: 1, window: null, lastPage: null, theme: 'system', ...state,
+  }), 'utf8');
+
+  await write({
+    recentWorkspaces: [{ path: '/a', identityKey: '/real/a', lastOpenedAt: 'now' }],
+    workspaces: { '/a': { identityKey: '/real/a', lastInputs: {} } },
+  });
+  const keyed = await new AppStateStore(file).get();
+  assert.equal(keyed.recentWorkspaces[0].identityKey, '/real/a');
+  assert.equal(keyed.workspaces['/a'].identityKey, '/real/a');
+
+  await write({
+    recentWorkspaces: [{ path: '/a', lastOpenedAt: 'now' }],
+    workspaces: { '/a': { lastWorkflow: 'feature', lastInputs: {} } },
+  });
+  const legacy = await new AppStateStore(file).get();
+  assert.deepEqual(legacy.recentWorkspaces, [{ path: '/a', lastOpenedAt: 'now' }]);
+  assert.equal(legacy.workspaces['/a'].identityKey, undefined);
+});
+
 test('AppStateStore round-trips through disk and creates parent dirs', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'whiphand-app-state-'));
   const store = new AppStateStore(join(dir, 'nested', 'app-state.json'));

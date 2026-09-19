@@ -48,23 +48,27 @@ test('a missing file yields defaults without throwing', async () => {
   assert.equal(config.port, DEFAULT_REMOTE_PORT);
 });
 
-test('mutate persists atomically and 0600, and survives a reload', async () => {
+test('mutate persists atomically, and survives a reload', async () => {
   const store = await tempStore();
   const saved = await store.mutate(c => ({ ...c, enabled: true, port: 62000 }));
   assert.equal(saved.enabled, true);
 
-  // The token is a credential; 0600 is the point of not putting it in
-  // app-state. POSIX only: Windows has no permission bits for fs.chmod to set
-  // — it only toggles the read-only attribute — so the file lands 0666 there
-  // and this guarantee simply does not hold. Restricting it on Windows means
-  // an ACL, which is a change to the product, not to this test.
-  if (process.platform !== 'win32') {
-    const stats = await stat(store.filePath);
-    assert.equal(stats.mode & 0o777, 0o600, 'token file must not be world-readable');
-  }
-
   const reloaded = await new RemoteAccessStore(store.filePath).get();
   assert.deepEqual(reloaded, saved);
+});
+
+// The token is a credential; 0600 is the point of not putting it in app-state.
+// POSIX only: Windows has no permission bits for fs.chmod to set — it only
+// toggles the read-only attribute — so the file lands 0666 there and this
+// guarantee simply does not hold. Restricting it on Windows means an ACL, which
+// is a change to the product, not to this test; the gap is a *named* one, gated
+// with a reason the allowlist can see (this used to be a bare `if` inside a test
+// that reported green either way) and surfaced by doctor as `token-file-mode`.
+test('the token file is written 0600', { skip: process.platform === 'win32' && 'fs modes are not enforceable on Windows: the remote token file cannot be made 0600' }, async () => {
+  const store = await tempStore();
+  await store.mutate(c => ({ ...c, enabled: true, port: 62000 }));
+  const stats = await stat(store.filePath);
+  assert.equal(stats.mode & 0o777, 0o600, 'token file must not be world-readable');
 });
 
 test('an invalid config fails CLOSED rather than leaving a port open', async () => {

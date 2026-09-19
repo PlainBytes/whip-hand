@@ -13,10 +13,12 @@ test('the state file lives in the run dir, named after the step', () => {
   assert.equal(awaitStatePath('/w/.whiphand/runs/r1', 'plan'), join('/w/.whiphand/runs/r1', '.plan.await'));
 });
 
-test('a step id with path or shell characters flattens to one safe segment', () => {
-  // This name is pasted unquoted into hook shell commands.
-  assert.equal(awaitStateName('a b;rm -rf /'), '.a_b_rm_-rf__.await');
-  assert.equal(dirname(awaitStatePath('/w/.whiphand/runs/r1', '../escape')), join('/w/.whiphand/runs/r1'));
+test('a step id is used verbatim, and one that is not a legal segment is refused rather than flattened', () => {
+  // Step ids are validated segments (schema.ts), so no two steps can share a
+  // state file the way two flattened ids could.
+  assert.equal(awaitStateName('a b'), '.a b.await');
+  assert.throws(() => awaitStateName('a/b'), /invalid step id/);
+  assert.throws(() => awaitStatePath('/w/.whiphand/runs/r1', '../escape'), /invalid step id/);
 });
 
 test('await state and end markers never claim each other', () => {

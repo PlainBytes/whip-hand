@@ -9,9 +9,9 @@
  * Deliberately no cursor control: `whiphand run` output is routinely piped to a
  * file or read by CI, and an in-place spinner would corrupt both.
  */
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import {
-  ATTACHMENTS_DIR, formatBytes, formatElapsed, mergeUsage, nestedPrefix, progressActionText, usageParts,
+  ATTACHMENTS_DIR, degradationLine, formatBytes, formatElapsed, mergeUsage, nestedPrefix, progressActionText, usageParts,
 } from '@whiphand/core';
 import type { UsageCounters, WhiphandEvent } from '@whiphand/core';
 
@@ -27,6 +27,13 @@ export interface RenderOptions {
    * attachments, so this is how it still says where each one would have gone.
    */
   runDirOf?: (runId: string) => string;
+  /**
+   * Set for a dry run: print each prompt file's content under the spawn line.
+   * Prompts travel in files now (stdin or an argv pointer), so without this a
+   * dry run — whose whole point is to show what would be sent — would show a
+   * pointer and nothing else.
+   */
+  showPrompts?: boolean;
 }
 
 /** What a headless step has told us so far, cleared when it finishes. */
@@ -71,6 +78,9 @@ export function createRenderer(
   // Keyed by the stages step's own id, holding its current stage's index/total — see 'stages:accepted' below.
   const stagePositions = new Map<string, { index: number; total: number }>();
 
+  const degraded: Array<Extract<WhiphandEvent, { type: 'run:degraded' }>> = [];
+  let runEnded = false;
+
   /** The run's label, when it has one. The id stays: `--resume` takes that. */
   const named = (name: string | undefined): string => (name === undefined ? '' : ` "${name}"`);
 
@@ -102,8 +112,17 @@ export function createRenderer(
       case 'step:start':
         if (event.mode === 'headless') tallies.set(event.stepId, { startedMs: now() });
         return out(stepLine(event));
-      case 'step:spawn':
-        return out(`  $ ${event.spec.argv.map(a => (a.includes(' ') ? JSON.stringify(a) : a)).join(' ')}`);
+      case 'step:spawn': {
+        out(`  $ ${event.spec.argv.map(a => (a.includes(' ') ? JSON.stringify(a) : a)).join(' ')}`);
+        if (opts.showPrompts === true) {
+          for (const file of event.spec.files ?? []) {
+            if (!/\.(?:harvest-)?prompt$/.test(file.path)) continue;
+            out(`  ┆ ${basename(file.path)}:`);
+            for (const line of file.content.split('\n')) out(`  ┆   ${line}`);
+          }
+        }
+        return;
+      }
       case 'step:artifact': return out(`  ✔ artifact ${event.path}`);
       case 'step:verdict': return out(`  verdict: ${event.verdict.toUpperCase()}`);
       case 'step:progress': {
@@ -163,9 +182,23 @@ export function createRenderer(
       case 'stages:done':
         return out(`▤ ${event.id} finished ${event.completed} stages`);
       case 'guard:warning': return err(`  ⚠ ${event.message}`);
+      // Invariant 7: a capability that degraded is *shown*, not just logged. Held
+      // until the run ends so they read as a summary rather than as noise between
+      // steps; one that arrives after the end (a failed prune, at teardown) is
+      // printed as it comes, since nothing later will.
+      case 'run:degraded': {
+        if (runEnded) return err(`  ⚠ degraded: ${degradationLine(event)}`);
+        degraded.push(event);
+        return;
+      }
       case 'run:error': return err(`✘ ${event.message}`);
       case 'run:cancelled': return out('✖ run cancelled');
-      case 'run:done': return out(event.ok ? '✔ run complete' : '✘ run failed');
+      case 'run:done': {
+        runEnded = true;
+        out(event.ok ? '✔ run complete' : '✘ run failed');
+        for (const d of degraded) err(`  ⚠ degraded: ${degradationLine(d)}`);
+        return;
+      }
     }
   };
 }

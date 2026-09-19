@@ -6,7 +6,9 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { execRunner } from './exec.ts';
-import { DEFAULT_SHELL, shellFlags } from './engine/command.ts';
+import { commandSpec } from './engine/command.ts';
+import { resolveShell } from './shell.ts';
+import type { CommandStep, RunCtx } from './types.ts';
 import {
   createWorkflow, deleteWorkflow, cloneWorkflow, initWorkspace, workflowTemplate, specDrivenTemplate, featureDevelopmentTemplate,
   stagedFeatureDevelopmentTemplate, updateWorkflow,
@@ -184,7 +186,28 @@ test('stagedFeatureDevelopmentTemplate parses, stages the plan dir, and gates ev
   assert.ok(findStep(wf.steps, 'commit'), 'each stage commits');
 });
 
-test('featureDevelopmentTemplate stage step works when the runs dir is gitignored and files are already staged', async () => {
+/**
+ * A command step's real spec — argv, env and all, exactly what a run would
+ * spawn — executed through the resolved POSIX shell. Templates are identical
+ * bytes on every platform now, so these run on the Windows leg too (where Git's
+ * `sh.exe` is the shell); only a machine with no shell at all skips them.
+ */
+const shell = resolveShell();
+const withShell = { skip: shell.ok ? false : 'no POSIX shell on this machine' };
+
+async function runStep(
+  step: CommandStep, cwd: string, env: Record<string, string> = {}, ctx: Partial<RunCtx> = {},
+): Promise<void> {
+  const base: RunCtx = {
+    workdir: cwd, runId: 'r1', runDir: join(cwd, '.whiphand', 'runs', 'r1'), runSlug: 'r1',
+    shell: shell.ok ? shell.path : '/bin/sh',
+    sessionIds: {}, artifacts: {}, attempts: {}, verdicts: {}, inputs: {}, ...ctx,
+  };
+  const spec = commandSpec(step, base);
+  await execRunner(spec.argv, { cwd, env: { ...process.env, ...spec.env, ...env } });
+}
+
+test('featureDevelopmentTemplate stage step works when the runs dir is gitignored and files are already staged', withShell, async () => {
   const stage = parseWorkflow(featureDevelopmentTemplate()).steps.find(s => s.id === 'stage');
   assert.ok(stage && stage.kind === 'command');
   const git = (...args: string[]) => promisify(execFile)('git', args, { cwd: ws });
@@ -200,21 +223,14 @@ test('featureDevelopmentTemplate stage step works when the runs dir is gitignore
   await git('add', 'a.txt');
   await writeFile(join(ws, 'b.txt'), 'new\n');
 
-  // The shell a command step really gets (cmd.exe on Windows), so this also
-  // pins that the run line survives cmd's quoting. Rejects on a non-zero exit.
-  await execRunner([DEFAULT_SHELL, ...shellFlags(DEFAULT_SHELL), stage.run], { cwd: ws });
+  // The shell a command step really gets, and its real spec. Rejects on a non-zero exit.
+  await runStep(stage as CommandStep, ws);
 
   const { stdout } = await git('diff', '--cached', '--name-only');
   assert.deepEqual(stdout.trim().split('\n'), ['a.txt', 'b.txt']);
 });
 
-// The staged template's commit steps are POSIX sh lines ($VAR, `&&` next to a
-// quote) that cmd.exe can neither expand nor be handed; see docs/design.md.
-const posixShellOnly = {
-  skip: process.platform === 'win32' && "the staged template's commit steps need a POSIX shell",
-};
-
-test("the staged workflow's commit-plan subject names the run, or its slug when the run is unnamed", posixShellOnly, async () => {
+test("the staged workflow's commit-plan subject names the run, or its slug when the run is unnamed", withShell, async () => {
   const step = findStep(parseWorkflow(stagedFeatureDevelopmentTemplate()).steps, 'commit-plan');
   assert.ok(step && step.kind === 'command');
   if (!step || step.kind !== 'command') return;
@@ -232,22 +248,21 @@ test("the staged workflow's commit-plan subject names the run, or its slug when 
   const subject = async () => (await git('log', '-1', '--pretty=%s')).stdout.trim();
   // command.ts exports WHIPHAND_RUN_NAME only for a named run, so the
   // unnamed case must not inherit one from whatever runs this test.
-  const { WHIPHAND_RUN_NAME: _inherited, ...baseEnv } = process.env;
-  const commitPlan = async (file: string, env: Record<string, string>) => {
+  delete process.env.WHIPHAND_RUN_NAME;
+  const commitPlan = async (file: string, ctx: Partial<RunCtx>) => {
     await mkdir(join(ws, 'plans'), { recursive: true });
     await writeFile(join(ws, 'plans', file), '# Stage\n');
-    await execRunner([DEFAULT_SHELL, ...shellFlags(DEFAULT_SHELL), step.run],
-      { cwd: ws, env: { ...baseEnv, WHIPHAND_PLAN_DIR: 'plans', WHIPHAND_RUN_SLUG: 'oauth-login', ...env } });
+    await runStep(step, ws, {}, { inputs: { plan_dir: 'plans' }, runSlug: 'oauth-login', ...ctx });
   };
 
   await commitPlan('01-a.md', {});
   assert.equal(await subject(), 'plan: oauth-login', 'not a bare "plan: "');
-  await commitPlan('02-b.md', { WHIPHAND_RUN_NAME: 'OAuth login' });
+  await commitPlan('02-b.md', { runName: 'OAuth login' });
   assert.equal(await subject(), 'plan: OAuth login');
 });
 
 test("the staged workflow's stage-body commit step exits 0 on an empty index instead of "
-  + "failing the run, and still commits — and still fails — for real", posixShellOnly, async () => {
+  + "failing the run, and still commits — and still fails — for real", withShell, async () => {
   const commit = findStep(parseWorkflow(stagedFeatureDevelopmentTemplate()).steps, 'commit');
   assert.ok(commit && commit.kind === 'command');
   if (!commit || commit.kind !== 'command') return;
@@ -268,7 +283,7 @@ test("the staged workflow's stage-body commit step exits 0 on an empty index ins
   // A stage with no diff is a normal stage (product spec's own edge case):
   // an empty index must exit 0, not fail the run the way a bare `git commit`
   // would (exit 1, "nothing to commit").
-  await execRunner([DEFAULT_SHELL, ...shellFlags(DEFAULT_SHELL), commit.run], { cwd: ws });
+  await runStep(commit as CommandStep, ws);
   assert.equal(await head(), before, 'nothing was committed');
 
   // Something staged: a real commit is made from the message artifact env
@@ -277,10 +292,7 @@ test("the staged workflow's stage-body commit step exits 0 on an empty index ins
   await git('add', 'a.txt');
   const msgPath = join(ws, 'msg.txt');
   await writeFile(msgPath, 'do the thing\n');
-  await execRunner(
-    [DEFAULT_SHELL, ...shellFlags(DEFAULT_SHELL), commit.run],
-    { cwd: ws, env: { ...process.env, WHIPHAND_ARTIFACT_COMMIT_MESSAGE: msgPath } },
-  );
+  await runStep(commit as CommandStep, ws, { WHIPHAND_ARTIFACT_COMMIT_MESSAGE: msgPath });
   assert.notEqual(await head(), before, 'a real commit was made');
   assert.equal((await git('log', '-1', '--pretty=%s')).stdout.trim(), 'do the thing');
 
@@ -289,10 +301,8 @@ test("the staged workflow's stage-body commit step exits 0 on an empty index ins
   // exit 1 the way commit-plan's expect_exit does.
   await writeFile(join(ws, 'a.txt'), 'changed again\n');
   await git('add', 'a.txt');
-  await assert.rejects(() => execRunner(
-    [DEFAULT_SHELL, ...shellFlags(DEFAULT_SHELL), commit.run],
-    { cwd: ws, env: { ...process.env, WHIPHAND_ARTIFACT_COMMIT_MESSAGE: join(ws, 'no-such-file.txt') } },
-  ));
+  await assert.rejects(() => runStep(
+    commit as CommandStep, ws, { WHIPHAND_ARTIFACT_COMMIT_MESSAGE: join(ws, 'no-such-file.txt') }));
 });
 
 test('createWorkflow writes the file, refuses overwrite, validates the name', async () => {

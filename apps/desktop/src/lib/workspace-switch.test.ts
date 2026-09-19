@@ -23,7 +23,7 @@ async function settleRequest(
 
 afterEach(() => {
   useAppStore.setState({
-    workspacePath: null, filesDirty: false, pendingWorkspaceSwitch: null, appState: null,
+    workspacePath: null, workspaceIdentityKey: null, filesDirty: false, pendingWorkspaceSwitch: null, appState: null,
   });
 });
 
@@ -37,6 +37,17 @@ describe('openWorkspace', () => {
 
     expect(await promise).toBe(true);
     expect(useAppStore.getState().workspacePath).toBe('/ws/a');
+  });
+
+  it('adopts the identity key the agent returns, so workspace comparisons can use it', async () => {
+    const { transport, client } = setup();
+    const promise = openWorkspace(client, 'C:\\PROGRA~1\\Proj');
+    await settleRequest(transport, 'touchRecentWorkspace', {
+      recentWorkspaces: [{ path: 'C:\\PROGRA~1\\Proj', identityKey: 'c:/program files/proj', lastOpenedAt: 'now' }],
+    });
+
+    await promise;
+    expect(useAppStore.getState().workspaceIdentityKey).toBe('c:/program files/proj');
   });
 
   it('throws when the agent refuses the path', async () => {

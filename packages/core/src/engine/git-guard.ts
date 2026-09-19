@@ -1,16 +1,53 @@
-import { execFile } from 'node:child_process';
 import { matchesGlob } from 'node:path';
-import { promisify } from 'node:util';
+import { execRunner } from '../exec.ts';
+import { samePath } from '../path-form.ts';
 
-const run = promisify(execFile);
+/**
+ * What asking git about a workspace can come back as — three answers, not two
+ * (invariant 7). "Not a repository" is a fact about the workspace; "unavailable"
+ * is git having been *expected to work and not working*: not on PATH, a
+ * `.cmd` wrapper it cannot run, a timeout, or `detected dubious ownership` (a
+ * repo owned by another user, which on Windows is routine on a shared or
+ * network profile). Collapsing the second into the first is what let a
+ * `writes: false` step lose its protection with nobody finding out.
+ */
+export type GitResult<T> =
+  | ({ kind: 'ok' } & T)
+  | { kind: 'not-a-repo' }
+  | { kind: 'unavailable'; reason: string };
 
-export async function snapshotTree(workdir: string): Promise<string | null> {
+export type TreeSnapshot = GitResult<{ tree: string }>;
+export type HeadResult = GitResult<{ sha: string }>;
+
+/**
+ * The classification allowlist has exactly one entry: exit 128 **and** stderr
+ * `not a git repository`. The seam runs git under `LC_ALL=C`/`LANGUAGE=C`, so
+ * the wording cannot be localized away. Never classify on the exit code alone —
+ * 128 is also what git says for dubious ownership and half its other fatals.
+ */
+export function classifyGitFailure(error: unknown): { kind: 'not-a-repo' } | { kind: 'unavailable'; reason: string } {
+  const e = error as { code?: number | string; stderr?: string; message?: string };
+  const stderr = typeof e.stderr === 'string' ? e.stderr : '';
+  if (e.code === 128 && /not a git repository/i.test(stderr)) return { kind: 'not-a-repo' };
+  const detail = stderr.trim() !== '' ? stderr.trim() : (e.message ?? String(error));
+  const cause = e.code === undefined ? '' : ` (${typeof e.code === 'number' ? `exit ${e.code}` : e.code})`;
+  return { kind: 'unavailable', reason: `git failed${cause}: ${detail.split('\n')[0]}` };
+}
+
+export class GitUnavailableError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = 'GitUnavailableError';
+  }
+}
+
+export async function snapshotTree(workdir: string): Promise<TreeSnapshot> {
   try {
-    const { stdout } = await run(
-      'git', ['status', '--porcelain=v1', '--untracked-files=all'], { cwd: workdir });
-    return stdout.split('\n').filter(Boolean).sort().join('\n');
-  } catch {
-    return null; // not a git repo (or git missing): guard disabled
+    const { stdout } = await execRunner(
+      ['git', 'status', '--porcelain=v1', '--untracked-files=all'], { cwd: workdir });
+    return { kind: 'ok', tree: stdout.split('\n').filter(Boolean).sort().join('\n') };
+  } catch (error) {
+    return classifyGitFailure(error);
   }
 }
 
@@ -20,21 +57,23 @@ export function diffSnapshots(before: string, after: string): string[] {
     .split('\n')
     .filter(Boolean)
     .filter(line => !beforeSet.has(line))
-    .filter(line => !line.includes('.whiphand/'));
+    // Whiphand's own bookkeeping directory, wherever it sits — compared by
+    // segment with the pure comparator, so `.WhipHand/` is the same directory on
+    // Windows and a name that merely *contains* the text is not.
+    .filter(line => !pathsFromStatusLines([line]).some(p => p.split('/').some(segment => samePath(segment, '.whiphand'))));
 }
 
 /**
- * The current commit whiphand is running against, or `null` outside a git
- * repo (or with git missing) — the same "guard disabled" posture snapshotTree
- * takes, for the same reason: `run:env` reports the machine honestly rather
- * than failing the run over a fact it cannot get.
+ * The current commit whiphand is running against — reported by `run:env`, which
+ * carries on without it rather than failing the run over a fact it cannot get.
+ * Still three answers, so the caller can tell the two absences apart.
  */
-export async function headSha(workdir: string): Promise<string | null> {
+export async function headSha(workdir: string): Promise<HeadResult> {
   try {
-    const { stdout } = await run('git', ['rev-parse', 'HEAD'], { cwd: workdir });
-    return stdout.trim();
-  } catch {
-    return null;
+    const { stdout } = await execRunner(['git', 'rev-parse', 'HEAD'], { cwd: workdir });
+    return { kind: 'ok', sha: stdout.trim() };
+  } catch (error) {
+    return classifyGitFailure(error);
   }
 }
 

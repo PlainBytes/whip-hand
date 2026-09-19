@@ -5,15 +5,15 @@
  * frontend answers it — the CLI on its tty, the desktop in a card — exactly as
  * `runInteractive` hands over a live session rather than owning one.
  */
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execRunner } from '../exec.ts';
+import { GitUnavailableError, classifyGitFailure } from './git-guard.ts';
 import type {
   CaptureSpec, ManualChoice, ManualRequest, ManualResponse, ManualStep, RunCtx,
 } from '../types.ts';
 import { inputArtifacts, renderTemplate } from '../template.ts';
+import { toWorkspace } from '../path-form.ts';
 import { frameIdentity, isStageFrame, nearestStage } from '../execution-key.ts';
 
-const run = promisify(execFile);
 
 /** How much of a diff we are willing to put in front of a human at once. */
 export const DIFF_LINE_LIMIT = 400;
@@ -40,11 +40,15 @@ export async function workingDiff(
 ): Promise<string | null> {
   let stdout: string;
   try {
-    ({ stdout } = await run('git', ['diff', '--stat', 'HEAD'], { cwd: workdir, maxBuffer: 8 << 20 }));
-    const { stdout: patch } = await run('git', ['diff', 'HEAD'], { cwd: workdir, maxBuffer: 8 << 20 });
+    ({ stdout } = await execRunner(['git', 'diff', '--stat', 'HEAD'], { cwd: workdir, maxBuffer: 8 << 20 }));
+    const { stdout: patch } = await execRunner(['git', 'diff', 'HEAD'], { cwd: workdir, maxBuffer: 8 << 20 });
     stdout = patch.trim().length > 0 ? `${stdout.trimEnd()}\n\n${patch}` : stdout;
-  } catch {
-    return null;
+  } catch (error) {
+    const failure = classifyGitFailure(error);
+    // Not a repository: no diff to show. Git unavailable: say so — `null` here
+    // would read as "nothing changed".
+    if (failure.kind === 'not-a-repo') return null;
+    throw new GitUnavailableError(failure.reason);
   }
   const lines = stdout.split('\n');
   if (lines.length <= limit) return stdout;
@@ -84,10 +88,21 @@ export async function buildManualRequest(
   // `attachments` expands to one entry per attached file, so a review screen
   // offers each of them on its own.
   const ids = [...new Set([...(step.inputs ?? []), ...(extras.forceInputs ?? [])])];
+  // Workspace-relative: the frontend and the recorded event get this one object.
   const artifacts = inputArtifacts(ids, ctx)
-    .filter((a): a is { id: string; path: string } => a.path !== undefined);
+    .filter((a): a is { id: string; path: string } => a.path !== undefined)
+    .map(a => ({ id: a.id, path: toWorkspace(a.path, ctx.workdir) }));
 
-  const diff = step.show_diff ? await workingDiff(ctx.workdir) : null;
+  let diff: string | null = null;
+  let diffUnavailable: string | undefined;
+  if (step.show_diff) {
+    try {
+      diff = await workingDiff(ctx.workdir);
+    } catch (error) {
+      if (!(error instanceof GitUnavailableError)) throw error;
+      diffUnavailable = error.message; // the runner records it as a `diff` degradation
+    }
+  }
   const stage = nearestStage(ctx.frame);
   const idn = frameIdentity(ctx.frame);
 
@@ -98,7 +113,7 @@ export async function buildManualRequest(
     instructions: [renderTemplate(step.instructions, ctx), ...(extras.notes ?? [])].join('\n\n'),
     choices: manualChoices(isStageFrame(ctx.frame) || ctx.loop !== undefined),
     ...(step.capture === undefined ? {} : { capture: captureSpecFor(step.capture) }),
-    context: { artifacts, ...(diff === null ? {} : { diff }) },
+    context: { artifacts, ...(diff === null ? {} : { diff }), ...(diffUnavailable === undefined ? {} : { diffUnavailable }) },
     defaultChoice: step.default ?? 'continue',
     ...(ctx.loop === undefined ? {} : { loop: ctx.loop }),
     ...(stage === undefined ? {} : {

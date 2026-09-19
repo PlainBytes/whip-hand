@@ -1,0 +1,25 @@
+[package]
+name = "whiphand-job"
+version = "0.2.0"
+description = "Process guard: one Windows Job Object per whiphand run, with kill-on-close"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "whiphand-job"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

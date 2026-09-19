@@ -178,13 +178,14 @@ test('rows come back group-major: every harness before every support tool', asyn
 test('optional defaults to true; only the things whiphand cannot work without are required', async () => {
   const rows = await detectTools(registryOf(), {}, { probe: allInstalled });
   const required = rows.filter(r => !r.optional).map(r => r.id).sort();
-  assert.deepEqual(required, ['claude', 'copilot', 'git']);
+  // The POSIX shell is required too: with none, command steps refuse to run.
+  assert.deepEqual(required, ['claude', 'copilot', 'git', 'posix-shell']);
 });
 
 test('empty notes are omitted, so the CLI printing none is the same fact', async () => {
   const rows = await detectTools(
     registryOf(), { hide: BUILTIN_TOOLS.slice(1).map(t => t.id) },
-    { probe: async () => ({ installed: true, notes: [] }) },
+    { probe: async () => ({ installed: true, notes: [] }), machine: () => [] },
   );
   assert.equal(rows.length, 1);
   assert.equal(rows[0].notes, undefined);

@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { liveStageProgress, ongoingJobs, useAppStore, waitingRunIds, type JobState } from './store.ts';
+import {
+  findWorkspaceMemory, jobInWorkspace, liveStageProgress, ongoingJobs, useAppStore, waitingRunIds, type JobState,
+} from './store.ts';
 import type { WhiphandEvent } from '../../../../packages/core/src/types.ts';
 import { EMPTY_APP_STATE } from '../../../../packages/agent/src/app-state.ts';
+import { fromPosix } from '../../../../packages/test-support/src/paths.ts';
 
 /** A JobState with the fields these selector tests do not care about filled in. */
 function baseJob(jobId: string): JobState {
@@ -14,6 +17,7 @@ function baseJob(jobId: string): JobState {
 function resetStore(): void {
   useAppStore.setState({
     workspacePath: null,
+    workspaceIdentityKey: null,
     agentStatus: 'connecting',
     workflows: [],
     runs: [],
@@ -126,7 +130,7 @@ describe('job workspace attribution', () => {
         awaiting: { stepId: 's', reason: 'permission' as const },
       },
     };
-    expect(waitingRunIds(jobs, '/ws/a')).toEqual(new Set(['r1']));
+    expect(waitingRunIds(jobs, { path: '/ws/a' })).toEqual(new Set(['r1']));
     expect(waitingRunIds(jobs)).toEqual(new Set(['r1', 'r2']));
   });
 });
@@ -223,6 +227,37 @@ describe('useAppStore reducers', () => {
 
     const job = useAppStore.getState().jobs.j1;
     expect(job.steps.triage).toMatchObject({ id: 'triage', status: 'pending', artifact: '/tmp/triage.md' });
+  });
+
+  it('resolves a workspace-relative artifact path against the job workdir, so it reads like the manifest\'s', () => {
+    const apply = useAppStore.getState().applyWhiphandEvent;
+    apply({
+      jobId: 'j-rel', workdir: '/ws/proj',
+      event: { type: 'step:artifact', stepId: 'plan', path: '.whiphand/runs/r1/plan.md' }, ts: 't1',
+    });
+    expect(useAppStore.getState().jobs['j-rel'].steps.plan.artifact).toBe(fromPosix('/ws/proj/.whiphand/runs/r1/plan.md'));
+  });
+
+  it('resolves against a Windows-shaped workdir into its native form', () => {
+    const apply = useAppStore.getState().applyWhiphandEvent;
+    apply({
+      jobId: 'j-win', workdir: 'C:\\Proj',
+      event: { type: 'step:artifact', stepId: 'plan', path: '.whiphand/runs/r1/plan.md' }, ts: 't1',
+    });
+    expect(useAppStore.getState().jobs['j-win'].steps.plan.artifact).toBe('C:\\Proj\\.whiphand\\runs\\r1\\plan.md');
+  });
+
+  it('keeps an absolute artifact path where it points (in the host\'s form), and a relative one when no workdir is known yet', () => {
+    const apply = useAppStore.getState().applyWhiphandEvent;
+    apply({
+      jobId: 'j-abs', workdir: '/ws/proj',
+      event: { type: 'step:artifact', stepId: 'plan', path: '/elsewhere/plan.md' }, ts: 't1',
+    });
+    apply({
+      jobId: 'j-nowd', event: { type: 'step:artifact', stepId: 'plan', path: '.whiphand/runs/r1/plan.md' }, ts: 't1',
+    });
+    expect(useAppStore.getState().jobs['j-abs'].steps.plan.artifact).toBe(fromPosix('/elsewhere/plan.md'));
+    expect(useAppStore.getState().jobs['j-nowd'].steps.plan.artifact).toBe('.whiphand/runs/r1/plan.md');
   });
 
   it('applyWhiphandEvent drives status through spawn -> artifact -> verdict -> done, and run:done marks the job finished', () => {
@@ -796,6 +831,50 @@ describe('resumed runs', () => {
   });
 });
 
+describe('degradations', () => {
+  beforeEach(() => resetStore());
+
+  it('folds run:degraded into the job, stamped with the event time', () => {
+    const { applyWhiphandEvent } = useAppStore.getState();
+    applyWhiphandEvent({
+      jobId: 'j-deg', event: { type: 'run:degraded', capability: 'git-guard', reason: 'not a git repository' }, ts: 't1',
+    });
+    applyWhiphandEvent({
+      jobId: 'j-deg', event: { type: 'run:degraded', capability: 'diff', reason: 'git unavailable', stepId: 'build' }, ts: 't2',
+    });
+
+    expect(useAppStore.getState().jobs['j-deg'].degradations).toEqual([
+      { capability: 'git-guard', reason: 'not a git repository', at: 't1' },
+      { capability: 'diff', reason: 'git unavailable', stepId: 'build', at: 't2' },
+    ]);
+  });
+
+  it('de-duplicates on (capability, stepId), as the journal does', () => {
+    const { applyWhiphandEvent } = useAppStore.getState();
+    for (const [ts, reason] of [['t1', 'first'], ['t2', 'second']] as const) {
+      applyWhiphandEvent({
+        jobId: 'j-dup', event: { type: 'run:degraded', capability: 'diff', reason, stepId: 'loop-body' }, ts,
+      });
+    }
+    applyWhiphandEvent({
+      jobId: 'j-dup', event: { type: 'run:degraded', capability: 'diff', reason: 'other step', stepId: 'other' }, ts: 't3',
+    });
+
+    const degradations = useAppStore.getState().jobs['j-dup'].degradations ?? [];
+    expect(degradations.map(d => [d.stepId, d.reason, d.at])).toEqual([
+      ['loop-body', 'first', 't1'],
+      ['other', 'other step', 't3'],
+    ]);
+  });
+
+  it('leaves a job that never degraded without a list', () => {
+    useAppStore.getState().applyWhiphandEvent({
+      jobId: 'j-ok', event: { type: 'run:resume', runId: 'r', workflow: 'w' }, ts: 't0',
+    });
+    expect(useAppStore.getState().jobs['j-ok'].degradations).toBeUndefined();
+  });
+});
+
 describe('a client attaching mid-step (F1/F2)', () => {
   beforeEach(() => resetStore());
 
@@ -1002,6 +1081,140 @@ describe('stages executions', () => {
         other: { ...baseJob('other'), runId: 'r3', workdir: '/elsewhere', stageProgress: { stagesId: 'b', index: 1, total: 2, title: 't', attempt: 1 } },
       },
     });
-    expect([...liveStageProgress(useAppStore.getState().jobs, '/ws').keys()]).toEqual(['r1']);
+    expect([...liveStageProgress(useAppStore.getState().jobs, { path: '/ws' }).keys()]).toEqual(['r1']);
+  });
+});
+
+describe('the same folder opened two ways is one workspace', () => {
+  it('patches the visible run list for a runStateChanged whose workdir differs only by case and separators (Windows)', () => {
+    const runs = [{ runId: 'r1', runDir: 'C:\\Proj\\.whiphand\\runs\\r1', status: 'running' }];
+    useAppStore.setState({ workspacePath: 'C:\\Proj', runs });
+
+    // The agent reports `c:/proj`: one workspace, however it was spelled.
+    useAppStore.getState().applyRunStateChanged({
+      jobId: 'j1', workdir: 'c:/proj', runId: 'r1', status: 'succeeded',
+    } as never);
+    expect(useAppStore.getState().runs[0].status).toBe('succeeded');
+  });
+
+  it('still ignores a notification for a genuinely different workspace', () => {
+    const runs = [{ runId: 'r1', runDir: '/ws/a/.whiphand/runs/r1', status: 'running' }];
+    useAppStore.setState({ workspacePath: '/ws/a', runs });
+    useAppStore.getState().applyRunStateChanged({ jobId: 'j1', workdir: '/ws/b', runId: 'r1', status: 'succeeded' } as never);
+    // Another folder on every host (case alone would not do: a Windows host folds it).
+    expect(useAppStore.getState().runs[0].status).toBe('running');
+  });
+});
+
+describe('workspace identity keys', () => {
+  beforeEach(() => resetStore());
+
+  // One directory under two names only the agent can tell are the same: 8.3 short name and long form.
+  const SHORT = 'C:\\PROGRA~1\\Proj';
+  const LONG = 'C:\\Program Files\\Proj';
+  const KEY = 'c:/program files/proj';
+
+  it('keeps the open workspace\'s key alongside its path, and refreshes it without clearing the page', () => {
+    const runs = [{ runId: 'r1', runDir: `${LONG}\\.whiphand\\runs\\r1`, status: 'running' }];
+    useAppStore.getState().setWorkspacePath(LONG, KEY);
+    expect(useAppStore.getState().workspaceIdentityKey).toBe(KEY);
+
+    useAppStore.setState({ runs });
+    useAppStore.getState().setWorkspacePath(LONG, 'c:/renamed');
+    expect(useAppStore.getState().workspaceIdentityKey).toBe('c:/renamed');
+    expect(useAppStore.getState().runs).toBe(runs);
+
+    useAppStore.getState().setWorkspacePath('/other');
+    expect(useAppStore.getState().workspaceIdentityKey).toBeNull();
+  });
+
+  it('recognises a job from an aliased workdir as this workspace, by key', () => {
+    const workspace = { path: LONG, identityKey: KEY };
+    expect(jobInWorkspace({ workdir: SHORT, identityKey: KEY }, workspace)).toBe(true);
+    expect(jobInWorkspace({ workdir: SHORT, identityKey: 'c:/somewhere/else' }, workspace)).toBe(false);
+  });
+
+  it('falls back to comparing paths when either side has no key, and an untagged job belongs nowhere', () => {
+    expect(jobInWorkspace({ workdir: 'c:/program files/proj' }, { path: LONG, identityKey: KEY })).toBe(true);
+    expect(jobInWorkspace({ workdir: SHORT, identityKey: KEY }, { path: LONG })).toBe(false);
+    expect(jobInWorkspace({ workdir: LONG }, { path: LONG })).toBe(true);
+    expect(jobInWorkspace({}, { path: LONG, identityKey: KEY })).toBe(false);
+  });
+
+  it('adopts the key carried on a notification, and on the tag at startRun', () => {
+    useAppStore.getState().noteJobWorkspace('j1', SHORT, KEY);
+    expect(useAppStore.getState().jobs.j1).toMatchObject({ workdir: SHORT, identityKey: KEY });
+
+    useAppStore.getState().applyWhiphandEvent({
+      jobId: 'j2', workdir: SHORT, identityKey: KEY, ts: '2026-01-01T00:00:00Z',
+      event: { type: 'run:start', runId: 'r1', workflow: 'demo' },
+    });
+    expect(useAppStore.getState().jobs.j2.identityKey).toBe(KEY);
+  });
+
+  it('fills in a key a job was tagged without, keeping its own spelling', () => {
+    useAppStore.getState().noteJobWorkspace('j1', SHORT);
+    useAppStore.getState().noteJobWorkspace('j1', SHORT, KEY);
+    expect(useAppStore.getState().jobs.j1).toMatchObject({ workdir: SHORT, identityKey: KEY });
+  });
+
+  it('patches the visible run list for a runStateChanged from another spelling of this workspace', () => {
+    const runs = [{ runId: 'r1', runDir: `${LONG}\\.whiphand\\runs\\r1`, status: 'running' }];
+    useAppStore.setState({ workspacePath: LONG, workspaceIdentityKey: KEY, runs });
+
+    useAppStore.getState().applyRunStateChanged({
+      jobId: 'j1', workdir: SHORT, identityKey: KEY, runId: 'r1', status: 'succeeded',
+    });
+    expect(useAppStore.getState().runs[0].status).toBe('succeeded');
+  });
+
+  it('does not patch it for a different directory, even one whose spelling matches', () => {
+    const runs = [{ runId: 'r1', runDir: `${LONG}\\.whiphand\\runs\\r1`, status: 'running' }];
+    useAppStore.setState({ workspacePath: LONG, workspaceIdentityKey: KEY, runs });
+
+    useAppStore.getState().applyRunStateChanged({
+      jobId: 'j1', workdir: LONG, identityKey: 'c:/moved', runId: 'r1', status: 'failed',
+    });
+    expect(useAppStore.getState().runs[0].status).toBe('running');
+  });
+
+  it('filters waiting runs and stage progress by workspace identity', () => {
+    const stage = { stagesId: 'b', index: 1, total: 2, title: 't', attempt: 1 };
+    const jobs = {
+      alias: {
+        ...baseJob('alias'), runId: 'r1', workdir: SHORT, identityKey: KEY, stageProgress: stage,
+        awaiting: { stepId: 's', reason: 'permission' as const },
+      },
+      other: {
+        ...baseJob('other'), runId: 'r2', workdir: '/elsewhere', identityKey: '/elsewhere', stageProgress: stage,
+        awaiting: { stepId: 's', reason: 'permission' as const },
+      },
+    };
+    const here = { path: LONG, identityKey: KEY };
+    expect(waitingRunIds(jobs, here)).toEqual(new Set(['r1']));
+    expect([...liveStageProgress(jobs, here).keys()]).toEqual(['r1']);
+    // No key on this side (an agent that predates them): only the path can be compared.
+    expect(waitingRunIds(jobs, { path: LONG })).toEqual(new Set());
+  });
+
+  it('finds remembered inputs by identity, however the workspace was spelled when they were recorded', () => {
+    useAppStore.getState().setAppState({
+      ...EMPTY_APP_STATE,
+      workspaces: { [SHORT]: { identityKey: KEY, lastWorkflow: 'feature', lastInputs: { feature: { ticket: 'T-1' } } } },
+    });
+    expect(findWorkspaceMemory(useAppStore.getState().appState, { path: LONG, identityKey: KEY })?.lastWorkflow).toBe('feature');
+    expect(findWorkspaceMemory(useAppStore.getState().appState, { path: LONG })).toBeUndefined();
+
+    useAppStore.getState().rememberInputsLocal(LONG, 'review', { pr: '42' }, KEY);
+    const { workspaces } = useAppStore.getState().appState!;
+    expect(Object.keys(workspaces)).toEqual([SHORT]);
+    expect(workspaces[SHORT].lastInputs).toEqual({ feature: { ticket: 'T-1' }, review: { pr: '42' } });
+  });
+
+  it('seeds a job from a listJobs summary with its workspace and key', () => {
+    useAppStore.getState().applyJobSummaries([{
+      jobId: 'j1', workdir: SHORT, identityKey: KEY, status: 'running', pty: null,
+    }]);
+    expect(useAppStore.getState().jobs.j1).toMatchObject({ workdir: SHORT, identityKey: KEY });
   });
 });

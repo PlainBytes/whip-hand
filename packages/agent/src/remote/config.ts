@@ -15,10 +15,11 @@
  * enabled:false — the one thing this file must never do is fail open and leave
  * a port listening with a token nobody knows.
  */
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
+import { writeFileAtomic } from '@whiphand/core';
 import { generateToken } from './auth.ts';
 
 /** 61337 is the Vite dev server (see apps/desktop/vite.config.ts), so: the next one. */
@@ -105,10 +106,10 @@ export class RemoteAccessStore {
 
   async #persist(next: RemoteAccessConfig): Promise<void> {
     await mkdir(dirname(this.filePath), { recursive: true });
-    const tmp = `${this.filePath}.tmp`;
     // The mode goes on the temp file because rename() preserves it; chmod-ing
     // after the rename would leave a window where the token is world-readable.
-    await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-    await rename(tmp, this.filePath);
+    // (Not enforceable on Windows, where fs modes only toggle read-only — doctor
+    // says so; see remoteTokenModeNote.)
+    await writeFileAtomic(this.filePath, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
   }
 }

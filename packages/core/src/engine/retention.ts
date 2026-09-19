@@ -2,7 +2,7 @@
  * Manual deletion and automatic retention for runs under a workspace's
  * artifacts dir: both are `rm -rf` of a run directory, guarded by the same two rules — never touch a locked run, never touch one still running.
  */
-import { rm } from 'node:fs/promises';
+import { removeTree } from '../durable-fs.ts';
 import type { WorkspaceConfig } from '../types.ts';
 import { getRun, isSafeRunId, listRuns, HEARTBEAT_STALE_MS } from './manifest.ts';
 
@@ -31,12 +31,16 @@ export async function deleteRun(
   // person clicking Delete on a row they can see, the reason comes back to
   // them either way, and a corrupt run directory is exactly what they would be
   // reaching for. Refusing it would strand the thing permanently.
-  await rm(detail.runDir, { recursive: true, force: true });
+  // User-initiated, so a failure surfaces: the person who clicked Delete is
+  // there to see it. (A prune failing must not fail a run — see pruneRuns.)
+  await removeTree(detail.runDir);
   return { deleted: true };
 }
 
 export interface PruneRunsResult {
   deleted: string[];
+  /** Runs whose directory could not be removed (a scanner or indexer held it, say). Never fatal — see below. */
+  failed: Array<{ runId: string; reason: string }>;
 }
 
 /**
@@ -55,18 +59,24 @@ export interface PruneRunsResult {
  * once the directory is stale by heartbeat standards, at which point it really
  * is what 'unknown' otherwise means: a crash, or a corrupt run.json.
  *
+ * A directory that cannot be removed (EBUSY behind an indexer, after the
+ * retries) is *returned*, not thrown: this runs at the end of every run, so
+ * throwing would fail a run that otherwise succeeded. The caller records each
+ * as a `retention` degradation (invariant 7) — never silent, never fatal.
+ *
  * `deleteRun` deliberately does not do this — see there.
  */
 export async function pruneRuns(
   workdir: string, config: WorkspaceConfig, max: number | null,
 ): Promise<PruneRunsResult> {
   const deleted: string[] = [];
-  if (max === null || max <= 0) return { deleted };
+  const failed: PruneRunsResult['failed'] = [];
+  if (max === null || max <= 0) return { deleted, failed };
 
   const runs = await listRuns(workdir, config);
   const eligible = runs.filter(r => !r.locked);
   let excess = eligible.length - max;
-  if (excess <= 0) return { deleted };
+  if (excess <= 0) return { deleted, failed };
 
   // listRuns sorts newest-first, so walking from the end goes oldest-first.
   const staleBefore = Date.now() - HEARTBEAT_STALE_MS;
@@ -74,9 +84,15 @@ export async function pruneRuns(
     const run = eligible[i];
     if (run.status === 'running') continue;
     if (run.status === 'unknown' && run.mtimeMs > staleBefore) continue;
-    await rm(run.runDir, { recursive: true, force: true });
-    deleted.push(run.runId);
+    try {
+      await removeTree(run.runDir);
+      deleted.push(run.runId);
+    } catch (error) {
+      failed.push({ runId: run.runId, reason: (error as Error).message });
+    }
+    // Counted either way: a run we could not remove is not one to retry with
+    // the next-oldest, which would prune more than `max` asks for.
     excess -= 1;
   }
-  return { deleted };
+  return { deleted, failed };
 }

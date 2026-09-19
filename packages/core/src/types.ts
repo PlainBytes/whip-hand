@@ -1,7 +1,10 @@
 /**
  * Single source of truth for all shared whiphand types.
- * Every other module imports from here; nothing here imports from elsewhere.
+ * Every other module imports from here; nothing here imports from elsewhere
+ * (bar type-only imports of node-free id sets).
  */
+
+import type { DegradationId } from './degradations.ts';
 
 export type StepMode = 'interactive' | 'headless';
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -206,6 +209,13 @@ export interface SpawnSpec {
    * dry run records `files` on the `step:spawn` event but writes none of them.
    */
   files?: Array<{ path: string; content: string }>;
+  /**
+   * A file (also in `files`) the frontend hands the child as its stdin — for a
+   * headless runner verified to read a piped prompt. Stdio wiring, not a content
+   * channel: the frontend opens the file and passes the descriptor as fd 0, so
+   * there are no pipe writes and no backpressure. Serializes fine: it is a path.
+   */
+  stdinFile?: string;
 }
 
 export type ProgressFormat = 'claude-stream-json' | 'copilot-jsonl' | 'opencode-json';
@@ -315,6 +325,13 @@ export interface RunCtx {
   runName?: string;
   /** Path/ref-safe form of runName, falling back to runId. Never empty. */
   runSlug: string;
+  /**
+   * The POSIX shell command steps run through, resolved once per run
+   * (shell.ts) — `/bin/sh` on POSIX, derived from `git` on Windows, in
+   * absolute forward-slash form. Absent only in a hand-built ctx (a test
+   * double), where commandSpec resolves it itself.
+   */
+  shell?: string;
   sessionIds: Record<string, string>;    // stepId -> minted uuid (claude only)
   /**
    * stepId -> latest artifact path. Inside a loop this is exactly what a
@@ -492,8 +509,11 @@ export interface ManualRequest {
   choices: ManualChoice[];               // 'retry' only appears inside a loop
   capture?: CaptureSpec;
   context: {
+    /** `path` is workspace-relative, with `/`. */
     artifacts: Array<{ id: string; path: string }>;
     diff?: string;                       // present when show_diff, bounded
+    /** Why the diff could not be produced (git unavailable) — distinct from "no diff": recorded as a `diff` degradation. */
+    diffUnavailable?: string;
   };
   /** What a non-interactive frontend should pick under `--yes`. */
   defaultChoice: 'continue' | 'abort';
@@ -566,6 +586,7 @@ export type WhiphandEvent =
       type: 'step:skipped'; stepId: string; loopId?: string; iteration?: number; outerLoops?: LoopRef[];
       stage?: string;
     }
+  /** The recorded copy of the spec: its path fields are workspace-relative (see event-paths.ts), unlike the native one the frontend spawns. */
   | { type: 'step:spawn'; stepId: string; spec: SpawnSpec; phase: 'main' | 'harvest' }
   /**
    * A `sessionIdCapture` runner's interactive spawn exited, and the runner
@@ -575,7 +596,7 @@ export type WhiphandEvent =
    * `resumedStepIds` logic needs no changes to pick it up.
    */
   | { type: 'step:session'; stepId: string; sessionId: string }
-  /** `bytes` is the artifact's size once written — the cheapest signal that a step silently stubbed it out. */
+  /** `path` is workspace-relative. `bytes` is the artifact's size once written — the cheapest signal that a step silently stubbed it out. */
   | { type: 'step:artifact'; stepId: string; path: string; bytes?: number }
   /**
    * `assertArtifact` refused the step's declared output: it was never written
@@ -654,6 +675,13 @@ export type WhiphandEvent =
   /** `stepId` is absent for a workflow-level warning (a dropped ref, an exhausted loop) — present when one step's own guard tripped. */
   | { type: 'guard:warning'; message: string; stepId?: string }
   /**
+   * A capability degraded but the run carries on (invariant 7): folded into the
+   * manifest's `degradations[]` and rendered in the run summary. Distinct from
+   * `guard:warning`, which stays the authoring/config warning channel. A
+   * *safety-relevant* loss never comes through here — it fails the step.
+   */
+  | { type: 'run:degraded'; capability: DegradationId; reason: string; stepId?: string }
+  /**
    * One entry per run, right after `run:start`/`run:resume`: what ran it.
    * The highest-value single line for an issue report, and the thing `doctor`
    * already knows how to gather — resolved here rather than duplicated.
@@ -662,6 +690,8 @@ export type WhiphandEvent =
       type: 'run:env'; runId: string; whiphandVersion: string; nodeVersion: string; platform: string;
       runners: Array<{ id: string; installed: boolean; version?: string }>;
       git?: { sha: string; dirty: boolean };
+      /** The POSIX shell command steps run through, so a wrong answer is visible rather than mysterious. */
+      shell?: string;
     }
   /**
    * Which files a step's execution touched, from the same before/after

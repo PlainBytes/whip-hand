@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createServer } from 'node:net';
 import { createInterface } from 'node:readline';
-import { mkdtemp, mkdir, writeFile, chmod, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, chmod, readFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BUILTIN_TOOLS } from '@whiphand/core';
+import { BUILTIN_TOOLS, machineChecks, pathKey } from '@whiphand/core';
 
 const AGENT_MAIN = fileURLToPath(new URL('./main.ts', import.meta.url));
 
@@ -231,6 +231,23 @@ test('a resumed run carries its runId on every whiphandEvent notification', asyn
       m.method === 'runStateChanged' && m.params.jobId === jobId && m.params.status !== 'running');
     assert.equal(finalState.params.status, 'succeeded');
     assert.equal(finalState.params.runId, runId);
+  } finally {
+    agent.stop();
+  }
+});
+
+test('a resumed run tags its notifications with the workspace identity key', async () => {
+  const { workdir, runId } = await workspaceWithStoppedRun();
+  const agent = startAgent();
+  try {
+    agent.send({ id: 1, method: 'resumeRun', params: { workdir, runId } });
+    const { jobId } = (await agent.waitFor(m => m.id === 1)).result;
+
+    const finalState = await agent.waitFor(m =>
+      m.method === 'runStateChanged' && m.params.jobId === jobId && m.params.status !== 'running');
+    assert.equal(finalState.params.identityKey, pathKey(await realpath(workdir)));
+    agent.send({ id: 2, method: 'listJobs', params: {} });
+    assert.equal((await agent.waitFor(m => m.id === 2)).result[0].identityKey, pathKey(await realpath(workdir)));
   } finally {
     agent.stop();
   }
@@ -466,7 +483,9 @@ test('doctor reports one entry per built-in tool (shape only)', async () => {
     agent.send({ id: 1, method: 'doctor', params: {} });
     const res = await agent.waitFor(m => m.id === 1);
     assert.ok(Array.isArray(res.result));
-    assert.deepEqual(res.result.map((r: any) => r.id), BUILTIN_TOOLS.map(t => t.id));
+    // The built-in table, then this machine's own facts (the POSIX shell, and on Windows the
+    // git launcher and token-file gaps) — the same rows the CLI's doctor prints.
+    assert.deepEqual(res.result.map((r: any) => r.id), [...BUILTIN_TOOLS.map(t => t.id), ...machineChecks().map(r => r.id)]);
 
     for (const entry of res.result) {
       assert.equal(typeof entry.installed, 'boolean');
@@ -499,12 +518,18 @@ test('unknown method over the wire -> -32601', async () => {
 });
 
 /**
- * A PATH-stubbed `claude` binary: for the interactive call (argv[0] !=
- * '-p') it waits for one line of pty input, echoes a marker, then exits 0
- * (simulating the human finishing the session); for the harvest call
- * (`-p --resume ...`) it parses the artifact path out of claude.ts's fixed
- * harvestPrompt shape ("... to <path>. Write only the artifact content...")
- * and writes the artifact there, then exits 0.
+ * A PATH-stubbed `claude` binary that honours the prompt-off-argv contract.
+ *
+ * Interactive call (argv[0] != '-p'): checks that the last argv element is the
+ * one-sentence pointer and that the file it names (workspace-relative, so
+ * resolved against the cwd) holds the step's prompt, then waits for one line of
+ * pty input, echoes a marker, and exits 0 (the human finishing the session).
+ * Any deviation exits non-zero before the marker, which fails the test.
+ *
+ * Harvest call (`-p --resume ...`): the prompt arrives on STDIN, never argv. It
+ * parses the artifact path out of harvestPrompt's fixed shape ("... to <path>.
+ * Write only the artifact content...") — a workspace-relative path, resolved
+ * against the cwd — and writes the artifact there, then exits 0.
  */
 /**
  * Two entry points over one implementation, because PATH lookup differs by
@@ -521,11 +546,22 @@ async function stubClaudeBinDir(): Promise<string> {
     'const fs = require("fs");',
     'const args = process.argv.slice(2);',
     'if (args[0] === "-p") {',
-    '  const prompt = args[args.length - 1];',
+    '  if (args.some(a => a.includes("Write the final"))) process.exit(4);',
+    '  const prompt = fs.readFileSync(0, "utf8");',
     '  const m = prompt.match(/to (\\S+)\\. Write only the artifact content/);',
-    '  if (m) fs.writeFileSync(m[1], "STUBBED ARTIFACT CONTENT\\n");',
+    '  if (!m) process.exit(5);',
+    '  fs.writeFileSync(require("path").resolve(process.cwd(), m[1]), "STUBBED ARTIFACT CONTENT\\n");',
     '  process.exit(0);',
     '} else {',
+    '  const pointer = args[args.length - 1];',
+    '  const pm = pointer.match(/^Read and follow the instructions in (\\S+)$/);',
+    '  if (!pm) process.exit(2);',
+    '  const promptFile = require("path").resolve(process.cwd(), pm[1]);',
+    '  if (fs.readFileSync(promptFile, "utf8") !== "hello") process.exit(3);',
+    '  for (const flag of ["--append-system-prompt-file", "--settings"]) {',
+    '    const i = args.indexOf(flag);',
+    '    if (i < 0 || !fs.existsSync(args[i + 1])) process.exit(6);',
+    '  }',
     '  process.stdin.setEncoding("utf8");',
     '  let buf = "";',
     '  process.stdin.on("data", d => {',

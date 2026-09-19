@@ -7,23 +7,23 @@ import { access, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/prom
 import { dirname, join, resolve, sep } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import {
-  CORE_VERSION, createWorkflow as coreCreateWorkflow, defaultRegistry, detectTools,
+  CORE_VERSION, createContainer, openWorkspace, createWorkflow as coreCreateWorkflow, defaultRegistry, detectTools,
   deleteWorkflow as coreDeleteWorkflow, cloneWorkflow as coreCloneWorkflow, ModelCatalog,
   deleteRun as coreDeleteRun, diffConfigLayer, getRun as coreGetRun, loadDoctorConfig,
   readRunLog as coreReadRunLog, workingDiffFiles,
   globalConfigPath, initWorkspace as coreInitWorkspace, listWorkflows as coreListWorkflows,
   listRuns as coreListRuns, loadConfigLayer, loadGlobalConfig, loadWorkspaceConfig,
-  mergeConfig, DEFAULT_CONFIG, parseWorkflow, planResume,
+  mergeConfig, DEFAULT_CONFIG, parseWorkflow, planResume, sameWorkspace,
   pruneRuns as corePruneRuns, renameRun as coreRenameRun, resolveWorkflowPath, runWorkflow,
   setRunLocked as coreSetRunLocked, updateWorkflow as coreUpdateWorkflow, validateAttachments,
 } from '@whiphand/core';
-import type { AttachmentSource, RunDetail, WorkspaceConfig } from '@whiphand/core';
+import type { AttachmentSource, Container, OpenedWorkspace, RunDetail, RunOptions, WorkspaceConfig } from '@whiphand/core';
 import type {
   CancelRunParams, CancelRunResult, CloneWorkflowParams, CloneWorkflowResult,
   ConfigGetParams, ConfigGetResult, ConfigSetParams,
   ConfigSetResult, CreateWorkflowParams, CreateWorkflowResult, DeleteRunParams, DeleteRunResult,
   DeleteWorkflowParams, DeleteWorkflowResult,
-  DoctorResult,
+  DoctorParams, DoctorResult,
   EndSessionParams, EndSessionResult, GetWorkflowParams,
   ListModelsParams, ListModelsResult,
   ResolveManualParams, ResolveManualResult,
@@ -41,7 +41,7 @@ import type {
   TouchRecentWorkspaceParams,
   UpdateWorkflowParams, UpdateWorkflowResult,
 } from './protocol.ts';
-import { JobManager, abandonManual, answerManual } from './jobs.ts';
+import { JobManager, abandonManual, answerManual, jobWorkspace } from './jobs.ts';
 import { createFrontend, type NotifyFn } from './frontend.ts';
 import { createSpawnHeadless } from './spawn.ts';
 import type { Handler } from './rpc.ts';
@@ -166,23 +166,46 @@ async function resolveArtifactPath(
   return { path: resolvedPath, config };
 }
 
+/** A container that could not contain (a non-packaged Windows run with no guard) is a `process-containment` degradation on the run. */
+function containerDegradations(
+  container: Container | undefined, more: NonNullable<RunOptions['degradations']> = [],
+): Pick<RunOptions, 'degradations'> {
+  const all = [
+    ...more,
+    ...(container?.degraded === undefined ? [] : [{ capability: 'process-containment' as const, reason: container.degraded }]),
+  ];
+  return all.length === 0 ? {} : { degradations: all };
+}
+
 /** Runs a job's workflow in the background; never throws — failures surface as notifications. */
 async function runJobInBackground(
   notify: NotifyFn, job: ReturnType<JobManager['create']>, params: StartRunParams,
-  attachments: AttachmentSource[],
+  attachments: AttachmentSource[], opened: OpenedWorkspace,
 ): Promise<void> {
   const runIdBox: { current?: string } = {};
+  let container: Container | undefined;
   try {
-    const workdir = resolve(params.workdir);
+    // Workspace open happened in startRun; warn about long-path headroom before anything runs.
+    const workdir = opened.root;
+    for (const message of opened.warnings) {
+      notify('whiphandEvent', {
+        jobId: job.jobId, ...jobWorkspace(job), runId: undefined,
+        event: { type: 'guard:warning', message }, ts: new Date().toISOString(),
+      });
+    }
     const { path: workflowPath, source: workflowSource } = await resolveWorkflowPath(params.workflow, workdir);
     const workflow = parseWorkflow(await readFile(workflowPath, 'utf8'));
     const config = await loadWorkspaceConfig(workdir);
     const registry = defaultRegistry();
-    const frontend = createFrontend(job, notify, runIdBox);
-    const spawnHeadless = createSpawnHeadless(job.jobId, notify);
+    // One container per job (invariant 6), disposed when the job settles: the
+    // agent hosts several runs at once and each owns its own.
+    container = params.dryRun ? undefined : await createContainer();
+    const frontend = createFrontend(job, notify, runIdBox, {}, container);
+    const spawnHeadless = createSpawnHeadless(job.jobId, notify, { container });
 
     const result = await runWorkflow({
       workflow, workdir, config, registry, frontend, spawnHeadless, workflowSource,
+      ...containerDegradations(container, opened.degradations),
       inputs: params.inputs ?? {}, dryRun: params.dryRun, signal: job.controller.signal,
       // loadWorkspaceConfig already merged DEFAULT_CONFIG with the global and
       // project layers — no separate app-state fallback needed here.
@@ -197,11 +220,13 @@ async function runJobInBackground(
   } catch (e) {
     job.status = 'failed';
     notify('whiphandEvent', {
-      jobId: job.jobId, workdir: job.workdir, runId: runIdBox.current,
+      jobId: job.jobId, ...jobWorkspace(job), runId: runIdBox.current,
       event: { type: 'run:error', message: (e as Error).message },
       ts: new Date().toISOString(),
     });
   } finally {
+    // Nothing we spawned outlives the run: whatever a step left running dies here.
+    await container?.dispose();
     // A run that ended while parked on a human (it threw, or was torn down)
     // must not leave the question dangling: nothing else would ever settle it.
     abandonManual(job, 'run ended');
@@ -210,7 +235,7 @@ async function runJobInBackground(
     // it into the terminal notification, on both the success and failure paths.
     job.runId = runIdBox.current;
     notify('runStateChanged', {
-      jobId: job.jobId, workdir: job.workdir, runId: job.runId, status: job.status,
+      jobId: job.jobId, ...jobWorkspace(job), runId: job.runId, status: job.status,
     });
   }
 }
@@ -221,44 +246,48 @@ async function runJobInBackground(
  * directory recorded, and keeps the inputs it was started with.
  */
 async function resumeJobInBackground(
-  notify: NotifyFn, job: ReturnType<JobManager['create']>, params: ResumeRunParams,
+  notify: NotifyFn, job: ReturnType<JobManager['create']>, params: ResumeRunParams, opened: OpenedWorkspace,
 ): Promise<void> {
   const runIdBox: { current?: string } = {};
+  let container: Container | undefined;
   try {
-    const workdir = resolve(params.workdir);
+    const workdir = opened.root;
     const config = await loadWorkspaceConfig(workdir);
     let plan = await planResume(workdir, config, params.runId,
       params.extraIterations === undefined ? undefined : { extraIterations: params.extraIterations });
     if (params.freshSession) plan = { ...plan, resumedStepIds: new Set() };
     for (const message of plan.warnings) {
       notify('whiphandEvent', {
-        jobId: job.jobId, workdir: job.workdir, runId: plan.runId,
+        jobId: job.jobId, ...jobWorkspace(job), runId: plan.runId,
         event: { type: 'guard:warning', message }, ts: new Date().toISOString(),
       });
     }
 
+    container = await createContainer();
     const result = await runWorkflow({
       workflow: plan.workflow, workdir, config,
       registry: defaultRegistry(),
-      frontend: createFrontend(job, notify, runIdBox),
-      spawnHeadless: createSpawnHeadless(job.jobId, notify),
+      frontend: createFrontend(job, notify, runIdBox, {}, container),
+      spawnHeadless: createSpawnHeadless(job.jobId, notify, { container }),
+      ...containerDegradations(container, opened.degradations),
       inputs: plan.inputs, signal: job.controller.signal, resume: plan,
     });
     job.status = result.cancelled ? 'cancelled' : result.ok ? 'succeeded' : 'failed';
   } catch (e) {
     job.status = 'failed';
     notify('whiphandEvent', {
-      jobId: job.jobId, workdir: job.workdir, runId: runIdBox.current ?? params.runId,
+      jobId: job.jobId, ...jobWorkspace(job), runId: runIdBox.current ?? params.runId,
       event: { type: 'run:error', message: (e as Error).message },
       ts: new Date().toISOString(),
     });
   } finally {
+    await container?.dispose();
     abandonManual(job, 'run ended');
     // The run id is known up front here, unlike a fresh run, so a resume that
     // died before emitting anything is still attributed to the run it meant.
     job.runId = runIdBox.current ?? params.runId;
     notify('runStateChanged', {
-      jobId: job.jobId, workdir: job.workdir, runId: job.runId, status: job.status,
+      jobId: job.jobId, ...jobWorkspace(job), runId: job.runId, status: job.status,
     });
   }
 }
@@ -321,13 +350,14 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
    * file — the right outcome: a table that is silently half-applied is worse
    * than one that says it is broken.
    */
-  const doctor: Handler = async (): Promise<DoctorResult> => {
+  const doctor: Handler = async (params): Promise<DoctorResult> => {
+    const { workdir } = params as DoctorParams;
     // Doctor is where a user lands after upgrading a harness or logging into
     // one — invalidating here (rather than only via the Model field's own
     // Refresh action) means the account-aware model list is never stuck
     // behind a stale probe from before that.
     modelCatalog.invalidate();
-    return detectTools(defaultRegistry(), await loadDoctorConfig());
+    return detectTools(defaultRegistry(), await loadDoctorConfig(), workdir === undefined ? {} : { workdir });
   };
 
   const listModels: Handler = async (params): Promise<ListModelsResult> => {
@@ -372,7 +402,10 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
 
   const startRun: Handler = async (params, ctx): Promise<StartRunResult> => {
     const p = params as StartRunParams;
-    const workdir = resolve(p.workdir);
+    // Opened once, here: the job and the remembered inputs are keyed by the same
+    // identity, and a refused (UNC) workspace is this call's error like a bad attachment.
+    const opened = await openWorkspace(p.workdir);
+    const workdir = opened.root;
     const attachments = attachmentSources(p);
     if (attachments.length > 0) {
       // Checked before a job exists, the way resumeRun plans first: "too
@@ -383,17 +416,18 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
       const config = await loadWorkspaceConfig(workdir);
       await validateAttachments(attachments, workflow, config.runs.max_attachment_mb);
     }
-    const job = jobs.create(workdir);
-    job.promise = runJobInBackground(ctx.notify, job, p, attachments);
+    const job = jobs.create(workdir, opened.identityKey);
+    job.promise = runJobInBackground(ctx.notify, job, p, attachments, opened);
     void deps.appState
-      .mutate(s => rememberRun(s, resolve(p.workdir), p.workflow, p.inputs ?? {}))
+      .mutate(s => rememberRun(s, workdir, p.workflow, p.inputs ?? {}, opened.identityKey))
       .catch(() => {});
     return { jobId: job.jobId };
   };
 
   const resumeRun: Handler = async (params, ctx): Promise<ResumeRunResult> => {
     const p = params as ResumeRunParams;
-    const workdir = resolve(p.workdir);
+    const opened = await openWorkspace(p.workdir);
+    const workdir = opened.root;
     // Planned before a job exists, so an unresumable run answers with an error
     // rather than a jobId whose run dies a moment later. A ResumeError thrown
     // here becomes a -32000 response via rpc.ts's handler wrapper.
@@ -401,8 +435,8 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
     await planResume(workdir, config, p.runId,
       p.extraIterations === undefined ? undefined : { extraIterations: p.extraIterations });
 
-    const job = jobs.create(workdir);
-    job.promise = resumeJobInBackground(ctx.notify, job, p);
+    const job = jobs.create(workdir, opened.identityKey);
+    job.promise = resumeJobInBackground(ctx.notify, job, p, opened);
     // Deliberately no rememberRun: that records a workflow + inputs pair for
     // the New Run dialog's prefill, and a resume introduces neither.
     return { jobId: job.jobId };
@@ -422,7 +456,7 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
     const workdir = resolve(p.workdir);
     const config = await loadWorkspaceConfig(workdir);
     const detail = await coreGetRun(workdir, config, p.runId);
-    if (!detail || detail.status !== 'running') return { ok: false };
+    if (!detail || detail.status !== 'running' || detail.pid === undefined) return { ok: false };
     try {
       process.kill(detail.pid, 'SIGTERM');
       return { ok: true };
@@ -619,11 +653,13 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
 
   const touchRecentWorkspace: Handler = async (params) => {
     const { path } = params as TouchRecentWorkspaceParams;
-    const resolved = resolve(path);
-    if (!(await isExistingDirectory(resolved))) throw new Error(`not an existing directory: ${resolved}`);
+    // A directory whose canonical form cannot be read still opens: its key is the
+    // lexical one, and the run started in it records the workspace-identity degradation.
+    const { root, identityKey } = await openWorkspace(path);
+    if (!(await isExistingDirectory(root))) throw new Error(`not an existing directory: ${root}`);
     const next = await deps.appState.mutate(s => ({
       ...s,
-      recentWorkspaces: touchRecent(s.recentWorkspaces, resolved, new Date().toISOString()),
+      recentWorkspaces: touchRecent(s.recentWorkspaces, root, new Date().toISOString(), identityKey),
     }));
     return { recentWorkspaces: next.recentWorkspaces };
   };
@@ -632,16 +668,20 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
    * Sets or clears a pin. An unknown path is a no-op returning the current
    * list: you can only pin what the switcher already lists, so a miss means
    * the entry was pruned underneath the click, not that the client erred.
+   * An entry matches by identity, or by the exact path the client read off the
+   * list — the key of a directory that has vanished (an unmounted drive) can
+   * no longer be recomputed, and that pin must still be clearable.
    * Clearing writes `pinned: undefined` rather than `false` to keep the
    * persisted JSON minimal — zod strips it on the next parse either way.
    */
   const setWorkspacePinned: Handler = async (params) => {
     const { path, pinned } = params as SetWorkspacePinnedParams;
-    const resolved = resolve(path);
+    const opened = await openWorkspace(path);
+    const target = { path: opened.root, identityKey: opened.identityKey };
     const next = await deps.appState.mutate(s => ({
       ...s,
       recentWorkspaces: s.recentWorkspaces.map(r =>
-        r.path === resolved ? { ...r, pinned: pinned ? true : undefined } : r),
+        r.path === opened.root || sameWorkspace(r, target) ? { ...r, pinned: pinned ? true : undefined } : r),
     }));
     return { recentWorkspaces: next.recentWorkspaces };
   };
@@ -655,7 +695,9 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
       try {
         const config = await loadWorkspaceConfig(ws.path);
         return (await coreListRuns(ws.path, config))
-          .map(run => ({ ...run, workspace: ws.path }) as Record<string, unknown>);
+          .map(run => ({
+            ...run, workspace: ws.path, ...(ws.identityKey === undefined ? {} : { identityKey: ws.identityKey }),
+          }) as Record<string, unknown>);
       } catch {
         // unreadable/vanished workspace: it prunes on next getAppState; skip here
         return [];
@@ -694,6 +736,7 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
       return {
         jobId: job.jobId,
         workdir: job.workdir,
+        ...(job.identityKey === undefined ? {} : { identityKey: job.identityKey }),
         ...(job.runId === undefined ? {} : { runId: job.runId }),
         ...(job.runName === undefined ? {} : { name: job.runName }),
         status: job.status,

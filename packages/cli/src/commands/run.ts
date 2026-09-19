@@ -1,11 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import {
-  AttachmentError, defaultRegistry, loadWorkspaceConfig, parseInputPairs, parseWorkflow, planResume,
+  AttachmentError, ContainerError, WorkspaceRefusal, createContainer, defaultRegistry, openWorkspace, loadWorkspaceConfig, parseInputPairs, parseWorkflow, planResume,
   resolveWorkflowPath, ResumeError, runWorkflow, unattendedProblems, validateAttachments, validateWorkflowWarnings,
 } from '@whiphand/core';
-import type { AttachmentSource, Frontend, WhiphandEvent, ResumePlan, Scope, Workflow } from '@whiphand/core';
-import { spawnHeadless, spawnInteractive } from '../tty.ts';
+import type { AttachmentSource, Container, Frontend, WhiphandEvent, ResumePlan, Scope, Workflow } from '@whiphand/core';
+import { createTty } from '../tty.ts';
 import { createRenderer } from '../render.ts';
 import { createManualPrompt, promptMissingInputs } from '../prompt.ts';
 
@@ -48,7 +48,21 @@ function attachmentRefusal(e: AttachmentError): number {
 export async function runCommand(
   workflowRef: string | undefined, opts: RunCommandOptions,
 ): Promise<number> {
-  const workdir = resolve(opts.cwd);
+  // Workspace open: a typed UNC path is refused with the fix named (a mapped drive
+  // letter works), and a workspace too deep for Windows' 260-character limit warns
+  // *now*, not as an ENAMETOOLONG from whichever file operation happens first.
+  let opened;
+  try {
+    opened = await openWorkspace(opts.cwd);
+  } catch (e) {
+    if (e instanceof WorkspaceRefusal) {
+      console.error(`✘ ${e.message}`);
+      return USAGE_ERROR;
+    }
+    throw e;
+  }
+  for (const warning of opened.warnings) console.error(`  ⚠ ${warning}`);
+  const workdir = opened.root;
   const promptOpts = { yes: !!opts.yes, ...(opts.json ? { isTty: false } : {}) };
 
   if (opts.extraIterations !== undefined && opts.resume === undefined) {
@@ -154,13 +168,31 @@ export async function runCommand(
     ? await promptMissingInputs(workflow, parseInputPairs(opts.input), promptOpts)
     : plan.inputs;
 
+  // One container per run (invariant 6): every runner child is adopted into it,
+  // and nothing it started survives the run. A dry run spawns nothing, so it
+  // needs none. In a packaged build a container that cannot be made refuses the
+  // run — a run whose processes cannot be contained is not one to start.
+  let container: Container | undefined;
+  if (!opts.dryRun) {
+    try {
+      container = await createContainer();
+    } catch (e) {
+      if (e instanceof ContainerError) {
+        console.error(`✘ ${e.message}`);
+        return 1;
+      }
+      throw e;
+    }
+  }
+  const { spawnHeadless, spawnInteractive } = createTty(container);
+
   const frontend: Frontend = {
     runInteractive: spawnInteractive,
     runManual: createManualPrompt(promptOpts),
     onEvent: opts.json
       ? jsonEvent
       // A dry run copies nothing, so it says where a real run would have put each file.
-      : createRenderer({}, opts.dryRun ? { runDirOf: runId => resolve(workdir, config.artifacts_dir, runId) } : {}),
+      : createRenderer({}, opts.dryRun ? { runDirOf: runId => resolve(workdir, config.artifacts_dir, runId), showPrompts: true } : {}),
   };
 
   // Without this, a directly-invoked `whiphand run` has no cancellation path at
@@ -180,6 +212,12 @@ export async function runCommand(
       workflow, workdir, inputs, config,
       registry: defaultRegistry(), frontend,
       dryRun: opts.dryRun, spawnHeadless, workflowSource, signal: controller.signal,
+      ...(container?.degraded === undefined && opened.degradations.length === 0 ? {} : {
+        degradations: [
+          ...opened.degradations,
+          ...(container?.degraded === undefined ? [] : [{ capability: 'process-containment' as const, reason: container.degraded }]),
+        ],
+      }),
       ...(opts.maxIterations === undefined ? {} : { maxIterations: opts.maxIterations }),
       ...(opts.name === undefined ? {} : { name: opts.name }),
       ...(plan === undefined ? {} : { resume: plan }),
@@ -192,6 +230,8 @@ export async function runCommand(
   } finally {
     process.off('SIGTERM', onSignal);
     process.off('SIGINT', onSignal);
+    // Nothing we spawned outlives the run: a watcher a step left running dies here.
+    await container?.dispose();
   }
   return result.ok ? 0 : 1;
 }

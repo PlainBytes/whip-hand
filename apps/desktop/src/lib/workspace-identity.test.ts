@@ -24,6 +24,14 @@ describe('workspaceColorVar', () => {
     expect(workspaceColorVar('/home/u/proj')).toMatchInlineSnapshot(`"--colorPalettePinkBorderActive"`);
   });
 
+  it('follows the identity key, so one workspace is one colour however it was spelled', () => {
+    const key = 'c:/program files/proj';
+    expect(workspaceColorVar('C:\\PROGRA~1\\Proj', key)).toBe(workspaceColorVar('C:\\Program Files\\Proj', key));
+    expect(workspaceColorVar('/a', key)).toBe(workspaceColorVar('/b', key));
+    // No key (an entry written before keys existed): the path is all there is.
+    expect(workspaceColorVar('/home/u/proj')).toBe(workspaceColorVar('/home/u/proj', undefined));
+  });
+
   it('distinguishes workspaces that share a basename', () => {
     expect(workspaceColorVar('/a/api')).not.toBe(workspaceColorVar('/b/api'));
   });

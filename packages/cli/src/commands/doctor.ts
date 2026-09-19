@@ -35,7 +35,11 @@ export function doctorReport(statuses: readonly ToolStatus[]): string {
   return sections.join('\n\n');
 }
 
-/** The command itself: probe this machine, then render it. */
-export async function runDoctor(registry: AdapterRegistry): Promise<string> {
-  return doctorReport(await detectTools(registry, await loadDoctorConfig()));
+/**
+ * The command itself: probe this machine — and, given a working folder, what is
+ * wrong with that folder — then render it. The agent's `doctor` RPC takes the
+ * same optional `workdir`, so the two still report the same facts.
+ */
+export async function runDoctor(registry: AdapterRegistry, workdir?: string): Promise<string> {
+  return doctorReport(await detectTools(registry, await loadDoctorConfig(), workdir === undefined ? {} : { workdir }));
 }

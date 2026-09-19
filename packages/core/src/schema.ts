@@ -5,6 +5,8 @@ import { STAGE_REF } from './types.ts';
 import { childSteps, flattenSteps, isContainerStep, isLoopStep, isManualStep, isStagesStep } from './steps.ts';
 import { ATTACHMENTS_REF } from './attachments.ts';
 import { disabledIds } from './enabled.ts';
+import { validateRelativePath, validateSegment } from './segment.ts';
+import { artifactEnvName, inputEnvName } from './template.ts';
 
 export class WorkflowError extends Error {
   problems: string[];
@@ -362,6 +364,9 @@ export function validateWorkflowSemantics(workflow: Workflow): string[] {
     else byId.set(entry.step.id, entry);
   }
 
+  checkNames(located, problems);
+  checkInputEnvCollisions(workflow, problems);
+
   for (const src of located) {
     const step = src.step;
 
@@ -435,6 +440,60 @@ export function validateWorkflowSemantics(workflow: Workflow): string[] {
   }
 
   return problems;
+}
+
+/**
+ * Names that become path segments (invariant 3) and the shell a command step
+ * may name. Rejected on every platform, at parse time, where the author is
+ * standing — never sanitized: portability is only a promise if it is enforced
+ * where the workflow is written.
+ */
+const REFUSED_SHELLS = new Set(['cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe']);
+
+function checkNames(located: Located[], problems: string[]): void {
+  for (const { step } of located) {
+    const label = isLoopStep(step) ? 'loop' : isStagesStep(step) ? 'stages step' : 'step';
+    const id = validateSegment(step.id);
+    // The reserved-word diagnostics above already name these, and a pattern of
+    // problems about one id is noise; a segment problem is reported alongside.
+    if (!id.ok) problems.push(`${label} id '${step.id}' ${id.reason}; it becomes a file name`);
+    if (isContainerStep(step)) continue;
+    if ('output' in step && step.output !== undefined && step.output !== '') {
+      const output = validateRelativePath(step.output);
+      if (!output.ok) problems.push(`step '${step.id}': output '${step.output}' ${output.reason}`);
+    }
+    if (step.kind === 'command' && step.shell !== undefined) {
+      const base = (step.shell.split(/[/\\]/).pop() ?? step.shell).toLowerCase();
+      if (REFUSED_SHELLS.has(base)) {
+        problems.push(`step '${step.id}': shell '${step.shell}' is not supported — command steps run in a POSIX `
+          + "shell on every platform (a breaking change from earlier versions on Windows). Write the command "
+          + "for /bin/sh and drop 'shell:'");
+      }
+    }
+    if (step.kind === 'command') {
+      const seen = new Map<string, string>();
+      for (const ref of step.inputs ?? []) {
+        if (ref === ATTACHMENTS_REF || ref === STAGE_REF) continue;
+        const env = artifactEnvName(ref);
+        const prior = seen.get(env);
+        if (prior !== undefined && prior !== ref) {
+          problems.push(`step '${step.id}': inputs '${prior}' and '${ref}' both map to ${env}; rename one`);
+        }
+        seen.set(env, ref);
+      }
+    }
+  }
+}
+
+/** Two input keys that collapse to one env name (`a-b` and `a_b`) would silently shadow each other. */
+function checkInputEnvCollisions(workflow: Workflow, problems: string[]): void {
+  const seen = new Map<string, string>();
+  for (const key of Object.keys(workflow.inputs ?? {})) {
+    const env = inputEnvName(key);
+    const prior = seen.get(env);
+    if (prior !== undefined) problems.push(`inputs '${prior}' and '${key}' both map to ${env}; rename one`);
+    else seen.set(env, key);
+  }
 }
 
 /**

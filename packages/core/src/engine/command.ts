@@ -8,45 +8,49 @@
  */
 import { isAbsolute, resolve } from 'node:path';
 import type { CommandStep, Frame, RunCtx, SpawnSpec } from '../types.ts';
-import { inputArtifacts, renderTemplate } from '../template.ts';
+import {
+  TemplateError, artifactEnvName, bindings, inputArtifacts, referencedRefs, renderReferences, renderTemplate,
+} from '../template.ts';
 import { isStageFrame, nearestStage } from '../execution-key.ts';
 import { ATTACHMENTS_REF } from '../attachments.ts';
-
-export const DEFAULT_SHELL = process.platform === 'win32' ? 'cmd.exe' : '/bin/sh';
+import { toFwdAbs } from '../path-form.ts';
+import { resolveShell, shellRefusal } from '../shell.ts';
 
 /**
- * The flag that runs an inline command string varies with the shell, not
- * just its name — `cmd.exe` wants `/d /s /c`, PowerShell wants `-NoProfile
- * -Command`, everything POSIX wants `-c`. Matched on basename so a full path
- * (`/usr/local/bin/bash`) still resolves.
+ * The most one environment variable can carry: Linux's MAX_ARG_STRLEN (128 KiB
+ * per `NAME=value` string), Windows' 32,767 characters. A referenced input over
+ * it fails the step *before* spawn, naming the input and its size, instead of
+ * surfacing as an opaque E2BIG from the launch.
  */
-const SHELL_FLAGS: Record<string, string[]> = {
-  sh: ['-c'],
-  bash: ['-c'],
-  zsh: ['-c'],
-  cmd: ['/d', '/s', '/c'],
-  'cmd.exe': ['/d', '/s', '/c'],
-  powershell: ['-NoProfile', '-Command'],
-  'powershell.exe': ['-NoProfile', '-Command'],
-  pwsh: ['-NoProfile', '-Command'],
-  'pwsh.exe': ['-NoProfile', '-Command'],
-};
+export function envValueLimit(platform: NodeJS.Platform = process.platform): number {
+  return platform === 'win32' ? 32_767 : 128 * 1024;
+}
 
-export function shellFlags(shell: string): string[] {
-  const base = shell.split(/[/\\]/).pop() ?? shell;
-  return SHELL_FLAGS[base.toLowerCase()] ?? ['-c'];
+function assertFitsEnv(envName: string, key: string, value: string, platform: NodeJS.Platform): void {
+  const limit = envValueLimit(platform);
+  const size = platform === 'win32' ? envName.length + 1 + value.length : Buffer.byteLength(`${envName}=${value}`);
+  if (size > limit) {
+    throw new TemplateError(
+      `input '${key}' is ${size} ${platform === 'win32' ? 'characters' : 'bytes'}, over the ${limit} a command's `
+      + `environment can carry (it is exported as ${envName}); pass it as a file instead`);
+  }
 }
 
 /**
- * `stepId` -> the env var a command reaches its artifact through, e.g.
- * 'execute-report' -> 'WHIPHAND_ARTIFACT_EXECUTE_REPORT'.
+ * Command steps run through a POSIX shell on every OS, so the flag that runs an
+ * inline string is always `-c`. (`cmd` and PowerShell are refused at parse
+ * time; any other explicit shell gets `-c` too — the author's own choice, which
+ * we neither reason about nor test.)
  */
-export function artifactEnvName(stepId: string): string {
-  return `WHIPHAND_ARTIFACT_${stepId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
-}
+const SHELL_FLAGS = ['-c'];
 
 export function commandSpec(step: CommandStep, ctx: RunCtx, capturePath?: string): SpawnSpec {
-  const run = renderTemplate(step.run, ctx);
+  // `run` is rendered with the *reference* renderer (invariant 8): `{{ x }}`
+  // becomes `${WHIPHAND_X}`, so a value is expanded by the shell as data and a
+  // run named `; rm -rf ~` is inert. Everything else a step declares — `cwd`,
+  // `env` values — is data read by us, not parsed by a shell, so those get the
+  // value itself.
+  const { text: run, used } = renderReferences(step.run, ctx);
   // `cwd` is templated for the same reason `run` is: the whole point of
   // {{ run.slug }} is deriving a per-run directory, and a step that has to
   // `cd` into it in its own shell line cannot also declare it as its cwd.
@@ -54,7 +58,27 @@ export function commandSpec(step: CommandStep, ctx: RunCtx, capturePath?: string
   const cwd = cwdTpl === undefined
     ? ctx.workdir
     : (isAbsolute(cwdTpl) ? cwdTpl : resolve(ctx.workdir, cwdTpl));
-  const shell = step.shell ?? DEFAULT_SHELL;
+  const shell = step.shell ?? ctx.shell ?? resolvedShellOrThrow();
+
+  // The binding table is the one source for what the environment holds.
+  // `run.*` is always exported, `stage.*` inside a stages step, `loop.*` inside
+  // a loop; an input is exported **only when this step references it** — by
+  // `run`, an `env` value or `cwd` — so "exported equals referenced" holds by
+  // construction and an unrelated multi-megabyte input never rides along.
+  const referenced = new Set<string>([
+    ...used.map(binding => binding.ref),
+    ...referencedRefs(step.cwd ?? ''),
+    ...Object.values(step.env ?? {}).flatMap(referencedRefs),
+  ]);
+  const bound: Record<string, string> = {};
+  for (const binding of bindings(ctx)) {
+    if (binding.ref.startsWith('inputs.')) {
+      if (!referenced.has(binding.ref)) continue;
+      assertFitsEnv(binding.envName, binding.ref.slice('inputs.'.length), binding.value, process.platform);
+    }
+    bound[binding.envName] = binding.value;
+  }
+
   // Each `inputs:` entry with a recorded artifact becomes a path a command
   // can read straight off the environment — `inputArtifacts` is the same
   // resolver `buildPrompt` uses, so a command and an agent agree on what an
@@ -63,31 +87,25 @@ export function commandSpec(step: CommandStep, ctx: RunCtx, capturePath?: string
   // as "the artifact is the empty string", which is a lie a missing var
   // can't tell. `attachments` expansions are skipped outright: they name a
   // file, not a step, and a command already reaches them at
-  // `$WHIPHAND_RUN_DIR/attachments` — turning each into its own
-  // `WHIPHAND_ARTIFACT_ATTACHMENTS_*` would just be a second, redundant way
-  // to spell the same path. Two distinct step ids that happen to collapse to
-  // the same env name (`a-b` and `a_b` both become `A_B`) collide silently
-  // here; the later one in `inputs:` wins.
+  // `$WHIPHAND_RUN_DIR/attachments`. Two distinct step ids that collapse to the
+  // same env name (`a-b` and `a_b` both become `A_B`) are rejected at parse time.
+  //
+  // Paths in the environment are absolute with forward slashes (invariant 2):
+  // the consumer's cwd is `step.cwd`, so there is no relative form to give.
   const artifactEnv = Object.fromEntries(
     inputArtifacts(step.inputs ?? [], ctx)
       .filter((input): input is { id: string; path: string } =>
         input.path !== undefined && !input.id.startsWith(`${ATTACHMENTS_REF}/`))
-      .map(({ id, path }) => [artifactEnvName(id), path]),
+      .map(({ id, path }) => [artifactEnvName(id), toFwdAbs(path)]),
   );
   // A stage's title is a markdown heading pulled off disk — exactly the
-  // "arbitrary human text" the run-name comment below warns about — so it
-  // rides in as environment too, never as a `{{ stage.title }}` placeholder
-  // a command would have to requote into its own shell line.
+  // "arbitrary human text" that must ride in as environment, never as text a
+  // command would have to requote into its own shell line. (`stage.*` is in the
+  // binding table above; the path has no placeholder, so it is added here.)
   const stage = nearestStage(ctx.frame);
-  const stageEnv: Record<string, string> = stage === undefined ? {} : {
-    WHIPHAND_STAGE_ID: stage.stage.id,
-    WHIPHAND_STAGE_TITLE: stage.stage.title,
-    WHIPHAND_STAGE_INDEX: String(stage.stage.index),
-    WHIPHAND_STAGE_TOTAL: String(stage.stage.total),
-    WHIPHAND_STAGE_PATH: stage.stage.path,
-  };
+  const stageEnv: Record<string, string> = stage === undefined ? {} : { WHIPHAND_STAGE_PATH: toFwdAbs(stage.stage.path) };
   return {
-    argv: [shell, ...shellFlags(shell), run],
+    argv: [shell, ...SHELL_FLAGS, run],
     cwd,
     env: {
       // `step.env` is templated for the same reason `run` and `cwd` are: a
@@ -96,20 +114,21 @@ export function commandSpec(step: CommandStep, ctx: RunCtx, capturePath?: string
       // as for everything else a step declares.
       ...Object.fromEntries(Object.entries(step.env ?? {}).map(([k, v]) => [k, renderTemplate(v, ctx)])),
       ...artifactEnv,
+      ...bound,
       ...stageEnv,
-      // The run's identity as environment rather than interpolation: a name is
-      // arbitrary human text, and pasting it into a `sh -c` string is a quoting
-      // hazard the slug only partly mitigates. `{{ run.* }}` is still there for
-      // prose; "$WHIPHAND_RUN_SLUG" is the one to reach for in a shell line.
-      WHIPHAND_RUN_DIR: ctx.runDir,
-      WHIPHAND_RUN_ID: ctx.runId,
-      WHIPHAND_RUN_SLUG: ctx.runSlug,
-      ...(ctx.runName === undefined ? {} : { WHIPHAND_RUN_NAME: ctx.runName }),
+      WHIPHAND_RUN_DIR: toFwdAbs(ctx.runDir),
       WHIPHAND_STEP_ID: step.id,
     },
     interactive: false,
     ...(capturePath === undefined ? {} : { capture: { path: capturePath } }),
   };
+}
+
+/** Only reached when a `RunCtx` was built without the run's resolved shell (a test double). */
+function resolvedShellOrThrow(): string {
+  const result = resolveShell();
+  if (!result.ok) throw new TemplateError(shellRefusal(result));
+  return result.path;
 }
 
 /**

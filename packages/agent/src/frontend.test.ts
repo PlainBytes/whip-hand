@@ -44,6 +44,18 @@ test('onEvent tags whiphandEvent and runStateChanged with the job workdir', () =
   assert.equal(state?.params.workdir, '/ws/acme');
 });
 
+test('onEvent tags notifications with the job identity key when it has one, and omits it when not', () => {
+  const tagged = collectNotify();
+  createFrontend(fakeJob({ workdir: '/link', identityKey: '/real/ws' }), tagged.notify, {})
+    .onEvent({ type: 'run:start', runId: 'run-1', workflow: 'demo' });
+  assert.equal(tagged.calls.find(c => c.method === 'whiphandEvent')?.params.identityKey, '/real/ws');
+  assert.equal(tagged.calls.find(c => c.method === 'runStateChanged')?.params.identityKey, '/real/ws');
+
+  const untagged = collectNotify();
+  createFrontend(fakeJob(), untagged.notify, {}).onEvent({ type: 'run:start', runId: 'run-1', workflow: 'demo' });
+  for (const call of untagged.calls) assert.equal('identityKey' in call.params, false);
+});
+
 test('onEvent stamps the notification with the ts core supplied, rather than reading its own clock (F9)', () => {
   const job = fakeJob();
   const { calls, notify } = collectNotify();
@@ -339,30 +351,47 @@ test('an unchanged state is not re-reported on every poll', async () => {
 });
 
 /**
- * These three drive `bash -c "printf '\a'; exec cat"` and, on Windows, the BEL
- * never reaches the scanner. The cause is NOT that ConPTY drops bells: a BEL
- * written directly by a node child does arrive, which pty.test.ts's "onBell
- * fires for a real beep" proves on the same leg. Something about `printf`
- * inside Git Bash under ConPTY is eating it, and that is still unexplained.
+ * The BEL is emitted from a `node -e` child, not `bash -c "printf '\a'"`. These
+ * tests used to drive Git Bash's `printf` and, on Windows, the BEL never
+ * reached the scanner. The cause is NOT that ConPTY drops bells: a BEL written
+ * directly by a node child does arrive (pty.test.ts's "onBell fires for a real
+ * beep" proves it on the same leg). Something about `printf` inside Git Bash
+ * under ConPTY eats it — a mystery still undiagnosed, recorded here rather than
+ * buried. The named fix was to emit from node, so that is what runs.
  *
- * Skipped rather than diagnosed because the scanner itself is covered directly
- * by bel.test.ts and end to end by pty.test.ts. The way to get these back is to
- * emit the BEL from a `node -e` child as pty.test.ts does — which also means
- * raising the 60ms waits below, since node takes about a second to start.
+ * Two of the tests below assert the *absence* of a bell report, and an absence
+ * assertion passes vacuously if the child never ran. So every child prints
+ * READY after emitting, and the test waits for READY to have arrived through
+ * the pty before it asserts anything — node takes about a second to start
+ * under ConPTY, which is also why nothing here uses a fixed sleep.
  */
-const noBellOnConpty = {
-  skip: process.platform === 'win32' && "a BEL from bash's printf does not reach the scanner",
-};
+function bellSpec(emit: string, base: SpawnSpec = catSpec(), delayMs = 0): SpawnSpec {
+  const script = `const go = () => { process.stdout.write(${emit}); process.stdout.write('READY\\n'); };`
+    + ` ${delayMs > 0 ? `setTimeout(go, ${delayMs})` : 'go()'}; process.stdin.pipe(process.stdout);`;
+  return { ...base, argv: [process.execPath, '-e', script] };
+}
 
-test('a terminal bell reports attention even with no hooks to watch', noBellOnConpty, async () => {
+async function until(check: () => boolean, ms = 15_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error('timed out waiting for the pty');
+    await new Promise(r => setTimeout(r, 10));
+  }
+}
+
+/** True once the child's READY line has come through the pty. */
+function sawReady(calls: Array<{ method: string; params: any }>): boolean {
+  return calls.some(c => c.method === 'ptyData' && Buffer.from(c.params.data, 'base64').toString('utf8').includes('READY'));
+}
+
+test('a terminal bell reports attention even with no hooks to watch', async () => {
   const job = fakeJob();
   const { calls, notify } = collectNotify();
   const frontend = createFrontend(job, notify, {}, FAST);
 
   // No awaitState: this is the copilot-shaped path.
-  const promise = frontend.runInteractive({
-    ...catSpec(), argv: ['bash', '-c', String.raw`printf '\a'; exec cat`] });
-  await new Promise(r => setTimeout(r, 60));
+  const promise = frontend.runInteractive(bellSpec("'\\x07'"));
+  await until(() => awaits(calls).length > 0);
 
   assert.deepEqual(awaits(calls).map(p => p.reason), ['attention']);
   job.pty!.kill();
@@ -374,9 +403,8 @@ test('a window-title sequence is not mistaken for a bell', async () => {
   const { calls, notify } = collectNotify();
   const frontend = createFrontend(job, notify, {}, FAST);
 
-  const promise = frontend.runInteractive({
-    ...catSpec(), argv: ['bash', '-c', String.raw`printf '\033]0;title\a'; exec cat`] });
-  await new Promise(r => setTimeout(r, 60));
+  const promise = frontend.runInteractive(bellSpec("'\\x1b]0;title\\x07'"));
+  await until(() => sawReady(calls));
 
   assert.deepEqual(awaits(calls), [], 'claude repaints its title constantly');
   job.pty!.kill();
@@ -390,23 +418,21 @@ test('a bell never downgrades a state the hooks actually reported', async () => 
   const { spec, statePath } = await awaitingSpec();
   await writeFile(statePath, '{"r":"permission"}');
 
-  const promise = frontend.runInteractive({
-    ...spec, argv: ['bash', '-c', String.raw`sleep 0.1; printf '\a'; exec cat`] });
-  await new Promise(r => setTimeout(r, 200));
+  const promise = frontend.runInteractive(bellSpec("'\\x07'", spec, 100));
+  await until(() => sawReady(calls));
 
   assert.deepEqual(awaits(calls).map(p => p.reason), ['permission']);
   job.pty!.kill();
   await promise;
 });
 
-test('clearBell withdraws an attention report', noBellOnConpty, async () => {
+test('clearBell withdraws an attention report', async () => {
   const job = fakeJob();
   const { calls, notify } = collectNotify();
   const frontend = createFrontend(job, notify, {}, FAST);
 
-  const promise = frontend.runInteractive({
-    ...catSpec(), argv: ['bash', '-c', String.raw`printf '\a'; exec cat`] });
-  await new Promise(r => setTimeout(r, 60));
+  const promise = frontend.runInteractive(bellSpec("'\\x07'"));
+  await until(() => awaits(calls).length > 0);
   assert.equal(typeof job.clearBell, 'function');
   job.clearBell!();
 
@@ -415,14 +441,13 @@ test('clearBell withdraws an attention report', noBellOnConpty, async () => {
   await promise;
 });
 
-test('ptyAwait never arrives before ptyStarted', noBellOnConpty, async () => {
+test('ptyAwait never arrives before ptyStarted', async () => {
   const job = fakeJob();
   const { calls, notify } = collectNotify();
   const frontend = createFrontend(job, notify, {}, FAST);
 
-  const promise = frontend.runInteractive({
-    ...catSpec(), argv: ['bash', '-c', String.raw`printf '\a'; exec cat`] });
-  await new Promise(r => setTimeout(r, 60));
+  const promise = frontend.runInteractive(bellSpec("'\\x07'"));
+  await until(() => awaits(calls).length > 0);
 
   const started = calls.findIndex(c => c.method === 'ptyStarted');
   const awaited = calls.findIndex(c => c.method === 'ptyAwait');

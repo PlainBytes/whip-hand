@@ -1,3 +1,4 @@
+import { validateSegment } from './segment.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -24,6 +25,16 @@ test('sanitize replaces anything outside [A-Za-z0-9._-] with a dash', () => {
 test('sanitize strips leading dots, so nothing becomes hidden or a bookkeeping name', () => {
   assert.equal(sanitizeAttachmentName('/x/.name'), 'name');
   assert.equal(sanitizeAttachmentName('/x/..lock'), 'lock');
+});
+
+test('sanitize never mints a name Windows would resolve to a device or strip', () => {
+  assert.equal(sanitizeAttachmentName('/x/nul.txt'), 'attachment-nul.txt');
+  assert.equal(sanitizeAttachmentName('C:\\x\\CON'), 'attachment-CON');
+  assert.equal(sanitizeAttachmentName('/x/com1.tar.gz'), 'attachment-com1.tar.gz');
+  assert.equal(sanitizeAttachmentName('/x/notes.'), 'notes');
+  for (const raw of ['/x/nul.txt', '/x/aux', '/x/lpt3.log', '/x/a.', '/x/...', '/x/a:b?.md']) {
+    assert.equal(validateSegment(sanitizeAttachmentName(raw)).ok, true, raw);
+  }
 });
 
 test('sanitize falls back to "attachment" when nothing is left', () => {

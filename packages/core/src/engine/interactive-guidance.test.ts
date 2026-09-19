@@ -1,7 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { interactiveGuidance } from './interactive-guidance.ts';
-import { endMarkerPath, shellPath } from './session-end.ts';
 import type { AgentStep, RunCtx } from '../types.ts';
 
 const ctx: RunCtx = {
@@ -32,15 +31,34 @@ test('both modes get the scope rule that keeps a step out of later steps work', 
     const text = interactiveGuidance({ ...step, writes }, ctx);
     assert.ok(text.includes("step 'plan'"));
     assert.ok(text.includes('Do not run ahead'));
-    assert.ok(text.includes(`touch ${shellPath(endMarkerPath(ctx.runDir, 'plan'))}`));
+    // Workspace-relative with forward slashes: what the rule pre-approves too.
+    assert.ok(text.includes('touch .whiphand/runs/r1/.plan.done'));
+    assert.ok(!text.includes('/w/'), 'no absolute path is shown to the model');
   }
+});
+
+test('a run dir with a space gets its marker single-quoted; a Windows one stays workspace-relative', () => {
+  const spaced = interactiveGuidance(step, { ...ctx, runDir: '/w/my runs/r1' });
+  assert.ok(spaced.includes("touch 'my runs/r1/.plan.done'"));
+  assert.ok(spaced.includes('run directory (my runs/r1)'));
+
+  const win = interactiveGuidance(step, { ...ctx, workdir: 'D:\\w', runDir: 'D:\\w\\.whiphand\\runs\\r1' });
+  assert.ok(win.includes('touch .whiphand/runs/r1/.plan.done'));
+  assert.ok(!win.includes('\\'), 'no backslash reaches the model');
+});
+
+test('a run dir outside the workspace falls back to the absolute forward-slash marker', () => {
+  const text = interactiveGuidance(step, { ...ctx, runDir: '/elsewhere/runs/r1' });
+  assert.ok(text.includes('touch /elsewhere/runs/r1/.plan.done'));
 });
 
 test('the run dir is carved out of the read-only rule', () => {
   // harvest resumes this same session and asks it to write plan.md into the run
   // dir; without the carve-out that request contradicts the rule above it.
   const text = interactiveGuidance(step, ctx);
-  assert.ok(text.includes(ctx.runDir));
+  // Workspace-relative, like every path a model is shown.
+  assert.ok(text.includes('run directory (.whiphand/runs/r1)'));
+  assert.ok(!text.includes(ctx.runDir), 'not the absolute path');
   assert.ok(text.includes('exempt from the rule above'));
 });
 

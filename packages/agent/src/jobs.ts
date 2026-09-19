@@ -8,7 +8,14 @@ const DEFAULT_PTY_ROWS = 24;
 
 export interface Job {
   jobId: string;
+  /** The path the job's workspace was opened by; the operational one. */
   workdir: string;
+  /**
+   * The workspace's identity key (`openWorkspace`'s), so a client can tell which
+   * open workspace this job belongs to however either was spelled. Absent for a
+   * job created without one.
+   */
+  identityKey?: string;
   runId?: string;
   runName?: string;
   status: JobStatus;
@@ -69,6 +76,11 @@ export function abandonManual(job: Job, reason: string): void {
   pending.reject(new Error(reason));
 }
 
+/** The workspace tag carried by every notification a job sends. */
+export function jobWorkspace(job: Job): { workdir: string; identityKey?: string } {
+  return { workdir: job.workdir, ...(job.identityKey === undefined ? {} : { identityKey: job.identityKey }) };
+}
+
 /** Tracks in-flight (and completed) background runs by jobId. */
 export class JobManager {
   #jobs = new Map<string, Job>();
@@ -78,10 +90,11 @@ export class JobManager {
    * so its jobId can be returned to the caller immediately. The caller
    * assigns `job.promise` once the background work has started.
    */
-  create(workdir: string): Job {
+  create(workdir: string, identityKey?: string): Job {
     const job: Job = {
       jobId: randomUUID(),
       workdir,
+      ...(identityKey === undefined ? {} : { identityKey }),
       status: 'running',
       controller: new AbortController(),
       promise: Promise.resolve(),

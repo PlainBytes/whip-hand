@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   requestSchema, responseSchema, notificationSchema, methods, notifications, ErrorCode,
   readArtifactResult, writeArtifactParams, whiphandEventNotificationParams, manualRequestParams,
+  runStateChangedParams, jobSummarySchema,
 } from './protocol.ts';
 
 test('requestSchema: round-trips a well-formed request', () => {
@@ -427,4 +428,25 @@ test('a stage\'s attempt budget survives the wire on stages:item and on a manual
     },
   });
   assert.equal(request.request.stage?.maxAttempts, 3);
+});
+
+test('the workspace identity key rides on job notifications and summaries, and is optional on all of them', () => {
+  const event = { type: 'run:start', runId: 'r', workflow: 'w' };
+  const tagged = whiphandEventNotificationParams.parse({ jobId: 'j', workdir: '/link', identityKey: '/real', event, ts: 't' });
+  assert.equal(tagged.identityKey, '/real');
+  assert.equal(whiphandEventNotificationParams.parse({ jobId: 'j', event, ts: 't' }).identityKey, undefined);
+
+  assert.equal(runStateChangedParams.parse({ jobId: 'j', identityKey: '/real', status: 'running' }).identityKey, '/real');
+  assert.equal(runStateChangedParams.parse({ jobId: 'j', status: 'running' }).identityKey, undefined);
+
+  const summary = { jobId: 'j', workdir: '/link', status: 'running', pty: null };
+  assert.equal(jobSummarySchema.parse({ ...summary, identityKey: '/real' }).identityKey, '/real');
+  assert.equal(jobSummarySchema.parse(summary).identityKey, undefined);
+});
+
+test('a recent workspace entry round-trips its identity key, and one without still parses', () => {
+  const parsed = methods.touchRecentWorkspace.result.parse({
+    recentWorkspaces: [{ path: '/link', lastOpenedAt: 't', identityKey: '/real' }, { path: '/old', lastOpenedAt: 't' }],
+  });
+  assert.deepEqual(parsed.recentWorkspaces.map(r => r.identityKey), ['/real', undefined]);
 });

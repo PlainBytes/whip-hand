@@ -6,8 +6,11 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { copilotAdapter, parseCopilotModels, COPILOT_QUIT_SEQUENCE } from './copilot.ts';
 import { interactiveGuidance } from '../engine/interactive-guidance.ts';
-import { endMarkerPath, shellPath } from '../engine/session-end.ts';
-import type { AgentStep, RunCtx } from '../types.ts';
+import { endMarkerPath } from '../engine/session-end.ts';
+import { SUGGEST_PROMPT_NAME, harvestPromptPath, promptPath } from '../engine/spawn-files.ts';
+import { buildPrompt } from '../template.ts';
+import { harvestPrompt } from './common.ts';
+import type { AgentStep, RunCtx, SpawnSpec } from '../types.ts';
 
 const fixtureDir = fileURLToPath(new URL('../../../../parity/fixtures/models/', import.meta.url));
 
@@ -21,26 +24,40 @@ const planStep: AgentStep = { kind: 'agent',
   writes: false, prompt: 'Plan it.', output: 'plan.md',
 };
 
+/** What core writes at `path` before the spawn. */
+function fileOf(spec: SpawnSpec, path: string): string {
+  const file = spec.files?.find(f => f.path === path);
+  assert.ok(file, `the spec must carry a file at ${path}; it has ${JSON.stringify(spec.files?.map(f => f.path))}`);
+  return file.content;
+}
+
+/** The argv element following `flag`. */
+function after(spec: SpawnSpec, flag: string): string {
+  return spec.argv[spec.argv.indexOf(flag) + 1];
+}
+
 test('a Windows run dir reaches the runner shell-readable, not backslashed', () => {
-  // Runs on every platform on purpose: shellPath is the identity off Windows,
-  // so an expectation built from the native path would agree with a broken
-  // adapter here and only fail on the Windows leg. Feeding it a Windows-shaped
-  // run dir is what makes the check real on Linux.
+  // Runs on every platform on purpose: an expectation built from the native
+  // path would agree with a broken adapter here and only fail on the Windows
+  // leg. Feeding it a Windows-shaped run dir is what makes the check real on
+  // Linux. Both the pointer and the marker in the guidance are
+  // workspace-relative with forward slashes.
   const winCtx: RunCtx = { ...ctx, workdir: 'D:\\w', runDir: 'D:\\w\\.whiphand\\runs\\r1' };
   const spec = copilotAdapter.interactive(planStep, winCtx);
-  const guidance = spec.argv[spec.argv.indexOf('-i') + 1];
-  assert.ok(guidance.includes('touch D:/w/.whiphand/runs/r1/.plan.done'),
+  assert.equal(after(spec, '-i'), 'Read and follow the instructions in .whiphand/runs/r1/.plan.prompt');
+  for (const a of spec.argv) assert.ok(!a.includes('\\'), `argv still carries a backslash: ${a}`);
+  const promptFile = spec.files?.find(f => f.content.includes('touch '));
+  assert.ok(promptFile, 'the guidance lives in the prompt file');
+  assert.ok(promptFile.content.includes('touch .whiphand/runs/r1/.plan.done'),
     'the guidance must name the same marker the rule allows');
   assert.equal(spec.endSession?.markerPath, endMarkerPath(winCtx.runDir, 'plan'),
     'the path the agent watches stays native — it goes to fs, not to a shell');
 });
 
-test('interactive: seeds via -i, mints via --session-id, denies write', () => {
+test('interactive: seeds via -i with a pointer, mints via --session-id, denies write', () => {
   const spec = copilotAdapter.interactive(planStep, ctx);
-  // Shell-rendered, because that is what the runner is handed to execute.
-  const marker = shellPath(endMarkerPath(ctx.runDir, 'plan'));
   assert.deepEqual(spec.argv, [
-    'copilot', '-i', `${interactiveGuidance(planStep, ctx)}\n\n---\n\nPlan it.`,
+    'copilot', '-i', 'Read and follow the instructions in .whiphand/runs/r1/.plan.prompt',
     '--session-id', 'sid-123',
     '--model', 'gpt-5.5', '--deny-tool=write',
     // copilot matches a shell rule by command name, never by its arguments:
@@ -49,6 +66,7 @@ test('interactive: seeds via -i, mints via --session-id, denies write', () => {
     '--allow-tool=shell(touch)',
   ]);
   assert.equal(spec.interactive, true);
+  assert.equal(spec.stdinFile, undefined, 'copilot -p with piped stdin says "No task was provided"');
 });
 
 test('interactive: a resumed step continues via --resume= instead of minting', () => {
@@ -57,11 +75,15 @@ test('interactive: a resumed step continues via --resume= instead of minting', (
   assert.ok(!spec.argv.includes('--session-id'));
 });
 
-test('interactive: copilot has no system-prompt flag, so guidance leads and the task prompt ends', () => {
+test('interactive: copilot has no system-prompt flag, so guidance leads and the task prompt ends, in the one file', () => {
   const spec = copilotAdapter.interactive(planStep, ctx);
-  const prompt = spec.argv[spec.argv.indexOf('-i') + 1];
+  const prompt = fileOf(spec, promptPath(ctx.runDir, 'plan'));
+  assert.equal(prompt, `${interactiveGuidance(planStep, ctx)}\n\n---\n\nPlan it.`);
   assert.ok(prompt.startsWith("You are running as step 'plan'"));
   assert.ok(prompt.endsWith('Plan it.'));
+  assert.ok(!prompt.includes('\r'), 'LF');
+  assert.ok(prompt.includes('touch .whiphand/runs/r1/.plan.done'), 'the marker is workspace-relative');
+  assert.ok(!spec.argv.some(a => a.includes('Plan it.') || a.includes('Whiphand workflow')), 'no prompt content on argv');
 });
 
 test('interactive: has no await-state spec, because copilot has no hooks', () => {
@@ -81,6 +103,7 @@ test('headless and harvest carry no interactive guidance: they have no human to 
   const step: AgentStep = { ...planStep, mode: 'headless' };
   for (const spec of [copilotAdapter.headless(step, ctx), copilotAdapter.harvest(planStep, ctx)]) {
     assert.ok(!spec.argv.some(a => a.includes('Whiphand workflow')));
+    assert.ok(!spec.files?.some(f => f.content.includes('Whiphand workflow')), 'nor in any file it reads');
     assert.equal(spec.endSession, undefined);
   }
 });
@@ -89,9 +112,12 @@ test('headless writes:true requires --allow-all-tools', () => {
   const step: AgentStep = { kind: 'agent', id: 'exec', runner: 'copilot', mode: 'headless', writes: true, prompt: 'Do.', output: 'r.md' };
   const spec = copilotAdapter.headless(step, ctx);
   assert.deepEqual(spec.argv, [
-    'copilot', '-p', 'Do.', '--allow-all-tools', '--output-format', 'json', '--stream', 'on', '--no-color',
+    'copilot', '-p', 'Read and follow the instructions in .whiphand/runs/r1/.exec.prompt',
+    '--allow-all-tools', '--output-format', 'json', '--stream', 'on', '--no-color',
   ]);
   assert.equal(spec.interactive, false);
+  assert.equal(fileOf(spec, promptPath(ctx.runDir, 'exec')), 'Do.');
+  assert.equal(spec.stdinFile, undefined);
 });
 
 test('headless writes:false allows file writes only to its own artifact', () => {
@@ -101,8 +127,10 @@ test('headless writes:false allows file writes only to its own artifact', () => 
   const step: AgentStep = { kind: 'agent', id: 'rev', runner: 'copilot', mode: 'headless', writes: false, prompt: 'Review.', output: 'f.md' };
   const loopCtx: RunCtx = { ...ctx, artifacts: { rev: '/w/.whiphand/runs/r1/fix/iter-2/f.md' } };
   const spec = copilotAdapter.headless(step, loopCtx);
+  assert.equal(fileOf(spec, promptPath(ctx.runDir, 'rev')), 'Review.');
   assert.deepEqual(spec.argv, [
-    'copilot', '-p', 'Review.', '--allow-tool=shell', '--allow-tool=url',
+    'copilot', '-p', 'Read and follow the instructions in .whiphand/runs/r1/.rev.prompt',
+    '--allow-tool=shell', '--allow-tool=url',
     '--allow-tool=write(/w/.whiphand/runs/r1/fix/iter-2/f.md)',
     '--output-format', 'json', '--stream', 'on', '--no-color',
   ]);
@@ -112,8 +140,11 @@ test('harvest resumes the session by id and asks it to write the artifact', () =
   const spec = copilotAdapter.harvest(planStep, ctx);
   assert.equal(spec.argv[0], 'copilot');
   assert.equal(spec.argv[1], '-p');
-  const prompt = spec.argv[2];
-  assert.ok(prompt.includes('/w/.whiphand/runs/r1/plan.md'));
+  assert.equal(spec.argv[2], 'Read and follow the instructions in .whiphand/runs/r1/.plan.harvest-prompt');
+  const prompt = fileOf(spec, harvestPromptPath(ctx.runDir, 'plan'));
+  assert.equal(prompt, harvestPrompt(planStep, ctx));
+  assert.ok(prompt.includes(' .whiphand/runs/r1/plan.md.'), prompt);
+  assert.ok(!prompt.includes('/w/.whiphand'), 'workspace-relative, not absolute');
   assert.ok(spec.argv.includes('--resume=sid-123'));
   assert.ok(spec.argv.includes('--allow-all-tools'));
   assert.ok(!spec.argv.some(a => a.includes('--share')));
@@ -202,4 +233,59 @@ test('copilot capabilities: sessionIdInjection+sessionResume, no share transcrip
     sessionIdInjection: true, sessionIdCapture: false, sessionResume: true,
     toolDenial: true, shareTranscript: false,
   });
+});
+
+// --- prompt off argv ---------------------------------------------------
+
+test('the pointer sentence is the same for interactive and headless of one step', () => {
+  // One sentence, one file name: the two modes cannot drift apart, and the
+  // sentence has no metacharacter for a shim to mishandle.
+  const headlessStep: AgentStep = { ...planStep, mode: 'headless' };
+  const interactive = after(copilotAdapter.interactive(planStep, ctx), '-i');
+  const headless = after(copilotAdapter.headless(headlessStep, ctx), '-p');
+  assert.equal(interactive, headless);
+  assert.equal(interactive, 'Read and follow the instructions in .whiphand/runs/r1/.plan.prompt');
+});
+
+test('an adversarial prompt is written to the file and never appears in argv', () => {
+  const adversarial =
+    `%COMSPEC% "double" 'single' \`tick\` $(id) & | > ^ ! \\ \n\nsecond line\n${'x'.repeat(20000)}`;
+  const headlessStep: AgentStep = { ...planStep, mode: 'headless', prompt: adversarial };
+  const specs: Array<[string, SpawnSpec]> = [
+    ['interactive', copilotAdapter.interactive({ ...planStep, prompt: adversarial }, ctx)],
+    ['headless', copilotAdapter.headless(headlessStep, ctx)],
+  ];
+  for (const [label, spec] of specs) {
+    assert.ok(fileOf(spec, promptPath(ctx.runDir, 'plan')).includes(adversarial), `${label}: file carries the prompt`);
+    for (const a of spec.argv) {
+      assert.ok(a.length < 300, `${label}: an argv element is ${a.length} chars long`);
+      for (const bad of ['%COMSPEC%', '"double"', 'second line', 'xxxxxxxxxx', '$(id)']) {
+        assert.ok(!a.includes(bad), `${label}: argv carries ${bad}`);
+      }
+    }
+  }
+});
+
+test('headless: the prompt file holds buildPrompt, LF', () => {
+  const step: AgentStep = { ...planStep, mode: 'headless', prompt: 'one\r\ntwo' };
+  const content = fileOf(copilotAdapter.headless(step, ctx), promptPath(ctx.runDir, 'plan'));
+  assert.equal(content, buildPrompt({ ...step, prompt: 'one\r\ntwo' }, ctx).replace(/\r\n?/g, '\n'));
+  assert.ok(!content.includes('\r'));
+});
+
+test('harvest and suggestName: pointer argv plus the file, and no stdinFile', () => {
+  const harvest = copilotAdapter.harvest(planStep, ctx);
+  assert.deepEqual(harvest.files, [{ path: harvestPromptPath(ctx.runDir, 'plan'), content: harvestPrompt(planStep, ctx) }]);
+  assert.equal(harvest.stdinFile, undefined);
+
+  const capture = join(ctx.runDir, '.name.out');
+  const suggest = copilotAdapter.suggestName!('Name it: "%X%" & co\r\nplease', ctx, capture);
+  const file = join(ctx.runDir, SUGGEST_PROMPT_NAME);
+  assert.deepEqual(suggest.argv, [
+    'copilot', '-p', 'Read and follow the instructions in .whiphand/runs/r1/.name.suggest-prompt',
+    '--model', 'gpt-5-mini', '--deny-tool=write', '--deny-tool=shell', '--no-color',
+  ]);
+  assert.deepEqual(suggest.files, [{ path: file, content: 'Name it: "%X%" & co\nplease' }]);
+  assert.equal(suggest.stdinFile, undefined);
+  assert.deepEqual(suggest.capture, { path: capture, streams: 'stdout' });
 });

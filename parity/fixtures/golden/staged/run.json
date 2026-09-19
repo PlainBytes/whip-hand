@@ -1,0 +1,129 @@
+{
+  "version": 5,
+  "runId": "<RUN_ID>",
+  "workflow": "staged",
+  "workdir": "<WORKSPACE>",
+  "dryRun": false,
+  "startedAt": "<TIMESTAMP>",
+  "updatedAt": "<TIMESTAMP>",
+  "heartbeatAt": "<TIMESTAMP>",
+  "status": "succeeded",
+  "workflowSource": "project",
+  "inputs": {},
+  "sessionIds": {},
+  "steps": [
+    {
+      "id": "build",
+      "kind": "stages",
+      "status": "done",
+      "startedAt": "<TIMESTAMP>",
+      "total": 2,
+      "completedStages": [
+        "01-a",
+        "02-b"
+      ],
+      "currentStage": {
+        "id": "02-b",
+        "title": "B",
+        "index": 2
+      },
+      "attempt": 1,
+      "maxAttempts": 3,
+      "startedStages": {
+        "01-a": {
+          "title": "A",
+          "index": 1,
+          "maxAttempts": 3
+        },
+        "02-b": {
+          "title": "B",
+          "index": 2,
+          "maxAttempts": 3
+        }
+      },
+      "completed": 2,
+      "endedAt": "<TIMESTAMP>"
+    },
+    {
+      "id": "execute",
+      "kind": "command",
+      "loopId": "build",
+      "stagesId": "build",
+      "status": "done",
+      "iteration": 1,
+      "stage": "01-a",
+      "startedAt": "<TIMESTAMP>",
+      "endedAt": "<TIMESTAMP>",
+      "exitCode": 0,
+      "artifact": "build/01-a/attempt-1/execute.md"
+    },
+    {
+      "id": "execute",
+      "kind": "command",
+      "status": "done",
+      "loopId": "build",
+      "iteration": 1,
+      "stage": "02-b",
+      "startedAt": "<TIMESTAMP>",
+      "endedAt": "<TIMESTAMP>",
+      "exitCode": 0,
+      "artifact": "build/02-b/attempt-1/execute.md"
+    },
+    {
+      "id": "verdict",
+      "kind": "command",
+      "loopId": "build",
+      "stagesId": "build",
+      "status": "done",
+      "iteration": 1,
+      "stage": "01-a",
+      "startedAt": "<TIMESTAMP>",
+      "endedAt": "<TIMESTAMP>",
+      "exitCode": 0,
+      "artifact": "build/01-a/attempt-1/verdict.md",
+      "verdict": "pass"
+    },
+    {
+      "id": "verdict",
+      "kind": "command",
+      "status": "done",
+      "loopId": "build",
+      "iteration": 1,
+      "stage": "02-b",
+      "startedAt": "<TIMESTAMP>",
+      "endedAt": "<TIMESTAMP>",
+      "exitCode": 0,
+      "artifact": "build/02-b/attempt-1/verdict.md",
+      "verdict": "pass"
+    },
+    {
+      "id": "accept",
+      "kind": "approval",
+      "loopId": "build",
+      "stagesId": "build",
+      "status": "done",
+      "iteration": 1,
+      "stage": "01-a",
+      "startedAt": "<TIMESTAMP>",
+      "endedAt": "<TIMESTAMP>",
+      "exitCode": 0,
+      "artifact": "build/01-a/attempt-1/accept.md",
+      "verdict": "pass"
+    },
+    {
+      "id": "accept",
+      "kind": "approval",
+      "status": "done",
+      "loopId": "build",
+      "iteration": 1,
+      "stage": "02-b",
+      "startedAt": "<TIMESTAMP>",
+      "endedAt": "<TIMESTAMP>",
+      "exitCode": 0,
+      "artifact": "build/02-b/attempt-1/accept.md",
+      "verdict": "pass"
+    }
+  ],
+  "ok": true,
+  "endedAt": "<TIMESTAMP>"
+}

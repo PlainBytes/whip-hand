@@ -19,6 +19,7 @@
  */
 import type { LoopRef, StepProgress, WhiphandEvent } from './types.ts';
 import { formatBytes, stageLabel } from './format.ts';
+import { degradationLine } from './degradations.ts';
 
 /** One line's budget, after which it is truncated with a marker — one giant blob must not own the file. */
 export const MAX_LOG_LINE_BYTES = 8 * 1024;
@@ -221,7 +222,7 @@ export function summarizeEvent(event: WhiphandEvent): Omit<LogRow, 'seq' | 'ts'>
       return {
         kind: event.type,
         text: `whiphand ${event.whiphandVersion}, node ${event.nodeVersion}, ${event.platform}, `
-          + `runners: ${runners || 'none'}${git}`,
+          + `runners: ${runners || 'none'}${git}${event.shell === undefined ? '' : `, shell ${event.shell}`}`,
       };
     }
     case 'step:tree-delta':
@@ -273,6 +274,8 @@ export function summarizeEvent(event: WhiphandEvent): Omit<LogRow, 'seq' | 'ts'>
       return { kind: event.type, stepId: event.id, text: `stages done, ${event.completed} completed` };
     case 'guard:warning':
       return { kind: event.type, stepId: event.stepId, text: event.message };
+    case 'run:degraded':
+      return { kind: event.type, stepId: event.stepId, text: `degraded: ${degradationLine(event)}` };
     case 'run:done':
       return { kind: event.type, text: `run done: ${event.ok ? 'ok' : 'failed'}` };
     case 'run:error':

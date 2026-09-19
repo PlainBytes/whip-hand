@@ -36,6 +36,16 @@ test('listJobs reveals a run that started before this client connected', async (
   assert.equal(result[0]!.pty, null, 'no interactive session open');
 });
 
+test('listJobs carries the job identity key so a client can tell which workspace it belongs to', async () => {
+  const { jobs, handlers } = await harness();
+  jobs.create('/link', '/real/ws');
+  jobs.create('/other');
+
+  const result = await handlers.listJobs!({}, ctx) as JobSummary[];
+  assert.equal(result[0]!.identityKey, '/real/ws');
+  assert.equal(result[1]!.identityKey, undefined);
+});
+
 test('listJobs reports the live pty, with the step id only the transcript knows', async () => {
   const { jobs, hub, handlers } = await harness();
   const job = jobs.create('/ws');

@@ -1,4 +1,4 @@
-import { WORKFLOW_NAME_RE } from '../../../../packages/core/src/workflow-name.ts';
+import { WORKFLOW_NAME_RE, workflowNameProblem as coreNameProblem } from '../../../../packages/core/src/workflow-name.ts';
 import type { Scope } from '../../../../packages/core/src/types.ts';
 import { isWorkflowFile } from './workflow-lane/WorkflowLane.tsx';
 import type { WorkflowEntry } from './workflow-lane/WorkflowLane.tsx';
@@ -35,6 +35,8 @@ export function workflowNameProblem(
   if (!WORKFLOW_NAME_RE.test(name)) {
     return { message: 'Use lowercase letters, digits, - and _ (start with a letter or digit)', blocking: true };
   }
+  const reserved = coreNameProblem(name);
+  if (reserved !== null) return { message: `${name} is not a usable name: ${reserved}`, blocking: true };
   if (isWorkflowNameTaken(existing, name, scope)) {
     return { message: `A workflow named ${name} already exists`, blocking: true };
   }

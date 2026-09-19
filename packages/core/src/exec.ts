@@ -3,15 +3,28 @@
  * several ways of not being POSIX are dealt with once. Transparent on POSIX;
  * see the comments below for how the Windows `.cmd`-shim/cmd.exe handling works.
  *
+ * This is *the* seam (invariant 1): every external process started from Node goes
+ * through it — runners, `git`, the packaging scripts — and nothing else imports
+ * `node:child_process` or passes `shell: true` (scripts/invariants.test.mjs).
+ * Two carve-outs, named because an invariant with an unwritten exception list
+ * gets quietly ignored: the Tauri agent sidecar, whose process creation lives in
+ * `tauri-plugin-shell`'s Rust and is gated by capabilities/default.json, and
+ * plugin-shell's `open()`, which hands a URL to the OS rather than starting a
+ * process we own.
+ *
  * And, once launched, one seam for draining a piped child (`pipeChild`, at the
  * bottom), so every headless frontend shares the same answer to "when is this
  * child actually done".
  */
-import { execFile, spawn as nodeSpawn, type ChildProcess, type ExecFileOptions, type SpawnOptions } from 'node:child_process';
+import {
+  execFile, spawn as nodeSpawn, spawnSync, type ChildProcess, type ExecFileOptions, type SpawnOptions,
+  type SpawnSyncOptions,
+} from 'node:child_process';
 import { once } from 'node:events';
-import { createWriteStream, existsSync, readFileSync, readdirSync } from 'node:fs';
+import { closeSync, createWriteStream, existsSync, openSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { createInterface, type Interface } from 'node:readline';
+import type { Container } from './container.ts';
 import type { SpawnSpec } from './types.ts';
 
 export interface ResolvedExecutable {
@@ -79,9 +92,6 @@ function listDir(dir: string): string[] {
     return [];
   }
 }
-
-/** `cmd.exe`, by any path, with or without its extension. */
-const CMD_SHELL_RE = /^(?:.*[\\/])?cmd(?:\.exe)?$/i;
 
 /**
  * Wider than the classic MSVCRT trigger (space, tab, `"`, empty), because the
@@ -204,25 +214,6 @@ export function cmdInvocation(
 }
 
 /**
- * The other half of the same problem: when argv[0] already *is* cmd.exe — what
- * `commandSpec` builds for every command step on Windows — the trailing run
- * line is a cmd command, not an MSVCRT argument. Left to libuv it gets
- * backslash-escaped into something cmd does not speak (`echo "hi"` prints
- * `\"hi\"`), so it needs the same verbatim treatment, just without a second
- * layer of argument quoting. Returns null when the argv is not that shape.
- */
-function cmdShellInvocation(file: string, args: string[]): CmdInvocation | null {
-  const runIndex = args.length - 1;
-  if (runIndex < 1 || !/^\/[ck]$/i.test(args[runIndex - 1])) return null;
-  assertCarryable([args[runIndex]]);
-  const argv0 = msvcrtQuote(file);
-  const cmdArgs = [...args.slice(0, runIndex), `"${args[runIndex]}"`];
-  const commandLine = cmdArgs.join(' ');
-  assertLength(`${argv0} ${commandLine}`);
-  return { file, argv0, args: cmdArgs, commandLine };
-}
-
-/**
  * A `.cmd` shim is not a program — it is a batch file whose whole job is to
  * run `node <entry point>` with the arguments it was given. Going through
  * cmd.exe to reach that is what drags in the entire quoting problem above; so
@@ -324,12 +315,9 @@ export function planLaunch(argv: string[], deps: ResolveExecutableOpts = {}): La
     const invocation = cmdInvocation(resolved.file, args, deps.env ?? process.env);
     return { file: invocation.file, args: invocation.args, invocation };
   }
-  if (CMD_SHELL_RE.test(path.win32.basename(resolved.file))) {
-    const invocation = cmdShellInvocation(resolved.file, args);
-    if (invocation !== null) {
-      return { file: invocation.file, args: invocation.args, invocation };
-    }
-  }
+  // Nothing else ever wraps: command steps run through a POSIX shell on every
+  // platform, so argv[0] is never cmd.exe on the command-step path, and the
+  // cmd.exe hop above is reserved for a `.cmd` shim we could not read.
   return { file: resolved.file, args, invocation: null };
 }
 
@@ -340,24 +328,57 @@ export function verbatim(invocation: CmdInvocation | null): Record<string, unkno
     : { argv0: invocation.argv0, windowsVerbatimArguments: true };
 }
 
-/** `child_process.spawn`, routed through `resolveExecutable`. Transparent on POSIX. */
-export function spawnRunner(
-  argv: string[],
-  options: SpawnOptions = {},
-  deps: { spawn?: typeof nodeSpawn } & ResolveExecutableOpts = {},
-): ChildProcess {
+export interface SpawnDeps extends ResolveExecutableOpts {
+  spawn?: typeof nodeSpawn;
+  /** The run's process container: the child is spawned into it (POSIX: as a group leader) and adopted. */
+  container?: Container;
+  /**
+   * False for an interactive child that inherits the terminal: it must stay in
+   * the foreground process group, so it is adopted but not made a group leader.
+   */
+  group?: boolean;
+}
+
+/** `child_process.spawn`, routed through `resolveExecutable`. Transparent on POSIX; never shows a console window on Windows. */
+export function spawnRunner(argv: string[], options: SpawnOptions = {}, deps: SpawnDeps = {}): ChildProcess {
   const spawnFn = deps.spawn ?? nodeSpawn;
   const plan = planLaunch(argv, deps);
-  return spawnFn(plan.file, plan.args, { ...options, ...verbatim(plan.invocation), shell: false });
+  const grouped = deps.group ?? true;
+  const child = spawnFn(plan.file, plan.args, {
+    windowsHide: true,
+    ...options,
+    ...(grouped ? deps.container?.spawnOptions ?? {} : {}),
+    ...verbatim(plan.invocation),
+    shell: false,
+  });
+  deps.container?.adopt(child, { group: grouped });
+  return child;
+}
+
+/**
+ * `git` always speaks English to us: the exit-code-plus-stderr classification in
+ * git-guard.ts matches `not a git repository`, and a localized git would turn a
+ * plain non-repo into "unavailable". The seam owns this so no call site can forget it.
+ */
+const GIT_COMMAND = /^git(?:\.exe)?$/i;
+const GIT_ENV = { LC_ALL: 'C', LANGUAGE: 'C' } as const;
+
+function isGit(command: string): boolean {
+  return GIT_COMMAND.test(command.split(/[\\/]/).pop() ?? command);
 }
 
 /**
  * `child_process.execFile`, promisified and routed through `resolveExecutable`.
  *
- * Its callers today are only the adapters' `--version` probes, which carry no
- * user data and would survive far cruder handling — but leaving it on Node's
- * `shell: true` would make it a third rule for the same problem, and the one a
- * future caller with real arguments would land on without noticing.
+ * Its callers are the adapters' `--version` probes, model listing, doctor, and
+ * `git`. Out-of-run, so deliberately *not* containerised: these are short-lived
+ * direct children with timeouts, on Windows libuv's process-global job already
+ * kills direct children when node dies, and on POSIX a process-level group would
+ * add nothing in the crash case (the per-run container is the one enforcement point).
+ *
+ * `git` moved here from bare `execFile` for enforceability, not behaviour: git is
+ * a real `.exe` on Windows, so this changes nothing functional and the plan says
+ * so plainly rather than letting someone later discover it was a no-op and revert it.
  */
 export function execRunner(
   argv: string[],
@@ -365,13 +386,17 @@ export function execRunner(
   deps: ResolveExecutableOpts = {},
 ): Promise<{ stdout: string; stderr: string }> {
   const plan = planLaunch(argv, deps);
+  const env = isGit(argv[0]) ? { ...process.env, ...options.env, ...GIT_ENV } : options.env;
   return new Promise((resolvePromise, reject) => {
     execFile(
       plan.file,
       plan.args,
-      { ...options, ...verbatim(plan.invocation), shell: false, encoding: 'utf8' },
+      { windowsHide: true, ...options, ...(env === undefined ? {} : { env }), ...verbatim(plan.invocation), shell: false, encoding: 'utf8' },
       (error, stdout, stderr) => {
         if (error) {
+          // The seam's own callers want git's stderr to classify on, and node's
+          // ExecFileException carries it only on the error object.
+          Object.assign(error, { stdout: String(stdout), stderr: String(stderr) });
           reject(error);
           return;
         }
@@ -381,7 +406,104 @@ export function execRunner(
   });
 }
 
+export interface RunSyncOptions {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  /** `'inherit'` (the default) for the packaging scripts; `['ignore', 'pipe', 'inherit']` and the like to capture. */
+  stdio?: SpawnSyncOptions['stdio'];
+  /** Throw when the exit status is not 0, as `execFileSync` did. Default false: the caller reads `status`. */
+  check?: boolean;
+  timeout?: number;
+}
+
+export interface RunSyncResult {
+  status: number;
+  stdout: string;
+  stderr: string;
+}
+
+/**
+ * A synchronous run through the same plan as everything else — for the packaging
+ * scripts, which launch `npm` (a `.cmd` shim on Windows: this file's thesis in
+ * miniature) and used to say `shell: process.platform === 'win32'` to get
+ * there. A spawn failure always throws; a non-zero status throws only with
+ * `check`, carrying `status` and `stderr` on the error.
+ */
+export function runSync(argv: string[], options: RunSyncOptions = {}, deps: ResolveExecutableOpts = {}): RunSyncResult {
+  const plan = planLaunch(argv, deps);
+  const result = spawnSync(plan.file, plan.args, {
+    windowsHide: true,
+    cwd: options.cwd,
+    env: options.env,
+    timeout: options.timeout,
+    ...verbatim(plan.invocation),
+    stdio: options.stdio ?? 'inherit',
+    encoding: 'utf8',
+    shell: false,
+  });
+  if (result.error !== undefined) throw result.error;
+  const status = result.status ?? 1;
+  const out = { status, stdout: String(result.stdout ?? ''), stderr: String(result.stderr ?? '') };
+  if (options.check === true && status !== 0) {
+    throw Object.assign(new Error(`${argv[0]} exited with status ${status}${out.stderr === '' ? '' : `: ${out.stderr.trim()}`}`), out);
+  }
+  return out;
+}
+
+/** `runSync` with inherited stdio, returning the exit code. */
+export function runInherited(
+  argv: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}, deps: ResolveExecutableOpts = {},
+): number {
+  return runSync(argv, { ...options, stdio: 'inherit' }, deps).status;
+}
+
+/**
+ * A spec's `stdinFile` as the child's fd 0: the file itself, seekable, opened
+ * read-only — stdio wiring rather than a content channel, so there are no pipe
+ * writes and no backpressure (spec §3). Without one, stdin is ignored, as it
+ * always was. `close()` must be called once the child has been spawned (the
+ * child holds its own duplicate); it is safe to call twice.
+ */
+export function openStdin(spec: { stdinFile?: string }): { stdin: number | 'ignore'; close: () => void } {
+  if (spec.stdinFile === undefined) return { stdin: 'ignore', close: () => {} };
+  const fd = openSync(spec.stdinFile, 'r');
+  let closed = false;
+  return { stdin: fd, close: () => { if (!closed) { closed = true; try { closeSync(fd); } catch { /* already gone */ } } } };
+}
+
 export type ChildStream = 'stdout' | 'stderr';
+
+/**
+ * A streaming CRLF→LF filter. A `\r` at the end of a chunk is held back until
+ * the next chunk shows whether it is half of a CRLF split across the boundary;
+ * `end()` releases a `\r` that turned out to be the stream's last byte.
+ */
+export function crlfToLf(): { write(chunk: Buffer): Buffer; end(): Buffer } {
+  let held = false;
+  return {
+    write(chunk) {
+      let bytes = held ? Buffer.concat([Buffer.of(0x0d), chunk]) : chunk;
+      held = false;
+      if (bytes.length > 0 && bytes[bytes.length - 1] === 0x0d) {
+        held = true;
+        bytes = bytes.subarray(0, -1);
+      }
+      if (!bytes.includes(0x0d)) return bytes;
+      const out = Buffer.allocUnsafe(bytes.length);
+      let n = 0;
+      for (let i = 0; i < bytes.length; i++) {
+        if (bytes[i] === 0x0d && bytes[i + 1] === 0x0a) continue;
+        out[n++] = bytes[i];
+      }
+      return out.subarray(0, n);
+    },
+    end() {
+      const rest = held ? Buffer.of(0x0d) : Buffer.alloc(0);
+      held = false;
+      return rest;
+    },
+  };
+}
 
 /**
  * Which headless output goes where, decided once from the spec so the
@@ -416,13 +538,14 @@ export interface PipeChildOptions {
   /** Every line, from a second reader on the same stream; the final unterminated line included. */
   onLine?: (line: string, stream: ChildStream) => void;
   /**
-   * Appends the named streams to `path`. `unit` is the frontend's choice of
-   * fidelity: 'chunk' keeps the bytes exactly (a terminal user's artifact
-   * should match their scrollback); 'line' writes `line + "\n"`, which never
-   * splices stdout and stderr mid-line and suits a frontend already working
-   * in lines.
+   * Appends the named streams to `path`, chunk by chunk, with CRLF folded to LF
+   * on the way to the *file only*. Artifacts are a record for humans and for
+   * diffing, so they are portable by construction — identical bytes on every
+   * platform, whichever frontend captured them. A lone `\r` (a spinner redraw)
+   * is preserved. The live streams (`onChunk`, `onLine`) are untouched: a
+   * terminal or PTY is a stream where CR does real work.
    */
-  capture?: { path: string; streams: readonly ChildStream[]; unit: 'chunk' | 'line' };
+  capture?: { path: string; streams: readonly ChildStream[] };
   /**
    * Abort policy, left to the caller because it genuinely differs by frontend.
    * Called once when `signal` aborts — immediately, if it already has —
@@ -438,6 +561,14 @@ export interface PipeChildOptions {
    * ABORT_ERR into a sentinel exit code.
    */
   errorExitCode?: (err: NodeJS.ErrnoException) => number | undefined;
+  /**
+   * When set, an abort settles the promise at once with this exit code instead of
+   * waiting for 'close' — which waits for every pipe an orphaned grandchild still
+   * holds, so a cancelled or timed-out step could otherwise never resolve. The
+   * tree itself is the container's job (`onAbort` calls `killAll`). Both
+   * frontends use it, so cancel behaves the same in the CLI and the desktop.
+   */
+  abortExitCode?: number;
 }
 
 /**
@@ -468,20 +599,21 @@ export function pipeChild(child: ChildProcess, opts: PipeChildOptions = {}): Pro
     // child that ran fine: core asserts the artifact afterwards rather than
     // trusting the frontend, so that is where a missing file surfaces.
     capture?.on('error', () => {});
-    const captures = (stream: ChildStream, unit: 'chunk' | 'line'): boolean =>
-      opts.capture !== undefined && opts.capture.unit === unit && opts.capture.streams.includes(stream);
+    const captures = (stream: ChildStream): boolean =>
+      opts.capture !== undefined && opts.capture.streams.includes(stream);
+    const folds = { stdout: crlfToLf(), stderr: crlfToLf() };
 
     const readers: Interface[] = [];
     for (const stream of ['stdout', 'stderr'] as const) {
       const input = child[stream];
       if (input === null) continue;
-      const byChunk = opts.onChunk !== undefined || captures(stream, 'chunk');
-      const byLine = opts.onLine !== undefined || captures(stream, 'line');
+      const byChunk = opts.onChunk !== undefined || captures(stream);
+      const byLine = opts.onLine !== undefined;
       if (byChunk) {
         input.on('data', (chunk: Buffer) => {
           if (settled) return;
           opts.onChunk?.(chunk, stream);
-          if (captures(stream, 'chunk')) capture!.write(chunk);
+          if (captures(stream)) capture!.write(folds[stream].write(chunk));
         });
       }
       if (byLine) {
@@ -489,7 +621,6 @@ export function pipeChild(child: ChildProcess, opts: PipeChildOptions = {}): Pro
         reader.on('line', line => {
           if (settled) return;
           opts.onLine?.(line, stream);
-          if (captures(stream, 'line')) capture!.write(`${line}\n`);
         });
         readers.push(reader);
       }
@@ -499,25 +630,39 @@ export function pipeChild(child: ChildProcess, opts: PipeChildOptions = {}): Pro
     }
 
     let disposeAbort: (() => void) | void;
-    const onAbort = (): void => { disposeAbort = opts.onAbort?.(child); };
-    if (opts.signal !== undefined && opts.onAbort !== undefined) {
-      if (opts.signal.aborted) onAbort();
-      else opts.signal.addEventListener('abort', onAbort, { once: true });
-    }
+    // Hoisted: `settle` is declared below, and an already-aborted signal calls this immediately.
+    let onAbort: () => void = () => {};
+    const abortListener = (): void => onAbort();
 
     const settle = async (outcome: () => void): Promise<void> => {
       if (settled) return;
       settled = true;
-      opts.signal?.removeEventListener('abort', onAbort);
+      opts.signal?.removeEventListener('abort', abortListener);
       disposeAbort?.();
       for (const reader of readers) reader.close();
       if (capture !== undefined && !capture.closed) {
         const closed = once(capture, 'close').catch(() => {});
+        for (const stream of ['stdout', 'stderr'] as const) {
+          const rest = folds[stream].end();
+          if (rest.length > 0 && captures(stream)) capture.write(rest);
+        }
         capture.end();
         await closed;
       }
       outcome();
     };
+
+    onAbort = (): void => {
+      disposeAbort = opts.onAbort?.(child);
+      if (opts.abortExitCode !== undefined) {
+        const code = opts.abortExitCode;
+        void settle(() => resolvePromise(code));
+      }
+    };
+    if (opts.signal !== undefined && opts.onAbort !== undefined) {
+      if (opts.signal.aborted) onAbort();
+      else opts.signal.addEventListener('abort', abortListener, { once: true });
+    }
 
     child.on('error', err => {
       const code = opts.errorExitCode?.(err);

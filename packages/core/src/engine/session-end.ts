@@ -5,34 +5,7 @@
  */
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
-
-/**
- * Flattens a step id to a single path segment that needs no shell quoting.
- * Step ids are only `.min(1)` in the schema, and the names built from them end
- * up inside shell commands in a runner's settings, so this is the guarantee
- * every one of those names rests on. Shared with await-state.ts so the two
- * cannot drift.
- */
-export function sanitizeStepId(stepId: string): string {
-  return stepId.replace(/[^A-Za-z0-9._-]/g, '_');
-}
-
-/**
- * A path as a *runner* will read it, for the strings we hand one to parse: the
- * `touch <marker>` in a session's guidance, the permission rule that
- * pre-approves it, and the hook commands that write the await-state file.
- *
- * Windows accepts `/` in every API that takes a path, so this names the same
- * file — but a native `D:\w\.whiphand\runs\r1\.plan.done` does not survive being
- * pasted into a command line: Claude runs hook commands and Bash tool calls
- * through Git Bash on Windows, where `\` escapes rather than separates, and
- * our own SHELL_SAFE_PATH guard rejects a backslash outright.
- *
- * Only for strings a runner parses. Paths that go to `fs` stay native.
- */
-export function shellPath(path: string): string {
-  return path.replace(/\\/g, '/');
-}
+import { assertSegment } from '../segment.ts';
 
 /**
  * The shape every per-step file in a run dir shares: `.<step>.<suffix>`,
@@ -40,11 +13,11 @@ export function shellPath(path: string): string {
  * session-capture file and opencode's support files all need the same four
  * things — the name, the path, a "could this be one?" check to hide it from
  * artifact lists, and a best-effort clear before a new session — and every
- * copy of that quartet was a chance for one of them to forget sanitizeStepId
- * or drift its hiding pattern away from the names it actually produces.
+ * copy of that quartet was a chance for one of them to forget the segment
+ * check or drift its hiding pattern away from the names it actually produces.
  */
 export interface StepStateFile {
-  /** Basename for a step: one safe path segment. */
+  /** Basename for a step: one path segment. */
   name(stepId: string): string;
   /** Absolute path of the step's file, directly in the run dir. */
   path(runDir: string, stepId: string): string;
@@ -62,7 +35,13 @@ export interface StepStateFile {
 export function stepStateFile(suffix: string): StepStateFile {
   const escaped = suffix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const pattern = new RegExp(`^\\..+\\.${escaped}$`);
-  const name = (stepId: string): string => `.${sanitizeStepId(stepId)}.${suffix}`;
+  // Step ids are validated segments (schema.ts), so the id goes in verbatim and
+  // no two steps can share a state file. Asserted rather than trusted: a Workflow
+  // built in code never passed through the parser.
+  const name = (stepId: string): string => {
+    assertSegment(stepId, 'step id');
+    return `.${stepId}.${suffix}`;
+  };
   const path = (runDir: string, stepId: string): string => join(runDir, name(stepId));
   return {
     name,
@@ -80,7 +59,7 @@ export function stepStateFile(suffix: string): StepStateFile {
 
 const endMarker = stepStateFile('done');
 
-/** Marker basename for a step: one safe path segment. */
+/** Marker basename for a step: one path segment. */
 export const endMarkerName: (stepId: string) => string = endMarker.name;
 
 /** Absolute path of a step's marker: its appearance means the human agreed we're done. */

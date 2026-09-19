@@ -12,6 +12,7 @@
  * run.slug }}` exists so step one can create a worktree or a branch, and a name
  * minted afterwards is too late to be one.
  */
+import { writeSpecFiles } from './spawn-files.ts';
 import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RunCtx, SpawnSpec, Workflow } from '../types.ts';
@@ -89,6 +90,9 @@ export async function autoNameRun(opts: AutoNameOptions): Promise<string | undef
     // cleanup; this is the one that covers the abnormal exit.
     await rm(capturePath, { force: true }).catch(() => {});
     if (opts.signal?.aborted === true) return undefined;
+    // The naming prompt rides in a file like any other. Naming is best-effort,
+    // so a file that cannot be written just means no name (the catch below).
+    await writeSpecFiles(spec);
 
     const exitCode = await opts.spawnHeadless(spec, controller.signal);
     if (exitCode !== 0) return undefined;
@@ -104,5 +108,6 @@ export async function autoNameRun(opts: AutoNameOptions): Promise<string | undef
     // The reply has been folded into the marker; leaving it behind would just
     // be a second, staler copy of the same string in the run directory.
     await rm(capturePath, { force: true }).catch(() => {});
+    for (const file of spec.files ?? []) await rm(file.path, { force: true }).catch(() => {});
   }
 }

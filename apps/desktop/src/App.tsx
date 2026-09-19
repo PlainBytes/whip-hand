@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { FluentProvider, webDarkTheme, webLightTheme } from '@fluentui/react-components';
-import { useAppStore, type JobState } from './state/store.ts';
+import { jobInWorkspace, useAppStore, type JobState } from './state/store.ts';
 import { useAgentClient } from './agent/agent-context.tsx';
 import { useDarkTheme } from './lib/use-dark-theme.ts';
 import { useStartupRestore } from './lib/use-startup-restore.ts';
@@ -40,6 +40,7 @@ export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
   const [pendingPage, setPendingPage] = useState<{ id: PageId; runDetailTarget?: RunDetailTarget } | null>(null);
   const [quickSwitchOpen, setQuickSwitchOpen] = useState(false);
   const workspacePath = useAppStore(state => state.workspacePath);
+  const workspaceIdentityKey = useAppStore(state => state.workspaceIdentityKey);
   const pendingWorkspaceSwitch = useAppStore(state => state.pendingWorkspaceSwitch);
   const client = useAgentClient();
   useStartupRestore(client, capabilities);
@@ -87,7 +88,8 @@ export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
    */
   async function openRun(job: JobState): Promise<void> {
     const target: RunDetailTarget = { jobId: job.jobId, runId: job.runId };
-    if (job.workdir !== undefined && job.workdir !== workspacePath) {
+    const here = workspacePath === null ? null : { path: workspacePath, identityKey: workspaceIdentityKey ?? undefined };
+    if (job.workdir !== undefined && (here === null || !jobInWorkspace(job, here))) {
       const opened = await openWorkspace(client, job.workdir).catch(() => false);
       if (!opened) return;
       goToPage('runs', target);

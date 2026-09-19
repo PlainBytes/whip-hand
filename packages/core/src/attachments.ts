@@ -6,6 +6,7 @@
 import type { Workflow } from './types.ts';
 import { flattenSteps, isContainerStep } from './steps.ts';
 import { disabledIds } from './enabled.ts';
+import { validateSegment } from './segment.ts';
 
 /**
  * The reserved ref a step's `inputs:` names to receive every attached file.
@@ -46,8 +47,12 @@ function baseName(path: string): string {
  * become a hidden file or collide with a bookkeeping name like `.name`.
  */
 export function sanitizeAttachmentName(raw: string): string {
-  const cleaned = baseName(raw).replace(/[^A-Za-z0-9._-]/g, '-').replace(/^\.+/, '');
-  return cleaned === '' ? 'attachment' : cleaned;
+  // Trailing dots go too: Windows strips them, so `a.` and `a` would be one file.
+  const cleaned = baseName(raw).replace(/[^A-Za-z0-9._-]/g, '-').replace(/^\.+/, '').replace(/\.+$/, '');
+  const name = cleaned === '' ? 'attachment' : cleaned;
+  // `nul.txt` writes to the NUL device on Windows. This is a *minting* function,
+  // so it repairs rather than rejects — its output is what the validator sees.
+  return validateSegment(name).ok ? name : `attachment-${name}`;
 }
 
 /** `bug.png` -> ['bug', '.png']; no extension -> ['bug', '']. */

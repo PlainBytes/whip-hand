@@ -22,6 +22,10 @@ import type {
 } from '../../../../packages/agent/src/protocol.ts';
 import type { LoopRef, ManualRequest, StepKind, StepMode, StepProgress } from '../../../../packages/core/src/types.ts';
 import { executionKey } from '../../../../packages/core/src/execution-key.ts';
+import { addDegradation, type RunDegradation } from '../lib/run-degradations.ts';
+import {
+  findWorkspaceKey, sameWorkspace, toNative, type WorkspaceRef,
+} from '../../../../packages/core/src/path-form.ts';
 import type { AppState as AppStateData } from '../../../../packages/agent/src/app-state.ts';
 import type { LogRow } from '../../../../packages/core/src/log-rows.ts';
 import { mergeUsage, progressActionText, summarizeEvent } from '../../../../packages/core/src/log-rows.ts';
@@ -153,6 +157,12 @@ export interface JobState {
    * the only way to be untagged is to predate this field.
    */
   workdir?: string;
+  /**
+   * That workspace's identity key, from the agent, which is what "is this the
+   * open workspace" compares when both sides have one (see `jobInWorkspace`).
+   * The webview cannot canonicalize a path itself, so it never computes one.
+   */
+  identityKey?: string;
   runId?: string;
   /**
    * The run's display label, learned from run:start/run:resume. Kept on the
@@ -255,6 +265,13 @@ export interface JobState {
    * Cleared on ptyStarted and ptyExit.
    */
   awaiting?: { stepId: string; reason: AwaitReason };
+  /**
+   * What this run has lost and carried on without (invariant 7), folded from
+   * `run:degraded` and de-duplicated exactly as core's RunJournal does, so the
+   * run view can say so instead of leaving it to the Logs tab. Absent until
+   * the first one.
+   */
+  degradations?: readonly RunDegradation[];
 }
 
 const LOG_TAIL_CAP = 2000;
@@ -512,6 +529,7 @@ export function reduceJobEvent(job: JobState, params: WhiphandEventNotificationP
     job = { ...job, runName: event.name };
   }
   if (params.workdir && job.workdir !== params.workdir) job = { ...job, workdir: params.workdir };
+  if (params.identityKey && job.identityKey !== params.identityKey) job = { ...job, identityKey: params.identityKey };
 
   switch (event.type) {
     case 'run:start':
@@ -558,7 +576,11 @@ export function reduceJobEvent(job: JobState, params: WhiphandEventNotificationP
       job = patchCurrent(job, event.stepId, { phase: event.phase });
       break;
     case 'step:artifact':
-      job = patchCurrent(job, event.stepId, { artifact: event.path });
+      // The event path is workspace-relative; the manifest the run page merges
+      // this over holds resolved paths, so resolve it the same way.
+      job = patchCurrent(job, event.stepId, {
+        artifact: job.workdir === undefined ? event.path : toNative(event.path, job.workdir),
+      });
       break;
     case 'step:progress':
       job = applyProgress(job, event.stepId, event.progress);
@@ -668,6 +690,14 @@ export function reduceJobEvent(job: JobState, params: WhiphandEventNotificationP
       break;
     case 'guard:warning':
       break;
+    case 'run:degraded': {
+      const degradations = addDegradation(job.degradations, {
+        capability: event.capability, reason: event.reason,
+        ...(event.stepId === undefined ? {} : { stepId: event.stepId }), at: params.ts,
+      });
+      if (degradations !== job.degradations) job = { ...job, degradations };
+      break;
+    }
     case 'step:log': {
       const rows = [...job.logRows, {
         seq: params.seq ?? 0, ts: params.ts, ...summarizeEvent(event),
@@ -712,7 +742,9 @@ export function reduceJobEvent(job: JobState, params: WhiphandEventNotificationP
 
 export interface AppState {
   workspacePath: string | null;
-  setWorkspacePath: (path: string | null) => void;
+  /** The open workspace's identity key from the agent, when it sent one. */
+  workspaceIdentityKey: string | null;
+  setWorkspacePath: (path: string | null, identityKey?: string) => void;
   /**
    * Path a workspace switch is waiting to move to while the unsaved-edits
    * guard is up. Only here so App knows to mount the dialog; the promise it
@@ -752,7 +784,7 @@ export interface AppState {
    * notification for it can arrive. The notifications carry the same workdir;
    * this just closes the window between the two.
    */
-  noteJobWorkspace: (jobId: string, workdir: string) => void;
+  noteJobWorkspace: (jobId: string, workdir: string, identityKey?: string) => void;
   /**
    * Renaming a run writes a marker file, so nothing on the wire tells a live
    * job its label changed — `run:start` already went out with the old one.
@@ -806,7 +838,9 @@ export interface AppState {
   setRestoreDone: () => void;
   page: string;
   setPage: (page: string) => void;
-  rememberInputsLocal: (workspace: string, workflow: string, inputs: Record<string, string>) => void;
+  rememberInputsLocal: (
+    workspace: string, workflow: string, inputs: Record<string, string>, identityKey?: string,
+  ) => void;
 
   /**
    * Set by RunDetailPage's "Run again" button, consumed by NewRunPage on
@@ -830,14 +864,20 @@ export interface AppState {
 
 export const useAppStore = create<AppState>((set) => ({
   workspacePath: null,
+  workspaceIdentityKey: null,
   pendingWorkspaceSwitch: null,
   setPendingWorkspaceSwitch: path => set({ pendingWorkspaceSwitch: path }),
-  setWorkspacePath: path => set(state => {
+  setWorkspacePath: (path, identityKey) => set(state => {
     // openWorkspace re-adopts the agent's canonical path even when reopening
     // the workspace already open (a Welcome card, an Activity row in this
     // workspace) — without this, every such click would blank the page and
     // refetch for nothing.
-    if (state.workspacePath === path) return {};
+    // Strict on purpose: this is "already showing exactly this spelling", and a
+    // different spelling of the same folder (`c:\\proj` vs the agent's `C:\\Proj`)
+    // must still be adopted — that is the point of re-adopting the canonical path.
+    if (state.workspacePath === path) {
+      return state.workspaceIdentityKey === (identityKey ?? null) ? {} : { workspaceIdentityKey: identityKey ?? null };
+    }
     // Clear rather than key by workspace: every consumer already refetches on
     // a workspacePath change, so keying would only retain every visited
     // workspace's data forever while keeping stale-but-plausible rows on
@@ -847,6 +887,7 @@ export const useAppStore = create<AppState>((set) => ({
     // to run *before* the switch; clearing it here would silently bypass it).
     return {
       workspacePath: path,
+      workspaceIdentityKey: identityKey ?? null,
       runs: [],
       workflows: [],
       config: null,
@@ -874,10 +915,16 @@ export const useAppStore = create<AppState>((set) => ({
 
   jobs: {},
 
-  noteJobWorkspace: (jobId, workdir) => set(state => {
+  noteJobWorkspace: (jobId, workdir, identityKey) => set(state => {
     const job = state.jobs[jobId] ?? emptyJob(jobId);
-    if (job.workdir === workdir) return {};
-    return { jobs: { ...state.jobs, [jobId]: { ...job, workdir } } };
+    if (job.workdir !== undefined && workdir !== undefined
+      && sameWorkspace({ path: job.workdir, identityKey: job.identityKey }, { path: workdir, identityKey })) {
+      // Already tagged as this workspace, possibly by a notification that got here first: keep its
+      // spelling, but learn the key if it arrived without one.
+      if (identityKey === undefined || job.identityKey !== undefined) return {};
+      return { jobs: { ...state.jobs, [jobId]: { ...job, identityKey } } };
+    }
+    return { jobs: { ...state.jobs, [jobId]: { ...job, workdir, ...(identityKey === undefined ? {} : { identityKey }) } } };
   }),
 
   setJobRunName: (jobId, runName) => set(state => {
@@ -902,11 +949,15 @@ export const useAppStore = create<AppState>((set) => ({
       statusFromSummary: false,
       runId: params.runId ?? job.runId,
       workdir: params.workdir ?? job.workdir,
+      identityKey: params.identityKey ?? job.identityKey,
     };
     // Run ids are a timestamp plus two random bytes, so two workspaces can
     // collide within the same second. Only patch the visible run list when
     // the notification is for the workspace it belongs to.
-    const forThisWorkspace = params.workdir === undefined || params.workdir === state.workspacePath;
+    const forThisWorkspace = params.workdir === undefined
+      || (state.workspacePath !== null && sameWorkspace(
+        { path: params.workdir, identityKey: updatedJob.identityKey },
+        { path: state.workspacePath, identityKey: state.workspaceIdentityKey ?? undefined }));
     const runs = params.runId && forThisWorkspace
       ? state.runs.map(r => (r.runId === params.runId ? { ...r, status: params.status } : r))
       : state.runs;
@@ -1068,7 +1119,7 @@ export const useAppStore = create<AppState>((set) => ({
     // `events`/`logRows` are discarded below (F8), never written back.
     let fold: JobState = {
       ...emptyJob(jobId),
-      workdir: current.workdir, runId: current.runId, runName: current.runName,
+      workdir: current.workdir, identityKey: current.identityKey, runId: current.runId, runName: current.runName,
       events: current.events, logTail: current.logTail, logRows: current.logRows,
       ptyActive: current.ptyActive, ptyStepId: current.ptyStepId,
       ptyCols: current.ptyCols, ptyRows: current.ptyRows,
@@ -1153,6 +1204,8 @@ export const useAppStore = create<AppState>((set) => ({
         statusFromSummary: statusIsLive ? job.statusFromSummary : true,
         runId: job.runId ?? summary.runId,
         runName: job.runName ?? summary.name,
+        workdir: job.workdir ?? summary.workdir,
+        identityKey: job.identityKey ?? summary.identityKey,
         ptyActive: job.ptyActive || summary.pty !== null,
         ptyStepId: job.ptyStepId ?? summary.pty?.stepId,
         ptyCols: job.ptyCols ?? summary.pty?.cols,
@@ -1175,16 +1228,19 @@ export const useAppStore = create<AppState>((set) => ({
   setRestoreDone: () => set({ restoreDone: true }),
   page: 'runs',
   setPage: page => set({ page }),
-  rememberInputsLocal: (workspace, workflow, inputs) => set(state => {
+  rememberInputsLocal: (workspace, workflow, inputs, identityKey) => set(state => {
     if (!state.appState) return state;
-    const memory = state.appState.workspaces[workspace] ?? { lastInputs: {} };
+    // Under whichever spelling the agent first recorded this workspace by.
+    const key = findWorkspaceKey(state.appState.workspaces, { path: workspace, identityKey }) ?? workspace;
+    const memory = state.appState.workspaces[key] ?? { lastInputs: {} };
     return {
       appState: {
         ...state.appState,
         workspaces: {
           ...state.appState.workspaces,
-          [workspace]: {
+          [key]: {
             ...memory,
+            ...(identityKey === undefined ? {} : { identityKey }),
             lastWorkflow: workflow,
             lastInputs: { ...memory.lastInputs, [workflow]: { ...inputs } },
           },
@@ -1199,6 +1255,28 @@ export const useAppStore = create<AppState>((set) => ({
   filesDirty: false,
   setFilesDirty: filesDirty => set({ filesDirty }),
 }));
+
+/**
+ * Whether a job belongs to `workspace`. Compares identity keys when both sides
+ * have one, so a workspace reached by another spelling (8.3 name, `subst` drive,
+ * junction) still counts, and falls back to the paths otherwise. A job with no
+ * workdir predates tagging and belongs to no workspace.
+ */
+export function jobInWorkspace(
+  job: Pick<JobState, 'workdir' | 'identityKey'>, workspace: WorkspaceRef,
+): boolean {
+  return job.workdir !== undefined
+    && sameWorkspace({ path: job.workdir, identityKey: job.identityKey }, workspace);
+}
+
+/** The remembered inputs for `workspace`, found by identity: the record is keyed by whichever spelling was seen first. */
+export function findWorkspaceMemory(
+  appState: AppStateData | null, workspace: WorkspaceRef,
+): AppStateData['workspaces'][string] | undefined {
+  if (!appState) return undefined;
+  const key = findWorkspaceKey(appState.workspaces, workspace);
+  return key === undefined ? undefined : appState.workspaces[key];
+}
 
 /** A job blocked on the human — an interactive session waiting for a turn, or a manual/approval step waiting for an answer. */
 export function isWaitingJob(job: JobState): boolean {
@@ -1231,27 +1309,27 @@ export function ongoingJobs(jobs: Record<string, JobState>): JobState[] {
  * runId -> where a live run is among its stages, for the run grids: a job
  * hears `stages:item` the moment a stage starts, well before the grid's next
  * manifest poll. Only unfinished jobs — a finished job's copy is stale, and
- * the manifest is authoritative for it. `workdir`, when given, keeps another
+ * the manifest is authoritative for it. `workspace`, when given, keeps another
  * workspace's run from decorating this one's rows, as in `waitingRunIds`.
  */
 export function liveStageProgress(
-  jobs: Record<string, JobState>, workdir?: string,
+  jobs: Record<string, JobState>, workspace?: WorkspaceRef,
 ): Map<string, { index: number; total: number }> {
   const progress = new Map<string, { index: number; total: number }>();
   for (const job of Object.values(jobs)) {
     if (job.finished || job.runId === undefined || job.stageProgress === undefined) continue;
-    if (workdir !== undefined && job.workdir !== workdir) continue;
+    if (workspace !== undefined && !jobInWorkspace(job, workspace)) continue;
     progress.set(job.runId, { index: job.stageProgress.index, total: job.stageProgress.total });
   }
   return progress;
 }
 
 /** runIds of runs blocked on the human — the runs list renders disk rows keyed by runId. */
-/** `workdir`, when given, keeps another workspace's waiting run from decorating this one's rows. */
-export function waitingRunIds(jobs: Record<string, JobState>, workdir?: string): Set<string> {
+/** `workspace`, when given, keeps another workspace's waiting run from decorating this one's rows. */
+export function waitingRunIds(jobs: Record<string, JobState>, workspace?: WorkspaceRef): Set<string> {
   const ids = new Set<string>();
   for (const job of waitingJobs(jobs)) {
-    if (workdir !== undefined && job.workdir !== workdir) continue;
+    if (workspace !== undefined && !jobInWorkspace(job, workspace)) continue;
     if (job.runId) ids.add(job.runId);
   }
   return ids;

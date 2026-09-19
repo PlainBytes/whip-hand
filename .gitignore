@@ -9,3 +9,4 @@ apps/*/src-tauri/binaries/
 apps/*/src-tauri/resources/
 .worktrees/
 .whiphand/
+crates/*/target/

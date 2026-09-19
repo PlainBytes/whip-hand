@@ -95,7 +95,7 @@ steps:
                   are attached, address every point.
               - id: tests
                 kind: command
-                run: "{{ inputs.test_command }}"
+                run: eval "{{ inputs.test_command }}"
                 verdict: true
                 output: tests.log
                 timeout_ms: 1800000

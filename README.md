@@ -359,8 +359,8 @@ whiphand treats Windows as one more platform with one way to do paths and proces
   moves still resumes.
 - **Nothing outlives the run.** A Windows Job Object per run (via the small `whiphand-job.exe` guard,
   embedded in the CLI and the desktop agent) ends the whole process tree on cancel, timeout or crash. Liveness
-  is a heartbeat lease (renewed every 30 s, stale at 5 min), so a run whose process was killed is marked
-  crashed **at next start**. A host suspended for more than five minutes loses its run on wake, and a step
+  is a heartbeat lease (renewed every 30 s, stale at 5 min), cut short when the owning process provably no
+  longer exists on this machine, so a run whose process was killed is marked crashed **at next start**. A host suspended for more than five minutes loses its run on wake, and a step
   that deliberately left a process running does not keep it past the run.
 - **What is out of scope.** A workspace on a *typed* UNC path (`\\server\share\proj`) is refused with a
   clear message — map the share to a drive letter instead. Paths over 260 characters are not guaranteed, but a

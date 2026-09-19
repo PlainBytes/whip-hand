@@ -478,7 +478,7 @@ test('doctor parity: CLI human output and agent doctor() report the same tool fa
  */
 function normalizeManifest(value: unknown, dir: string, runId: string): unknown {
   const VOLATILE = new Set([
-    'runId', 'workdir', 'runDir', 'pid', 'startedAt', 'endedAt', 'updatedAt', 'heartbeatAt', 'resumedAt',
+    'runId', 'workdir', 'runDir', 'pid', 'pidScope', 'startedAt', 'endedAt', 'updatedAt', 'heartbeatAt', 'resumedAt',
   ]);
   if (Array.isArray(value)) return value.map(v => normalizeManifest(v, dir, runId));
   if (value !== null && typeof value === 'object') {

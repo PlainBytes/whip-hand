@@ -50,6 +50,12 @@
       "counterpart": "durable-fs.test.ts: 'removeTree retries a transient failure ... and gives up on a persistent one' (the same failure, injected)"
     },
     {
+      "file": "packages/core/src/engine/manifest.test.ts",
+      "reason": "needs a POSIX non-root user",
+      "kind": "asymmetry",
+      "counterpart": "manifest.test.ts: 'listRuns: a fresh lease is left running with a live owner' (a live pid is never judged dead, on every OS; EPERM on a pid we may not signal is the POSIX-only case)"
+    },
+    {
       "file": "packages/core/src/engine/command.test.ts",
       "reason": "no POSIX shell on this machine",
       "kind": "capability"

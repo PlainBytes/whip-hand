@@ -51,6 +51,17 @@ const PLACEHOLDER =
   /\{\{\s*(inputs\.[A-Za-z0-9_-]+|loop\.(?:iteration|max_iterations)|stage\.(?:index|total|id|title)|run\.(?:name|slug|id|dir))\s*\}\}/g;
 
 /**
+ * The fields each built-in namespace has — what `PLACEHOLDER` accepts. A
+ * `{{ run.x }}` naming anything else is not a placeholder at render time (it
+ * stays as written), so validation refuses it instead: see schema.ts.
+ */
+export const PLACEHOLDER_FIELDS = {
+  run: ['id', 'slug', 'name', 'dir'],
+  stage: ['index', 'total', 'id', 'title'],
+  loop: ['iteration', 'max_iterations'],
+} as const;
+
+/**
  * One resolved placeholder: the `{{ ref }}` a template names, the environment
  * variable a command step sees it through, and its value. The single table
  * behind both renderers *and* `commandSpec`'s env map, so "what `run:` refers to"

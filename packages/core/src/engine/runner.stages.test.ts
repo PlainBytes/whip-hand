@@ -228,6 +228,28 @@ test('each stage gets its stage file and nothing from the stage before it', asyn
   }
 });
 
+test('items can glob the run directory, where an earlier step wrote the plan', async () => {
+  const dir = await tmpRepoWithPlans({});
+  const h = harness();
+  const before = `
+  - kind: command
+    id: cut
+    run: ls "{{ run.dir }}"`;
+  // The harness never runs a real shell, so 'cut' writes the plan the way
+  // its command would: under the run dir it is handed.
+  const spawnHeadless: NonNullable<RunOptions['spawnHeadless']> = async (spec, ...rest) => {
+    const runDir = spec.env.WHIPHAND_RUN_DIR;
+    if (spec.env.WHIPHAND_STEP_ID === 'cut' && runDir !== undefined) {
+      await mkdir(join(runDir, 'plans'));
+      for (const [name, text] of Object.entries(TWO_STAGES)) await writeFile(join(runDir, 'plans', name), text);
+    }
+    return h.spawnHeadless(spec, ...rest);
+  };
+  const result = await run(dir, h, { workflow: stagedWorkflow('{{ run.dir }}/plans/*.md', { before }), spawnHeadless });
+  assert.equal(result.ok, true, JSON.stringify(h.events.find(e => e.type === 'run:error')));
+  assert.deepEqual(items(h), ['01-schema', '02-api']);
+});
+
 test('a stage added to the directory mid-run is picked up before the run ends', async () => {
   const dir = await tmpRepoWithPlans(TWO_STAGES);
   const h = harness({

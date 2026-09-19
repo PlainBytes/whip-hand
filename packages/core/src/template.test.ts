@@ -58,6 +58,13 @@ test('run.* is available outside a loop, unlike loop.*', () => {
   assert.throws(() => renderTemplate('{{ loop.iteration }}', scope()), TemplateError);
 });
 
+test('run.dir is the run directory, absolute with forward slashes on every platform', () => {
+  const posix = scope({ runDir: '/w/.whiphand/runs/20260101-000000-aaaa' });
+  assert.equal(renderTemplate('{{ run.dir }}/plans/*.md', posix), '/w/.whiphand/runs/20260101-000000-aaaa/plans/*.md');
+  const win = scope({ runDir: 'C:\\Users\\me\\proj\\.whiphand\\runs\\r1' });
+  assert.equal(renderTemplate('{{run.dir}}', win), 'C:/Users/me/proj/.whiphand/runs/r1');
+});
+
 test('an unknown run.* reference is left alone rather than throwing', () => {
   assert.equal(renderTemplate('{{ run.nope }}', scope()), '{{ run.nope }}');
 });

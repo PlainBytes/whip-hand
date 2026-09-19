@@ -116,7 +116,6 @@ export function commandSpec(step: CommandStep, ctx: RunCtx, capturePath?: string
       ...artifactEnv,
       ...bound,
       ...stageEnv,
-      WHIPHAND_RUN_DIR: toFwdAbs(ctx.runDir),
       WHIPHAND_STEP_ID: step.id,
     },
     interactive: false,

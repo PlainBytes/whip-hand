@@ -446,6 +446,11 @@ splits and globs like any unquoted shell variable: **quote it the way you would 
 variable** (`"{{ inputs.base }}"`). Everything else a step declares — `cwd`, `env` values, an
 agent prompt — is data we read, not a shell line, so those still get the value itself.
 
+A `{{ run.* }}`, `{{ stage.* }}` or `{{ loop.* }}` naming a field not in the table below is refused
+when the workflow is parsed, naming the step and field. It would otherwise stay in the text as
+written: a stages glob over it matches nothing, and a prompt hands the agent a literal `{{ … }}`.
+Braces outside those three namespaces are not placeholders and stay legal in any field.
+
 Every placeholder has one environment binding, from one table:
 
 | Placeholder | Variable | Exported |
@@ -1039,6 +1044,7 @@ hazards:
 | the name | `{{ run.name }}` | `$WHIPHAND_RUN_NAME` (unset when unnamed) |
 | the slug | `{{ run.slug }}` | `$WHIPHAND_RUN_SLUG` |
 | the id | `{{ run.id }}` | `$WHIPHAND_RUN_ID` |
+| the run directory | `{{ run.dir }}` | `$WHIPHAND_RUN_DIR` |
 
 `run.slug` is the name lowercased to `[a-z0-9-]`, capped at 48 characters — the same shape
 `WORKFLOW_NAME_RE` validates, which is already git-ref safe. An unnamed run (or one whose

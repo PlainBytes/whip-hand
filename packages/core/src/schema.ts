@@ -4,9 +4,9 @@ import type { LoopStep, StagesStep, Workflow, Step, StepKind } from './types.ts'
 import { STAGE_REF } from './types.ts';
 import { childSteps, flattenSteps, isContainerStep, isLoopStep, isManualStep, isStagesStep } from './steps.ts';
 import { ATTACHMENTS_REF } from './attachments.ts';
-import { disabledIds } from './enabled.ts';
+import { disabledIds, joinNames } from './enabled.ts';
 import { validateRelativePath, validateSegment } from './segment.ts';
-import { artifactEnvName, inputEnvName } from './template.ts';
+import { PLACEHOLDER_FIELDS, artifactEnvName, inputEnvName } from './template.ts';
 
 export class WorkflowError extends Error {
   problems: string[];
@@ -366,6 +366,7 @@ export function validateWorkflowSemantics(workflow: Workflow): string[] {
 
   checkNames(located, problems);
   checkInputEnvCollisions(workflow, problems);
+  checkPlaceholders(located, problems);
 
   for (const src of located) {
     const step = src.step;
@@ -480,6 +481,47 @@ function checkNames(located: Located[], problems: string[]): void {
           problems.push(`step '${step.id}': inputs '${prior}' and '${ref}' both map to ${env}; rename one`);
         }
         seen.set(env, ref);
+      }
+    }
+  }
+}
+
+/**
+ * A `{{ run.x }}`, `{{ stage.x }}` or `{{ loop.x }}` naming a field that does
+ * not exist is left as written at render time — so a typo like `{{ run.dir }}`
+ * before it existed became a literal path, and a stages glob over it matched
+ * nothing after the planning session had already run. Refused here instead.
+ * Braces outside these namespaces are not placeholders at all and stay legal,
+ * so a prompt can still quote another tool's template syntax.
+ */
+const NAMESPACED = /\{\{\s*(run|stage|loop)\.([A-Za-z0-9_-]+)\s*\}\}/g;
+
+function templatedFields(step: Step): Array<[string, string]> {
+  if (isStagesStep(step)) return [['items', step.items]];
+  if (isLoopStep(step)) return [];
+  if (step.kind === 'command') {
+    return [
+      ['run', step.run],
+      ...(step.cwd === undefined ? [] : [['cwd', step.cwd] as [string, string]]),
+      ...Object.entries(step.env ?? {}).map(([k, v]): [string, string] => [`env.${k}`, v]),
+    ];
+  }
+  if (isManualStep(step)) return [['title', step.title], ['instructions', step.instructions]];
+  return [
+    ['prompt', step.prompt],
+    ...(step.allow_paths ?? []).map((g, i): [string, string] => [`allow_paths[${i}]`, g]),
+  ];
+}
+
+function checkPlaceholders(located: Located[], problems: string[]): void {
+  for (const { step } of located) {
+    const label = isStagesStep(step) ? 'stages step' : 'step';
+    for (const [field, text] of templatedFields(step)) {
+      for (const [, ns, name] of text.matchAll(NAMESPACED)) {
+        const known: readonly string[] = PLACEHOLDER_FIELDS[ns as keyof typeof PLACEHOLDER_FIELDS];
+        if (known.includes(name)) continue;
+        problems.push(`${label} '${step.id}': unknown placeholder '{{ ${ns}.${name} }}' in ${field} `
+          + `(${ns}.* has ${joinNames([...known])})`);
       }
     }
   }

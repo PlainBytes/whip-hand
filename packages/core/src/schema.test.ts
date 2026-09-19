@@ -59,6 +59,52 @@ test('rejects inputs referencing unknown steps', () => {
     e instanceof WorkflowError && e.problems.some(p => p.includes('nonexistent')));
 });
 
+test('rejects a run.*, stage.* or loop.* placeholder that does not exist, naming the step', () => {
+  const y = VALID.replace('prompt: "Implement the plan."', 'prompt: "Write to {{ run.dir }}/{{ run.directory }}"');
+  assert.throws(() => parseWorkflow(y), (e: unknown) =>
+    e instanceof WorkflowError
+    && e.problems.includes("step 'execute': unknown placeholder '{{ run.directory }}' in prompt "
+      + '(run.* has id, slug, name and dir)'));
+});
+
+test('checks placeholders in every templated field, stages items included', () => {
+  const y = `
+name: w
+steps:
+  - kind: stages
+    id: build
+    items: "{{ run.plans }}/*.md"
+    steps:
+      - kind: command
+        id: c
+        run: echo "{{ stage.name }}"
+        cwd: "{{ loop.count }}"
+        env: { A: "{{ run.nope }}" }
+      - kind: approval
+        id: accept
+        title: "{{ stage.heading }}"
+        instructions: "{{ loop.i }}"
+`;
+  assert.throws(() => parseWorkflow(y), (e: unknown) => {
+    if (!(e instanceof WorkflowError)) return false;
+    const bad = e.problems.filter(p => p.includes('unknown placeholder')).map(p => p.split(' (')[0]);
+    assert.deepEqual(bad, [
+      "stages step 'build': unknown placeholder '{{ run.plans }}' in items",
+      "step 'c': unknown placeholder '{{ stage.name }}' in run",
+      "step 'c': unknown placeholder '{{ loop.count }}' in cwd",
+      "step 'c': unknown placeholder '{{ run.nope }}' in env.A",
+      "step 'accept': unknown placeholder '{{ stage.heading }}' in title",
+      "step 'accept': unknown placeholder '{{ loop.i }}' in instructions",
+    ]);
+    return true;
+  });
+});
+
+test('leaves braces outside the run/stage/loop namespaces alone, so prompts can quote other template syntax', () => {
+  const y = VALID.replace('prompt: "Implement the plan."', 'prompt: "Keep {{ user.name }} and {{name}} as-is in {{ run.dir }}"');
+  assert.doesNotThrow(() => parseWorkflow(y));
+});
+
 test('rejects inputs referencing later steps', () => {
   const y = VALID.replace('inputs: [plan]', 'inputs: [review]');
   assert.throws(() => parseWorkflow(y), (e: unknown) =>

@@ -33,6 +33,13 @@
   and `cursor-agent`, which had no adapter, no longer appear.
 - The harness group is built from the adapter registry. `doctor.yaml` may override a harness entry's label, url
   and `optional`, but a `group: harness` entry for an id with no registered adapter is rejected.
+### `{{ run.dir }}`, and unknown placeholders are refused
+
+- `{{ run.dir }}` names the run directory, the same absolute, forward-slash path as `$WHIPHAND_RUN_DIR`, so a
+  planning step can write stage files there and a `stages` step can glob them (`items: "{{ run.dir }}/plans/*.md"`).
+- A `{{ run.* }}`, `{{ stage.* }}` or `{{ loop.* }}` with a field that does not exist is now a parse-time error
+  naming the step and field. It used to stay in the text as written, so a stages glob over it failed only after
+  the steps before it had run.
 
 ### Windows: one way to do paths and processes
 

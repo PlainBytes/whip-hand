@@ -116,6 +116,13 @@ test('step env is merged with the run-dir pointers, and does not leak process en
   });
 });
 
+test('{{ run.dir }} in run: is a reference to WHIPHAND_RUN_DIR, and a value everywhere else', () => {
+  const spec = commandSpec({ kind: 'command', id: 'c', run: 'ls "{{ run.dir }}/plans"', env: { PLANS: '{{ run.dir }}/plans' } }, ctx);
+  assert.equal(spec.argv.at(-1), 'ls "${WHIPHAND_RUN_DIR}/plans"');
+  assert.equal(spec.env.WHIPHAND_RUN_DIR, '/w/.whiphand/runs/r1');
+  assert.equal(spec.env.PLANS, '/w/.whiphand/runs/r1/plans');
+});
+
 test('env paths are absolute with forward slashes, whatever the platform wrote them as', () => {
   const win: RunCtx = { ...ctx, runDir: 'C:\\Users\\me\\proj\\.whiphand\\runs\\r1', artifacts: { plan: 'C:\\Users\\me\\proj\\.whiphand\\runs\\r1\\plan.md' } };
   const spec = commandSpec({ kind: 'command', id: 'c', run: 'true', inputs: ['plan'] }, win);

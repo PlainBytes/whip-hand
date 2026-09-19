@@ -88,5 +88,8 @@ test('cancel: killAll ends the whole tree while the guard stays usable for the n
   const next = await second.grandchild;
   assert.ok(alive(next));
   await container.dispose();
-  await until(() => !alive(second.pid) && !alive(next), 20_000);
+  assert.equal(container.lastKillError, undefined, 'TerminateJobObject failed on dispose (win32 error)');
+  assert.deepEqual(container.assignErrors, [], 'the guard refused the next step\'s assign (pid, win32 error)');
+  await until(() => !alive(second.pid) && !alive(next), 20_000)
+    .catch(() => assert.fail(`survivors after dispose: child ${alive(second.pid)}, grandchild ${alive(next)}`));
 });

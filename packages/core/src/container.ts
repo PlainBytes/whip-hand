@@ -204,13 +204,23 @@ export class GuardContainer implements Container {
   private readonly timeoutMs: number;
   /** Why the last `kill` failed, as the guard reported it; cleared by one that succeeds. */
   lastKillError: string | undefined;
+  /** Assigns the guard refused (`<pid> <reason>`): each is a child running outside the job. */
+  readonly assignErrors: string[] = [];
 
   constructor(guard: ChildProcess, timeoutMs: number = GUARD_TIMEOUT_MS) {
     this.guard = guard;
     this.timeoutMs = timeoutMs;
     guard.stdout?.setEncoding('utf8');
     const lines = createInterface({ input: guard.stdout! });
-    lines.on('line', line => { this.waiters.shift()?.(line.trim()); });
+    lines.on('line', raw => {
+      const line = raw.trim();
+      // Assign answers are unsolicited — nothing waits on them — but a refusal must not vanish.
+      if (/^(ok|err) \d+/.test(line)) {
+        if (line.startsWith('err ')) this.assignErrors.push(line.slice('err '.length));
+        return;
+      }
+      this.waiters.shift()?.(line);
+    });
     // A guard that dies takes its job with it, killing the members: the
     // containment we wanted, only earlier than asked. Nothing to do but stop
     // writing to it.

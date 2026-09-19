@@ -79,7 +79,9 @@ test('cancel: killAll ends the whole tree while the guard stays usable for the n
   await container.killAll();
   assert.ok(container instanceof GuardContainer, container.degraded ?? 'the guard was found and started');
   assert.equal(container.lastKillError, undefined, 'TerminateJobObject failed (win32 error)');
-  await until(() => !alive(first.pid) && !alive(grandchild), 20_000);
+  assert.deepEqual(container.assignErrors, [], 'the guard refused an assign (pid, win32 error)');
+  await until(() => !alive(first.pid) && !alive(grandchild), 20_000)
+    .catch(() => assert.fail(`survivors after killAll: child ${alive(first.pid)}, grandchild ${alive(grandchild)}`));
 
   // The run goes on after a step is killed (a timeout, a loop iteration): the next step is contained too.
   const second = run();

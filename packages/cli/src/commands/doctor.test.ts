@@ -38,19 +38,17 @@ test('a missing OPTIONAL tool is marked ○, not ✘', () => {
   assert.ok(report.includes('○ jq not installed'));
 });
 
-test('a harness with no adapter behind it is marked detect only', () => {
+test('a row is printed as mark, id and version — nothing trails it', () => {
   const report = doctorReport([
-    row({ id: 'claude', runner: true, installed: true, version: '2.1.252' }),
-    row({ id: 'codex', runner: false, optional: true, installed: true, version: '0.5.0' }),
+    row({ id: 'claude', installed: true, version: '2.1.252' }),
+    row({ id: 'opencode', optional: true }),
+    row({ id: 'jq', group: 'support', runner: false, installed: true, version: '1.8.1' }),
   ]);
 
-  assert.ok(report.includes('✔ claude 2.1.252\n'), 'a real runner carries no marker');
-  assert.ok(report.includes('✔ codex 0.5.0 [detect only]'));
-});
-
-test('support tools are never marked detect only, runner or not', () => {
-  const report = doctorReport([row({ id: 'jq', group: 'support', runner: false, installed: true, version: '1.8.1' })]);
-  assert.ok(!report.includes('[detect only]'), 'the marker means "harness we cannot drive"');
+  assert.deepEqual(
+    report.split('\n').filter(line => /^[✔✘○] /.test(line)),
+    ['✔ claude 2.1.252', '○ opencode not installed', '✔ jq 1.8.1'],
+  );
 });
 
 test('groups are printed in TOOL_GROUPS order regardless of input order', () => {

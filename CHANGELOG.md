@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Doctor lists only harnesses whiphand can drive
+
+- The `[detect only]` marker and badge are gone from `whiphand doctor` and the desktop's Doctor page: every row in
+  the "AI harnesses" group is a registered runner, so any of them can be a workflow's `runner:`. `codex`, `gemini`
+  and `cursor-agent`, which had no adapter, no longer appear.
+- The harness group is built from the adapter registry. `doctor.yaml` may override a harness entry's label, url
+  and `optional`, but a `group: harness` entry for an id with no registered adapter is rejected.
+
 ### Windows: one way to do paths and processes
 
 **Breaking changes**

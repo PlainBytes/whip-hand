@@ -62,7 +62,6 @@ AI harnesses
 ✔ copilot 1.0.83
   · copilot will not signal when it needs you; set "beep": true in ~/.copilot/settings.json
 ✔ opencode 1.17.13
-○ codex not installed [detect only]
 
 Support tools
 ✔ git 2.53.0
@@ -70,9 +69,9 @@ Support tools
 ○ fd not installed
 ```
 
-`✔` installed · `✘` missing and required · `○` missing but optional. `[detect only]`
-marks a harness whiphand can see but has no adapter for — it will not be offered as a
-workflow's `runner:`.
+`✔` installed · `✘` missing and required · `○` missing but optional. The harness group lists
+exactly the registered runners, so any harness in it can be a workflow's `runner:`; `doctor.yaml`
+may override a harness entry but not add one.
 
 Run inside a project (or with `-C <dir>`; the desktop passes the open workspace), doctor also checks
 that folder and adds a row only when something is wrong with it: git refusing the repository
@@ -109,7 +108,7 @@ tools:
     optional: false        # missing is then an error, not a shrug
     aliases: [rtk-bin]     # other binary names to try, in order
 
-hide: [cursor-agent, jq]   # drop built-ins you do not care about
+hide: [fd, jq]     # drop built-ins you do not care about
 ```
 
 Every key is validated and unknown ones are rejected, so a typo tells you rather than

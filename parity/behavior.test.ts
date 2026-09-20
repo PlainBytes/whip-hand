@@ -350,11 +350,11 @@ const GROUP_BY_LABEL = new Map<string, ToolGroup>(
 /**
  * packages/cli/src/commands/doctor.ts's line grammar:
  *   heading  a bare line matching no other rule
- *   tool     "✔|✘|○ <id> <rest>" with an optional " [detect only]" suffix
+ *   tool     "✔|✘|○ <id> <rest>"
  *   note     "  · <text>", belonging to the tool above it
  *   blank    separates sections
  */
-const TOOL_LINE_RE = /^(✔|✘|○) (\S+) (.+?)( \[detect only\])?$/;
+const TOOL_LINE_RE = /^(✔|✘|○) (\S+) (.+)$/;
 const NOTE_LINE_RE = /^ {2}· (.+)$/;
 
 function parseCliDoctorOutput(stdout: string): DoctorFact[] {
@@ -381,14 +381,14 @@ function parseCliDoctorOutput(stdout: string): DoctorFact[] {
     }
 
     assert.ok(group !== null, `tool line before any group heading: ${JSON.stringify(line)}`);
-    const [, mark, id, rest, detectOnly] = tool;
+    const [, mark, id, rest] = tool;
     const installed = mark === '✔';
     facts.push({
       id,
       group,
-      // Only a harness row can carry the marker, so a support tool is never
-      // mistaken for a runner by its absence.
-      runner: group === 'harness' && detectOnly === undefined,
+      // The CLI prints no runner column: every harness row is a runner, and
+      // support rows never are.
+      runner: group === 'harness',
       installed,
       version: installed ? (rest === '(version unknown)' ? undefined : rest) : undefined,
     });

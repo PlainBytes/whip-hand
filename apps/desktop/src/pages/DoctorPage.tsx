@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Badge,
   Button,
   Card,
   CardHeader,
@@ -29,7 +28,7 @@ import type { DoctorRow } from '../../../../packages/agent/src/protocol.ts';
 
 /** Why each group is here, in the one line the heading doesn't have room for. */
 const GROUP_BLURB: Record<ToolGroup, string> = {
-  harness: 'The coding agents whiphand drives. Only the ones without a "detect only" tag can be a workflow’s runner.',
+  harness: 'The coding agents whiphand can drive — any of these can be a workflow’s runner.',
   support: 'Command-line tools that workflows — and whiphand itself — lean on.',
 };
 
@@ -57,9 +56,6 @@ const SUBTLE = { color: 'var(--colorNeutralForeground3)' };
 
 function ToolCard({ tool }: { tool: DoctorRow }) {
   const openExternal = useOpenExternal();
-  // Marks a harness we can see but cannot drive, so nobody puts it in a
-  // workflow's `runner:` and waits for the run to explain why not.
-  const detectOnly = tool.group === 'harness' && !tool.runner;
 
   return (
     <Card data-testid={`doctor-card-${tool.id}`}>
@@ -74,7 +70,6 @@ function ToolCard({ tool }: { tool: DoctorRow }) {
             {tool.id.toLowerCase() !== tool.label.toLowerCase() && (
               <Text size={200} font="monospace" style={SUBTLE}>{tool.id}</Text>
             )}
-            {detectOnly && <Badge appearance="outline" size="small">detect only</Badge>}
           </div>
         }
         description={

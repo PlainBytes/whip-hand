@@ -124,18 +124,18 @@ describe('App', () => {
           runner: true, optional: false, installed: true, version: '1.2.3',
         },
         {
-          id: 'codex', label: 'OpenAI Codex CLI', group: 'harness',
-          runner: false, optional: true, installed: false,
+          id: 'opencode', label: 'opencode', group: 'harness',
+          runner: true, optional: true, installed: false,
         },
       ],
     });
 
     const claudeCard = await screen.findByTestId('doctor-card-claude');
-    const codexCard = screen.getByTestId('doctor-card-codex');
+    const opencodeCard = screen.getByTestId('doctor-card-opencode');
     expect(claudeCard).toHaveTextContent('claude');
     expect(claudeCard).toHaveTextContent('1.2.3');
     expect(claudeCard).toHaveTextContent('Installed');
-    expect(codexCard).toHaveTextContent('Not found');
+    expect(opencodeCard).toHaveTextContent('Not found');
   });
 
   it('restores the last workspace and page from getAppState on connect', async () => {

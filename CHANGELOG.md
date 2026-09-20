@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Doctor says when an installed tool is not logged in, or not set up
+
+- `whiphand doctor` and the desktop's Doctor page add a note under `claude`, `copilot`, `opencode` and `gh` when the
+  tool is installed but has nothing to authenticate with, naming the fix (for example
+  ``not logged in — run `claude` and use /login``). The row stays `✔`: the binary is there.
+- The checks are local and never interactive — an env var, a credentials file, or a subcommand that stays on the
+  machine — so being offline never reads as logged out. When a check times out, cannot read its file or gets an
+  answer it does not recognise, there is no note. The claude check is skipped on macOS, where the login lives in the
+  Keychain.
+- Two more notes for an install that is present but not doing its job. The rtk row says when claude is installed
+  and no user-level Claude Code settings file has a hook that calls rtk (``run `rtk init -g` to set it up``). A
+  harness older than the oldest version its adapter was verified against (claude 2.1.260, copilot 1.0.83, opencode
+  1.17.13) says so, and that it should be updated. Neither changes the row's `✔`, and an unreadable settings file
+  or an unparseable version gives no note.
+
+### Doctor checks for tools that make agents more effective
+
+- The support group gains six optional rows: `gh` (PRs, issues and CI logs without scraping the web),
+  `ast-grep` (structural search and rewrite), `yq` (jq for YAML), `uv` (fast Python environments, `uvx`),
+  Universal Ctags (a symbol index) and `scc` (a size and language map; `tokei` answers for it). A machine
+  without them shows `○`, never `✘`.
+- `whiphand doctor` wall time is unchanged at ~0.6s: the new probes run in parallel and the slowest existing
+  one, opencode, still sets the pace.
+
+### Doctor lists only harnesses whiphand can drive
+
+- The `[detect only]` marker and badge are gone from `whiphand doctor` and the desktop's Doctor page: every row in
+  the "AI harnesses" group is a registered runner, so any of them can be a workflow's `runner:`. `codex`, `gemini`
+  and `cursor-agent`, which had no adapter, no longer appear.
+- The harness group is built from the adapter registry. `doctor.yaml` may override a harness entry's label, url
+  and `optional`, but a `group: harness` entry for an id with no registered adapter is rejected.
+
 ### Windows: one way to do paths and processes
 
 **Breaking changes**

@@ -22,7 +22,7 @@ export {
 export { ModelCatalog } from './model-catalog.ts';
 export type { ModelCatalogGetOptions } from './model-catalog.ts';
 export {
-  BUILTIN_TOOLS, TOOL_GROUPS, TOOL_GROUP_LABELS, VERSION_RE, PROBE_TIMEOUT_MS,
+  BUILTIN_SUPPORT_TOOLS, TOOL_GROUPS, TOOL_GROUP_LABELS, VERSION_RE, PROBE_TIMEOUT_MS,
   detectTools, machineChecks, workspaceChecks, probeTool, resolveToolTable, parseToolVersion,
 } from './tools.ts';
 export type { ToolProbe, ToolStatus, DoctorToolsConfig } from './tools.ts';

@@ -161,10 +161,16 @@ test('detect notes that copilot cannot signal for attention while beep is off', 
   // Its only attention channel is the terminal bell, and beep defaults to off.
   const home = await mkdtemp(join(tmpdir(), 'whiphand-copilot-'));
   const previous = process.env.COPILOT_HOME;
+  const previousToken = process.env.COPILOT_GITHUB_TOKEN;
   process.env.COPILOT_HOME = home;
+  // Not what this test is about: with a token, detect() has no login note, so
+  // `notes` below is the beep advice alone (the login note is in auth.test.ts).
+  process.env.COPILOT_GITHUB_TOKEN = 'test-token';
   t.after(() => {
     if (previous === undefined) delete process.env.COPILOT_HOME;
     else process.env.COPILOT_HOME = previous;
+    if (previousToken === undefined) delete process.env.COPILOT_GITHUB_TOKEN;
+    else process.env.COPILOT_GITHUB_TOKEN = previousToken;
   });
 
   const noConfig = await copilotAdapter.detect();

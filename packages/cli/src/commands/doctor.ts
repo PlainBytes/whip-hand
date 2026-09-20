@@ -23,10 +23,7 @@ export function doctorReport(statuses: readonly ToolStatus[]): string {
       // tells the user their machine is broken when it isn't.
       const mark = status.installed ? '✔' : status.optional ? '○' : '✘';
       const rest = status.installed ? (status.version ?? '(version unknown)') : 'not installed';
-      // Marks a harness we can see but cannot drive, so nobody puts it in a
-      // workflow's `runner:` and waits for the run to explain why not.
-      const detectOnly = group === 'harness' && !status.runner ? ' [detect only]' : '';
-      lines.push(`${mark} ${status.id} ${rest}${detectOnly}`);
+      lines.push(`${mark} ${status.id} ${rest}`);
       for (const note of status.notes ?? []) lines.push(`  · ${note}`);
     }
     sections.push(lines.join('\n'));

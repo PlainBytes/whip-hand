@@ -13,6 +13,7 @@ function fakeAdapter(
 ): RunnerAdapter {
   return {
     id,
+    doctor: { label: id, argv: [id], optional: true },
     capabilities: CAPS,
     async detect(): Promise<DetectResult> { return { installed: true }; },
     interactive(_step: AgentStep, _ctx: RunCtx): SpawnSpec { return NOOP_SPEC; },

@@ -38,6 +38,7 @@ function fakeRunner(): RunnerAdapter {
   });
   return {
     id: 'fake',
+    doctor: { label: 'fake', argv: ['fake'], optional: true },
     capabilities: { sessionIdInjection: true, sessionIdCapture: false, sessionResume: true, toolDenial: true, shareTranscript: false },
     detect: async () => ({ installed: true }),
     interactive: build('interactive'),

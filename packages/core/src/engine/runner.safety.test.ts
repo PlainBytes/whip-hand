@@ -46,6 +46,7 @@ function fakeRunner(extraFiles?: (ctx: RunCtx) => SpawnSpec['files']): RunnerAda
   });
   return {
     id: 'fake',
+    doctor: { label: 'fake', argv: ['fake'], optional: true },
     capabilities: { sessionIdInjection: true, sessionIdCapture: false, sessionResume: true, toolDenial: true, shareTranscript: false },
     detect: async () => ({ installed: true }),
     interactive: build('interactive'), headless: build('headless'), harvest: build('harvest'),

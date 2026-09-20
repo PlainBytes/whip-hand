@@ -78,19 +78,19 @@ describe('WelcomePage', () => {
     expect(await screen.findByText(/not installed/)).toBeInTheDocument();
   });
 
-  it('lists only actual runners — not support tools or undrivable harnesses', async () => {
+  it('lists only actual runners — not support tools', async () => {
     // Doctor reports the whole machine now; this heading says "Runners" and
     // must keep meaning it, or jq shows up as something you could run a
     // workflow on.
     const { transport } = renderWelcome();
     await respond(transport, 'doctor', [
       { id: 'claude', label: 'Claude Code', group: 'harness', runner: true, optional: false, installed: true, version: '3.0.0' },
-      { id: 'codex', label: 'OpenAI Codex CLI', group: 'harness', runner: false, optional: true, installed: true, version: '0.5.0' },
+      { id: 'git', label: 'Git', group: 'support', runner: false, optional: false, installed: true, version: '2.53.0' },
       { id: 'jq', label: 'jq', group: 'support', runner: false, optional: true, installed: true, version: '1.8.1' },
     ]);
 
     expect(await screen.findByText('Claude Code')).toBeInTheDocument();
-    expect(screen.queryByText('OpenAI Codex CLI')).not.toBeInTheDocument();
+    expect(screen.queryByText('Git')).not.toBeInTheDocument();
     expect(screen.queryByText('jq')).not.toBeInTheDocument();
   });
 

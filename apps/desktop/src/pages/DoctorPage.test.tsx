@@ -126,23 +126,18 @@ describe('DoctorPage', () => {
     expect(screen.getByTestId('doctor-card-jq')).toHaveTextContent('Not found — optional');
   });
 
-  it('tags a harness whiphand cannot drive, and leaves real runners untagged', async () => {
+  it('carries no badge on a harness card', async () => {
+    // Every harness row is a runner, so there is nothing left to mark.
     const { transport } = renderDoctor();
     await respond(transport, 'doctor', [
       CLAUDE,
-      row({ id: 'codex', label: 'OpenAI Codex CLI', runner: false, optional: true, installed: true, version: '0.5.0' }),
+      row({ id: 'opencode', label: 'opencode', optional: true }),
     ]);
 
-    expect(await screen.findByTestId('doctor-card-codex')).toHaveTextContent('detect only');
-    expect(screen.getByTestId('doctor-card-claude')).not.toHaveTextContent('detect only');
-  });
-
-  it('never tags a support tool as detect only', async () => {
-    // The tag means "harness we cannot drive", not "not a runner" — every
-    // support tool would qualify for the latter.
-    const { transport } = renderDoctor();
-    await respond(transport, 'doctor', [GIT]);
-    expect(await screen.findByTestId('doctor-card-git')).not.toHaveTextContent('detect only');
+    for (const id of ['claude', 'opencode']) {
+      const card = await screen.findByTestId(`doctor-card-${id}`);
+      expect(card.querySelector('.fui-Badge')).toBeNull();
+    }
   });
 
   it('renders the setup notes a tool reported', async () => {

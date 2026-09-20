@@ -6,6 +6,7 @@ import { shQuote, toFwdAbs, toWorkspace } from '../path-form.ts';
 import { awaitStatePath } from '../engine/await-state.ts';
 import { SUGGEST_PROMPT_NAME, harvestPromptPath, promptPath, settingsPath, systemPromptPath } from '../engine/spawn-files.ts';
 import { probeRunner } from '../tools.ts';
+import { envOn, isMissingFile, liveAuthDeps, withAuthNote, type AuthProbeDeps } from './auth.ts';
 import { probeClaudeModels } from './claude-models.ts';
 import { flagArgs, harvestPrompt, isResumedStep, lf, promptPointer, requireSessionId, spawnSpec } from './common.ts';
 import { join } from 'node:path';
@@ -77,16 +78,74 @@ function interactiveSettings(touchMarker: string, awaitPath: string): Record<str
   };
 }
 
+/** Any one of these set means claude has something to authenticate with. */
+const CLAUDE_CREDENTIAL_ENV = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'];
+/** Bedrock, Vertex and Foundry authenticate through the cloud provider's own credentials, not a login. */
+const CLAUDE_CLOUD_PROVIDER_ENV = ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'];
+
+/**
+ * Whether claude will start with no credentials, worked out from the same
+ * places claude itself looks, with no process spawned. Verified against claude
+ * 2.1.278 with `claude auth status` in an empty CLAUDE_CONFIG_DIR: every
+ * variable above, an `apiKeyHelper` or `env` entry in the user's settings.json,
+ * and a `.credentials.json` in the config dir each flip `loggedIn` to true.
+ *
+ * `claude auth status` itself is not used: it answers authoritatively but
+ * opens a connection to Anthropic on every call (seen with strace, even with
+ * telemetry switched off), and Doctor's checks stay on the machine.
+ *
+ * macOS keeps the login in the Keychain, where a file check can only see the
+ * wrong thing, so there is no answer and therefore no note. Windows and Linux
+ * use `.credentials.json` under the config dir (Windows not verified here).
+ * Project-level and managed settings are not read; a login supplied only
+ * there would get a note it does not deserve; accepted, since running the
+ * suggested login is harmless.
+ */
+export async function claudeAuthNote(deps: AuthProbeDeps = liveAuthDeps()): Promise<string | undefined> {
+  if (deps.platform !== 'linux' && deps.platform !== 'win32') return undefined;
+  const { env } = deps;
+  if (envOn(env, ...CLAUDE_CREDENTIAL_ENV, ...CLAUDE_CLOUD_PROVIDER_ENV)) return undefined;
+
+  const configDir = env.CLAUDE_CONFIG_DIR || join(deps.home, '.claude');
+  try {
+    await deps.readText(join(configDir, '.credentials.json'));
+    return undefined;
+  } catch (error) {
+    if (!isMissingFile(error)) return undefined;
+  }
+
+  try {
+    const settings = JSON.parse(await deps.readText(join(configDir, 'settings.json'))) as
+      { apiKeyHelper?: unknown; env?: Record<string, unknown> } | null;
+    if (settings?.apiKeyHelper) return undefined;
+    // settings.json's `env` block is applied like exported variables, cloud-provider switches included.
+    const fromSettings = Object.fromEntries(
+      Object.entries(settings?.env ?? {}).filter(([, value]) => value != null).map(([name, value]) => [name, String(value)]));
+    if (envOn(fromSettings, ...CLAUDE_CREDENTIAL_ENV, ...CLAUDE_CLOUD_PROVIDER_ENV)) return undefined;
+  } catch (error) {
+    // No settings.json is a plain "no" — but one we cannot read or parse might
+    // hold the helper, and then we are not sure.
+    if (!isMissingFile(error)) return undefined;
+  }
+  return 'not logged in — run `claude` and use /login';
+}
+
 export const claudeAdapter: RunnerAdapter = {
   id: 'claude',
+  doctor: {
+    label: 'Claude Code', url: 'https://claude.com/claude-code',
+    argv: ['claude', '--version'], optional: false,
+    // The oldest version cited under "verified against" in this file (2.1.260 in interactiveSettings).
+    minVersion: '2.1.260',
+  },
   capabilities: {
     sessionIdInjection: true, sessionIdCapture: false, sessionResume: true,
     toolDenial: true, shareTranscript: false,
   },
 
-  /** Nothing to add on top of the plain probe — claude's hooks mean it never needs a setup advisory. */
-  detect(): Promise<DetectResult> {
-    return probeRunner('claude');
+  /** The plain probe, plus a login note — claude's hooks mean it never needs a setup advisory. */
+  async detect(): Promise<DetectResult> {
+    return withAuthNote(await probeRunner(claudeAdapter.doctor), claudeAuthNote);
   },
 
   interactive(step: AgentStep, ctx: RunCtx): SpawnSpec {

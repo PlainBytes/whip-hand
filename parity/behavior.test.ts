@@ -21,7 +21,7 @@ const FIXTURE_WORKSPACE = fileURLToPath(new URL('./fixtures/workspace', import.m
 // launches (see test-support) rather than the checked-in bash scripts, which need
 // the executable bit and are invisible to a Windows PATHEXT walk. Same versions.
 const FIXTURE_BIN = mintVersionStubs({
-  claude: '9.9.9-stub', codex: 'codex-cli 0.5.0', copilot: '9.9.9-stub', opencode: '9.9.9-stub',
+  claude: '9.9.9-stub', copilot: '9.9.9-stub', opencode: '9.9.9-stub',
 });
 
 /**
@@ -328,7 +328,7 @@ test('dry-run parity: CLI --attach and agent startRun attachments record the sam
  * thing to a human and to the desktop.
  *
  * `label`, `optional` and `url` are deliberately outside the comparison: they
- * are static table metadata both sides read from the same BUILTIN_TOOLS, so
+ * are static table metadata both sides read from the same registry and BUILTIN_SUPPORT_TOOLS, so
  * there is no drift for a comparison to find. (`optional` is recoverable from
  * the ○ mark for a MISSING tool, but not for an installed one, so including
  * it would only assert half a fact.)
@@ -350,11 +350,11 @@ const GROUP_BY_LABEL = new Map<string, ToolGroup>(
 /**
  * packages/cli/src/commands/doctor.ts's line grammar:
  *   heading  a bare line matching no other rule
- *   tool     "✔|✘|○ <id> <rest>" with an optional " [detect only]" suffix
+ *   tool     "✔|✘|○ <id> <rest>"
  *   note     "  · <text>", belonging to the tool above it
  *   blank    separates sections
  */
-const TOOL_LINE_RE = /^(✔|✘|○) (\S+) (.+?)( \[detect only\])?$/;
+const TOOL_LINE_RE = /^(✔|✘|○) (\S+) (.+)$/;
 const NOTE_LINE_RE = /^ {2}· (.+)$/;
 
 function parseCliDoctorOutput(stdout: string): DoctorFact[] {
@@ -381,14 +381,14 @@ function parseCliDoctorOutput(stdout: string): DoctorFact[] {
     }
 
     assert.ok(group !== null, `tool line before any group heading: ${JSON.stringify(line)}`);
-    const [, mark, id, rest, detectOnly] = tool;
+    const [, mark, id, rest] = tool;
     const installed = mark === '✔';
     facts.push({
       id,
       group,
-      // Only a harness row can carry the marker, so a support tool is never
-      // mistaken for a runner by its absence.
-      runner: group === 'harness' && detectOnly === undefined,
+      // The CLI prints no runner column: every harness row is a runner, and
+      // support rows never are.
+      runner: group === 'harness',
       installed,
       version: installed ? (rest === '(version unknown)' ? undefined : rest) : undefined,
     });
@@ -424,7 +424,15 @@ function normalize(facts: DoctorFact[]): DoctorFact[] {
 }
 
 test('doctor parity: CLI human output and agent doctor() report the same tool facts', async () => {
-  const stubEnv = { PATH: pathWith(FIXTURE_BIN).PATH ?? '' };
+  // The login notes are a fact about whoever runs the suite (`~/.claude`, the
+  // keychain, gh's config), so give every tool a credential to keep them out of
+  // the comparison: the stub runners then report no auth note, and the real gh
+  // (when installed) answers `gh auth token` from GH_TOKEN. The stub opencode
+  // answers `auth list` with nothing, which is an answer we do not recognise.
+  const stubEnv = {
+    PATH: pathWith(FIXTURE_BIN).PATH ?? '',
+    ANTHROPIC_API_KEY: 'parity-stub', COPILOT_GITHUB_TOKEN: 'parity-stub', GH_TOKEN: 'parity-stub',
+  };
 
   const { stdout } = await execFileAsync(process.execPath, [CLI_MAIN, 'doctor'], { env: childEnv(stubEnv) });
   const cliFacts = normalize(parseCliDoctorOutput(stdout));

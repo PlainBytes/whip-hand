@@ -1,11 +1,13 @@
 /**
  * What `whiphand doctor` and the desktop's Doctor page report: a declarative
- * table of tools to probe, in two groups. The registry stays the authority on
- * *runners* (`runner: true`, load-bearing for the `defaults.runner` dropdown);
- * everything else here is detect-only.
+ * table of tools to probe, in two groups. The registry is the authority on
+ * *harnesses*: the "harness" group is exactly the registered `RunnerAdapter`s
+ * (`runner: true`, load-bearing for the `defaults.runner` dropdown), each
+ * described by its own `adapter.doctor`. The "support" group is the table
+ * below plus whatever the user adds in doctor.yaml.
  */
 import type { AdapterRegistry } from './registry.ts';
-import type { DetectResult } from './types.ts';
+import type { DetectResult, RunnerDoctor } from './types.ts';
 import { execRunner, resolveExecutable } from './exec.ts';
 import path from 'node:path';
 import { resolveShell, type ResolveShellOpts } from './shell.ts';
@@ -13,11 +15,23 @@ import { toFwdAbs } from './path-form.ts';
 import { headroomWarning } from './canonicalize.ts';
 import { classifyGitFailure } from './engine/git-guard.ts';
 import { TOOL_GROUPS, type ToolGroup } from './tool-groups.ts';
+import { WorkflowError } from './schema.ts';
+import { globalDoctorConfigPath } from './doctor-config.ts';
+import { rtkHookCheck } from './rtk-hook.ts';
 
 // Re-exported so `@whiphand/core` stays the one import for everything doctor-shaped;
 // they live in their own node-free module because the desktop bundles them.
 export { TOOL_GROUPS, TOOL_GROUP_LABELS } from './tool-groups.ts';
 export type { ToolGroup } from './tool-groups.ts';
+
+/** What a row's `check` may ask about the rest of the report. */
+export interface CheckContext {
+  /**
+   * The detect result of another row of the table, awaited without a second
+   * probe. undefined when there is no such row — hidden, or never registered.
+   */
+  detected(id: string): Promise<DetectResult> | undefined;
+}
 
 /** A declarative "is this installed, and at what version" check. */
 export interface ToolProbe {
@@ -38,6 +52,13 @@ export interface ToolProbe {
    */
   optional?: boolean;
   url?: string;
+  /**
+   * Extra notes for a tool that turned out to be installed — "installed but
+   * not logged in", say. Built-in rows only: a function cannot come from
+   * doctor.yaml, and an override of a built-in row there replaces the row, check
+   * included. A check that throws is a check with no answer, so no notes.
+   */
+  check?: (ctx: CheckContext) => Promise<string[]>;
 }
 
 /** One row of the doctor report. The wire shape of the `doctor` RPC's result. */
@@ -45,10 +66,7 @@ export interface ToolStatus {
   id: string;
   label: string;
   group: ToolGroup;
-  /**
-   * A RunnerAdapter can drive this — i.e. it is in the registry. False for
-   * every support tool AND for a harness we can detect but not yet run.
-   */
+  /** A RunnerAdapter can drive this — i.e. it is in the registry: true for exactly the harness rows. */
   runner: boolean;
   optional: boolean;
   installed: boolean;
@@ -62,8 +80,10 @@ export interface ToolStatus {
  * Every probe is one cheap `--version` call, but there are a dozen of them
  * behind a single RPC, and `execRunner` has no timeout of its own — one hung
  * binary would hang the whole Doctor page until the client's 30s request
- * timeout fired. Measured cost of the built-in table in parallel is ~600ms,
- * so this is ~50x headroom rather than a budget anything runs near.
+ * timeout fired. Measured cost of the built-in table in parallel is ~610ms
+ * (600ms before the agent-productivity rows were added: the slowest single
+ * probe, opencode at ~460ms, sets the pace and the rest overlap it), so this is
+ * ~8x headroom rather than a budget anything runs near.
  */
 export const PROBE_TIMEOUT_MS = 5_000;
 
@@ -73,7 +93,8 @@ export const PROBE_TIMEOUT_MS = 5_000;
  *
  *   git   `git version 2.53.0`          node  `v24.16.0`
  *   jq    `jq-1.8.1` (and `jq-1.6`)     rg    `ripgrep 15.1.0`
- *   copilot `GitHub Copilot CLI 1.0.83.`  cursor-agent `2025.08.28-8d9dd2c`
+ *   copilot `GitHub Copilot CLI 1.0.83.`
+ *   yq    `yq (https://github.com/mikefarah/yq/) version v4.53.6`
  *
  * Anchored on nothing, so it finds the number wherever the tool puts it.
  * `(?:\.\d+)*` needs a digit after each dot, which is what stops copilot's
@@ -113,54 +134,65 @@ export function parseToolVersion(
 }
 
 /**
- * claude, copilot and opencode are probed through their adapters —
- * `detectTools` routes any registry id through the adapter's own `detect()`,
- * which is what keeps copilot's `beep` advisory note (and opencode's PATH and
- * env notes) alive. The adapters don't re-implement the probe to do that,
- * though: each `detect()` runs *this* entry via `probeRunner`, then layers its
- * notes on top, so the argv here is the one that actually runs — edit it and
- * both Doctor and the run:env snapshot follow.
+ * "Installed but not logged in" for gh. Checked against gh 2.86.0:
+ * `gh auth token --hostname github.com` is local (keyring, `hosts.yml` or
+ * `GH_TOKEN`), takes ~0.1s and exits 1 with `no oauth token found for
+ * github.com` when there is none.
  *
- * `optional` defaults to true. Only the things whiphand cannot work without at
- * all are required: claude and copilot (a fresh install needs at least one
- * working runner, and these are the two everyone starts from), and git, which
- * engine/git-guard.ts shells out to in order to enforce every `writes: false`
- * step. opencode is a third, later runner, and stays optional — nothing about
- * a working whiphand install depends on it being there.
+ * `gh auth status` looks like the obvious call and is wrong for this: it
+ * validates the token against the API, so offline it exits 1 with "The token
+ * in keyring is invalid" for a perfectly good login. The token comes back on
+ * stdout, is never looked at, and goes out of scope with the result.
+ *
+ * Only that exact failure counts. A timeout, a locked keyring, or anything
+ * else that is not "no token" says nothing about being logged in.
  */
-export const BUILTIN_TOOLS: readonly ToolProbe[] = [
-  // --- harness: what whiphand drives -------------------------------------------
-  {
-    id: 'claude', label: 'Claude Code', group: 'harness',
-    argv: ['claude', '--version'], optional: false,
-    url: 'https://claude.com/claude-code',
-  },
-  {
-    id: 'copilot', label: 'GitHub Copilot CLI', group: 'harness',
-    argv: ['copilot', '--version'], optional: false,
-    url: 'https://github.com/github/copilot-cli',
-  },
-  // Detected, not drivable: no RunnerAdapter exists for these yet, so they
-  // report `runner: false` and the UI says so rather than offering them as a
-  // `defaults.runner` that would fail validateWorkflowRunners at run time.
-  {
-    id: 'codex', label: 'OpenAI Codex CLI', group: 'harness',
-    argv: ['codex', '--version'], url: 'https://github.com/openai/codex',
-  },
-  {
-    id: 'gemini', label: 'Gemini CLI', group: 'harness',
-    argv: ['gemini', '--version'], url: 'https://github.com/google-gemini/gemini-cli',
-  },
-  {
-    id: 'cursor-agent', label: 'Cursor Agent', group: 'harness',
-    argv: ['cursor-agent', '--version'], url: 'https://cursor.com/cli',
-  },
-  {
-    id: 'opencode', label: 'opencode', group: 'harness',
-    argv: ['opencode', '--version'], optional: true, url: 'https://opencode.ai',
-  },
+export async function ghAuthCheck(run: typeof execRunner = execRunner): Promise<string[]> {
+  try {
+    await run(['gh', 'auth', 'token', '--hostname', 'github.com'], { timeout: PROBE_TIMEOUT_MS });
+    return [];
+  } catch (error) {
+    const { code, stderr } = error as { code?: unknown; stderr?: unknown };
+    return code === 1 && /no oauth token/i.test(String(stderr ?? ''))
+      ? ['not logged in — run `gh auth login`']
+      : [];
+  }
+}
 
-  // --- support: what workflows and whiphand itself lean on ---------------------
+/**
+ * Whether `version` is older than `min`, comparing the dot-separated numbers
+ * and padding the shorter with zeros (`1.0` equals `1.0.0`). A `-beta.1` or
+ * `+build` suffix is ignored. Anything that is not plain numbers on either
+ * side — no version at all, a custom pattern's odd capture — is not "older":
+ * a floor note is worth showing only when we are sure.
+ */
+export function isOlderVersion(version: string | undefined, min: string): boolean {
+  const numbers = (v: string): number[] | undefined => {
+    const parts = v.split(/[-+]/, 1)[0].split('.');
+    return parts.every(part => /^\d+$/.test(part)) ? parts.map(Number) : undefined;
+  };
+  const have = version === undefined ? undefined : numbers(version);
+  const want = numbers(min);
+  if (have === undefined || want === undefined) return false;
+  for (let i = 0; i < Math.max(have.length, want.length); i++) {
+    const diff = (have[i] ?? 0) - (want[i] ?? 0);
+    if (diff !== 0) return diff < 0;
+  }
+  return false;
+}
+
+/**
+ * The support group's built-in rows. Harnesses are not here: each registered
+ * adapter carries its own `doctor` descriptor, and `resolveToolTable` builds
+ * the harness rows from the registry, so a new adapter shows up in Doctor
+ * with no edit to this table.
+ *
+ * `optional` defaults to true. Only what whiphand cannot work without at all
+ * is required: git, which engine/git-guard.ts shells out to in order to
+ * enforce every `writes: false` step. (Which harnesses are required is the
+ * adapters' say: claude and copilot, the two everyone starts from.)
+ */
+export const BUILTIN_SUPPORT_TOOLS: readonly ToolProbe[] = [
   {
     id: 'git', label: 'Git', group: 'support',
     argv: ['git', '--version'], optional: false, url: 'https://git-scm.com',
@@ -180,7 +212,11 @@ export const BUILTIN_TOOLS: readonly ToolProbe[] = [
     id: 'python', label: 'Python', group: 'support',
     argv: ['python3', '--version'], aliases: ['python'], url: 'https://www.python.org',
   },
-  { id: 'rtk', label: 'rtk', group: 'support', argv: ['rtk', '--version'] },
+  {
+    // Installed is not enough: rtk saves tokens only through a Claude Code hook.
+    id: 'rtk', label: 'rtk', group: 'support', argv: ['rtk', '--version'],
+    check: ctx => rtkHookCheck(ctx),
+  },
   {
     id: 'rg', label: 'ripgrep', group: 'support',
     argv: ['rg', '--version'], url: 'https://github.com/BurntSushi/ripgrep',
@@ -192,10 +228,55 @@ export const BUILTIN_TOOLS: readonly ToolProbe[] = [
     argv: ['fd', '--version'], aliases: ['fdfind'], url: 'https://github.com/sharkdp/fd',
   },
   { id: 'jq', label: 'jq', group: 'support', argv: ['jq', '--version'], url: 'https://jqlang.github.io/jq' },
+
+  // Agent-productivity tools: CLIs a coding agent leans on, or that cut its
+  // token use or error rate. All optional, grouped by purpose.
+  {
+    // PRs, issues and CI logs without scraping the web.
+    id: 'gh', label: 'GitHub CLI', group: 'support', argv: ['gh', '--version'], url: 'https://cli.github.com',
+    check: () => ghAuthCheck(),
+  },
+  {
+    // Structural search and rewrite: precise edits for far fewer tokens than
+    // regex plus reading whole files. Its short name `sg` is not an alias on
+    // purpose: on Linux that is shadow-utils' "switch group", and telling the
+    // two apart would take a probe option that checks the output.
+    id: 'ast-grep', label: 'ast-grep', group: 'support',
+    argv: ['ast-grep', '--version'], url: 'https://ast-grep.github.io',
+  },
+  {
+    // Two unrelated tools share this name (mikefarah's Go one and the Python
+    // wrapper around jq). Both print a version on the first line, so a plain
+    // probe serves either; the link is to mikefarah's.
+    id: 'yq', label: 'yq', group: 'support', argv: ['yq', '--version'], url: 'https://github.com/mikefarah/yq',
+  },
+  {
+    // Fast, reproducible Python environments; many agent tools and MCP servers
+    // are distributed through `uvx`.
+    id: 'uv', label: 'uv', group: 'support', argv: ['uv', '--version'], url: 'https://docs.astral.sh/uv',
+  },
+  {
+    // A cheap symbol index for navigating big repos. Only Universal Ctags
+    // counts, and BSD/macOS ctags exits nonzero for `--version`, so it reads as
+    // missing. (Emacs' `ctags` answers with its own version and reads as
+    // installed — accepted rather than probed around.) `uctags` is what some
+    // BSDs and distros call the Universal build, where `ctags` is another tool.
+    id: 'ctags', label: 'Universal Ctags', group: 'support',
+    argv: ['ctags', '--version'], aliases: ['uctags'], url: 'https://ctags.io',
+  },
+  {
+    // A one-shot size and language map of a codebase. `tokei` is the same idea
+    // and prints `tokei 14.0.0`, which VERSION_RE already handles.
+    id: 'scc', label: 'scc', group: 'support',
+    argv: ['scc', '--version'], aliases: ['tokei'], url: 'https://github.com/boyter/scc',
+  },
 ];
 
+/** The part of a `ToolProbe` that says what to run, which is all `probeTool` needs. */
+type ProbeCommand = Pick<ToolProbe, 'argv' | 'aliases' | 'versionPattern'>;
+
 /** Every executable name to try, in order: argv[0] first, then each alias. */
-function candidates(probe: ToolProbe): string[][] {
+function candidates(probe: ProbeCommand): string[][] {
   const [, ...rest] = probe.argv;
   return [probe.argv, ...(probe.aliases ?? []).map(name => [name, ...rest])];
 }
@@ -203,10 +284,10 @@ function candidates(probe: ToolProbe): string[][] {
 /**
  * Runs one probe. "Installed" means the command exited zero — `execFile`
  * rejects otherwise, so a tool that prints its version and exits nonzero
- * would read as missing. Nothing in BUILTIN_TOOLS does that; if a real case
+ * would read as missing. Nothing in BUILTIN_SUPPORT_TOOLS does that; if a real case
  * turns up it wants a per-probe opt-out rather than relaxing this for all.
  */
-export async function probeTool(probe: ToolProbe): Promise<DetectResult> {
+export async function probeTool(probe: ProbeCommand): Promise<DetectResult> {
   for (const argv of candidates(probe)) {
     try {
       const { stdout, stderr } = await execRunner(argv, { timeout: PROBE_TIMEOUT_MS });
@@ -226,21 +307,41 @@ export async function probeTool(probe: ToolProbe): Promise<DetectResult> {
 }
 
 /**
- * The spawn half of a runner adapter's `detect()`: probes the adapter's own
- * BUILTIN_TOOLS row, so adapters share probeTool's version parsing, timeout
- * and alias fallback instead of each carrying a copy. Deliberately the
- * *built-in* row, not the doctor.yaml-merged table — an override there cannot
- * change how a registry id is detected (see resolveToolTable), and a run's
- * run:env snapshot has no doctor config to consult anyway.
- *
- * An id with no row gets `<id> --version`, the same default resolveToolTable
- * synthesizes for a registered adapter the table hasn't heard of — so a
- * third-party adapter can use this too, and a missing row degrades to a
- * sensible probe instead of throwing out of Doctor.
+ * What `detectTools` runs for a support row: the probe, then the row's own
+ * `check` when it is installed. Kept out of `probeTool` so the adapters, which
+ * do their own layering in `detect()`, share only the version half; and out of
+ * the detectTools body so a test that substitutes `deps.probe` also gets no
+ * real `gh` spawned behind its back.
  */
-export function probeRunner(id: string): Promise<DetectResult> {
-  const builtin = BUILTIN_TOOLS.find(probe => probe.id === id);
-  return probeTool(builtin ?? { id, label: id, group: 'harness', argv: [id, '--version'] });
+async function probeToolAndCheck(entry: ToolProbe, ctx: CheckContext): Promise<DetectResult> {
+  const probed = await probeTool(entry);
+  const { check } = entry;
+  if (!probed.installed || check === undefined) return probed;
+  // Through a promise chain so a check that throws before it returns one is also "no answer".
+  const notes = await Promise.resolve().then(() => check(ctx)).catch((): string[] => []);
+  return notes.length === 0 ? probed : { ...probed, notes: [...(probed.notes ?? []), ...notes] };
+}
+
+/**
+ * The spawn half of a runner adapter's `detect()`: probes the adapter's own
+ * `doctor` descriptor, so adapters share probeTool's version parsing, timeout
+ * and alias fallback instead of each carrying a copy. Deliberately the
+ * adapter's descriptor, not the doctor.yaml-merged table — an override there
+ * cannot change how a registry id is detected (see resolveToolTable), and a
+ * run's run:env snapshot has no doctor config to consult anyway.
+ *
+ * `detectTools` routes every registry id through the adapter's `detect()`,
+ * which is what keeps copilot's `beep` advisory note (and opencode's PATH and
+ * env notes) alive: each `detect()` runs its descriptor here, then layers its
+ * notes on top, so the argv in `adapter.doctor` is the one that actually
+ * runs — edit it and both Doctor and the run:env snapshot follow.
+ */
+export async function probeRunner(doctor: RunnerDoctor): Promise<DetectResult> {
+  const probed = await probeTool(doctor);
+  const { minVersion } = doctor;
+  if (minVersion === undefined || !isOlderVersion(probed.version, minVersion)) return probed;
+  const note = `older than ${minVersion}, the oldest version whiphand is tested with — update it`;
+  return { ...probed, notes: [...(probed.notes ?? []), note] };
 }
 
 export interface DoctorToolsConfig {
@@ -249,7 +350,7 @@ export interface DoctorToolsConfig {
 }
 
 export interface DetectToolsDeps {
-  probe?: (probe: ToolProbe) => Promise<DetectResult>;
+  probe?: (probe: ToolProbe, ctx: CheckContext) => Promise<DetectResult>;
   /** Machine-level facts appended to the support group; substituted by tests. Defaults to `machineChecks()`. */
   machine?: () => ToolStatus[];
   /**
@@ -354,42 +455,54 @@ export async function workspaceChecks(workdir: string, opts: WorkspaceChecksOpts
 }
 
 /**
- * The merged table: built-ins, the user's own entries from doctor.yaml, and
- * anything in the registry the table hasn't heard of.
+ * The merged table, in this order: one harness row per registered adapter (in
+ * registration order, built from its `doctor` descriptor), the support
+ * built-ins, then the user's own support rows from doctor.yaml.
  *
- * A user entry whose `id` matches a built-in REPLACES it *in place* rather
- * than appending — so tweaking one probe doesn't reshuffle the whole report.
- * The one thing such an override cannot change is detection for a registry
- * id: `detectTools` still calls the adapter's own `detect()` there, because
- * that is where copilot's beep note comes from. Label, group, url and
- * optional are all overridable.
+ * A user entry whose `id` matches an existing row REPLACES it *in place*
+ * rather than appending — so tweaking one probe doesn't reshuffle the whole
+ * report. For a registry id the override may change only `label`, `url` and
+ * `optional`: detection keeps going through the adapter's own `detect()`
+ * (that is where copilot's beep note comes from), so `argv`, `aliases` and
+ * `versionPattern` have nothing to act on, and the row stays in the harness
+ * group.
  *
- * `hide` is applied LAST, after the registry sweep, so hiding an adapter
- * actually hides it rather than having it re-appear as an unknown runner.
+ * The harness group is reserved for registered runners: a user entry claiming
+ * it for an id the registry has never heard of is refused with a
+ * `WorkflowError`, the same way any other invalid doctor.yaml is. The schema
+ * cannot see the registry, so the check lives here.
+ *
+ * `hide` is applied LAST, so hiding an adapter actually hides it.
  */
 export function resolveToolTable(
   registry: AdapterRegistry, config: DoctorToolsConfig = {},
 ): ToolProbe[] {
-  const table = [...BUILTIN_TOOLS];
+  const adapters = registry.list();
+  const table: ToolProbe[] = [
+    ...adapters.map((adapter): ToolProbe => ({ id: adapter.id, group: 'harness', ...adapter.doctor })),
+    ...BUILTIN_SUPPORT_TOOLS,
+  ];
   const indexOf = new Map(table.map((probe, i) => [probe.id, i]));
+
+  const reserved = (config.tools ?? []).filter(t => t.group === 'harness' && !registry.has(t.id));
+  if (reserved.length > 0) {
+    const path = globalDoctorConfigPath();
+    const runners = adapters.map(adapter => adapter.id).join(', ');
+    throw new WorkflowError(reserved.map(t =>
+      `${path}: tools.${t.id}: group 'harness' is reserved for registered runners (${runners})`));
+  }
 
   for (const extra of config.tools ?? []) {
     const existing = indexOf.get(extra.id);
     if (existing === undefined) {
       indexOf.set(extra.id, table.length);
       table.push(extra);
+    } else if (registry.has(extra.id)) {
+      const row = table[existing];
+      table[existing] = { ...row, label: extra.label, url: extra.url ?? row.url, optional: extra.optional ?? row.optional };
     } else {
       table[existing] = extra;
     }
-  }
-
-  // A third adapter registered in defaultRegistry() shows up in Doctor with
-  // no table edit at all — the registry is the authority on runners, and a
-  // runner missing from the health check is the worst thing this could do.
-  for (const adapter of registry.list()) {
-    if (indexOf.has(adapter.id)) continue;
-    indexOf.set(adapter.id, table.length);
-    table.push({ id: adapter.id, label: adapter.id, group: 'harness', argv: [adapter.id, '--version'] });
   }
 
   const hidden = new Set(config.hide ?? []);
@@ -408,12 +521,20 @@ export async function detectTools(
   config: DoctorToolsConfig = {},
   deps: DetectToolsDeps = {},
 ): Promise<ToolStatus[]> {
-  const probe = deps.probe ?? probeTool;
+  const probe = deps.probe ?? probeToolAndCheck;
   const table = resolveToolTable(registry, config);
+
+  // Every row's detection is one shared promise, so a check that asks about
+  // another row (rtk's about claude) waits on it instead of probing twice.
+  const detections = new Map<string, Promise<DetectResult>>();
+  const ctx: CheckContext = { detected: id => detections.get(id) };
+  for (const entry of table) {
+    detections.set(entry.id, registry.has(entry.id) ? registry.get(entry.id).detect() : probe(entry, ctx));
+  }
 
   const rows = await Promise.all(table.map(async (entry): Promise<ToolStatus> => {
     const runner = registry.has(entry.id);
-    const detected = runner ? await registry.get(entry.id).detect() : await probe(entry);
+    const detected = await detections.get(entry.id)!;
     return {
       id: entry.id,
       label: entry.label,

@@ -96,9 +96,9 @@ export function WorkspaceSettingsPage() {
   }, [client, doctorResult, workspacePath, setDoctorResult]);
 
   const runnerOptions = useMemo(() => {
-    // `.runner` only: doctor also reports support tools and harnesses whiphand has
-    // no adapter for, and offering `git` or `codex` here would build a
-    // workflow that fails validateWorkflowRunners the moment it starts.
+    // `.runner` only: doctor also reports support tools, and offering `git`
+    // here would build a workflow that fails validateWorkflowRunners the
+    // moment it starts.
     const ids = new Set((doctorResult ?? []).filter(a => a.runner).map(a => a.id));
     if (form?.defaults.runner) ids.add(form.defaults.runner);
     return Array.from(ids);

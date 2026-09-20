@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Doctor checks for tools that make agents more effective
+
+- The support group gains six optional rows: `gh` (PRs, issues and CI logs without scraping the web),
+  `ast-grep` (structural search and rewrite), `yq` (jq for YAML), `uv` (fast Python environments, `uvx`),
+  Universal Ctags (a symbol index) and `scc` (a size and language map; `tokei` answers for it). A machine
+  without them shows `○`, never `✘`.
+- `whiphand doctor` wall time is unchanged at ~0.6s: the new probes run in parallel and the slowest existing
+  one, opencode, still sets the pace.
+
 ### Doctor lists only harnesses whiphand can drive
 
 - The `[detect only]` marker and badge are gone from `whiphand doctor` and the desktop's Doctor page: every row in

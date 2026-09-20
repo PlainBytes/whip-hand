@@ -47,11 +47,24 @@ test('parses the version out of each tool’s actual --version output', () => {
     ['2.1.263 (Claude Code)', '2.1.263'],
     ['fd 10.2.0', '10.2.0'],
     ['2025.08.28-8d9dd2c', '2025.08.28-8d9dd2c'],   // a dated build + hash
+    ['gh version 2.86.0-112-gc30647b78 (2026-02-14)', '2.86.0-112-gc30647b78'], // gh; the date stays out
+    ['ast-grep 0.28.1', '0.28.1'],
+    ['yq (https://github.com/mikefarah/yq/) version v4.53.6', '4.53.6'], // the URL has no digits to win
+    ['uv 0.12.6 (7938ca5d5 2026-08-25 x86_64-unknown-linux-gnu)', '0.12.6'],
+    ['Universal Ctags 6.2.1, Copyright (C) 2015-2025 Universal Ctags Team', '6.2.1'], // not the copyright years
+    ['scc version 3.7.0', '3.7.0'],
+    ['tokei 14.0.0 compiled with serialization support: json, cbor, yaml', '14.0.0'],
     ['no numbers here', undefined],
   ];
   for (const [output, expected] of cases) {
     assert.equal(parseToolVersion(output), expected, `parsing ${JSON.stringify(output)}`);
   }
+});
+
+test('a tool whose version is on line 2 reports none rather than the wrong thing', () => {
+  // shellcheck is not a row for exactly this reason: `--version` opens with its
+  // tagline and puts `version: 0.11.0` second, and only line 1 is searched.
+  assert.equal(parseToolVersion('ShellCheck - shell script analysis tool\nversion: 0.11.0\nlicense: GPL-3'), undefined);
 });
 
 test('copilot’s trailing sentence period is not swallowed into the version', () => {
@@ -125,6 +138,24 @@ test('a newly registered adapter appears with its own label and url, not just it
   assert.equal(added?.label, 'Newbie CLI');
   assert.equal(added?.url, 'https://example.com/newbie');
   assert.equal(added?.optional, false);
+});
+
+test('the agent-productivity tools are optional support rows, ordered after the original built-ins', () => {
+  const table = resolveToolTable(registryOf());
+  const added = ['gh', 'ast-grep', 'yq', 'uv', 'ctags', 'scc'];
+  assert.deepEqual(table.slice(-added.length).map(t => t.id), added);
+  assert.deepEqual(table.slice(0, 8).map(t => t.id), ['git', 'node', 'npm', 'python', 'rtk', 'rg', 'fd', 'jq']);
+  for (const id of added) {
+    const row = table.find(t => t.id === id);
+    assert.equal(row?.group, 'support', id);
+    assert.equal(row?.optional ?? true, true, `${id} is optional: a missing one is ○, never ✘`);
+    assert.match(row?.url ?? '', /^https:\/\//, `${id} links somewhere`);
+  }
+  assert.equal(table.find(t => t.id === 'yq')?.url, 'https://github.com/mikefarah/yq');
+  assert.deepEqual(table.find(t => t.id === 'ctags')?.aliases, ['uctags']);
+  assert.deepEqual(table.find(t => t.id === 'scc')?.aliases, ['tokei']);
+  assert.equal(table.find(t => t.id === 'ast-grep')?.aliases, undefined, 'sg is shadow-utils on Linux');
+  assert.ok(!table.some(t => t.id === 'shellcheck'), 'shellcheck needs a versionLine knob, so it is not a row');
 });
 
 test('a user tool with a new id is appended', () => {

@@ -71,7 +71,9 @@ Support tools
 
 `✔` installed · `✘` missing and required · `○` missing but optional. The harness group lists
 exactly the registered runners, so any harness in it can be a workflow's `runner:`; `doctor.yaml`
-may override a harness entry but not add one.
+may override a harness entry but not add one. The support group also lists tools that make agents
+more effective (`gh`, `ast-grep`, `yq`, `uv`, `ctags`, `scc`); all of them are optional, so a machine
+without them shows `○`, never `✘`.
 
 Run inside a project (or with `-C <dir>`; the desktop passes the open workspace), doctor also checks
 that folder and adds a row only when something is wrong with it: git refusing the repository

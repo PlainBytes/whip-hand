@@ -63,8 +63,10 @@ export interface ToolStatus {
  * Every probe is one cheap `--version` call, but there are a dozen of them
  * behind a single RPC, and `execRunner` has no timeout of its own — one hung
  * binary would hang the whole Doctor page until the client's 30s request
- * timeout fired. Measured cost of the built-in table in parallel is ~600ms,
- * so this is ~50x headroom rather than a budget anything runs near.
+ * timeout fired. Measured cost of the built-in table in parallel is ~610ms
+ * (600ms before the agent-productivity rows were added: the slowest single
+ * probe, opencode at ~460ms, sets the pace and the rest overlap it), so this is
+ * ~8x headroom rather than a budget anything runs near.
  */
 export const PROBE_TIMEOUT_MS = 5_000;
 
@@ -75,6 +77,7 @@ export const PROBE_TIMEOUT_MS = 5_000;
  *   git   `git version 2.53.0`          node  `v24.16.0`
  *   jq    `jq-1.8.1` (and `jq-1.6`)     rg    `ripgrep 15.1.0`
  *   copilot `GitHub Copilot CLI 1.0.83.`
+ *   yq    `yq (https://github.com/mikefarah/yq/) version v4.53.6`
  *
  * Anchored on nothing, so it finds the number wherever the tool puts it.
  * `(?:\.\d+)*` needs a digit after each dot, which is what stops copilot's
@@ -156,6 +159,47 @@ export const BUILTIN_SUPPORT_TOOLS: readonly ToolProbe[] = [
     argv: ['fd', '--version'], aliases: ['fdfind'], url: 'https://github.com/sharkdp/fd',
   },
   { id: 'jq', label: 'jq', group: 'support', argv: ['jq', '--version'], url: 'https://jqlang.github.io/jq' },
+
+  // Agent-productivity tools: CLIs a coding agent leans on, or that cut its
+  // token use or error rate. All optional, grouped by purpose.
+  {
+    // PRs, issues and CI logs without scraping the web.
+    id: 'gh', label: 'GitHub CLI', group: 'support', argv: ['gh', '--version'], url: 'https://cli.github.com',
+  },
+  {
+    // Structural search and rewrite: precise edits for far fewer tokens than
+    // regex plus reading whole files. Its short name `sg` is not an alias on
+    // purpose: on Linux that is shadow-utils' "switch group", and telling the
+    // two apart would take a probe option that checks the output.
+    id: 'ast-grep', label: 'ast-grep', group: 'support',
+    argv: ['ast-grep', '--version'], url: 'https://ast-grep.github.io',
+  },
+  {
+    // Two unrelated tools share this name (mikefarah's Go one and the Python
+    // wrapper around jq). Both print a version on the first line, so a plain
+    // probe serves either; the link is to mikefarah's.
+    id: 'yq', label: 'yq', group: 'support', argv: ['yq', '--version'], url: 'https://github.com/mikefarah/yq',
+  },
+  {
+    // Fast, reproducible Python environments; many agent tools and MCP servers
+    // are distributed through `uvx`.
+    id: 'uv', label: 'uv', group: 'support', argv: ['uv', '--version'], url: 'https://docs.astral.sh/uv',
+  },
+  {
+    // A cheap symbol index for navigating big repos. Only Universal Ctags
+    // counts, and BSD/macOS ctags exits nonzero for `--version`, so it reads as
+    // missing. (Emacs' `ctags` answers with its own version and reads as
+    // installed — accepted rather than probed around.) `uctags` is what some
+    // BSDs and distros call the Universal build, where `ctags` is another tool.
+    id: 'ctags', label: 'Universal Ctags', group: 'support',
+    argv: ['ctags', '--version'], aliases: ['uctags'], url: 'https://ctags.io',
+  },
+  {
+    // A one-shot size and language map of a codebase. `tokei` is the same idea
+    // and prints `tokei 14.0.0`, which VERSION_RE already handles.
+    id: 'scc', label: 'scc', group: 'support',
+    argv: ['scc', '--version'], aliases: ['tokei'], url: 'https://github.com/boyter/scc',
+  },
 ];
 
 /** The part of a `ToolProbe` that says what to run, which is all `probeTool` needs. */

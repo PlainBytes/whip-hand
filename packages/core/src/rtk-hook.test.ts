@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { join } from 'node:path';
 import { RTK_HOOK_NOTE, rtkHookCheck, type RtkHookDeps } from './rtk-hook.ts';
 import type { CheckContext } from './tools.ts';
 
@@ -26,8 +27,12 @@ const hooksWith = (command: string) => JSON.stringify({
   hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command }] }] },
 });
 
-const SETTINGS = '/h/.claude/settings.json';
-const LOCAL = '/h/.claude/settings.local.json';
+// Built with `join`, not written out: rtkHookCheck joins the config dir with
+// `node:path`, so on Windows it looks up '\\h\\.claude\\settings.json'. A
+// POSIX-shaped key misses there, every read is an ENOENT, and the check falls
+// through to the note — which is what these fixtures are here to rule out.
+const SETTINGS = join('/h', '.claude', 'settings.json');
+const LOCAL = join('/h', '.claude', 'settings.local.json');
 
 test('rtkHookCheck: a hook that calls rtk means no note', async () => {
   for (const command of [
@@ -78,7 +83,7 @@ test('rtkHookCheck: only when claude is in the report and installed', async () =
 
 test('rtkHookCheck: reads CLAUDE_CONFIG_DIR the way claude does', async () => {
   const env = { CLAUDE_CONFIG_DIR: '/cfg' };
-  const notes = await rtkHookCheck(claudeIs(true), deps({ '/cfg/settings.json': hooksWith('rtk hook claude') }, { env }));
+  const notes = await rtkHookCheck(claudeIs(true), deps({ [join('/cfg', 'settings.json')]: hooksWith('rtk hook claude') }, { env }));
   assert.deepEqual(notes, []);
   assert.deepEqual(await rtkHookCheck(claudeIs(true), deps({ [SETTINGS]: hooksWith('rtk hook claude') }, { env })), [RTK_HOOK_NOTE]);
 });

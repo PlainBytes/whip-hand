@@ -90,9 +90,11 @@ steps:
                 prompt: |
                   Implement stage {{ stage.index }} of {{ stage.total }}: {{ stage.title }}.
                   Earlier stages are implemented and committed — read the tree or `git log`
-                  if you need them. Implement only this stage. If a tests log marked
-                  VERDICT: FAIL is attached, fix every failure first; if review findings
-                  are attached, address every point.
+                  if you need them. Implement only this stage, and leave it uncommitted:
+                  that is how an earlier stage came to be committed — a human read its
+                  working tree at the gate below and the workflow committed it after they
+                  accepted. If a tests log marked VERDICT: FAIL is attached, fix every
+                  failure first; if review findings are attached, address every point.
               - id: tests
                 kind: command
                 run: eval "{{ inputs.test_command }}"

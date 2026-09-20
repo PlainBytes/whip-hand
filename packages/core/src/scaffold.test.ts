@@ -15,7 +15,7 @@ import {
 } from './scaffold.ts';
 import { parseWorkflow, validateWorkflowWarnings, validateWorkflowSemantics, WorkflowError } from './schema.ts';
 import { loadWorkspaceConfig } from './config.ts';
-import { findStep } from './steps.ts';
+import { findStep, flattenSteps } from './steps.ts';
 import type { Workflow } from './types.ts';
 
 async function withConfigHome<T>(fn: (configHome: string) => Promise<T>): Promise<T> {
@@ -184,6 +184,39 @@ test('stagedFeatureDevelopmentTemplate parses, stages the plan dir, and gates ev
   assert.equal(gate.show_diff, true);
   assert.equal(gate.capture, 'review');
   assert.ok(findStep(wf.steps, 'commit'), 'each stage commits');
+});
+
+/**
+ * A `show_diff` gate puts the *working tree* against HEAD in front of the human
+ * (engine/diff.ts's `workingDiffFiles`), so it shows something only while the
+ * implementer's work is still uncommitted. Nothing in the engine enforces that:
+ * the write-guard cannot see a commit at all, because committing *removes*
+ * porcelain lines rather than adding them, so `diffSnapshots` comes back empty
+ * and the gate even volunteers "This stage produced no changes." The prompt is
+ * the whole mechanism, which is why it is pinned here — an implementer that
+ * commits its own work leaves a human approving a blank screen.
+ */
+test('every shipped template tells its implementer to leave the work uncommitted', () => {
+  const shipped: Array<[string, string]> = [
+    ['feature', workflowTemplate('feature')],
+    ['feature-development', featureDevelopmentTemplate()],
+    ['spec-driven', specDrivenTemplate()],
+    ['staged-feature-development', stagedFeatureDevelopmentTemplate()],
+  ];
+  for (const [name, source] of shipped) {
+    const wf = parseWorkflow(source);
+    const gate = flattenSteps(wf.steps)
+      .map(f => f.step)
+      .find(s => (s.kind === 'approval' || s.kind === 'manual') && s.show_diff === true);
+    assert.ok(gate, `${name} gates on a diff`);
+    const execute = findStep(wf.steps, 'execute');
+    assert.ok(execute?.kind === 'agent' && execute.writes === true, `${name}'s implementer writes`);
+    if (execute?.kind !== 'agent') return;
+    assert.match(
+      execute.prompt ?? '', /uncommitted/i,
+      `${name}'s 'execute' prompt must tell the agent not to commit, or ${gate?.id}'s diff is empty`,
+    );
+  }
 });
 
 /**

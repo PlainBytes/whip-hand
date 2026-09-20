@@ -91,7 +91,9 @@ steps:
                   Implement the attached plan. If a tests log marked VERDICT: FAIL
                   is attached, fix every failure it shows before anything else.
                   If review findings or sign-off feedback are attached, address
-                  every point.
+                  every point. Leave your work uncommitted: a human reads the
+                  working tree at the gate below, and the workflow commits it
+                  once they have approved.
               - id: tests
                 kind: command
                 run: eval "{{ inputs.test_command }}"
@@ -253,7 +255,9 @@ steps:
                   spec; where they disagree, say so rather than guessing. If a
                   tests log marked VERDICT: FAIL is attached, fix every failure it
                   shows before anything else. If sign-off feedback is attached,
-                  address every requested change.
+                  address every requested change. Leave your work uncommitted: a
+                  human reads the working tree at the gate below, and the workflow
+                  commits it once they have approved.
               - id: tests
                 kind: command
                 run: eval "{{ inputs.test_command }}"
@@ -379,7 +383,9 @@ steps:
                   Implement the attached plan. If a tests log marked VERDICT: FAIL
                   is attached, fix every failure it shows before anything else.
                   If review findings or sign-off feedback are attached, address
-                  every point.
+                  every point. Leave your work uncommitted: a human reads the
+                  working tree at the gate below, and the workflow commits it
+                  once they have approved.
                 output: execute-report.md
               - id: tests
                 kind: command
@@ -559,9 +565,11 @@ steps:
                 prompt: |
                   Implement stage {{ stage.index }} of {{ stage.total }}: {{ stage.title }}.
                   Earlier stages are implemented and committed — read the tree or \`git log\`
-                  if you need them. Implement only this stage. If a tests log marked
-                  VERDICT: FAIL is attached, fix every failure first; if review findings
-                  are attached, address every point.
+                  if you need them. Implement only this stage, and leave it uncommitted:
+                  that is how an earlier stage came to be committed — a human read its
+                  working tree at the gate below and the workflow committed it after they
+                  accepted. If a tests log marked VERDICT: FAIL is attached, fix every
+                  failure first; if review findings are attached, address every point.
               - id: tests
                 kind: command
                 run: eval "{{ inputs.test_command }}"

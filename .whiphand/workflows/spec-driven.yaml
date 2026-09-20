@@ -118,7 +118,9 @@ steps:
                   spec; where they disagree, say so rather than guessing. If a
                   tests log marked VERDICT: FAIL is attached, fix every failure it
                   shows before anything else. If sign-off feedback is attached,
-                  address every requested change.
+                  address every requested change. Leave your work uncommitted: a
+                  human reads the working tree at the gate below, and the workflow
+                  commits it once they have approved.
               - id: tests
                 kind: command
                 run: eval "{{ inputs.test_command }}"

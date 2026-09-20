@@ -764,6 +764,9 @@ as it does outside a stage. Outside a `stages` step, loop exhaustion is unchange
 
 A gate also says "This stage produced no changes." when the tree is exactly as it was when
 the stage began, so the human accepts an empty stage knowingly rather than having it skipped.
+The claim rests on the same assumption as the diff above: an implementer that commits its own
+work leaves an unchanged tree, and the note then says "no changes" about a stage that did the
+whole job.
 A resumed run leaves that note off for any stage it re-enters: the process can only snapshot
 the tree after the earlier process's edits, so an unchanged tree since then proves nothing.
 A stage the resume reaches for the first time still gets the note.
@@ -858,6 +861,12 @@ time**, before anything spawns — the same rule every other capability mismatch
 
 `capture: note` asks for free text and writes it as the step's artifact, so a later step can
 read it. `show_diff: true` puts the working tree's diff in front of whoever is deciding.
+
+That diff is the working tree **against `HEAD`**, so a workflow that gates on one has to tell
+its implementing agent to leave the work uncommitted — an agent that commits as it goes leaves
+a clean tree and a human approving a blank screen. Nothing in the engine enforces it: a commit
+*removes* porcelain lines rather than adding them, so the write-guard's snapshot cannot see one
+either. Every shipped template says it in its `execute` prompt, and scaffold.test.ts pins that.
 
 ### Sending work back (`capture: review`)
 

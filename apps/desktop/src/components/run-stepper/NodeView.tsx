@@ -1,11 +1,14 @@
-import { Badge, Text } from '@fluentui/react-components';
+import { useMemo, useState } from 'react';
+import { Badge } from '@fluentui/react-components';
 import {
   flattenNodes, type LeafNode, type LoopNode, type StageGroup, type StagesNode, type StepNode,
 } from '../../lib/run-tree.ts';
 import { stageLabel } from '../../../../../packages/core/src/format.ts';
+import { stageRollup } from '../../lib/stage-rollup.ts';
 import {
   loopProgress, metaLine, spendSummary, stagesProgress, stepDuration, stepStatusColor,
 } from './step-facts.ts';
+import { defaultExpandedStage, StageRow } from './StageRow.tsx';
 import { IterationHistory, StepDetails, StepPill } from './StepPill.tsx';
 import { StepTrack } from './StepTrack.tsx';
 import type { NodeProps } from './types.ts';
@@ -119,11 +122,34 @@ function groupsByStage(groups: readonly StageGroup[]): StageGroup[][] {
 
 /**
  * A `stages` step and its body, drawn like a loop group — its own pill, then
- * one labelled group per stage file, reading `stage 2 of 7 · Add API routes`.
+ * one row per stage file, reading `stage 2 of 7 · Add API routes`. A row is
+ * one summary line until opened, so a run of many stages stays a short list;
+ * open, it holds that stage's pills in a scrolling track.
  * A stage sent back after a rejection keeps each attempt's pills apart,
  * badged `attempt N`, rather than folding them into one another.
  */
 function StagesView({ node, focusKey, awaitingKey, awaiting, clock, nodeRef }: NodeProps & { node: StagesNode }) {
+  // Explicit toggles only. What is open when nobody has touched a row is
+  // `defaultExpandedStage`'s answer, computed each render, so it follows the
+  // run as it moves on and a click always wins over it.
+  const [overrides, setOverrides] = useState<Record<string, boolean>>({});
+  const rows = useMemo(() => groupsByStage(node.children).map(attempts => {
+    const first = attempts[0];
+    return {
+      attempts,
+      stageKey: first.stage === undefined ? first.key : `${node.key}@${first.stage}`,
+      label: first.stage === undefined ? 'not started' : stageLabel(first.index, first.total, first.title),
+      rollup: stageRollup(attempts, clock),
+    };
+  }), [node.key, node.children, clock]);
+  const focusStageKey = useMemo(() => {
+    if (focusKey === undefined) return undefined;
+    return rows.find(row => row.attempts.some(
+      group => flattenNodes(group.children).some(child => child.key === focusKey),
+    ))?.stageKey;
+  }, [rows, focusKey]);
+  const defaultStage = defaultExpandedStage(rows, focusStageKey);
+
   const pill = (meta: string, withDuration: boolean) => (
     <StepPill
       id={node.id}
@@ -161,7 +187,7 @@ function StagesView({ node, focusKey, awaitingKey, awaiting, clock, nodeRef }: N
     <div
       data-testid={`step-stages-${node.key}`}
       style={{
-        display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+        display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 4,
         border: `1px dashed ${stepStatusColor(node.stages.status)}`,
         borderRadius: 12, padding: 6,
         // As for a loop: a `stages` step inside a loop is a direct child of
@@ -169,46 +195,45 @@ function StagesView({ node, focusKey, awaitingKey, awaiting, clock, nodeRef }: N
         flexShrink: 0,
       }}
     >
-      {pill(metaLine(node.stages), true)}
-      {groupsByStage(node.children).map(attempts => {
-        const first = attempts[0];
-        const stageKey = first.stage === undefined ? first.key : `${node.key}@${first.stage}`;
+      {/* Wrapped so the column's stretch does not pull the pill out to the full width. */}
+      <div style={{ display: 'flex' }}>{pill(metaLine(node.stages), true)}</div>
+      {rows.map(({ attempts, stageKey, label, rollup }) => {
         // Badged only once a stage has been attempted more than once: an
         // "attempt 1" on every stage that passed first time is noise.
-        const badged = attempts.length > 1 || (first.attempt ?? 1) > 1;
+        const badged = attempts.length > 1 || (attempts[0].attempt ?? 1) > 1;
+        const expanded = overrides[stageKey] ?? stageKey === defaultStage;
         return (
-          <div
+          <StageRow
             key={stageKey}
-            data-testid={`stage-group-${stageKey}`}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
-              borderLeft: '2px solid var(--colorNeutralStroke2)', paddingLeft: 8,
-            }}
+            stageKey={stageKey}
+            label={label}
+            rollup={rollup}
+            expanded={expanded}
+            onToggle={() => setOverrides(current => ({ ...current, [stageKey]: !expanded }))}
           >
-            <Text
-              size={200}
-              data-testid={`stage-label-${stageKey}`}
-              style={{ color: 'var(--colorNeutralForeground2)' }}
-            >
-              {first.stage === undefined ? 'not started' : stageLabel(first.index, first.total, first.title)}
-            </Text>
             {attempts.map(group => badged ? (
               <div
                 key={group.key}
                 data-testid={`stage-attempt-group-${group.key}`}
-                style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
+                style={{ display: 'flex', alignItems: 'center', gap: 8 }}
               >
-                <Badge appearance="tint" color="informative" size="small" data-testid={`stage-attempt-${group.key}`}>
+                <Badge
+                  appearance="tint"
+                  color="informative"
+                  size="small"
+                  data-testid={`stage-attempt-${group.key}`}
+                  style={{ flexShrink: 0 }}
+                >
                   {group.maxAttempts === undefined
                     ? `attempt ${group.attempt}`
                     : `attempt ${group.attempt} of ${group.maxAttempts}`}
                 </Badge>
-                {children(group.children)}
+                <StepTrack testid={`stage-track-${group.key}`}>{children(group.children)}</StepTrack>
               </div>
             ) : (
-              <div key={group.key} style={{ display: 'contents' }}>{children(group.children)}</div>
+              <StepTrack key={group.key} testid={`stage-track-${group.key}`}>{children(group.children)}</StepTrack>
             ))}
-          </div>
+          </StageRow>
         );
       })}
     </div>

@@ -1042,6 +1042,8 @@ describe('RunDetailPage', () => {
 
     expect(await screen.findByTestId('step-card-implement@02-b#1')).toHaveAttribute('data-current', 'true');
     expect(screen.getByTestId('step-card-build')).not.toHaveAttribute('data-current');
+    // The finished stage is collapsed until opened.
+    fireEvent.click(screen.getByTestId('stage-toggle-build@01-a'));
     expect(screen.getByTestId('step-card-implement@01-a#1')).not.toHaveAttribute('data-current');
   });
 

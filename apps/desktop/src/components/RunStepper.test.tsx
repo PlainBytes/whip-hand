@@ -545,6 +545,8 @@ describe('stages', () => {
   it('draws the stages step as a container holding one group per stage', () => {
     render(<RunStepper steps={stagedRows()} />);
     const container = screen.getByTestId('step-stages-build');
+    // The accepted stage starts collapsed; the running one is open already.
+    fireEvent.click(screen.getByTestId('stage-toggle-build@01-a'));
     const first = within(container).getByTestId('stage-group-build@01-a');
     const second = within(container).getByTestId('stage-group-build@02-b');
     // The same step id in two stages is two pills, one under each stage.
@@ -570,6 +572,9 @@ describe('stages', () => {
       stageRow('accept', '01-a', 1, { kind: 'approval', verdict: 'fail' }),
       stageRow('implement', '01-a', 2, { status: 'running' }),
     ]} />);
+    // The retry is running, so its stage is already open: no click needed,
+    // and none wanted — it would close it.
+    expect(screen.getByTestId('stage-toggle-build@01-a')).toHaveAttribute('aria-expanded', 'true');
     // One stage label, however many times the stage was attempted.
     expect(screen.getAllByText('stage 1 of 7 · Schema')).toHaveLength(1);
     expect(screen.getByTestId('stage-attempt-build@01-a#1')).toHaveTextContent(/^attempt 1 of 3$/);
@@ -589,6 +594,8 @@ describe('stages', () => {
 
   it('shows no attempt badge on a stage accepted first time', () => {
     render(<RunStepper steps={stagedRows()} />);
+    fireEvent.click(screen.getByTestId('stage-toggle-build@01-a'));
+    expect(screen.getByTestId('step-card-implement@01-a#1')).toBeInTheDocument();
     expect(screen.queryByText(/attempt/)).toBeNull();
   });
 
@@ -621,6 +628,144 @@ describe('stages', () => {
     expect(screen.getByTestId('step-disabled-build')).toBeInTheDocument();
     expect(screen.getByTestId('step-meta-build')).toHaveTextContent('stages disabled — 2 steps not run');
     expect(screen.queryByTestId('step-card-implement')).not.toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // One collapsible row per stage.
+  // -------------------------------------------------------------------------
+
+  /** Three accepted stages and nothing running: the shape of a run that finished cleanly. */
+  function finishedStagedRows(): StepState[] {
+    return [
+      stagesRow({
+        status: 'done', total: 3, completed: 3, currentStage: undefined,
+        completedStages: ['01-a', '02-b', '03-c'],
+        startedStages: {
+          '01-a': { title: 'Schema', index: 1, maxAttempts: 3 },
+          '02-b': { title: 'API', index: 2, maxAttempts: 3 },
+          '03-c': { title: 'UI', index: 3, maxAttempts: 3 },
+        },
+      }),
+      ...['01-a', '02-b', '03-c'].flatMap(id => [
+        stageRow('implement', id, 1),
+        stageRow('accept', id, 1, { kind: 'approval' }),
+      ]),
+    ];
+  }
+
+  it('renders a finished run with every stage collapsed and no body steps in the tree', () => {
+    render(<RunStepper steps={finishedStagedRows()} />);
+    for (const id of ['01-a', '02-b', '03-c']) {
+      expect(screen.getByTestId(`stage-toggle-build@${id}`)).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.queryByTestId(`step-card-implement@${id}#1`)).not.toBeInTheDocument();
+      expect(screen.queryByTestId(`step-card-accept@${id}#1`)).not.toBeInTheDocument();
+    }
+    // The stages step's own pill is not part of any stage's body.
+    expect(screen.getByTestId('step-card-build')).toBeInTheDocument();
+  });
+
+  it('opens the failed stage of a stopped run and leaves the others closed', () => {
+    render(<RunStepper steps={[
+      stagesRow({ status: 'failed', total: 3, currentStage: { id: '03-c', title: 'UI', index: 3 }, completedStages: ['01-a', '02-b'] }),
+      stageRow('implement', '01-a', 1),
+      stageRow('implement', '02-b', 1),
+      stageRow('implement', '03-c', 1, { status: 'failed' }),
+    ]} />);
+    expect(screen.getByTestId('stage-toggle-build@01-a')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByTestId('stage-toggle-build@02-b')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByTestId('stage-toggle-build@03-c')).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('step-card-implement@03-c#1')).toBeInTheDocument();
+    expect(screen.queryByTestId('step-card-implement@01-a#1')).not.toBeInTheDocument();
+  });
+
+  it('opens the stage holding the focused step even when another stage is running', () => {
+    render(<RunStepper steps={stagedRows()} focusStepId="accept" />);
+    // `accept` only ran in 01-a, so that is where focus is; 02-b is running but loses to it.
+    expect(screen.getByTestId('stage-toggle-build@01-a')).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('stage-toggle-build@02-b')).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('expands a collapsed stage and collapses an expanded one when its header is clicked', () => {
+    render(<RunStepper steps={stagedRows()} />);
+    const closed = screen.getByTestId('stage-toggle-build@01-a');
+    const open = screen.getByTestId('stage-toggle-build@02-b');
+    expect(closed).toHaveAttribute('aria-expanded', 'false');
+    expect(open).toHaveAttribute('aria-expanded', 'true');
+
+    fireEvent.click(closed);
+    expect(closed).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('step-card-implement@01-a#1')).toBeInTheDocument();
+
+    fireEvent.click(open);
+    expect(open).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('step-card-implement@02-b#1')).not.toBeInTheDocument();
+  });
+
+  it('keeps a stage the reader closed closed while the run moves on', () => {
+    const { rerender } = render(<RunStepper steps={stagedRows()} />);
+    fireEvent.click(screen.getByTestId('stage-toggle-build@02-b'));
+    // The stage is still running after the rerender, so its default would be open: only the
+    // reader's recorded close can keep it shut.
+    rerender(<RunStepper steps={[...stagedRows(), stageRow('accept', '02-b', 1, { kind: 'approval', status: 'running' })]} />);
+    expect(screen.getByTestId('stage-toggle-build@02-b')).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('summarises a stage as steps, time and spend on its header line', () => {
+    render(<RunStepper steps={[
+      stagesRow({ status: 'done', total: 1, currentStage: undefined, completedStages: ['01-a'] }),
+      stageRow('one', '01-a', 1, { startedAt: at(0), endedAt: at(600), progress: { turns: 8, costUsd: 0.5 } }),
+      stageRow('two', '01-a', 1, { startedAt: at(600), endedAt: at(1260), progress: { turns: 12, costUsd: 1.34 } }),
+      stageRow('three', '01-a', 1, { kind: 'command', startedAt: at(1260), endedAt: at(1290) }),
+    ]} now={Date.parse(at(5000))} />);
+    expect(screen.getByTestId('stage-summary-build@01-a')).toHaveTextContent('3 steps · 21m 30s · 20 turns · $1.84');
+  });
+
+  it('drops the spend from the summary of a stage whose steps reported none, and never shows a zero', () => {
+    render(<RunStepper steps={[
+      stagesRow({ status: 'done', total: 1, currentStage: undefined, completedStages: ['01-a'] }),
+      stageRow('one', '01-a', 1, { kind: 'command', startedAt: at(0), endedAt: at(90) }),
+    ]} now={Date.parse(at(5000))} />);
+    const summary = screen.getByTestId('stage-summary-build@01-a');
+    expect(summary).toHaveTextContent(/^1 step · 1m 30s$/);
+    expect(summary).not.toHaveTextContent(/\$|turn|0 /);
+  });
+
+  it('names a stage that has not started, and reads "not started" on it', () => {
+    render(<RunStepper steps={[
+      stagesRow({ status: 'pending', currentStage: undefined, completedStages: undefined, total: undefined }),
+      { key: 'implement', id: 'implement', kind: 'agent', stagesId: 'build', status: 'pending' } as StepState,
+    ]} />);
+    expect(screen.getByTestId('stage-label-build@')).toHaveTextContent('not started');
+  });
+
+  it('still badges both attempts of a retried stage once it is expanded', () => {
+    render(<RunStepper steps={[
+      stagesRow({
+        status: 'done', attempt: 2, maxAttempts: 3, currentStage: undefined, completedStages: ['01-a'], total: 1,
+        startedStages: { '01-a': { title: 'Schema', index: 1, maxAttempts: 3 } },
+      }),
+      stageRow('implement', '01-a', 1),
+      stageRow('accept', '01-a', 1, { kind: 'approval', verdict: 'fail' }),
+      stageRow('implement', '01-a', 2),
+    ]} />);
+    expect(screen.queryByTestId('stage-attempt-build@01-a#1')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('stage-toggle-build@01-a'));
+    expect(screen.getByTestId('stage-attempt-build@01-a#1')).toHaveTextContent(/^attempt 1 of 3$/);
+    expect(screen.getByTestId('stage-attempt-build@01-a#2')).toHaveTextContent(/^attempt 2 of 3$/);
+  });
+
+  it('scrolls each attempt\'s pills in a track of their own, under the header', () => {
+    render(<RunStepper steps={stagedRows()} />);
+    const track = screen.getByTestId('stage-track-build@02-b#1');
+    expect(track).toHaveStyle({ flexWrap: 'nowrap', overflowX: 'auto' });
+    expect(within(track).getByTestId('step-card-implement@02-b#1')).toBeInTheDocument();
+    expect(screen.getByTestId('stage-body-build@02-b')).toHaveStyle({ paddingLeft: '24px' });
+  });
+
+  it('stacks the stage rows in a column under the stages pill, without the old left marker', () => {
+    render(<RunStepper steps={stagedRows()} />);
+    expect(screen.getByTestId('step-stages-build')).toHaveStyle({ flexDirection: 'column', alignItems: 'stretch' });
+    expect(screen.getByTestId('stage-group-build@01-a').style.borderLeft).toBe('');
   });
 });
 

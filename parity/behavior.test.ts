@@ -424,7 +424,15 @@ function normalize(facts: DoctorFact[]): DoctorFact[] {
 }
 
 test('doctor parity: CLI human output and agent doctor() report the same tool facts', async () => {
-  const stubEnv = { PATH: pathWith(FIXTURE_BIN).PATH ?? '' };
+  // The login notes are a fact about whoever runs the suite (`~/.claude`, the
+  // keychain, gh's config), so give every tool a credential to keep them out of
+  // the comparison: the stub runners then report no auth note, and the real gh
+  // (when installed) answers `gh auth token` from GH_TOKEN. The stub opencode
+  // answers `auth list` with nothing, which is an answer we do not recognise.
+  const stubEnv = {
+    PATH: pathWith(FIXTURE_BIN).PATH ?? '',
+    ANTHROPIC_API_KEY: 'parity-stub', COPILOT_GITHUB_TOKEN: 'parity-stub', GH_TOKEN: 'parity-stub',
+  };
 
   const { stdout } = await execFileAsync(process.execPath, [CLI_MAIN, 'doctor'], { env: childEnv(stubEnv) });
   const cliFacts = normalize(parseCliDoctorOutput(stdout));

@@ -59,6 +59,7 @@ Doctor page renders, so the two can never disagree:
 ```
 AI harnesses
 ✔ claude 2.1.263
+  · not logged in — run `claude` and use /login
 ✔ copilot 1.0.83
   · copilot will not signal when it needs you; set "beep": true in ~/.copilot/settings.json
 ✔ opencode 1.17.13
@@ -74,6 +75,20 @@ exactly the registered runners, so any harness in it can be a workflow's `runner
 may override a harness entry but not add one. The support group also lists tools that make agents
 more effective (`gh`, `ast-grep`, `yq`, `uv`, `ctags`, `scc`); all of them are optional, so a machine
 without them shows `○`, never `✘`.
+
+An installed tool that has no login gets a note under its row, with the fix. The row stays `✔`
+(the binary is there); the note is what will fail the first step:
+
+| Tool | Note | Counts as logged in |
+|---|---|---|
+| claude | ``not logged in — run `claude` and use /login`` | `~/.claude/.credentials.json` (or under `CLAUDE_CONFIG_DIR`), `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, Bedrock/Vertex/Foundry, or an `apiKeyHelper` / key in `~/.claude/settings.json`. Not checked on macOS (the login is in the Keychain). |
+| copilot | ``not logged in — run `copilot login` `` | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN`; `COPILOT_PROVIDER_BASE_URL` (bring your own key); or a login recorded in `~/.copilot/config.json` |
+| opencode | ``no provider credentials — run `opencode auth login` `` | a credential in `auth.json` under `$XDG_DATA_HOME/opencode`, or a provider key `opencode auth list` finds in the environment |
+| gh | ``not logged in — run `gh auth login` `` | `gh auth token --hostname github.com` finds a token (keyring, `hosts.yml` or `GH_TOKEN`) |
+
+These checks are local: nothing is sent to a server and no token is read into the output, so an
+offline machine is not reported as logged out. A note appears only when doctor is sure — a timeout, an
+unreadable file or an answer it does not recognise gives no note, so a missing note is not proof of a login.
 
 Run inside a project (or with `-C <dir>`; the desktop passes the open workspace), doctor also checks
 that folder and adds a row only when something is wrong with it: git refusing the repository

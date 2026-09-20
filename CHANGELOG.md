@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Doctor says when an installed tool is not logged in
+
+- `whiphand doctor` and the desktop's Doctor page add a note under `claude`, `copilot`, `opencode` and `gh` when the
+  tool is installed but has nothing to authenticate with, naming the fix (for example
+  ``not logged in — run `claude` and use /login``). The row stays `✔`: the binary is there.
+- The checks are local and never interactive — an env var, a credentials file, or a subcommand that stays on the
+  machine — so being offline never reads as logged out. When a check times out, cannot read its file or gets an
+  answer it does not recognise, there is no note. The claude check is skipped on macOS, where the login lives in the
+  Keychain.
+
 ### Doctor checks for tools that make agents more effective
 
 - The support group gains six optional rows: `gh` (PRs, issues and CI logs without scraping the web),

@@ -60,6 +60,7 @@ import { opencodeGuidancePath, opencodePluginPath } from '../engine/opencode-fil
 import { isRecord } from '../engine/progress.ts';
 import { execRunner } from '../exec.ts';
 import { PROBE_TIMEOUT_MS, probeRunner } from '../tools.ts';
+import { liveAuthDeps, withAuthNote, type AuthProbeDeps } from './auth.ts';
 import {
   flagArgs, harvestPrompt, isResumedStep, lf, listModelsVia, promptPointer, requireSessionId, spawnSpec,
 } from './common.ts';
@@ -257,6 +258,36 @@ export function parseOpencodeModels(output: string): ModelInfo[] {
     .map(id => ({ id }));
 }
 
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+
+/**
+ * Whether opencode has no provider to talk to. Verified against opencode
+ * 1.18.31: `opencode auth list` is local (no connection, seen with strace) and
+ * prints a "Credentials" block (`N credentials`, from `auth.json`) and, only
+ * when there are any, an "Environment" block of provider API keys it found in
+ * the environment. Its answer is the whole truth, but it takes ~0.8s, which
+ * would double the Doctor page's wall time — so the common case reads
+ * `auth.json` (`$XDG_DATA_HOME/opencode/`, default `~/.local/share/opencode/`)
+ * instead, and the subcommand only runs when that file has nothing to show.
+ * A wrong guess at the path therefore costs time, never a wrong note.
+ *
+ * "Not logged in" would be too strong here: opencode also has free models that
+ * need no key, and providers can be configured in opencode.json. The note
+ * says what we saw.
+ */
+export async function opencodeAuthNote(deps: AuthProbeDeps = liveAuthDeps()): Promise<string | undefined> {
+  const dataDir = deps.env.XDG_DATA_HOME || join(deps.home, '.local', 'share');
+  try {
+    const stored: unknown = JSON.parse(await deps.readText(join(dataDir, 'opencode', 'auth.json')));
+    if (isRecord(stored) && Object.keys(stored).length > 0) return undefined;
+  } catch {
+    // missing or unreadable: ask opencode itself
+  }
+  const listing = (await deps.run(['opencode', 'auth', 'list'])).replace(ANSI_RE, '');
+  if (!/\b0 credentials\b/.test(listing) || /environment variable/i.test(listing)) return undefined;
+  return 'no provider credentials — run `opencode auth login`';
+}
+
 export const opencodeAdapter: RunnerAdapter = {
   id: 'opencode',
   doctor: {
@@ -269,7 +300,7 @@ export const opencodeAdapter: RunnerAdapter = {
   },
 
   async detect(): Promise<DetectResult> {
-    const probed = await probeRunner(opencodeAdapter.doctor);
+    const probed = await withAuthNote(await probeRunner(opencodeAdapter.doctor), opencodeAuthNote);
     const notes = [...(probed.notes ?? [])];
     if (!probed.installed) {
       // opencode is only on PATH in an interactive shell (it's added by

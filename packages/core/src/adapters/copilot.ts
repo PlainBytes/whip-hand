@@ -6,6 +6,7 @@ import { buildPrompt } from '../template.ts';
 import { interactiveGuidance } from '../engine/interactive-guidance.ts';
 import { endMarkerPath } from '../engine/session-end.ts';
 import { probeRunner } from '../tools.ts';
+import { envOn, isMissingFile, liveAuthDeps, parseLenientJson, withAuthNote, type AuthProbeDeps } from './auth.ts';
 import {
   flagArgs, harvestPrompt, isResumedStep, lf, listModelsVia, promptPointer, requireSessionId, spawnSpec,
 } from './common.ts';
@@ -38,13 +39,45 @@ async function beepNote(): Promise<string[]> {
   for (const name of ['settings.json', 'config.json']) {
     try {
       const text = await readFile(join(home, name), 'utf8');
-      const config = JSON.parse(text.replace(/^\s*\/\/.*$/gm, '')) as { beep?: unknown };
+      const config = parseLenientJson(text) as { beep?: unknown };
       if (config.beep === true) return [];
     } catch {
       // no file yet, or unreadable: the default is off either way
     }
   }
   return [`copilot will not signal when it needs you; set "beep": true in ${join(home, 'settings.json')}`];
+}
+
+/** `copilot help environment` (1.0.86): any of these is a token that takes precedence over stored credentials. */
+const COPILOT_TOKEN_ENV = ['COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN'];
+
+/**
+ * Whether copilot has no GitHub login to use. Signals, per copilot 1.0.86:
+ *  - a token in the environment (above), which wins over anything stored;
+ *  - `COPILOT_PROVIDER_BASE_URL`: bring-your-own-key mode, which the help text
+ *    says needs no GitHub authentication at all;
+ *  - `loggedInUsers` in `config.json` under COPILOT_HOME (default `~/.copilot`)
+ *    — the login itself is in the keychain and this list records who.
+ *
+ * Verified: a fresh COPILOT_HOME has no `config.json` (still none after
+ * `copilot --version` and `copilot help`), and a logged-in one has a
+ * non-empty `loggedInUsers`. Not verified: what `copilot logout` leaves in
+ * the file — hence "no config.json" and "`loggedInUsers` is an empty array"
+ * are the only two answers that count as logged out. An absent key, or a file
+ * we cannot read or parse, could be a version that names things differently,
+ * and that says nothing.
+ */
+export async function copilotAuthNote(deps: AuthProbeDeps = liveAuthDeps()): Promise<string | undefined> {
+  if (envOn(deps.env, ...COPILOT_TOKEN_ENV, 'COPILOT_PROVIDER_BASE_URL')) return undefined;
+  const home = deps.env.COPILOT_HOME ?? join(deps.home, '.copilot');
+  try {
+    const config = parseLenientJson(await deps.readText(join(home, 'config.json'))) as
+      { loggedInUsers?: unknown } | null;
+    if (!Array.isArray(config?.loggedInUsers) || config.loggedInUsers.length > 0) return undefined;
+  } catch (error) {
+    if (!isMissingFile(error)) return undefined;
+  }
+  return 'not logged in — run `copilot login`';
 }
 
 /** The heading line `copilot help config` prints ahead of its model id list. */
@@ -95,12 +128,13 @@ export const copilotAdapter: RunnerAdapter = {
   },
 
   /**
-   * The beep note is only worth reading config for once copilot is actually
-   * there — a missing runner's row has nothing to advise about. `notes` is
-   * always an array when installed (empty once beep is on), never absent.
+   * The login and beep notes are only worth reading config for once copilot
+   * is actually there — a missing runner's row has nothing to advise about.
+   * `notes` is always an array when installed (empty once logged in and beep
+   * is on), never absent. The login note leads: a step cannot start without it.
    */
   async detect(): Promise<DetectResult> {
-    const probed = await probeRunner(copilotAdapter.doctor);
+    const probed = await withAuthNote(await probeRunner(copilotAdapter.doctor), copilotAuthNote);
     if (!probed.installed) return probed;
     return { ...probed, notes: [...(probed.notes ?? []), ...await beepNote()] };
   },

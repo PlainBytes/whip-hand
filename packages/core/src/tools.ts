@@ -42,6 +42,13 @@ export interface ToolProbe {
    */
   optional?: boolean;
   url?: string;
+  /**
+   * Extra notes for a tool that turned out to be installed — "installed but
+   * not logged in", say. Built-in rows only: a function cannot come from
+   * doctor.yaml, and an override of a built-in row there replaces the row, check
+   * included. A check that throws is a check with no answer, so no notes.
+   */
+  check?: () => Promise<string[]>;
 }
 
 /** One row of the doctor report. The wire shape of the `doctor` RPC's result. */
@@ -117,6 +124,32 @@ export function parseToolVersion(
 }
 
 /**
+ * "Installed but not logged in" for gh. Checked against gh 2.86.0:
+ * `gh auth token --hostname github.com` is local (keyring, `hosts.yml` or
+ * `GH_TOKEN`), takes ~0.1s and exits 1 with `no oauth token found for
+ * github.com` when there is none.
+ *
+ * `gh auth status` looks like the obvious call and is wrong for this: it
+ * validates the token against the API, so offline it exits 1 with "The token
+ * in keyring is invalid" for a perfectly good login. The token comes back on
+ * stdout, is never looked at, and goes out of scope with the result.
+ *
+ * Only that exact failure counts. A timeout, a locked keyring, or anything
+ * else that is not "no token" says nothing about being logged in.
+ */
+export async function ghAuthCheck(run: typeof execRunner = execRunner): Promise<string[]> {
+  try {
+    await run(['gh', 'auth', 'token', '--hostname', 'github.com'], { timeout: PROBE_TIMEOUT_MS });
+    return [];
+  } catch (error) {
+    const { code, stderr } = error as { code?: unknown; stderr?: unknown };
+    return code === 1 && /no oauth token/i.test(String(stderr ?? ''))
+      ? ['not logged in — run `gh auth login`']
+      : [];
+  }
+}
+
+/**
  * The support group's built-in rows. Harnesses are not here: each registered
  * adapter carries its own `doctor` descriptor, and `resolveToolTable` builds
  * the harness rows from the registry, so a new adapter shows up in Doctor
@@ -165,6 +198,7 @@ export const BUILTIN_SUPPORT_TOOLS: readonly ToolProbe[] = [
   {
     // PRs, issues and CI logs without scraping the web.
     id: 'gh', label: 'GitHub CLI', group: 'support', argv: ['gh', '--version'], url: 'https://cli.github.com',
+    check: ghAuthCheck,
   },
   {
     // Structural search and rewrite: precise edits for far fewer tokens than
@@ -234,6 +268,22 @@ export async function probeTool(probe: ProbeCommand): Promise<DetectResult> {
     }
   }
   return { installed: false };
+}
+
+/**
+ * What `detectTools` runs for a support row: the probe, then the row's own
+ * `check` when it is installed. Kept out of `probeTool` so the adapters, which
+ * do their own layering in `detect()`, share only the version half; and out of
+ * the detectTools body so a test that substitutes `deps.probe` also gets no
+ * real `gh` spawned behind its back.
+ */
+async function probeToolAndCheck(entry: ToolProbe): Promise<DetectResult> {
+  const probed = await probeTool(entry);
+  const { check } = entry;
+  if (!probed.installed || check === undefined) return probed;
+  // Through a promise chain so a check that throws before it returns one is also "no answer".
+  const notes = await Promise.resolve().then(() => check()).catch((): string[] => []);
+  return notes.length === 0 ? probed : { ...probed, notes: [...(probed.notes ?? []), ...notes] };
 }
 
 /**
@@ -431,7 +481,7 @@ export async function detectTools(
   config: DoctorToolsConfig = {},
   deps: DetectToolsDeps = {},
 ): Promise<ToolStatus[]> {
-  const probe = deps.probe ?? probeTool;
+  const probe = deps.probe ?? probeToolAndCheck;
   const table = resolveToolTable(registry, config);
 
   const rows = await Promise.all(table.map(async (entry): Promise<ToolStatus> => {

@@ -4,7 +4,7 @@ import { AdapterRegistry, defaultRegistry } from './registry.ts';
 import { WorkflowError } from './schema.ts';
 import type { DetectResult, RunnerAdapter, RunnerDoctor, SpawnSpec } from './types.ts';
 import {
-  BUILTIN_SUPPORT_TOOLS, detectTools, parseToolVersion, probeRunner, probeTool, resolveToolTable,
+  BUILTIN_SUPPORT_TOOLS, detectTools, ghAuthCheck, parseToolVersion, probeRunner, probeTool, resolveToolTable,
 } from './tools.ts';
 import type { ToolProbe } from './tools.ts';
 
@@ -332,6 +332,77 @@ test('empty notes are omitted, so the CLI printing none is the same fact', async
   assert.equal(rows.length, 1);
   assert.equal(rows[0].notes, undefined);
   assert.ok(!Object.values(rows[0]).includes(null));
+});
+
+// ---------------------------------------------------------------------------
+// login checks (gh, and the `check` hook on a support row)
+// ---------------------------------------------------------------------------
+
+const GH_NOTE = 'not logged in — run `gh auth login`';
+
+/** What execFile rejects with for a command that ran and exited nonzero, as execRunner decorates it. */
+const exited = (code: number, stderr: string) => Object.assign(new Error('Command failed'), { code, stdout: '', stderr });
+
+test('ghAuthCheck: a token means logged in, and asks gh for the github.com token, offline-safe', async () => {
+  const calls: string[][] = [];
+  const notes = await ghAuthCheck(async argv => { calls.push(argv); return { stdout: 'gho_x', stderr: '' }; });
+  assert.deepEqual(notes, []);
+  // `auth token`, not `auth status`: status validates against the API, so an offline laptop reads as logged out.
+  assert.deepEqual(calls, [['gh', 'auth', 'token', '--hostname', 'github.com']]);
+});
+
+test('ghAuthCheck: exit 1 with "no oauth token" is the one answer that means logged out', async () => {
+  const notes = await ghAuthCheck(async () => { throw exited(1, 'no oauth token found for github.com\n'); });
+  assert.deepEqual(notes, [GH_NOTE]);
+});
+
+test('ghAuthCheck: a timeout, another exit code, another message or a spawn failure says nothing', async () => {
+  const check = (error: unknown) => ghAuthCheck(async () => { throw error; });
+  assert.deepEqual(await check(Object.assign(new Error('timed out'), { killed: true, code: null, signal: 'SIGTERM', stderr: '' })), []);
+  assert.deepEqual(await check(exited(2, 'no oauth token found for github.com')), []);
+  assert.deepEqual(await check(exited(1, 'failed to read from keyring: locked')), []);
+  assert.deepEqual(await check(Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' })), []);
+});
+
+test('gh’s row carries the check; no other built-in does', () => {
+  assert.equal(BUILTIN_SUPPORT_TOOLS.find(t => t.id === 'gh')?.check, ghAuthCheck);
+  assert.deepEqual(BUILTIN_SUPPORT_TOOLS.filter(t => t.check).map(t => t.id), ['gh']);
+});
+
+// The default probe is the only one that runs checks; a test that substitutes
+// `deps.probe` must not get a real `gh` spawned behind its back. `node` itself
+// is the installed tool here, so nothing outside the test process is involved.
+const nodeRow = (check: ToolProbe['check']): ToolProbe =>
+  probe({ id: 'checked', argv: [process.execPath, '--version'], check });
+
+const rowOf = async (row: ToolProbe) =>
+  (await detectTools(registryOf(), { tools: [row], hide: BUILTIN_SUPPORT_TOOLS.map(t => t.id) }, { machine: () => [] }))[0];
+
+test('detectTools: an installed tool’s check adds its notes to the row', async () => {
+  const row = await rowOf(nodeRow(async () => ['not logged in — run `x login`']));
+  assert.equal(row.installed, true);
+  assert.deepEqual(row.notes, ['not logged in — run `x login`']);
+});
+
+test('detectTools: a check with nothing to say, or one that throws, leaves the row without notes', async () => {
+  assert.equal((await rowOf(nodeRow(async () => []))).notes, undefined);
+  const thrown = await rowOf(nodeRow(async () => { throw new Error('boom'); }));
+  assert.equal(thrown.installed, true, 'a failing check must not fail the row');
+  assert.equal(thrown.notes, undefined);
+  const syncThrown = await rowOf(nodeRow((() => { throw new Error('boom'); }) as ToolProbe['check']));
+  assert.equal(syncThrown.installed, true, 'nor may one that throws before it returns a promise');
+  assert.equal(syncThrown.notes, undefined);
+});
+
+test('detectTools: a tool that is not installed is not checked', async () => {
+  let asked = false;
+  const row = await rowOf(probe({
+    id: 'checked', argv: ['whiphand-no-such-binary-4f1c', '--version'],
+    check: async () => { asked = true; return ['never']; },
+  }));
+  assert.equal(row.installed, false);
+  assert.equal(asked, false);
+  assert.equal(row.notes, undefined);
 });
 
 // ---------------------------------------------------------------------------

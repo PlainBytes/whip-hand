@@ -1865,7 +1865,14 @@ test('fencing does not fire for a healthy owner: the lease is renewed', async ()
 
 test('a legacy manifest that still carries a pid parses, and the pid is not consulted', async () => {
   const workdir = await tmpRunDir();
-  const runDir = await writeAbandonedRun(workdir, '20260101-000021-lgcy', { pid: 1, heartbeatAt: new Date().toISOString() });
+  // A manifest from before pidScope existed: a pid, and no space to read it in,
+  // so ownerGone refuses to probe it and the fresh lease is the whole answer.
+  // The pid is one nothing runs under, so a probe that did run would say "dead".
+  // `pid: 1` would not prove that: it is unused only on Windows (ESRCH), while
+  // on Linux it is init and EPERM already reads as alive — passing for the
+  // wrong reason on one platform and failing on the other.
+  const runDir = await writeAbandonedRun(workdir, '20260101-000021-lgcy',
+    { pid: deadPid(), pidScope: undefined, heartbeatAt: new Date().toISOString() });
   const parsed = runManifestSchema.safeParse(JSON.parse(await readFile(join(runDir, 'run.json'), 'utf8')));
   assert.equal(parsed.success, true);
   const [run] = await listRuns(workdir, DEFAULT_CONFIG);

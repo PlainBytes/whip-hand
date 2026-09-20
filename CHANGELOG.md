@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### Doctor says when an installed tool is not logged in
+### Doctor says when an installed tool is not logged in, or not set up
 
 - `whiphand doctor` and the desktop's Doctor page add a note under `claude`, `copilot`, `opencode` and `gh` when the
   tool is installed but has nothing to authenticate with, naming the fix (for example
@@ -11,6 +11,11 @@
   machine — so being offline never reads as logged out. When a check times out, cannot read its file or gets an
   answer it does not recognise, there is no note. The claude check is skipped on macOS, where the login lives in the
   Keychain.
+- Two more notes for an install that is present but not doing its job. The rtk row says when claude is installed
+  and no user-level Claude Code settings file has a hook that calls rtk (``run `rtk init -g` to set it up``). A
+  harness older than the oldest version its adapter was verified against (claude 2.1.260, copilot 1.0.83, opencode
+  1.17.13) says so, and that it should be updated. Neither changes the row's `✔`, and an unreadable settings file
+  or an unparseable version gives no note.
 
 ### Doctor checks for tools that make agents more effective
 

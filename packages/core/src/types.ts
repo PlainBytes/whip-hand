@@ -443,6 +443,12 @@ export interface RunnerDoctor {
   /** RegExp source whose group 1 is the version. Defaults to `VERSION_RE`. */
   versionPattern?: string;
   /**
+   * The oldest version this adapter's comments say it was verified against.
+   * An older one still reads as installed, with a note: it may well work, but
+   * nobody has checked. Left unset, no floor is enforced.
+   */
+  minVersion?: string;
+  /**
    * Presentation only. True for a harness a working install can do without;
    * false for one whiphand needs at least one of to be usable at all.
    */

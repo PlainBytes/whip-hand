@@ -135,6 +135,8 @@ export const claudeAdapter: RunnerAdapter = {
   doctor: {
     label: 'Claude Code', url: 'https://claude.com/claude-code',
     argv: ['claude', '--version'], optional: false,
+    // The oldest version cited under "verified against" in this file (2.1.260 in interactiveSettings).
+    minVersion: '2.1.260',
   },
   capabilities: {
     sessionIdInjection: true, sessionIdCapture: false, sessionResume: true,

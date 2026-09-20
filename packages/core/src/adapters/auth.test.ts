@@ -284,6 +284,15 @@ test('claude detect(): an installed claude with no login carries the note; a key
   });
 });
 
+test('claude detect(): a version below the floor is noted', async () => {
+  const config = await emptyDir();
+  await withStubBin('claude', `console.log('claude 2.1.0');`, async () => {
+    const result = await withEnv({ ...NO_CLAUDE_LOGIN, CLAUDE_CONFIG_DIR: config, ANTHROPIC_API_KEY: 'k' }, () => claudeAdapter.detect());
+    assert.equal(result.installed, true);
+    assert.deepEqual(result.notes, ['older than 2.1.260, the oldest version whiphand is tested with — update it']);
+  });
+});
+
 test('claude detect(): an uninstalled claude gets no login note, only "not installed"', async () => {
   const result = await withEnv({ PATH: '', Path: '', ...NO_CLAUDE_LOGIN, CLAUDE_CONFIG_DIR: await emptyDir() },
     () => claudeAdapter.detect());
@@ -305,7 +314,7 @@ test('copilot detect(): the login note leads and the beep note still follows', a
 
 test('opencode detect(): asks `opencode auth list` only when auth.json has nothing, and notes `0 credentials`', async () => {
   const data = await emptyDir();
-  const behaviour = `console.log(process.argv[2] === 'auth' ? '└  0 credentials' : '1.2.3');`;
+  const behaviour = `console.log(process.argv[2] === 'auth' ? '└  0 credentials' : '9.9.9');`;
   await withStubBin('opencode', behaviour, async () => {
     const result = await withEnv({ XDG_DATA_HOME: data, OPENCODE_CONFIG_CONTENT: undefined }, () => opencodeAdapter.detect());
     assert.equal(result.installed, true);

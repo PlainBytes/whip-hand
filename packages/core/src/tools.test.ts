@@ -4,7 +4,8 @@ import { AdapterRegistry, defaultRegistry } from './registry.ts';
 import { WorkflowError } from './schema.ts';
 import type { DetectResult, RunnerAdapter, RunnerDoctor, SpawnSpec } from './types.ts';
 import {
-  BUILTIN_SUPPORT_TOOLS, detectTools, ghAuthCheck, parseToolVersion, probeRunner, probeTool, resolveToolTable,
+  BUILTIN_SUPPORT_TOOLS, detectTools, ghAuthCheck, isOlderVersion, parseToolVersion, probeRunner, probeTool,
+  resolveToolTable,
 } from './tools.ts';
 import type { ToolProbe } from './tools.ts';
 
@@ -364,9 +365,8 @@ test('ghAuthCheck: a timeout, another exit code, another message or a spawn fail
   assert.deepEqual(await check(Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' })), []);
 });
 
-test('gh’s row carries the check; no other built-in does', () => {
-  assert.equal(BUILTIN_SUPPORT_TOOLS.find(t => t.id === 'gh')?.check, ghAuthCheck);
-  assert.deepEqual(BUILTIN_SUPPORT_TOOLS.filter(t => t.check).map(t => t.id), ['gh']);
+test('only rtk and gh carry a check', () => {
+  assert.deepEqual(BUILTIN_SUPPORT_TOOLS.filter(t => t.check).map(t => t.id), ['rtk', 'gh']);
 });
 
 // The default probe is the only one that runs checks; a test that substitutes
@@ -392,6 +392,22 @@ test('detectTools: a check with nothing to say, or one that throws, leaves the r
   const syncThrown = await rowOf(nodeRow((() => { throw new Error('boom'); }) as ToolProbe['check']));
   assert.equal(syncThrown.installed, true, 'nor may one that throws before it returns a promise');
   assert.equal(syncThrown.notes, undefined);
+});
+
+test('detectTools: a check can ask about another row without that row being probed twice', async () => {
+  let claudeDetects = 0;
+  const claude = fakeAdapter('claude', async () => { claudeDetects++; return { installed: true, version: '2.1.300' }; });
+  const askClaude = nodeRow(async ctx => [`claude installed: ${(await ctx.detected('claude'))?.installed}`]);
+  const [, row] = await detectTools(registryOf(claude), { tools: [askClaude], hide: BUILTIN_SUPPORT_TOOLS.map(t => t.id) }, { machine: () => [] });
+  assert.deepEqual(row.notes, ['claude installed: true']);
+  assert.equal(claudeDetects, 1);
+});
+
+test('detectTools: a row nobody registered or that is hidden is undefined to a check', async () => {
+  const seen: unknown[] = [];
+  const ask = nodeRow(async ctx => { seen.push(ctx.detected('claude')); return []; });
+  await rowOf(ask);
+  assert.deepEqual(seen, [undefined]);
 });
 
 test('detectTools: a tool that is not installed is not checked', async () => {
@@ -455,4 +471,72 @@ test('every shipped adapter describes itself for doctor with a `--version` probe
     assert.deepEqual(adapter.doctor.argv, [adapter.id, '--version'], adapter.id);
     assert.ok(adapter.doctor.label.length > 0, adapter.id);
   }
+});
+
+// ---------------------------------------------------------------------------
+// version floor — RunnerDoctor.minVersion
+// ---------------------------------------------------------------------------
+
+test('isOlderVersion: equal and newer are not older, older is', () => {
+  assert.equal(isOlderVersion('2.1.277', '2.1.277'), false);
+  assert.equal(isOlderVersion('2.1.278', '2.1.277'), false);
+  assert.equal(isOlderVersion('2.2.0', '2.1.277'), false);
+  assert.equal(isOlderVersion('3.0.0', '2.1.277'), false);
+  assert.equal(isOlderVersion('2.1.276', '2.1.277'), true);
+  assert.equal(isOlderVersion('1.99.999', '2.0.0'), true);
+});
+
+test('isOlderVersion: compares numbers, not strings, and pads a short version with zeros', () => {
+  assert.equal(isOlderVersion('1.0.9', '1.0.83'), true);
+  assert.equal(isOlderVersion('1.0.100', '1.0.83'), false);
+  assert.equal(isOlderVersion('1.0', '1.0.0'), false);
+  assert.equal(isOlderVersion('1.0.0', '1.0'), false);
+  assert.equal(isOlderVersion('1.0', '1.0.1'), true);
+});
+
+test('isOlderVersion: a pre-release or build suffix is ignored', () => {
+  assert.equal(isOlderVersion('2.1.277-beta.1', '2.1.277'), false);
+  assert.equal(isOlderVersion('2.1.276-rc.2', '2.1.277'), true);
+  assert.equal(isOlderVersion('2.45.0+build.7', '2.45.0'), false);
+});
+
+test('isOlderVersion: a version that is missing or not plain numbers is never older', () => {
+  assert.equal(isOlderVersion(undefined, '2.1.277'), false);
+  assert.equal(isOlderVersion('', '2.1.277'), false);
+  assert.equal(isOlderVersion('nightly', '2.1.277'), false);
+  assert.equal(isOlderVersion('1.x.0', '2.1.277'), false);
+  assert.equal(isOlderVersion('1..0', '2.1.277'), false);
+  assert.equal(isOlderVersion('1.0.0', 'latest'), false);
+});
+
+const NODE_DOCTOR: RunnerDoctor = { label: 'Node', argv: ['node', '--version'], optional: true };
+
+test('probeRunner: a version below the descriptor’s minVersion is installed, with a note naming the floor', async () => {
+  const result = await probeRunner({ ...NODE_DOCTOR, minVersion: '999.0.0' });
+  assert.equal(result.installed, true);
+  assert.deepEqual(result.notes, ['older than 999.0.0, the oldest version whiphand is tested with — update it']);
+});
+
+test('probeRunner: no note at or above the floor, or with no floor at all', async () => {
+  const version = (await probeRunner(NODE_DOCTOR)).version!;
+  assert.equal((await probeRunner({ ...NODE_DOCTOR, minVersion: version })).notes, undefined);
+  assert.equal((await probeRunner({ ...NODE_DOCTOR, minVersion: '1.0.0' })).notes, undefined);
+  assert.equal((await probeRunner(NODE_DOCTOR)).notes, undefined);
+});
+
+test('probeRunner: an unparseable version gets no floor note, and a missing binary none either', async () => {
+  const dated = await probeRunner({ ...NODE_DOCTOR, versionPattern: '(v)\\d', minVersion: '999.0.0' });
+  assert.equal(dated.installed, true);
+  assert.equal(dated.notes, undefined);
+  const noVersion = await probeRunner({
+    label: 'Node', argv: [process.execPath, '-p', '"dev"'], versionPattern: '(dev)', optional: true, minVersion: '1.0.0',
+  });
+  assert.equal(noVersion.notes, undefined);
+  const missing = await probeRunner({ label: 'x', argv: ['whiphand-no-such-binary-4f1c'], optional: true, minVersion: '1.0.0' });
+  assert.deepEqual(missing, { installed: false });
+});
+
+test('the three harness adapters state the version their comments were verified against', () => {
+  const floors = Object.fromEntries(defaultRegistry().list().map(a => [a.id, a.doctor.minVersion]));
+  assert.deepEqual(floors, { claude: '2.1.260', copilot: '1.0.83', opencode: '1.17.13' });
 });

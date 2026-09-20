@@ -117,6 +117,7 @@ export const copilotAdapter: RunnerAdapter = {
   doctor: {
     label: 'GitHub Copilot CLI', url: 'https://github.com/github/copilot-cli',
     argv: ['copilot', '--version'], optional: false,
+    minVersion: '1.0.83',
   },
   // copilot 1.0.83's --session-id mints a new session, same as claude's flag
   // of the same name (--help: "or set the UUID for a new session"); a bare

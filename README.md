@@ -90,6 +90,16 @@ These checks are local: nothing is sent to a server and no token is read into th
 offline machine is not reported as logged out. A note appears only when doctor is sure — a timeout, an
 unreadable file or an answer it does not recognise gives no note, so a missing note is not proof of a login.
 
+Two more notes cover an install that is present but not doing its job:
+
+- **rtk hook** — when claude and rtk are both installed and neither `~/.claude/settings.json` nor
+  `settings.local.json` (under `CLAUDE_CONFIG_DIR` if set) has a hook whose command invokes `rtk`, the rtk row says
+  ``rtk is installed but no Claude Code hook calls it — run `rtk init -g` to set it up``. A settings file that
+  cannot be read or parsed gives no note; project-level settings are not consulted.
+- **Minimum version** — a harness older than the oldest version whiphand's adapter was verified against (claude
+  2.1.260, copilot 1.0.83, opencode 1.17.13) gets ``older than <version>, the oldest version whiphand is tested with
+  — update it``. A version doctor cannot read as plain numbers gets no note.
+
 Run inside a project (or with `-C <dir>`; the desktop passes the open workspace), doctor also checks
 that folder and adds a row only when something is wrong with it: git refusing the repository
 (`detected dubious ownership` — the row carries the `git config --global --add safe.directory …` fix,

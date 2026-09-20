@@ -293,6 +293,7 @@ export const opencodeAdapter: RunnerAdapter = {
   doctor: {
     label: 'opencode', url: 'https://opencode.ai',
     argv: ['opencode', '--version'], optional: true,
+    minVersion: '1.17.13',
   },
   capabilities: {
     sessionIdInjection: false, sessionIdCapture: true, sessionResume: true,

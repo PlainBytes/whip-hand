@@ -17,11 +17,21 @@ import { classifyGitFailure } from './engine/git-guard.ts';
 import { TOOL_GROUPS, type ToolGroup } from './tool-groups.ts';
 import { WorkflowError } from './schema.ts';
 import { globalDoctorConfigPath } from './doctor-config.ts';
+import { rtkHookCheck } from './rtk-hook.ts';
 
 // Re-exported so `@whiphand/core` stays the one import for everything doctor-shaped;
 // they live in their own node-free module because the desktop bundles them.
 export { TOOL_GROUPS, TOOL_GROUP_LABELS } from './tool-groups.ts';
 export type { ToolGroup } from './tool-groups.ts';
+
+/** What a row's `check` may ask about the rest of the report. */
+export interface CheckContext {
+  /**
+   * The detect result of another row of the table, awaited without a second
+   * probe. undefined when there is no such row — hidden, or never registered.
+   */
+  detected(id: string): Promise<DetectResult> | undefined;
+}
 
 /** A declarative "is this installed, and at what version" check. */
 export interface ToolProbe {
@@ -48,7 +58,7 @@ export interface ToolProbe {
    * doctor.yaml, and an override of a built-in row there replaces the row, check
    * included. A check that throws is a check with no answer, so no notes.
    */
-  check?: () => Promise<string[]>;
+  check?: (ctx: CheckContext) => Promise<string[]>;
 }
 
 /** One row of the doctor report. The wire shape of the `doctor` RPC's result. */
@@ -150,6 +160,28 @@ export async function ghAuthCheck(run: typeof execRunner = execRunner): Promise<
 }
 
 /**
+ * Whether `version` is older than `min`, comparing the dot-separated numbers
+ * and padding the shorter with zeros (`1.0` equals `1.0.0`). A `-beta.1` or
+ * `+build` suffix is ignored. Anything that is not plain numbers on either
+ * side — no version at all, a custom pattern's odd capture — is not "older":
+ * a floor note is worth showing only when we are sure.
+ */
+export function isOlderVersion(version: string | undefined, min: string): boolean {
+  const numbers = (v: string): number[] | undefined => {
+    const parts = v.split(/[-+]/, 1)[0].split('.');
+    return parts.every(part => /^\d+$/.test(part)) ? parts.map(Number) : undefined;
+  };
+  const have = version === undefined ? undefined : numbers(version);
+  const want = numbers(min);
+  if (have === undefined || want === undefined) return false;
+  for (let i = 0; i < Math.max(have.length, want.length); i++) {
+    const diff = (have[i] ?? 0) - (want[i] ?? 0);
+    if (diff !== 0) return diff < 0;
+  }
+  return false;
+}
+
+/**
  * The support group's built-in rows. Harnesses are not here: each registered
  * adapter carries its own `doctor` descriptor, and `resolveToolTable` builds
  * the harness rows from the registry, so a new adapter shows up in Doctor
@@ -180,7 +212,11 @@ export const BUILTIN_SUPPORT_TOOLS: readonly ToolProbe[] = [
     id: 'python', label: 'Python', group: 'support',
     argv: ['python3', '--version'], aliases: ['python'], url: 'https://www.python.org',
   },
-  { id: 'rtk', label: 'rtk', group: 'support', argv: ['rtk', '--version'] },
+  {
+    // Installed is not enough: rtk saves tokens only through a Claude Code hook.
+    id: 'rtk', label: 'rtk', group: 'support', argv: ['rtk', '--version'],
+    check: ctx => rtkHookCheck(ctx),
+  },
   {
     id: 'rg', label: 'ripgrep', group: 'support',
     argv: ['rg', '--version'], url: 'https://github.com/BurntSushi/ripgrep',
@@ -198,7 +234,7 @@ export const BUILTIN_SUPPORT_TOOLS: readonly ToolProbe[] = [
   {
     // PRs, issues and CI logs without scraping the web.
     id: 'gh', label: 'GitHub CLI', group: 'support', argv: ['gh', '--version'], url: 'https://cli.github.com',
-    check: ghAuthCheck,
+    check: () => ghAuthCheck(),
   },
   {
     // Structural search and rewrite: precise edits for far fewer tokens than
@@ -277,12 +313,12 @@ export async function probeTool(probe: ProbeCommand): Promise<DetectResult> {
  * the detectTools body so a test that substitutes `deps.probe` also gets no
  * real `gh` spawned behind its back.
  */
-async function probeToolAndCheck(entry: ToolProbe): Promise<DetectResult> {
+async function probeToolAndCheck(entry: ToolProbe, ctx: CheckContext): Promise<DetectResult> {
   const probed = await probeTool(entry);
   const { check } = entry;
   if (!probed.installed || check === undefined) return probed;
   // Through a promise chain so a check that throws before it returns one is also "no answer".
-  const notes = await Promise.resolve().then(() => check()).catch((): string[] => []);
+  const notes = await Promise.resolve().then(() => check(ctx)).catch((): string[] => []);
   return notes.length === 0 ? probed : { ...probed, notes: [...(probed.notes ?? []), ...notes] };
 }
 
@@ -300,8 +336,12 @@ async function probeToolAndCheck(entry: ToolProbe): Promise<DetectResult> {
  * notes on top, so the argv in `adapter.doctor` is the one that actually
  * runs — edit it and both Doctor and the run:env snapshot follow.
  */
-export function probeRunner(doctor: RunnerDoctor): Promise<DetectResult> {
-  return probeTool(doctor);
+export async function probeRunner(doctor: RunnerDoctor): Promise<DetectResult> {
+  const probed = await probeTool(doctor);
+  const { minVersion } = doctor;
+  if (minVersion === undefined || !isOlderVersion(probed.version, minVersion)) return probed;
+  const note = `older than ${minVersion}, the oldest version whiphand is tested with — update it`;
+  return { ...probed, notes: [...(probed.notes ?? []), note] };
 }
 
 export interface DoctorToolsConfig {
@@ -310,7 +350,7 @@ export interface DoctorToolsConfig {
 }
 
 export interface DetectToolsDeps {
-  probe?: (probe: ToolProbe) => Promise<DetectResult>;
+  probe?: (probe: ToolProbe, ctx: CheckContext) => Promise<DetectResult>;
   /** Machine-level facts appended to the support group; substituted by tests. Defaults to `machineChecks()`. */
   machine?: () => ToolStatus[];
   /**
@@ -484,9 +524,17 @@ export async function detectTools(
   const probe = deps.probe ?? probeToolAndCheck;
   const table = resolveToolTable(registry, config);
 
+  // Every row's detection is one shared promise, so a check that asks about
+  // another row (rtk's about claude) waits on it instead of probing twice.
+  const detections = new Map<string, Promise<DetectResult>>();
+  const ctx: CheckContext = { detected: id => detections.get(id) };
+  for (const entry of table) {
+    detections.set(entry.id, registry.has(entry.id) ? registry.get(entry.id).detect() : probe(entry, ctx));
+  }
+
   const rows = await Promise.all(table.map(async (entry): Promise<ToolStatus> => {
     const runner = registry.has(entry.id);
-    const detected = runner ? await registry.get(entry.id).detect() : await probe(entry);
+    const detected = await detections.get(entry.id)!;
     return {
       id: entry.id,
       label: entry.label,

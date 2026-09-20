@@ -7,6 +7,7 @@ function fakeAdapter(id: string, caps: Partial<RunnerAdapter['capabilities']>): 
   const spec: SpawnSpec = { argv: [id], cwd: '/', env: {}, interactive: false };
   return {
     id,
+    doctor: { label: id, argv: [id], optional: true },
     capabilities: {
       sessionIdInjection: false, sessionIdCapture: false, sessionResume: false,
       toolDenial: false, shareTranscript: false, ...caps,

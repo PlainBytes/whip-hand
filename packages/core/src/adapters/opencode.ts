@@ -259,13 +259,17 @@ export function parseOpencodeModels(output: string): ModelInfo[] {
 
 export const opencodeAdapter: RunnerAdapter = {
   id: 'opencode',
+  doctor: {
+    label: 'opencode', url: 'https://opencode.ai',
+    argv: ['opencode', '--version'], optional: true,
+  },
   capabilities: {
     sessionIdInjection: false, sessionIdCapture: true, sessionResume: true,
     toolDenial: true, shareTranscript: false,
   },
 
   async detect(): Promise<DetectResult> {
-    const probed = await probeRunner('opencode');
+    const probed = await probeRunner(opencodeAdapter.doctor);
     const notes = [...(probed.notes ?? [])];
     if (!probed.installed) {
       // opencode is only on PATH in an interactive shell (it's added by

@@ -29,8 +29,8 @@ const SCRIPTED_CONFIG = scriptedConfig();
 const runnerRow = (id: string) => ({
   id, label: id, group: 'harness' as const, runner: true, optional: false, installed: true, version: '1.0.0',
 });
-/** A doctor row for anything else: a support tool, or a harness with no adapter. */
-const toolRow = (id: string, group: 'harness' | 'support' = 'harness') => ({
+/** A doctor row for anything else: a support tool. */
+const toolRow = (id: string, group: 'harness' | 'support' = 'support') => ({
   id, label: id, group, runner: false, optional: true, installed: true, version: '1.0.0',
 });
 
@@ -79,7 +79,7 @@ describe('WorkspaceSettingsPage', () => {
   it('renders values from configGet and disables Save until an edit is made', async () => {
     const { transport } = renderWorkspaceSettingsPage();
     await respond(transport, 'configGet', SCRIPTED_CONFIG);
-    await respond(transport, 'doctor', [runnerRow('claude'), toolRow('codex')]);
+    await respond(transport, 'doctor', [runnerRow('claude'), toolRow('git')]);
 
     expect(await screen.findByDisplayValue('.whiphand/runs')).toBeInTheDocument();
     expect(screen.getByRole('spinbutton')).toHaveValue('3');
@@ -87,22 +87,20 @@ describe('WorkspaceSettingsPage', () => {
   });
 
   it('offers only real runners in the Runner dropdown, never support tools', async () => {
-    // Doctor reports the whole machine now. Picking `git` or `codex` here
+    // Doctor reports the whole machine now. Picking `git` here
     // would write a workflow that fails validateWorkflowRunners at start-up,
     // so the dropdown filters on `.runner` rather than listing every row.
     const { transport } = renderWorkspaceSettingsPage();
     await respond(transport, 'configGet', SCRIPTED_CONFIG);
     await respond(transport, 'doctor', [
       runnerRow('claude'),
-      toolRow('codex'),
-      toolRow('git', 'support'),
+      toolRow('git'),
     ]);
 
     const runner = await screen.findByRole('combobox', { name: /runner/i });
     fireEvent.click(runner);
 
     expect(await screen.findByRole('option', { name: 'claude' })).toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: 'codex' })).not.toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'git' })).not.toBeInTheDocument();
   });
 

@@ -28,6 +28,7 @@ function collector(): { events: WhiphandEvent[]; frontend: Frontend } {
 function captureRunner(opts: { capture: (step: AgentStep, ctx: RunCtx) => Promise<string | undefined> }): RunnerAdapter {
   return {
     id: 'capturer',
+    doctor: { label: 'capturer', argv: ['capturer'], optional: true },
     capabilities: { sessionIdInjection: false, sessionIdCapture: true, sessionResume: true, toolDenial: true, shareTranscript: false },
     detect: async () => ({ installed: true }),
     interactive(step: AgentStep, ctx: RunCtx): SpawnSpec {

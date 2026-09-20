@@ -47,10 +47,10 @@ describe('AgentClient', () => {
 
     // Respond out of order — correlation must be by id, not arrival order.
     transport.emitLine({ id: req2.id, result: [{ id: 'claude', installed: true }] });
-    transport.emitLine({ id: req1.id, result: [{ id: 'codex', installed: false }] });
+    transport.emitLine({ id: req1.id, result: [{ id: 'git', installed: false }] });
 
     await expect(p2).resolves.toEqual([{ id: 'claude', installed: true }]);
-    await expect(p1).resolves.toEqual([{ id: 'codex', installed: false }]);
+    await expect(p1).resolves.toEqual([{ id: 'git', installed: false }]);
   });
 
   it('rejects a request when the response carries an rpc error', async () => {

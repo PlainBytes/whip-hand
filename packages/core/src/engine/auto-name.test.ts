@@ -28,6 +28,7 @@ async function ctxIn(inputs: Record<string, string> = { feature: 'oauth support'
 function answering(reply: string | null, exitCode = 0): RunnerAdapter {
   const base = {
     id: 'fake',
+    doctor: { label: 'fake', argv: ['fake'], optional: true },
     capabilities: { sessionIdInjection: false, sessionIdCapture: false, sessionResume: false, toolDenial: true, shareTranscript: false },
     detect: async () => ({ installed: true }),
     interactive: () => { throw new Error('unused'); },

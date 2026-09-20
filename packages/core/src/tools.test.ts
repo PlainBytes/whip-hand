@@ -1,16 +1,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { AdapterRegistry } from './registry.ts';
-import type { DetectResult, RunnerAdapter, SpawnSpec } from './types.ts';
+import { AdapterRegistry, defaultRegistry } from './registry.ts';
+import { WorkflowError } from './schema.ts';
+import type { DetectResult, RunnerAdapter, RunnerDoctor, SpawnSpec } from './types.ts';
 import {
-  BUILTIN_TOOLS, detectTools, parseToolVersion, probeRunner, probeTool, resolveToolTable,
+  BUILTIN_SUPPORT_TOOLS, detectTools, parseToolVersion, probeRunner, probeTool, resolveToolTable,
 } from './tools.ts';
 import type { ToolProbe } from './tools.ts';
 
-function fakeAdapter(id: string, detect: () => Promise<DetectResult>): RunnerAdapter {
+function fakeAdapter(
+  id: string, detect: () => Promise<DetectResult>, doctor: Partial<RunnerDoctor> = {},
+): RunnerAdapter {
   const spec: SpawnSpec = { argv: [id], cwd: '/', env: {}, interactive: false };
   return {
     id,
+    doctor: { label: id, argv: [id, '--version'], optional: true, ...doctor },
     capabilities: { sessionIdInjection: false, sessionIdCapture: false, sessionResume: false, toolDenial: false, shareTranscript: false },
     detect,
     interactive: () => spec, headless: () => spec, harvest: () => spec,
@@ -42,7 +46,7 @@ test('parses the version out of each tool’s actual --version output', () => {
     ['jq-1.6', '1.6'],                              // older jq: only two components
     ['2.1.263 (Claude Code)', '2.1.263'],
     ['fd 10.2.0', '10.2.0'],
-    ['2025.08.28-8d9dd2c', '2025.08.28-8d9dd2c'],   // cursor-agent: dated build + hash
+    ['2025.08.28-8d9dd2c', '2025.08.28-8d9dd2c'],   // a dated build + hash
     ['no numbers here', undefined],
   ];
   for (const [output, expected] of cases) {
@@ -80,35 +84,122 @@ test('a custom pattern overrides the default rule', () => {
 // resolveToolTable — merge, override, registry sweep, hide
 // ---------------------------------------------------------------------------
 
-test('the built-in table is the baseline, in its declared order', () => {
+const ids = (table: ToolProbe[], group: ToolProbe['group']): string[] =>
+  table.filter(t => t.group === group).map(t => t.id);
+
+test('with no adapters and no config the table is the support built-ins alone', () => {
   const table = resolveToolTable(registryOf());
-  assert.deepEqual(table.map(t => t.id), BUILTIN_TOOLS.map(t => t.id));
+  assert.deepEqual(table.map(t => t.id), BUILTIN_SUPPORT_TOOLS.map(t => t.id));
+  assert.ok(table.every(t => t.group === 'support'));
+});
+
+test('the harness group is exactly the registry, in registration order, ahead of the support rows', () => {
+  const registry = defaultRegistry();
+  const table = resolveToolTable(registry);
+  assert.deepEqual(ids(table, 'harness'), registry.list().map(a => a.id));
+  assert.deepEqual(ids(table, 'harness'), ['claude', 'copilot', 'opencode']);
+  assert.deepEqual(table.slice(0, 3).map(t => t.group), ['harness', 'harness', 'harness'], 'harness rows come first');
+  for (const gone of ['codex', 'gemini', 'cursor-agent']) {
+    assert.ok(!table.some(t => t.id === gone), `${gone} has no adapter, so it is not a harness`);
+  }
+});
+
+test('each harness row carries its adapter’s own label, url and required-ness', () => {
+  const by = new Map(resolveToolTable(defaultRegistry()).map(t => [t.id, t]));
+  assert.equal(by.get('claude')?.label, 'Claude Code');
+  assert.equal(by.get('claude')?.url, 'https://claude.com/claude-code');
+  assert.equal(by.get('claude')?.optional, false);
+  assert.equal(by.get('copilot')?.label, 'GitHub Copilot CLI');
+  assert.equal(by.get('copilot')?.optional, false);
+  assert.equal(by.get('opencode')?.label, 'opencode');
+  assert.equal(by.get('opencode')?.optional, true);
+});
+
+test('a newly registered adapter appears with its own label and url, not just its id', () => {
+  const table = resolveToolTable(registryOf(fakeAdapter(
+    'newbie', async () => ({ installed: true }),
+    { label: 'Newbie CLI', url: 'https://example.com/newbie', optional: false },
+  )));
+  const added = table.find(t => t.id === 'newbie');
+  assert.equal(added?.group, 'harness');
+  assert.equal(added?.label, 'Newbie CLI');
+  assert.equal(added?.url, 'https://example.com/newbie');
+  assert.equal(added?.optional, false);
 });
 
 test('a user tool with a new id is appended', () => {
   const table = resolveToolTable(registryOf(), { tools: [probe({ id: 'bun' })] });
   assert.equal(table.at(-1)?.id, 'bun');
-  assert.equal(table.length, BUILTIN_TOOLS.length + 1);
+  assert.equal(table.length, BUILTIN_SUPPORT_TOOLS.length + 1);
 });
 
 test('a user tool reusing a built-in id replaces it IN PLACE', () => {
-  const at = BUILTIN_TOOLS.findIndex(t => t.id === 'rtk');
+  const at = BUILTIN_SUPPORT_TOOLS.findIndex(t => t.id === 'rtk');
   const table = resolveToolTable(registryOf(), {
     tools: [probe({ id: 'rtk', label: 'RTK', argv: ['rtk', 'version'], optional: false })],
   });
 
   // Position is the point: tweaking one probe must not reshuffle the report.
-  assert.equal(table.length, BUILTIN_TOOLS.length);
+  assert.equal(table.length, BUILTIN_SUPPORT_TOOLS.length);
   assert.equal(table[at].id, 'rtk');
   assert.deepEqual(table[at].argv, ['rtk', 'version']);
   assert.equal(table[at].label, 'RTK');
 });
 
-test('a registered adapter the table has never heard of is added as a harness', () => {
-  const table = resolveToolTable(registryOf(fakeAdapter('newbie', async () => ({ installed: true }))));
-  const added = table.find(t => t.id === 'newbie');
-  assert.ok(added, 'a third adapter must appear in doctor with no table edit');
-  assert.equal(added.group, 'harness');
+test('a doctor.yaml override of a registry id changes its presentation in place, and nothing else', () => {
+  const registry = defaultRegistry();
+  const before = resolveToolTable(registry);
+  const table = resolveToolTable(registry, {
+    tools: [probe({
+      id: 'claude', label: 'Claude!', group: 'harness', argv: ['never', 'run'],
+      optional: true, url: 'https://example.com/claude',
+    })],
+  });
+  const at = before.findIndex(t => t.id === 'claude');
+  assert.equal(table.length, before.length);
+  assert.equal(table[at].id, 'claude');
+  assert.equal(table[at].label, 'Claude!');
+  assert.equal(table[at].optional, true);
+  assert.equal(table[at].url, 'https://example.com/claude');
+  assert.equal(table[at].group, 'harness');
+  assert.deepEqual(table[at].argv, ['claude', '--version'], 'the adapter owns how it is probed');
+});
+
+test('an override that leaves url and optional out keeps the adapter’s', () => {
+  const table = resolveToolTable(defaultRegistry(), {
+    tools: [probe({ id: 'claude', label: 'Claude!', group: 'harness' })],
+  });
+  const claude = table.find(t => t.id === 'claude');
+  assert.equal(claude?.url, 'https://claude.com/claude-code');
+  assert.equal(claude?.optional, false);
+});
+
+test('a doctor.yaml harness entry with an unknown id is rejected, naming the file and the id', () => {
+  assert.throws(
+    () => resolveToolTable(defaultRegistry(), { tools: [probe({ id: 'codex', group: 'harness' })] }),
+    (e: unknown) => {
+      assert.ok(e instanceof WorkflowError);
+      assert.match(e.message, /doctor\.yaml/);
+      assert.match(e.message, /codex/);
+      assert.match(e.message, /group 'harness' is reserved for registered runners \(claude, copilot, opencode\)/);
+      return true;
+    },
+  );
+});
+
+test('every unknown harness entry is reported, not just the first', () => {
+  assert.throws(
+    () => resolveToolTable(defaultRegistry(), {
+      tools: [probe({ id: 'codex', group: 'harness' }), probe({ id: 'gemini', group: 'harness' })],
+    }),
+    (e: unknown) => e instanceof WorkflowError && /codex/.test(e.message) && /gemini/.test(e.message),
+  );
+});
+
+test('an unknown id in the support group is still just an appended support tool', () => {
+  const table = resolveToolTable(defaultRegistry(), { tools: [probe({ id: 'codex', group: 'support' })] });
+  assert.equal(table.at(-1)?.id, 'codex');
+  assert.equal(table.at(-1)?.group, 'support');
 });
 
 test('hide is applied last, so it can remove a registered adapter too', () => {
@@ -117,7 +208,12 @@ test('hide is applied last, so it can remove a registered adapter too', () => {
     { hide: ['jq', 'newbie'] },
   );
   assert.ok(!table.some(t => t.id === 'jq'));
-  assert.ok(!table.some(t => t.id === 'newbie'), 'hiding must beat the registry sweep');
+  assert.ok(!table.some(t => t.id === 'newbie'), 'hiding must beat the registry rows');
+});
+
+test('hide: [opencode] hides that harness and only that one', () => {
+  const table = resolveToolTable(defaultRegistry(), { hide: ['opencode'] });
+  assert.deepEqual(ids(table, 'harness'), ['claude', 'copilot']);
 });
 
 // ---------------------------------------------------------------------------
@@ -135,8 +231,11 @@ test('runner is true only for ids the registry actually has', async () => {
   );
   const by = new Map(rows.map(r => [r.id, r]));
   assert.equal(by.get('claude')?.runner, true);
-  assert.equal(by.get('codex')?.runner, false, 'a harness with no adapter is detect-only');
   assert.equal(by.get('git')?.runner, false);
+  assert.deepEqual(
+    rows.filter(r => r.runner).map(r => r.id), rows.filter(r => r.group === 'harness').map(r => r.id),
+    'runner is true for exactly the harness rows',
+  );
 });
 
 test('a registry id is detected by its adapter, not by the table’s argv', async () => {
@@ -157,6 +256,18 @@ test('a registry id is detected by its adapter, not by the table’s argv', asyn
   assert.deepEqual(copilot?.notes, ['beep']);
 });
 
+test('an override of claude changes its label and still detects through the adapter', async () => {
+  const rows = await detectTools(
+    registryOf(fakeAdapter('claude', async () => ({ installed: true, version: '2.0.0' }))),
+    { tools: [probe({ id: 'claude', label: 'My Claude', group: 'harness', argv: ['never', 'run'] })] },
+    { probe: async () => ({ installed: false }) },
+  );
+  const claude = rows.find(r => r.id === 'claude');
+  assert.equal(claude?.label, 'My Claude');
+  assert.equal(claude?.installed, true);
+  assert.equal(claude?.version, '2.0.0');
+});
+
 test('an override still gets to change a registry row’s presentation', async () => {
   const rows = await detectTools(
     registryOf(fakeAdapter('copilot', async () => ({ installed: true }))),
@@ -169,14 +280,14 @@ test('an override still gets to change a registry row’s presentation', async (
 });
 
 test('rows come back group-major: every harness before every support tool', async () => {
-  const rows = await detectTools(registryOf(), {}, { probe: allInstalled });
+  const rows = await detectTools(defaultRegistry(), {}, { probe: allInstalled });
   const groups = rows.map(r => r.group);
   assert.deepEqual([...new Set(groups)], ['harness', 'support']);
   assert.equal(groups.indexOf('support'), groups.lastIndexOf('harness') + 1);
 });
 
 test('optional defaults to true; only the things whiphand cannot work without are required', async () => {
-  const rows = await detectTools(registryOf(), {}, { probe: allInstalled });
+  const rows = await detectTools(defaultRegistry(), {}, { probe: allInstalled });
   const required = rows.filter(r => !r.optional).map(r => r.id).sort();
   // The POSIX shell is required too: with none, command steps refuse to run.
   assert.deepEqual(required, ['claude', 'copilot', 'git', 'posix-shell']);
@@ -184,7 +295,7 @@ test('optional defaults to true; only the things whiphand cannot work without ar
 
 test('empty notes are omitted, so the CLI printing none is the same fact', async () => {
   const rows = await detectTools(
-    registryOf(), { hide: BUILTIN_TOOLS.slice(1).map(t => t.id) },
+    registryOf(), { hide: BUILTIN_SUPPORT_TOOLS.slice(1).map(t => t.id) },
     { probe: async () => ({ installed: true, notes: [] }), machine: () => [] },
   );
   assert.equal(rows.length, 1);
@@ -222,21 +333,24 @@ test('an alias is tried after the primary name, and named when it answers', asyn
 // probeRunner — the spawn half of every adapter's detect()
 // ---------------------------------------------------------------------------
 
-test('probeRunner probes the built-in row for an id, returning probeTool\'s exact shape', async () => {
-  // `node` stands in for a runner: it has a built-in row and is certainly installed.
-  const result = await probeRunner('node');
+test('probeRunner probes the descriptor it is given, returning probeTool\'s exact shape', async () => {
+  // `node` stands in for a runner: it is certainly installed.
+  const result = await probeRunner({ label: 'Node', argv: ['node', '--version'], optional: true });
   assert.equal(result.installed, true);
   assert.match(result.version ?? '', /^\d+\.\d+\.\d+/);
   assert.ok(!('notes' in result), 'no alias answered, so no notes key at all — adapters return this as-is');
 });
 
-test('probeRunner falls back to `<id> --version` for an id with no built-in row', async () => {
-  assert.deepEqual(await probeRunner('whiphand-definitely-not-a-real-binary-xyz'), { installed: false });
+test('probeRunner reports a descriptor whose binary is missing as not installed', async () => {
+  const doctor: RunnerDoctor = {
+    label: 'Nope', argv: ['whiphand-definitely-not-a-real-binary-xyz', '--version'], optional: true,
+  };
+  assert.deepEqual(await probeRunner(doctor), { installed: false });
 });
 
-test('every shipped adapter has a built-in row for probeRunner to find', () => {
-  for (const id of ['claude', 'copilot', 'opencode']) {
-    const row = BUILTIN_TOOLS.find(probe => probe.id === id);
-    assert.deepEqual(row?.argv, [id, '--version'], id);
+test('every shipped adapter describes itself for doctor with a `--version` probe of its own id', () => {
+  for (const adapter of defaultRegistry().list()) {
+    assert.deepEqual(adapter.doctor.argv, [adapter.id, '--version'], adapter.id);
+    assert.ok(adapter.doctor.label.length > 0, adapter.id);
   }
 });

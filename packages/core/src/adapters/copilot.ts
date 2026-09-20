@@ -81,6 +81,10 @@ export function parseCopilotModels(helpOutput: string): ModelInfo[] {
 
 export const copilotAdapter: RunnerAdapter = {
   id: 'copilot',
+  doctor: {
+    label: 'GitHub Copilot CLI', url: 'https://github.com/github/copilot-cli',
+    argv: ['copilot', '--version'], optional: false,
+  },
   // copilot 1.0.83's --session-id mints a new session, same as claude's flag
   // of the same name (--help: "or set the UUID for a new session"); a bare
   // id string means "resume". Interactive harvest goes via --resume, same as
@@ -96,7 +100,7 @@ export const copilotAdapter: RunnerAdapter = {
    * always an array when installed (empty once beep is on), never absent.
    */
   async detect(): Promise<DetectResult> {
-    const probed = await probeRunner('copilot');
+    const probed = await probeRunner(copilotAdapter.doctor);
     if (!probed.installed) return probed;
     return { ...probed, notes: [...(probed.notes ?? []), ...await beepNote()] };
   },

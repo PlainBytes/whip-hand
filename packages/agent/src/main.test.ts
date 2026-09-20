@@ -7,7 +7,7 @@ import { mkdtemp, mkdir, writeFile, chmod, readFile, realpath } from 'node:fs/pr
 import { tmpdir } from 'node:os';
 import { join, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BUILTIN_TOOLS, machineChecks, pathKey } from '@whiphand/core';
+import { BUILTIN_SUPPORT_TOOLS, defaultRegistry, machineChecks, pathKey } from '@whiphand/core';
 
 const AGENT_MAIN = fileURLToPath(new URL('./main.ts', import.meta.url));
 
@@ -483,9 +483,14 @@ test('doctor reports one entry per built-in tool (shape only)', async () => {
     agent.send({ id: 1, method: 'doctor', params: {} });
     const res = await agent.waitFor(m => m.id === 1);
     assert.ok(Array.isArray(res.result));
-    // The built-in table, then this machine's own facts (the POSIX shell, and on Windows the
-    // git launcher and token-file gaps) — the same rows the CLI's doctor prints.
-    assert.deepEqual(res.result.map((r: any) => r.id), [...BUILTIN_TOOLS.map(t => t.id), ...machineChecks().map(r => r.id)]);
+    // The registered harnesses, then the support built-ins, then this machine's own facts (the
+    // POSIX shell, and on Windows the git launcher and token-file gaps) — the same rows the CLI's
+    // doctor prints.
+    assert.deepEqual(res.result.map((r: any) => r.id), [
+      ...defaultRegistry().list().map(a => a.id),
+      ...BUILTIN_SUPPORT_TOOLS.map(t => t.id),
+      ...machineChecks().map(r => r.id),
+    ]);
 
     for (const entry of res.result) {
       assert.equal(typeof entry.installed, 'boolean');
@@ -499,8 +504,9 @@ test('doctor reports one entry per built-in tool (shape only)', async () => {
     // The registry is the authority on what can be a workflow's `runner:`.
     const runners = res.result.filter((r: any) => r.runner).map((r: any) => r.id).sort();
     assert.deepEqual(runners, ['claude', 'copilot', 'opencode']);
-    const codex = res.result.find((r: any) => r.id === 'codex');
-    assert.equal(codex.runner, false, 'a harness with no adapter is detect-only');
+    const harnesses = res.result.filter((r: any) => r.group === 'harness').map((r: any) => r.id);
+    assert.deepEqual(harnesses, ['claude', 'copilot', 'opencode'], 'the harness group is exactly the runners');
+    assert.ok(!res.result.some((r: any) => ['codex', 'gemini', 'cursor-agent'].includes(r.id)));
   } finally {
     agent.stop();
   }

@@ -52,7 +52,7 @@ tools:
     version_pattern: 'v?(\\d+\\.\\d+\\.\\d+)'
     optional: false
     url: https://bun.sh
-hide: [jq, cursor-agent]
+hide: [jq, fd]
 `));
 
   assert.deepEqual(config, {
@@ -61,7 +61,7 @@ hide: [jq, cursor-agent]
       argv: ['bun', '--version'], aliases: ['bun-canary'],
       versionPattern: 'v?(\\d+\\.\\d+\\.\\d+)', optional: false, url: 'https://bun.sh',
     }],
-    hide: ['jq', 'cursor-agent'],
+    hide: ['jq', 'fd'],
   });
 });
 

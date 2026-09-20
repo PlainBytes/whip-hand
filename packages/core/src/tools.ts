@@ -1,11 +1,13 @@
 /**
  * What `whiphand doctor` and the desktop's Doctor page report: a declarative
- * table of tools to probe, in two groups. The registry stays the authority on
- * *runners* (`runner: true`, load-bearing for the `defaults.runner` dropdown);
- * everything else here is detect-only.
+ * table of tools to probe, in two groups. The registry is the authority on
+ * *harnesses*: the "harness" group is exactly the registered `RunnerAdapter`s
+ * (`runner: true`, load-bearing for the `defaults.runner` dropdown), each
+ * described by its own `adapter.doctor`. The "support" group is the table
+ * below plus whatever the user adds in doctor.yaml.
  */
 import type { AdapterRegistry } from './registry.ts';
-import type { DetectResult } from './types.ts';
+import type { DetectResult, RunnerDoctor } from './types.ts';
 import { execRunner, resolveExecutable } from './exec.ts';
 import path from 'node:path';
 import { resolveShell, type ResolveShellOpts } from './shell.ts';
@@ -13,6 +15,8 @@ import { toFwdAbs } from './path-form.ts';
 import { headroomWarning } from './canonicalize.ts';
 import { classifyGitFailure } from './engine/git-guard.ts';
 import { TOOL_GROUPS, type ToolGroup } from './tool-groups.ts';
+import { WorkflowError } from './schema.ts';
+import { globalDoctorConfigPath } from './doctor-config.ts';
 
 // Re-exported so `@whiphand/core` stays the one import for everything doctor-shaped;
 // they live in their own node-free module because the desktop bundles them.
@@ -45,10 +49,7 @@ export interface ToolStatus {
   id: string;
   label: string;
   group: ToolGroup;
-  /**
-   * A RunnerAdapter can drive this — i.e. it is in the registry. False for
-   * every support tool AND for a harness we can detect but not yet run.
-   */
+  /** A RunnerAdapter can drive this — i.e. it is in the registry: true for exactly the harness rows. */
   runner: boolean;
   optional: boolean;
   installed: boolean;
@@ -73,7 +74,7 @@ export const PROBE_TIMEOUT_MS = 5_000;
  *
  *   git   `git version 2.53.0`          node  `v24.16.0`
  *   jq    `jq-1.8.1` (and `jq-1.6`)     rg    `ripgrep 15.1.0`
- *   copilot `GitHub Copilot CLI 1.0.83.`  cursor-agent `2025.08.28-8d9dd2c`
+ *   copilot `GitHub Copilot CLI 1.0.83.`
  *
  * Anchored on nothing, so it finds the number wherever the tool puts it.
  * `(?:\.\d+)*` needs a digit after each dot, which is what stops copilot's
@@ -113,54 +114,17 @@ export function parseToolVersion(
 }
 
 /**
- * claude, copilot and opencode are probed through their adapters —
- * `detectTools` routes any registry id through the adapter's own `detect()`,
- * which is what keeps copilot's `beep` advisory note (and opencode's PATH and
- * env notes) alive. The adapters don't re-implement the probe to do that,
- * though: each `detect()` runs *this* entry via `probeRunner`, then layers its
- * notes on top, so the argv here is the one that actually runs — edit it and
- * both Doctor and the run:env snapshot follow.
+ * The support group's built-in rows. Harnesses are not here: each registered
+ * adapter carries its own `doctor` descriptor, and `resolveToolTable` builds
+ * the harness rows from the registry, so a new adapter shows up in Doctor
+ * with no edit to this table.
  *
- * `optional` defaults to true. Only the things whiphand cannot work without at
- * all are required: claude and copilot (a fresh install needs at least one
- * working runner, and these are the two everyone starts from), and git, which
- * engine/git-guard.ts shells out to in order to enforce every `writes: false`
- * step. opencode is a third, later runner, and stays optional — nothing about
- * a working whiphand install depends on it being there.
+ * `optional` defaults to true. Only what whiphand cannot work without at all
+ * is required: git, which engine/git-guard.ts shells out to in order to
+ * enforce every `writes: false` step. (Which harnesses are required is the
+ * adapters' say: claude and copilot, the two everyone starts from.)
  */
-export const BUILTIN_TOOLS: readonly ToolProbe[] = [
-  // --- harness: what whiphand drives -------------------------------------------
-  {
-    id: 'claude', label: 'Claude Code', group: 'harness',
-    argv: ['claude', '--version'], optional: false,
-    url: 'https://claude.com/claude-code',
-  },
-  {
-    id: 'copilot', label: 'GitHub Copilot CLI', group: 'harness',
-    argv: ['copilot', '--version'], optional: false,
-    url: 'https://github.com/github/copilot-cli',
-  },
-  // Detected, not drivable: no RunnerAdapter exists for these yet, so they
-  // report `runner: false` and the UI says so rather than offering them as a
-  // `defaults.runner` that would fail validateWorkflowRunners at run time.
-  {
-    id: 'codex', label: 'OpenAI Codex CLI', group: 'harness',
-    argv: ['codex', '--version'], url: 'https://github.com/openai/codex',
-  },
-  {
-    id: 'gemini', label: 'Gemini CLI', group: 'harness',
-    argv: ['gemini', '--version'], url: 'https://github.com/google-gemini/gemini-cli',
-  },
-  {
-    id: 'cursor-agent', label: 'Cursor Agent', group: 'harness',
-    argv: ['cursor-agent', '--version'], url: 'https://cursor.com/cli',
-  },
-  {
-    id: 'opencode', label: 'opencode', group: 'harness',
-    argv: ['opencode', '--version'], optional: true, url: 'https://opencode.ai',
-  },
-
-  // --- support: what workflows and whiphand itself lean on ---------------------
+export const BUILTIN_SUPPORT_TOOLS: readonly ToolProbe[] = [
   {
     id: 'git', label: 'Git', group: 'support',
     argv: ['git', '--version'], optional: false, url: 'https://git-scm.com',
@@ -194,8 +158,11 @@ export const BUILTIN_TOOLS: readonly ToolProbe[] = [
   { id: 'jq', label: 'jq', group: 'support', argv: ['jq', '--version'], url: 'https://jqlang.github.io/jq' },
 ];
 
+/** The part of a `ToolProbe` that says what to run, which is all `probeTool` needs. */
+type ProbeCommand = Pick<ToolProbe, 'argv' | 'aliases' | 'versionPattern'>;
+
 /** Every executable name to try, in order: argv[0] first, then each alias. */
-function candidates(probe: ToolProbe): string[][] {
+function candidates(probe: ProbeCommand): string[][] {
   const [, ...rest] = probe.argv;
   return [probe.argv, ...(probe.aliases ?? []).map(name => [name, ...rest])];
 }
@@ -203,10 +170,10 @@ function candidates(probe: ToolProbe): string[][] {
 /**
  * Runs one probe. "Installed" means the command exited zero — `execFile`
  * rejects otherwise, so a tool that prints its version and exits nonzero
- * would read as missing. Nothing in BUILTIN_TOOLS does that; if a real case
+ * would read as missing. Nothing in BUILTIN_SUPPORT_TOOLS does that; if a real case
  * turns up it wants a per-probe opt-out rather than relaxing this for all.
  */
-export async function probeTool(probe: ToolProbe): Promise<DetectResult> {
+export async function probeTool(probe: ProbeCommand): Promise<DetectResult> {
   for (const argv of candidates(probe)) {
     try {
       const { stdout, stderr } = await execRunner(argv, { timeout: PROBE_TIMEOUT_MS });
@@ -227,20 +194,20 @@ export async function probeTool(probe: ToolProbe): Promise<DetectResult> {
 
 /**
  * The spawn half of a runner adapter's `detect()`: probes the adapter's own
- * BUILTIN_TOOLS row, so adapters share probeTool's version parsing, timeout
+ * `doctor` descriptor, so adapters share probeTool's version parsing, timeout
  * and alias fallback instead of each carrying a copy. Deliberately the
- * *built-in* row, not the doctor.yaml-merged table — an override there cannot
- * change how a registry id is detected (see resolveToolTable), and a run's
- * run:env snapshot has no doctor config to consult anyway.
+ * adapter's descriptor, not the doctor.yaml-merged table — an override there
+ * cannot change how a registry id is detected (see resolveToolTable), and a
+ * run's run:env snapshot has no doctor config to consult anyway.
  *
- * An id with no row gets `<id> --version`, the same default resolveToolTable
- * synthesizes for a registered adapter the table hasn't heard of — so a
- * third-party adapter can use this too, and a missing row degrades to a
- * sensible probe instead of throwing out of Doctor.
+ * `detectTools` routes every registry id through the adapter's `detect()`,
+ * which is what keeps copilot's `beep` advisory note (and opencode's PATH and
+ * env notes) alive: each `detect()` runs its descriptor here, then layers its
+ * notes on top, so the argv in `adapter.doctor` is the one that actually
+ * runs — edit it and both Doctor and the run:env snapshot follow.
  */
-export function probeRunner(id: string): Promise<DetectResult> {
-  const builtin = BUILTIN_TOOLS.find(probe => probe.id === id);
-  return probeTool(builtin ?? { id, label: id, group: 'harness', argv: [id, '--version'] });
+export function probeRunner(doctor: RunnerDoctor): Promise<DetectResult> {
+  return probeTool(doctor);
 }
 
 export interface DoctorToolsConfig {
@@ -354,42 +321,54 @@ export async function workspaceChecks(workdir: string, opts: WorkspaceChecksOpts
 }
 
 /**
- * The merged table: built-ins, the user's own entries from doctor.yaml, and
- * anything in the registry the table hasn't heard of.
+ * The merged table, in this order: one harness row per registered adapter (in
+ * registration order, built from its `doctor` descriptor), the support
+ * built-ins, then the user's own support rows from doctor.yaml.
  *
- * A user entry whose `id` matches a built-in REPLACES it *in place* rather
- * than appending — so tweaking one probe doesn't reshuffle the whole report.
- * The one thing such an override cannot change is detection for a registry
- * id: `detectTools` still calls the adapter's own `detect()` there, because
- * that is where copilot's beep note comes from. Label, group, url and
- * optional are all overridable.
+ * A user entry whose `id` matches an existing row REPLACES it *in place*
+ * rather than appending — so tweaking one probe doesn't reshuffle the whole
+ * report. For a registry id the override may change only `label`, `url` and
+ * `optional`: detection keeps going through the adapter's own `detect()`
+ * (that is where copilot's beep note comes from), so `argv`, `aliases` and
+ * `versionPattern` have nothing to act on, and the row stays in the harness
+ * group.
  *
- * `hide` is applied LAST, after the registry sweep, so hiding an adapter
- * actually hides it rather than having it re-appear as an unknown runner.
+ * The harness group is reserved for registered runners: a user entry claiming
+ * it for an id the registry has never heard of is refused with a
+ * `WorkflowError`, the same way any other invalid doctor.yaml is. The schema
+ * cannot see the registry, so the check lives here.
+ *
+ * `hide` is applied LAST, so hiding an adapter actually hides it.
  */
 export function resolveToolTable(
   registry: AdapterRegistry, config: DoctorToolsConfig = {},
 ): ToolProbe[] {
-  const table = [...BUILTIN_TOOLS];
+  const adapters = registry.list();
+  const table: ToolProbe[] = [
+    ...adapters.map((adapter): ToolProbe => ({ id: adapter.id, group: 'harness', ...adapter.doctor })),
+    ...BUILTIN_SUPPORT_TOOLS,
+  ];
   const indexOf = new Map(table.map((probe, i) => [probe.id, i]));
+
+  const reserved = (config.tools ?? []).filter(t => t.group === 'harness' && !registry.has(t.id));
+  if (reserved.length > 0) {
+    const path = globalDoctorConfigPath();
+    const runners = adapters.map(adapter => adapter.id).join(', ');
+    throw new WorkflowError(reserved.map(t =>
+      `${path}: tools.${t.id}: group 'harness' is reserved for registered runners (${runners})`));
+  }
 
   for (const extra of config.tools ?? []) {
     const existing = indexOf.get(extra.id);
     if (existing === undefined) {
       indexOf.set(extra.id, table.length);
       table.push(extra);
+    } else if (registry.has(extra.id)) {
+      const row = table[existing];
+      table[existing] = { ...row, label: extra.label, url: extra.url ?? row.url, optional: extra.optional ?? row.optional };
     } else {
       table[existing] = extra;
     }
-  }
-
-  // A third adapter registered in defaultRegistry() shows up in Doctor with
-  // no table edit at all — the registry is the authority on runners, and a
-  // runner missing from the health check is the worst thing this could do.
-  for (const adapter of registry.list()) {
-    if (indexOf.has(adapter.id)) continue;
-    indexOf.set(adapter.id, table.length);
-    table.push({ id: adapter.id, label: adapter.id, group: 'harness', argv: [adapter.id, '--version'] });
   }
 
   const hidden = new Set(config.hide ?? []);

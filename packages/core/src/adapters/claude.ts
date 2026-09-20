@@ -79,6 +79,10 @@ function interactiveSettings(touchMarker: string, awaitPath: string): Record<str
 
 export const claudeAdapter: RunnerAdapter = {
   id: 'claude',
+  doctor: {
+    label: 'Claude Code', url: 'https://claude.com/claude-code',
+    argv: ['claude', '--version'], optional: false,
+  },
   capabilities: {
     sessionIdInjection: true, sessionIdCapture: false, sessionResume: true,
     toolDenial: true, shareTranscript: false,
@@ -86,7 +90,7 @@ export const claudeAdapter: RunnerAdapter = {
 
   /** Nothing to add on top of the plain probe — claude's hooks mean it never needs a setup advisory. */
   detect(): Promise<DetectResult> {
-    return probeRunner('claude');
+    return probeRunner(claudeAdapter.doctor);
   },
 
   interactive(step: AgentStep, ctx: RunCtx): SpawnSpec {

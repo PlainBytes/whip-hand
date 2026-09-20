@@ -21,7 +21,7 @@ const FIXTURE_WORKSPACE = fileURLToPath(new URL('./fixtures/workspace', import.m
 // launches (see test-support) rather than the checked-in bash scripts, which need
 // the executable bit and are invisible to a Windows PATHEXT walk. Same versions.
 const FIXTURE_BIN = mintVersionStubs({
-  claude: '9.9.9-stub', codex: 'codex-cli 0.5.0', copilot: '9.9.9-stub', opencode: '9.9.9-stub',
+  claude: '9.9.9-stub', copilot: '9.9.9-stub', opencode: '9.9.9-stub',
 });
 
 /**
@@ -328,7 +328,7 @@ test('dry-run parity: CLI --attach and agent startRun attachments record the sam
  * thing to a human and to the desktop.
  *
  * `label`, `optional` and `url` are deliberately outside the comparison: they
- * are static table metadata both sides read from the same BUILTIN_TOOLS, so
+ * are static table metadata both sides read from the same registry and BUILTIN_SUPPORT_TOOLS, so
  * there is no drift for a comparison to find. (`optional` is recoverable from
  * the ○ mark for a MISSING tool, but not for an installed one, so including
  * it would only assert half a fact.)

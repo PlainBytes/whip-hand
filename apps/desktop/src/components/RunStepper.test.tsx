@@ -623,3 +623,93 @@ describe('stages', () => {
     expect(screen.queryByTestId('step-card-implement')).not.toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Layout — rows scroll rather than wrap, and the top level stacks. Styles are
+// inline (jsdom loads no CSS), so `toHaveStyle` sees them; keep them inline.
+// ---------------------------------------------------------------------------
+
+describe('layout', () => {
+  const leafRow = (id: string): StepState => ({ key: id, id, kind: 'command', status: 'done' }) as StepState;
+
+  /** Three leaves, a stages step, then one more leaf — the shape that stranded `push` before. */
+  function bandedRows(): StepState[] {
+    return [
+      leafRow('one'), leafRow('two'), leafRow('three'),
+      stagesRow(), stageRow('implement', '01-a', 1),
+      leafRow('push'),
+    ];
+  }
+
+  it('stacks two step bands with the stages block between them', () => {
+    render(<RunStepper steps={bandedRows()} />);
+    const root = screen.getByTestId('run-stepper');
+    expect(root).toHaveStyle({ display: 'flex', flexDirection: 'column' });
+    const testids = Array.from(root.children).map(child => child.getAttribute('data-testid'));
+    expect(testids).toEqual(['step-band-one', 'step-stages-build', 'step-band-push']);
+
+    const first = screen.getByTestId('step-band-one');
+    expect(within(first).getByTestId('step-card-one')).toBeInTheDocument();
+    expect(within(first).getByTestId('step-card-three')).toBeInTheDocument();
+    expect(within(first).queryByTestId('step-card-push')).not.toBeInTheDocument();
+    expect(within(screen.getByTestId('step-band-push')).getByTestId('step-card-push')).toBeInTheDocument();
+  });
+
+  it('draws a fixed-width connector between two pills, not a growing one', () => {
+    render(<RunStepper steps={steps()} focusStepId="b" />);
+    expect(screen.getByTestId('step-connector-b')).toHaveStyle({ flex: '0 0 12px' });
+    expect(screen.getByTestId('step-connector-c')).toHaveStyle({ flex: '0 0 12px' });
+    // Nothing leads the first pill of a track.
+    expect(screen.queryByTestId('step-connector-a')).not.toBeInTheDocument();
+  });
+
+  it('scrolls a track sideways instead of wrapping it', () => {
+    render(<RunStepper steps={bandedRows()} />);
+    expect(screen.getByTestId('step-band-one')).toHaveStyle({ flexWrap: 'nowrap', overflowX: 'auto' });
+    expect(screen.getByTestId('step-band-push')).toHaveStyle({ flexWrap: 'nowrap', overflowX: 'auto' });
+  });
+
+  it('scrolls a loop body too, inside its dashed container', () => {
+    render(<RunStepper steps={loopRun(1)} />);
+    const container = screen.getByTestId('step-loop-do-review');
+    const track = within(container).getByTestId('step-loop-track-do-review');
+    expect(track).toHaveStyle({ flexWrap: 'nowrap', overflowX: 'auto' });
+    expect(within(track).getByTestId('step-card-do-review')).toBeInTheDocument();
+  });
+
+  // A track scrolls rather than shrinks its children: every kind of direct
+  // child — not just the pill — must keep its width, or the box is squeezed
+  // with the window before the track ever scrolls.
+  it('keeps a loop box at its own width instead of shrinking it with the window', () => {
+    render(<RunStepper steps={loopRun(1)} />);
+    expect(screen.getByTestId('step-loop-do-review')).toHaveStyle({ flexShrink: '0' });
+  });
+
+  it('keeps a stages box nested in a loop at its own width instead of shrinking it', () => {
+    const inLoop = [
+      ...loopRun(1),
+      stagesRow({ loopId: 'do-review', iteration: 1 }),
+      stageRow('implement', '01-a', 1, { loopId: 'build' }),
+    ];
+    render(<RunStepper steps={inLoop} />);
+    const track = screen.getByTestId('step-loop-track-do-review');
+    const stages = within(track).getByTestId('step-stages-build');
+    expect(stages.parentElement).toBe(track);
+    expect(stages).toHaveStyle({ flexShrink: '0' });
+  });
+
+  it('keeps the chevron on a row of its own at the end when expanded', () => {
+    render(<RunStepper steps={steps()} focusStepId="b" onToggleCollapse={vi.fn()} />);
+    const row = screen.getByTestId('stepper-collapse-toggle').parentElement as HTMLElement;
+    expect(row).toHaveStyle({ display: 'flex', justifyContent: 'flex-end' });
+    expect(row.parentElement).toBe(screen.getByTestId('run-stepper'));
+  });
+
+  it('keeps collapsed as one row, the chevron pushed to its end', () => {
+    render(<RunStepper steps={steps()} focusStepId="b" collapsed onToggleCollapse={vi.fn()} />);
+    const root = screen.getByTestId('run-stepper');
+    expect(root).not.toHaveStyle({ flexDirection: 'column' });
+    expect(screen.getByTestId('stepper-collapse-toggle')).toHaveStyle({ marginLeft: 'auto' });
+    expect(screen.getByTestId('stepper-collapse-toggle').parentElement).toBe(root);
+  });
+});

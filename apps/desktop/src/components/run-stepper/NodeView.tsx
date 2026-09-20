@@ -7,6 +7,7 @@ import {
   loopProgress, metaLine, spendSummary, stagesProgress, stepDuration, stepStatusColor,
 } from './step-facts.ts';
 import { IterationHistory, StepDetails, StepPill } from './StepPill.tsx';
+import { StepTrack } from './StepTrack.tsx';
 import type { NodeProps } from './types.ts';
 
 function LeafView({ node, focusKey, awaitingKey, awaiting, clock, nodeRef }: NodeProps & { node: LeafNode }) {
@@ -64,39 +65,43 @@ function LoopView({ node, focusKey, awaitingKey, awaiting, clock, nodeRef }: Nod
     <div
       data-testid={`step-loop-${node.key}`}
       style={{
-        display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
         border: `1px dashed ${stepStatusColor(node.loop.status)}`,
         borderRadius: 12, padding: 6,
+        // A direct child of a track, which scrolls rather than shrinks: the
+        // box keeps its width instead of being squeezed to the window's.
+        flexShrink: 0,
       }}
     >
-      <StepPill
-        id={node.id}
-        nodeKey={node.key}
-        ordinal={node.ordinal}
-        step={node.loop}
-        meta={metaLine(node.loop)}
-        duration={stepDuration(node.loop, clock)}
-        // On the pill rather than beside it: where a loop is in its budget is
-        // a fact about the loop, and a bare line of text floating next to the
-        // pill that owns it is the shape this screen no longer uses.
-        iteration={loopProgress(node.loop)}
-        isFocus={node.key === focusKey}
-        awaiting={node.key === awaitingKey ? awaiting : undefined}
-        nodeRef={nodeRef}
-      >
-        <StepDetails step={node.loop} />
-      </StepPill>
-      {node.children.map(child => (
-        <NodeView
-          key={child.key}
-          node={child}
-          focusKey={focusKey}
-          awaitingKey={awaitingKey}
-          awaiting={awaiting}
-          clock={clock}
+      <StepTrack testid={`step-loop-track-${node.key}`}>
+        <StepPill
+          id={node.id}
+          nodeKey={node.key}
+          ordinal={node.ordinal}
+          step={node.loop}
+          meta={metaLine(node.loop)}
+          duration={stepDuration(node.loop, clock)}
+          // On the pill rather than beside it: where a loop is in its budget is
+          // a fact about the loop, and a bare line of text floating next to the
+          // pill that owns it is the shape this screen no longer uses.
+          iteration={loopProgress(node.loop)}
+          isFocus={node.key === focusKey}
+          awaiting={node.key === awaitingKey ? awaiting : undefined}
           nodeRef={nodeRef}
-        />
-      ))}
+        >
+          <StepDetails step={node.loop} />
+        </StepPill>
+        {node.children.map(child => (
+          <NodeView
+            key={child.key}
+            node={child}
+            focusKey={focusKey}
+            awaitingKey={awaitingKey}
+            awaiting={awaiting}
+            clock={clock}
+            nodeRef={nodeRef}
+          />
+        ))}
+      </StepTrack>
     </div>
   );
 }
@@ -159,6 +164,9 @@ function StagesView({ node, focusKey, awaitingKey, awaiting, clock, nodeRef }: N
         display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
         border: `1px dashed ${stepStatusColor(node.stages.status)}`,
         borderRadius: 12, padding: 6,
+        // As for a loop: a `stages` step inside a loop is a direct child of
+        // that loop's track, and must not shrink with the window.
+        flexShrink: 0,
       }}
     >
       {pill(metaLine(node.stages), true)}

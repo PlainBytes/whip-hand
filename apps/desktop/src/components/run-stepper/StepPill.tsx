@@ -188,6 +188,9 @@ export function StepPill({
             opacity: isDisabled ? 0.55 : 1,
             display: 'flex',
             minWidth: 0,
+            // A track scrolls rather than wraps, so a pill keeps its width
+            // instead of being squeezed to fit the row.
+            flexShrink: 0,
           }}
         >
           <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1 }}>

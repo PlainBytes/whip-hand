@@ -452,6 +452,7 @@ Every placeholder has one environment binding, from one table:
 |---|---|---|
 | `run.id` / `run.slug` | `WHIPHAND_RUN_ID` / `WHIPHAND_RUN_SLUG` | always |
 | `run.name` | `WHIPHAND_RUN_NAME` (an unnamed run's name *is* its id, so it refers to `WHIPHAND_RUN_ID`) | when named |
+| `run.dir` | `WHIPHAND_RUN_DIR` — the run folder, absolute with forward slashes | always |
 | `stage.index` / `total` / `id` / `title` | `WHIPHAND_STAGE_*` | inside a stages step |
 | `loop.iteration` / `loop.max_iterations` | `WHIPHAND_LOOP_ITERATION` / `WHIPHAND_LOOP_MAX_ITERATIONS` | inside a loop |
 | `inputs.<key>` | `WHIPHAND_INPUT_<KEY>` (upper-cased, `-` → `_`) | **only when the step references it** |
@@ -670,13 +671,14 @@ so no single review has to hold the whole feature in its head at once.
 ```yaml
 - id: build
   kind: stages
-  items: "{{ inputs.plan_dir }}/*.md"   # templated glob, re-evaluated before every stage
+  items: "{{ run.dir }}/plans/*.md"     # templated glob, re-evaluated before every stage
   max_retries: 2                        # default: 2 (so 3 attempts total); non-negative
   steps: [...]
 ```
 
 **Discovering stages.** `items` is globbed against the run's workdir (`discoverStages`,
-`engine/stages.ts`) and sorted by relative path with plain `<`, not locale collation — which
+`engine/stages.ts`) — or absolutely, as the shipped workflow's `{{ run.dir }}/plans/*.md` is —
+and sorted by path with plain `<`, not locale collation — which
 would sort `03a-api` after `04-ui` and defeat the point of a letter-suffixed file landing
 between two numbered ones. The list is re-globbed before every stage, not just once at the
 start:
@@ -729,8 +731,18 @@ rejected attempt's work is never overwritten by the retry that follows it.
 **`allow_paths`.** A `writes: true` agent step may restrict what it is allowed to have
 touched: once it returns, any changed path that matches none of `allow_paths`'s globs fails
 the step, naming the file. The shipped `staged-feature-development` workflow's planning step
-uses `allow_paths: ["{{ inputs.plan_dir }}/**"]` to keep the planning phase from writing
-anywhere outside the plan directory it exists to fill.
+uses `allow_paths: ["{{ run.dir }}/**"]`, and stays `writes: true` because a `writes: false`
+step has its write tools denied outright, so the planner could not write its stage files. The
+git guard ignores every path with a `.whiphand` segment, so writes into the run folder never
+appear as changes, and the effective rule is "any change to the repository fails the step".
+
+**Where the stage files live.** The shipped workflow's planner writes them to
+`<runDir>/plans/NN-slug.md`, not to the repository (`{{ run.dir }}` is the absolute run folder,
+the same value as `$WHIPHAND_RUN_DIR`). They are not committed to the branch or the PR — there is
+no `plan_dir` input and no `commit-plan` step — and they are deleted with the run when
+`runs.max_retained` prunes it. A resume reuses the same run folder, so they survive one. Because
+the glob is absolute, a glob metacharacter (`[`, `*`, `?`, `{`) in the workdir path would break
+it; that limit is documented, not worked around.
 
 **Gating a stage.** The schema requires every enabled step with `verdict: true` in a
 `stages` body — at any depth, including a loop's `until` and a verdict step nested two loops
@@ -786,8 +798,8 @@ staged. A real commit failure — a rejecting hook, a bad message file — still
 and fails the run loudly, exactly as every later stage's assumption that history is clean
 requires; nothing here blanket-forgives a failing commit the way `expect_exit: [0, 1]` would.
 
-**The shipped staged workflow runs unchanged on every OS.** Its `commit-plan` and per-stage
-`commit` steps are POSIX shell lines (`$VAR`, `&&`/`||` beside quoted arguments), and command
+**The shipped staged workflow runs unchanged on every OS.** Its per-stage
+`commit` step is a POSIX shell line (`$VAR`, `&&`/`||` beside quoted arguments), and command
 steps run through a POSIX shell everywhere now — see "Command steps and shell injection" — so the
 templates are identical bytes on Linux, macOS and Windows, and the tests that execute them run on
 every CI leg.

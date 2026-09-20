@@ -1,4 +1,6 @@
 import { appendFile, readdir, readFile, stat } from 'node:fs/promises';
+import { readlinkSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { basename, join, relative, sep } from 'node:path';
 import { z } from 'zod';
 import { writeFileAtomic } from '../durable-fs.ts';
@@ -184,11 +186,15 @@ export const runManifestSchema = z.object({
   workflow: z.string().min(1),
   workdir: z.string().min(1),
   dryRun: z.boolean(),
-  // Informational only — never consulted for liveness, which is the heartbeat
-  // lease (a PID probe read EPERM as dead and could not tell a recycled PID from
-  // a live one). Still written because `cancelRun({ workdir, runId })` signals it
-  // to stop a run another process owns; optional so a manifest without one parses.
+  // Never extends a run's life — that is the heartbeat lease, since a PID probe
+  // cannot tell a recycled PID from a live one. It can only cut the lease short:
+  // see ownerGone. Also written because `cancelRun({ workdir, runId })` signals
+  // it to stop a run another process owns; optional so a manifest without one parses.
   pid: z.number().int().optional(),
+  // Which PID space `pid` belongs to (currentPidScope). A pid is only probed by
+  // a reader in the same space; absent on manifests written before it existed,
+  // which are then judged by the lease alone.
+  pidScope: z.string().optional(),
   startedAt: z.string(),
   updatedAt: z.string(),
   // Liveness ping, refreshed on a timer while the run is in flight. Distinct
@@ -240,8 +246,9 @@ export const runManifestSchema = z.object({
   /**
    * Why an `interrupted` run is interrupted, when that is more specific than
    * the message: 'lease-expired' is a run whose owner stopped renewing its
-   * heartbeat (crashed, killed, or suspended past the window) and was repaired
-   * by whoever read the store next.
+   * heartbeat (crashed, killed, or suspended past the window); 'owner-exited'
+   * is one whose owner was found dead before the lease ran out. Either way it
+   * was repaired by whoever read the store next.
    */
   interruptedReason: z.string().optional(),
   /**
@@ -257,6 +264,28 @@ export const runManifestSchema = z.object({
 
 export type RunManifest = z.infer<typeof runManifestSchema>;
 type ManifestStep = RunManifest['steps'][number];
+
+let pidScope: string | undefined;
+
+/**
+ * Names the PID space this process lives in, so a pid is only ever probed by a
+ * reader that shares it. Platform + hostname separates machines, and Windows
+ * from a WSL distro on the same machine (which share a hostname but not PIDs);
+ * on Linux the pid-namespace inode also separates containers and sandboxes.
+ */
+export function currentPidScope(): string {
+  if (pidScope !== undefined) return pidScope;
+  let ns = '';
+  if (process.platform === 'linux') {
+    try {
+      ns = `:${readlinkSync('/proc/self/ns/pid')}`;
+    } catch {
+      // No procfs: platform + hostname still separates machines.
+    }
+  }
+  pidScope = `${process.platform}:${hostname()}${ns}`;
+  return pidScope;
+}
 
 /** How often a live run refreshes heartbeatAt on disk. */
 export const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -388,6 +417,7 @@ export class RunJournal {
           workdir: init.workdir,
           dryRun: init.dryRun,
           pid: process.pid,
+          pidScope: currentPidScope(),
           startedAt: now,
           updatedAt: now,
           heartbeatAt: now,
@@ -409,6 +439,7 @@ export class RunJournal {
       : {
           ...existing,
           pid: process.pid,
+          pidScope: currentPidScope(),
           interruptedReason: undefined,
           status: 'running',
           updatedAt: now,
@@ -1016,18 +1047,44 @@ export type RunSummary = RunSummaryKnown | RunSummaryUnknown;
 export type RunDetail = RunSummary & { artifacts: Array<{ name: string; path: string }> };
 
 /**
- * A manifest still claiming 'running' is abandoned when its lease has expired:
- * `heartbeatAt` is renewed every HEARTBEAT_INTERVAL_MS by the run's owner and
- * stale after HEARTBEAT_STALE_MS. A lease, not a PID probe — `process.kill(pid, 0)`
- * reads EPERM as dead (a run owned by another user, or elevated, was marked
- * abandoned while alive), and Windows recycles PIDs aggressively enough that a
- * dead run's PID reads as alive. A manifest written before heartbeats existed
- * is judged by `updatedAt` against the same window.
+ * True only when the run's owner is provably gone: it lived in this reader's
+ * PID space and nothing runs under its pid any more (ESRCH). The probe is
+ * one-sided on purpose. EPERM (another user's, or an elevated, process) and a
+ * recycled PID both read as alive, and alive defers to the lease, so neither
+ * can keep a dead run running past HEARTBEAT_STALE_MS. What this adds is the
+ * common case the lease alone is slow on: the desktop's sidecar is SIGKILLed
+ * on quit, and a restart seconds later would otherwise show the run live, and
+ * silent, for minutes.
  */
-export function isAbandoned(manifest: RunManifest, now: number): boolean {
-  if (manifest.status !== 'running') return false;
+function ownerGone(manifest: RunManifest): boolean {
+  const { pid } = manifest;
+  if (pid === undefined || pid === process.pid) return false;
+  if (manifest.pidScope !== currentPidScope()) return false;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ESRCH';
+  }
+}
+
+/**
+ * Why a manifest still claiming 'running' is abandoned, or undefined when it
+ * is not. Its owner renews `heartbeatAt` every HEARTBEAT_INTERVAL_MS; the
+ * lease goes stale after HEARTBEAT_STALE_MS ('lease-expired'). Before that, a
+ * provably dead owner (ownerGone) ends it at once ('owner-exited'). A live pid
+ * never extends the lease. A manifest written before heartbeats existed is
+ * judged by `updatedAt` against the same window.
+ */
+function abandonedReason(manifest: RunManifest, now: number): 'lease-expired' | 'owner-exited' | undefined {
+  if (manifest.status !== 'running') return undefined;
   const lastSeen = Date.parse(manifest.heartbeatAt ?? manifest.updatedAt);
-  return !(now - lastSeen <= HEARTBEAT_STALE_MS);
+  if (!(now - lastSeen <= HEARTBEAT_STALE_MS)) return 'lease-expired';
+  return ownerGone(manifest) ? 'owner-exited' : undefined;
+}
+
+export function isAbandoned(manifest: RunManifest, now: number): boolean {
+  return abandonedReason(manifest, now) !== undefined;
 }
 
 /**
@@ -1035,7 +1092,7 @@ export function isAbandoned(manifest: RunManifest, now: number): boolean {
  * become 'interrupted', steps that never started stay pending, and the run
  * gets an end time so its duration stops growing on every poll.
  */
-function repairAbandoned(manifest: RunManifest): RunManifest {
+function repairAbandoned(manifest: RunManifest, reason: 'lease-expired' | 'owner-exited'): RunManifest {
   const endedAt = manifest.heartbeatAt ?? manifest.updatedAt;
   const interruptedStep = manifest.steps.find(s => s.status === 'running');
   return {
@@ -1046,7 +1103,7 @@ function repairAbandoned(manifest: RunManifest): RunManifest {
     steps: manifest.steps.map(s =>
       s.status === 'running' ? { ...s, status: 'interrupted' as const, endedAt } : s),
     error: manifest.error ?? { stepId: interruptedStep?.id, message: INTERRUPTED_MESSAGE },
-    interruptedReason: 'lease-expired',
+    interruptedReason: reason,
   };
 }
 
@@ -1073,9 +1130,10 @@ async function readRunSummary(runDir: string, dirName: string, mtimeMs = 0): Pro
     return { runId: dirName, runDir, status: 'unknown', locked, mtimeMs, ...name };
   }
   const manifest = resolveManifestPaths(parsed.data, runDir);
-  if (!isAbandoned(manifest, Date.now())) return { ...manifest, runDir, locked, ...name };
+  const reason = abandonedReason(manifest, Date.now());
+  if (reason === undefined) return { ...manifest, runDir, locked, ...name };
 
-  const repaired = repairAbandoned(manifest);
+  const repaired = repairAbandoned(manifest, reason);
   // Write the repair back so the state is final: readers stop re-deriving it.
   // Idempotent — the repaired status is terminal, so a subsequent read never
   // reaches here. Best-effort: an unwritable run dir must not break listRuns,

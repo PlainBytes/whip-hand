@@ -47,11 +47,19 @@ export function stageTitleOf(text: string, fallback: string): string {
  * price is that renumbering an already-completed stage file makes it run
  * again, which is an acceptable, visible surprise next to a stage that
  * never runs at all.
+ *
+ * `pattern` may be absolute (the shipped workflow globs
+ * `{{ run.dir }}/plans/*.md`, and `workdir` is then irrelevant to the match).
+ * Glob syntax has no escape for a literal directory name, so a `[`, `*`, `?` or
+ * `{` in an absolute prefix reads as a metacharacter and the pattern matches
+ * nothing (or the wrong things); that limit is documented, not worked around.
  */
 export async function discoverStages(workdir: string, pattern: string): Promise<Stage[]> {
   const relPaths: string[] = [];
   // glob yields native separators; '/' keeps the order and the paths named in
   // errors the same on every platform, and matches how the pattern was written.
+  // An absolute pattern yields absolute paths, all under one prefix, so the
+  // sort below still orders them by their tail.
   for await (const p of glob(pattern, { cwd: workdir })) relPaths.push(p.replace(/\\/g, '/'));
   relPaths.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 

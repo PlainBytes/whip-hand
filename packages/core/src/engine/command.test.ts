@@ -151,6 +151,13 @@ test('run.slug renders in the shell line and in cwd, so a worktree step works', 
   assert.equal(spec.cwd, resolve('/w', '../wt-oauth-support'));
 });
 
+test('run.dir in `run` refers to $WHIPHAND_RUN_DIR, absolute with forward slashes', () => {
+  const win: RunCtx = { ...ctx, runDir: 'C:\\Users\\me\\proj\\.whiphand\\runs\\r1' };
+  const spec = commandSpec({ ...step, run: 'ls {{ run.dir }}/plans' }, win);
+  assert.equal(spec.argv[spec.argv.length - 1], 'ls ${WHIPHAND_RUN_DIR}/plans');
+  assert.equal(spec.env.WHIPHAND_RUN_DIR, 'C:/Users/me/proj/.whiphand/runs/r1');
+});
+
 test('the capture header names the command, so the artifact explains itself', () => {
   const spec = commandSpec(step, ctx);
   const header = captureHeader(step, spec.argv, { id: 'fix', iteration: 2, maxIterations: 3 });

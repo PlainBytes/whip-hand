@@ -107,7 +107,9 @@ let remoteControl: { stop: () => Promise<void> } | undefined;
  * 'running' and readers have to fall back to interrupted-detection to work out
  * what happened. This cannot help the desktop's exit path — tauri-plugin-shell
  * SIGKILLs its children on RunEvent::Exit, and nothing survives that — so
- * interrupted-detection in core remains the backstop, not this.
+ * interrupted-detection in core remains the backstop, not this: the next
+ * reader finds this process gone (ownerGone in core's manifest.ts) and marks
+ * the run interrupted at once, with the heartbeat lease behind that.
  */
 async function shutdown(code: number): Promise<void> {
   if (shuttingDown) return;

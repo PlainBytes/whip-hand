@@ -4,11 +4,12 @@ import { chmod, mkdtemp, readFile, readdir, writeFile, mkdir } from 'node:fs/pro
 import { mkdtempSync } from 'node:fs';
 import { cp } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { hostname, tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import {
   RunJournal, listRuns, getRun, renameRun, WORKFLOW_SNAPSHOT_NAME, runManifestSchema,
-  HEARTBEAT_INTERVAL_MS, HEARTBEAT_STALE_MS,
+  HEARTBEAT_INTERVAL_MS, HEARTBEAT_STALE_MS, currentPidScope,
 } from './manifest.ts';
 import type { RunManifest, RunJournalInit } from './manifest.ts';
 import { DEFAULT_CONFIG } from '../config.ts';
@@ -337,7 +338,7 @@ test('listRuns: repair is idempotent across repeated reads', async () => {
   assert.equal(afterFirst, afterSecond);
 });
 
-test('listRuns: the pid is never consulted — a live pid with an expired lease is interrupted', async () => {
+test('listRuns: a live pid never extends the lease — a live pid with an expired lease is interrupted', async () => {
   const workdir = await tmpRunDir();
   // pid is our own (very much alive). A PID probe would call this run alive, as
   // it would a dead run whose PID Windows has since recycled; the lease does not.
@@ -350,18 +351,84 @@ test('listRuns: the pid is never consulted — a live pid with an expired lease 
   assert.equal(runs[0].status, 'interrupted');
 });
 
-test('listRuns: a fresh lease is left running, whatever the pid says', async () => {
+/** The pid of a child that has already exited and been reaped: nothing runs under it. */
+function deadPid(): number {
+  const child = spawnSync(process.execPath, ['-e', '']);
+  assert.ok(child.pid, 'the probe child spawned');
+  return child.pid;
+}
+
+test('listRuns: a fresh lease whose owner is gone from this PID space is interrupted at once', async () => {
   const workdir = await tmpRunDir();
-  // A pid nothing could be running under: a PID probe would call this dead.
+  // What the desktop leaves behind on quit: the sidecar is SIGKILLed seconds
+  // after its last renewal, so the lease alone would read live for minutes.
   const runDir = await writeAbandonedRun(workdir, '20260101-000006-aaab', {
-    pid: 999_999_999,
+    pid: deadPid(),
+    heartbeatAt: new Date().toISOString(),
+  });
+
+  const runs = await listRuns(workdir, DEFAULT_CONFIG);
+  assert.equal(runs[0].status, 'interrupted');
+  const onDisk: RunManifest = JSON.parse(await readFile(join(runDir, 'run.json'), 'utf8'));
+  assert.equal(onDisk.status, 'interrupted');
+  assert.equal(onDisk.interruptedReason, 'owner-exited');
+  assert.equal(onDisk.steps.find(s => s.id === 'b')!.status, 'interrupted');
+});
+
+test('getRun: a dead owner is detected on the detail read too', async () => {
+  const workdir = await tmpRunDir();
+  await writeAbandonedRun(workdir, '20260101-000006-aaae', {
+    pid: deadPid(),
+    heartbeatAt: new Date().toISOString(),
+  });
+
+  const run = await getRun(workdir, DEFAULT_CONFIG, '20260101-000006-aaae');
+  assert.equal(run?.status, 'interrupted');
+});
+
+test('the journal records the PID space its pid belongs to', async () => {
+  const runDir = await tmpRunDir();
+  const journal = new RunJournal(baseInit(runDir, '20260101-000006-aaaf'));
+  await journal.flush();
+  journal.close();
+  assert.equal(journal.manifest.pidScope, currentPidScope());
+  assert.ok(currentPidScope().includes(hostname()));
+});
+
+// Each of these would read as dead to a plain PID probe; only a proven-dead
+// owner in our own PID space may cut the lease short.
+for (const [label, overrides] of [
+  ['a live owner', () => ({ pid: process.pid })],
+  ['a pid from another PID space (other host, WSL vs Windows, container)', () => ({ pid: deadPid(), pidScope: 'linux:elsewhere' })],
+  ['a manifest that never recorded its PID space', () => ({ pid: deadPid(), pidScope: undefined })],
+  ['no pid at all', () => ({ pid: undefined })],
+] as const) {
+  test(`listRuns: a fresh lease is left running with ${label}`, async () => {
+    const workdir = await tmpRunDir();
+    const runDir = await writeAbandonedRun(workdir, '20260101-000006-aaac', {
+      ...overrides(),
+      heartbeatAt: new Date().toISOString(),
+    });
+
+    const runs = await listRuns(workdir, DEFAULT_CONFIG);
+    assert.equal(runs[0].status, 'running');
+    const onDisk: RunManifest = JSON.parse(await readFile(join(runDir, 'run.json'), 'utf8'));
+    assert.equal(onDisk.status, 'running', 'a live run must never be repaired out from under itself');
+  });
+}
+
+test('listRuns: EPERM reads as alive — a pid we may not signal is not a dead one', {
+  skip: process.platform === 'win32' || process.getuid?.() === 0 ? 'needs a POSIX non-root user' : false,
+}, async () => {
+  const workdir = await tmpRunDir();
+  // pid 1 is init: alive, and not ours to signal.
+  await writeAbandonedRun(workdir, '20260101-000006-aaad', {
+    pid: 1,
     heartbeatAt: new Date().toISOString(),
   });
 
   const runs = await listRuns(workdir, DEFAULT_CONFIG);
   assert.equal(runs[0].status, 'running');
-  const onDisk: RunManifest = JSON.parse(await readFile(join(runDir, 'run.json'), 'utf8'));
-  assert.equal(onDisk.status, 'running', 'a live run must never be repaired out from under itself');
 });
 
 test('listRuns: a legacy manifest with no heartbeatAt is judged by updatedAt against the same window', async () => {
@@ -1798,7 +1865,14 @@ test('fencing does not fire for a healthy owner: the lease is renewed', async ()
 
 test('a legacy manifest that still carries a pid parses, and the pid is not consulted', async () => {
   const workdir = await tmpRunDir();
-  const runDir = await writeAbandonedRun(workdir, '20260101-000021-lgcy', { pid: 1, heartbeatAt: new Date().toISOString() });
+  // A manifest from before pidScope existed: a pid, and no space to read it in,
+  // so ownerGone refuses to probe it and the fresh lease is the whole answer.
+  // The pid is one nothing runs under, so a probe that did run would say "dead".
+  // `pid: 1` would not prove that: it is unused only on Windows (ESRCH), while
+  // on Linux it is init and EPERM already reads as alive — passing for the
+  // wrong reason on one platform and failing on the other.
+  const runDir = await writeAbandonedRun(workdir, '20260101-000021-lgcy',
+    { pid: deadPid(), pidScope: undefined, heartbeatAt: new Date().toISOString() });
   const parsed = runManifestSchema.safeParse(JSON.parse(await readFile(join(runDir, 'run.json'), 'utf8')));
   assert.equal(parsed.success, true);
   const [run] = await listRuns(workdir, DEFAULT_CONFIG);

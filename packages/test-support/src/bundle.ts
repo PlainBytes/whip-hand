@@ -26,10 +26,10 @@ export interface CaptureOptions {
 /**
  * What a run records that describes the *host*, not the work — dropped from the
  * captured `run.json`, along with `run.log` and `events.ndjson` (also host-shaped)
- * and every dotfile (bookkeeping: markers, prompts, settings). `pid` is
- * informational (cross-process cancel) and differs by construction.
+ * and every dotfile (bookkeeping: markers, prompts, settings). `pid` and
+ * `pidScope` name the owning process and its PID space, and differ by construction.
  */
-const HOST_FIELDS = ['stoppedTree', 'degradations', 'pid'] as const;
+const HOST_FIELDS = ['stoppedTree', 'degradations', 'pid', 'pidScope'] as const;
 const EXCLUDED_FILES = new Set(['run.log', 'events.ndjson']);
 
 const ISO = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g;

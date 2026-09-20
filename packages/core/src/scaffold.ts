@@ -459,6 +459,12 @@ steps:
  * `.whiphand/workflows/staged-feature-development.yaml` can be generated
  * from the same source rather than kept in sync by hand.
  *
+ * The planner writes the stage files into the run folder
+ * (`{{ run.dir }}/plans/NN-slug.md`), not the repository: they are never
+ * committed to the branch or the PR, and go when `runs.max_retained` prunes the
+ * run. `build.items` globs them by that absolute path, so a glob metacharacter
+ * (`[`, `*`, `?`, `{`) in the workdir path would break the match.
+ *
  * `execute` and `review`, both nested inside `do-review`'s loops, cannot list
  * `accept` in their own `inputs:` — a forward reference is only legal across
  * a loop that encloses the reader (the "previous iteration" reading), never
@@ -482,11 +488,6 @@ inputs:
   feature:
     required: true
     prompt: What are we building?
-  plan_dir:
-    required: true
-    remember: true
-    multiline: false
-    prompt: "Plan directory (e.g. docs/plans/oauth)"
   base:
     required: false
     default: main
@@ -514,26 +515,25 @@ steps:
     runner: claude
     model: opus
     mode: interactive
-    writes: true                       # the plan lives in the repo, not the run dir
-    allow_paths: ["{{ inputs.plan_dir }}/**"]
+    # The stage files go in the run folder, not the repo, so the planner should
+    # change nothing in the repository. \`writes: true\` is still needed (without it
+    # the runner denies the write tools outright). The git guard ignores every
+    # path with a .whiphand segment, so run-folder writes never show up as
+    # changes; that leaves the allow_paths below meaning "any change to the
+    # repository fails this step".
+    writes: true
+    allow_paths: ["{{ run.dir }}/**"]
     inputs: [attachments]
     output: plan.md
     prompt: |
       We are planning: {{ inputs.feature }}. Work with me on a plan, then cut the work
       into stages small enough to review in one sitting. Write one file per stage into
-      {{ inputs.plan_dir }}/, named NN-slug.md, each opening with a \`# Title\` heading.
-      Write nothing outside that directory.
-
-  - id: commit-plan
-    kind: command
-    run: 'git add -A -- "$WHIPHAND_PLAN_DIR" && git commit -m "plan: \${WHIPHAND_RUN_NAME:-$WHIPHAND_RUN_SLUG}"'
-    env: { WHIPHAND_PLAN_DIR: "{{ inputs.plan_dir }}" }
-    expect_exit: [0, 1]                # 1 is git's "nothing to commit"
-    output: commit-plan.log
+      {{ run.dir }}/plans/, named NN-slug.md, each opening with a \`# Title\` heading.
+      Change nothing in the repository.
 
   - id: build
     kind: stages
-    items: "{{ inputs.plan_dir }}/*.md"
+    items: "{{ run.dir }}/plans/*.md"
     max_retries: 2
     steps:
       - id: do-review

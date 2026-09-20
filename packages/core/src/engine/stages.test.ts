@@ -38,6 +38,34 @@ test('stages are ordered by path, and an inserted 03a sorts between 03 and 04', 
   assert.ok(stages.every(s => isAbsolute(s.path)));
 });
 
+// The shipped workflow globs `{{ run.dir }}/plans/*.md`: absolute, forward
+// slashes, and unrelated to the workdir. Written the same way on every platform
+// (the tmp dir's `C:\\…` becomes `C:/…`), so the Windows leg covers it too.
+const fwd = (p: string): string => p.replace(/\\/g, '/');
+
+test('an absolute pattern outside the workdir orders, resolves and names stages like a relative one', async () => {
+  const runDir = await tmpPlanDir({
+    '01-schema.md': '# Schema\n', '03-api.md': '# API\n',
+    '03a-api.md': '# API routes\n', '04-ui.md': '# UI\n',
+  });
+  const workdir = await mkdtemp(join(tmpdir(), 'whiphand-workdir-'));
+  const stages = await discoverStages(workdir, `${fwd(runDir)}/plans/*.md`);
+  assert.deepEqual(stages.map(s => s.id), ['01-schema', '03-api', '03a-api', '04-ui']);
+  assert.deepEqual(stages.map(s => s.index), [1, 2, 3, 4]);
+  assert.deepEqual(stages.map(s => s.title), ['Schema', 'API', 'API routes', 'UI']);
+  assert.ok(stages.every(s => isAbsolute(s.path)));
+  assert.equal(fwd(stages[2]!.path), `${fwd(runDir)}/plans/03a-api.md`);
+});
+
+test('an absolute pattern names a bad match by its readable forward-slash path', async () => {
+  const runDir = await tmpPlanDir({ '01-schema.md': '# Schema\n' });
+  await mkdir(join(runDir, 'plans', '02-assets'));
+  const workdir = await mkdtemp(join(tmpdir(), 'whiphand-workdir-'));
+  await assert.rejects(discoverStages(workdir, `${fwd(runDir)}/plans/*`),
+    (e: Error) => e instanceof StageError
+      && e.message === `stage file '${fwd(runDir)}/plans/02-assets' is a directory, not a stage file`);
+});
+
 test('the id is the whole basename, so two stages of the same topic never collide', async () => {
   const dir = await tmpPlanDir({ '01-api.md': '# One\n', '03a-api.md': '# Two\n' });
   const stages = await discoverStages(dir, 'plans/*.md');

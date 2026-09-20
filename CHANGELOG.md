@@ -40,7 +40,10 @@
   desktop as well as the CLI. Processes a step deliberately left running do not survive the run.
 - Run liveness is a heartbeat lease (renewed every 30 s, stale at 5 min) instead of a PID probe; a run whose owner
   died is marked crashed (`interruptedReason: lease-expired`) by the next process that reads the store. A host
-  suspended for more than five minutes loses its run on wake.
+  suspended for more than five minutes loses its run on wake. The pid can only cut the lease short, never extend
+  it: when the owner provably no longer exists (ESRCH, probed only from the same PID space, recorded as `pidScope`
+  in `run.json`), the run is marked crashed at once (`interruptedReason: owner-exited`). So quitting the desktop
+  mid-run and reopening it shows the run interrupted right away, not as running with no updates for five minutes.
 - Losses that used to be silent are now visible: `run:degraded` events, `degradations[]` in `run.json`, and a summary in
   the CLI. A `writes: false` step (or one with `allow_paths`) fails when git is unavailable, instead of losing its
   write-guard silently; a failed post-step tree snapshot always fails the step.

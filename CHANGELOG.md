@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Shift+Enter and Alt+Enter add a new line in the terminal
+
+- In an interactive session's terminal, Shift+Enter and Alt+Enter now insert a newline in the CLI's prompt instead
+  of submitting it. Enter still submits. The same applies in the web build.
+
 ### The run's step strip is smaller and stays put
 
 - On a run with several stages, each stage now collapses to a single line showing its step count, elapsed time and

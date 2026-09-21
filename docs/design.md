@@ -229,6 +229,12 @@ in step 2 (`engine/interactive-guidance.ts`, one shared text; claude takes it vi
   **End session** button drives the identical path; the CLI, whose child owns the real
   TTY, still relies on the operator typing `/exit`.
 
+In the desktop terminal, **Shift+Enter** and **Alt+Enter** insert a newline in the runner's
+prompt and **Enter** submits. Both combos send the same bytes, ESC CR (`\x1b\r`) — xterm
+already sends that for Alt+Enter, and `TerminalPanel` remaps Shift+Enter to it, since xterm
+otherwise sends a bare CR that the runner cannot tell from Enter. One sequence serves every
+runner; there are no per-adapter overrides.
+
 ### Knowing when the session is waiting for the human
 
 A PTY existing does not mean anyone is waiting. Two channels answer that, and a

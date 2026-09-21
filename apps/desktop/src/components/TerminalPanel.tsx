@@ -18,6 +18,30 @@ const RESIZE_DEBOUNCE_MS = 100;
 const EMPTY_BUFFER: string[] = [];
 
 /**
+ * What a "newline, don't submit" key sends to the CLI: ESC CR, which is what
+ * xterm already sends for Alt+Enter, so both combos reach the CLI as the same
+ * bytes. One sequence for every CLI on purpose — no per-adapter overrides.
+ */
+export const NEWLINE_SEQUENCE = '\x1b\r';
+
+/**
+ * xterm 5.5 sends a bare CR for Shift+Enter, indistinguishable from Enter, and
+ * has no kitty keyboard protocol to say otherwise — so Shift+Enter is remapped
+ * here. Alt+Enter is left to xterm (it already sends NEWLINE_SEQUENCE), as are
+ * Ctrl/Meta chords and anything typed through an IME composition.
+ */
+export function isShiftEnter(event: KeyboardEvent): boolean {
+  return (
+    event.key === 'Enter' &&
+    event.shiftKey &&
+    !event.altKey &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.isComposing
+  );
+}
+
+/**
  * xterm.js wired to a job's PTY: keystrokes out as ptyInput, ptyData written
  * to the terminal, and resizes reported as ptyResize (debounced). Actual
  * construction goes through xterm-runtime.ts's createTerminal() (jsdom test boundary).
@@ -63,6 +87,19 @@ export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProp
 
     const dataSub = handle.term.onData(data => {
       void client.request('ptyInput', { jobId, data: encodeToBase64(data) });
+    });
+
+    // Returning false tells xterm to skip the event, so it must cover every
+    // event type of the key (keydown, keypress, keyup) or xterm would still
+    // send its own CR alongside ours. Only keydown sends. Once the session has
+    // exited (disableStdin) we send nothing: this handler would otherwise get
+    // around xterm's own input blocking.
+    handle.term.attachCustomKeyEventHandler(event => {
+      if (!isShiftEnter(event)) return true;
+      if (event.type === 'keydown' && !handle.term.options.disableStdin) {
+        void client.request('ptyInput', { jobId, data: encodeToBase64(NEWLINE_SEQUENCE) });
+      }
+      return false;
     });
 
     const resizeObserver = new ResizeObserver(() => {

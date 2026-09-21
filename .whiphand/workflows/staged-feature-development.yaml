@@ -83,12 +83,28 @@ steps:
                 output: execute-report.md
                 prompt: |
                   Implement stage {{ stage.index }} of {{ stage.total }}: {{ stage.title }}.
-                  Earlier stages are implemented and committed — read the tree or `git log`
-                  if you need them. Implement only this stage, and leave it uncommitted:
-                  that is how an earlier stage came to be committed — a human read its
-                  working tree at the gate below and the workflow committed it after they
-                  accepted. If a tests log marked VERDICT: FAIL is attached, fix every
-                  failure first; if review findings are attached, address every point.
+                  Earlier stages are implemented and already committed by the workflow —
+                  read the tree or `git log` if you need them. Implement only this stage,
+                  and leave it uncommitted: committing is the workflow's job, not yours. A
+                  human reads the working tree at the gate below, and the workflow commits
+                  it once they have accepted. If a tests log marked VERDICT: FAIL is
+                  attached, fix every failure first; if review findings are attached,
+                  address every point.
+                  Implement everything the stage asks. If something can't or shouldn't be
+                  done, don't drop it silently: say so in the report.
+                  Your report, the artifact, has these sections under exactly these headings:
+                  ## Changed
+                  The files you changed or added, one line each.
+                  ## Verified
+                  The exact commands you ran and their result. Run the tests relevant to
+                  what you changed, not only the workflow's test command.
+                  ## Not done / not verified
+                  Anything you did not do or check, with the reason.
+                  ## Deviations from the plan
+                  Where you departed from the stage, with the reason.
+                  ## Findings addressed
+                  Only when a tests log, review findings or rejection feedback were
+                  attached: one line per point, and how you addressed it.
               - id: tests
                 kind: command
                 run: eval "{{ inputs.test_command }}"
@@ -105,9 +121,20 @@ steps:
             writes: false
             output: review.md
             prompt: |
-              Review the working-tree diff against this stage only. If the implementer's
+              Review the uncommitted working-tree diff (`git diff` plus untracked
+              files) against this stage only. Walk the stage requirement by
+              requirement and state for each whether it is met. If the implementer's
               report says a previous rejection's feedback was addressed, check that every
               point it names was actually addressed.
+              Check every claim in the execute report against the diff. A false claim
+              is blocking. Also blocking:
+              - HEAD moved, or the executor committed (check `git log`)
+              - changes outside the stage's scope
+              - an empty diff when the stage requires changes
+              - a review or rejection point that was not addressed
+              If the attached tests log does not exercise the changed code, say so and
+              run the relevant tests yourself, with read-only commands only.
+              An improvement outside the stage is non-blocking at most.
       - id: accept
         inputs: [stage, review]
         kind: approval

@@ -94,6 +94,21 @@ steps:
                   every point. Leave your work uncommitted: a human reads the
                   working tree at the gate below, and the workflow commits it
                   once they have approved.
+                  Implement everything the plan asks. If something can't or shouldn't be
+                  done, don't drop it silently: say so in the report.
+                  Your report, the artifact, has these sections under exactly these headings:
+                  ## Changed
+                  The files you changed or added, one line each.
+                  ## Verified
+                  The exact commands you ran and their result. Run the tests relevant to
+                  what you changed, not only the workflow's test command.
+                  ## Not done / not verified
+                  Anything you did not do or check, with the reason.
+                  ## Deviations from the plan
+                  Where you departed from the plan, with the reason.
+                  ## Findings addressed
+                  Only when a tests log, review findings or sign-off feedback were
+                  attached: one line per point, and how you addressed it.
               - id: tests
                 kind: command
                 run: eval "{{ inputs.test_command }}"
@@ -109,8 +124,19 @@ steps:
             inputs: [plan, execute, tests, sign-off]
             output: review.md
             prompt: |
-              Review the implementation against the attached plan. If sign-off
+              Review the uncommitted working-tree diff (\`git diff\` plus untracked
+              files) against the attached plan. Walk the plan requirement by
+              requirement and state for each whether it is met. If sign-off
               feedback is attached, FAIL unless every requested change is addressed.
+              Check every claim in the execute report against the diff. A false claim
+              is blocking. Also blocking:
+              - HEAD moved, or the executor committed (check \`git log\`)
+              - changes outside the plan's scope
+              - an empty diff when the plan requires changes
+              - a review or sign-off point that was not addressed
+              If the attached tests log does not exercise the changed code, say so and
+              run the relevant tests yourself, with read-only commands only.
+              An improvement outside the plan is non-blocking at most.
 
       # A human gate. Its answer becomes the 'sign-off' both steps above read:
       # approving exits both loops, requesting changes sends fix-cycle round again.
@@ -258,6 +284,21 @@ steps:
                   address every requested change. Leave your work uncommitted: a
                   human reads the working tree at the gate below, and the workflow
                   commits it once they have approved.
+                  Implement everything the technical spec asks. If something can't or shouldn't be
+                  done, don't drop it silently: say so in the report.
+                  Your report, the artifact, has these sections under exactly these headings:
+                  ## Changed
+                  The files you changed or added, one line each.
+                  ## Verified
+                  The exact commands you ran and their result. Run the tests relevant to
+                  what you changed, not only the workflow's test command.
+                  ## Not done / not verified
+                  Anything you did not do or check, with the reason.
+                  ## Deviations from the plan
+                  Where you departed from the technical spec, with the reason.
+                  ## Findings addressed
+                  Only when a tests log, review findings or sign-off feedback were
+                  attached: one line per point, and how you addressed it.
               - id: tests
                 kind: command
                 run: eval "{{ inputs.test_command }}"
@@ -274,10 +315,21 @@ steps:
             inputs: [functional-grill, technical-grill, execute, tests, sign-off]
             output: review.md
             prompt: |
-              Review the implementation against both specs — the functional one
-              for whether it does the right thing, the technical one for whether
-              it was built the agreed way. If sign-off feedback is attached, FAIL
-              unless every requested change is addressed.
+              Review the uncommitted working-tree diff (\`git diff\` plus untracked
+              files) against both specs — the functional one for whether it does the
+              right thing, the technical one for whether it was built the agreed way.
+              Walk each spec requirement by requirement and state for each whether it
+              is met. If sign-off feedback is attached, FAIL unless every requested
+              change is addressed.
+              Check every claim in the execute report against the diff. A false claim
+              is blocking. Also blocking:
+              - HEAD moved, or the executor committed (check \`git log\`)
+              - changes outside the specs' scope
+              - an empty diff when the specs require changes
+              - a review or sign-off point that was not addressed
+              If the attached tests log does not exercise the changed code, say so and
+              run the relevant tests yourself, with read-only commands only.
+              An improvement outside the specs is non-blocking at most.
               End with VERDICT: PASS or VERDICT: FAIL.
 
       # A human gate. Its answer becomes the 'sign-off' both steps above read:
@@ -386,6 +438,21 @@ steps:
                   every point. Leave your work uncommitted: a human reads the
                   working tree at the gate below, and the workflow commits it
                   once they have approved.
+                  Implement everything the plan asks. If something can't or shouldn't be
+                  done, don't drop it silently: say so in the report.
+                  Your report, the artifact, has these sections under exactly these headings:
+                  ## Changed
+                  The files you changed or added, one line each.
+                  ## Verified
+                  The exact commands you ran and their result. Run the tests relevant to
+                  what you changed, not only the workflow's test command.
+                  ## Not done / not verified
+                  Anything you did not do or check, with the reason.
+                  ## Deviations from the plan
+                  Where you departed from the plan, with the reason.
+                  ## Findings addressed
+                  Only when a tests log, review findings or sign-off feedback were
+                  attached: one line per point, and how you addressed it.
                 output: execute-report.md
               - id: tests
                 kind: command
@@ -402,8 +469,19 @@ steps:
             mode: headless
             writes: false
             prompt: |
-              Review the implementation against the attached plan. If sign-off
+              Review the uncommitted working-tree diff (\`git diff\` plus untracked
+              files) against the attached plan. Walk the plan requirement by
+              requirement and state for each whether it is met. If sign-off
               feedback is attached, FAIL unless every requested change is addressed.
+              Check every claim in the execute report against the diff. A false claim
+              is blocking. Also blocking:
+              - HEAD moved, or the executor committed (check \`git log\`)
+              - changes outside the plan's scope
+              - an empty diff when the plan requires changes
+              - a review or sign-off point that was not addressed
+              If the attached tests log does not exercise the changed code, say so and
+              run the relevant tests yourself, with read-only commands only.
+              An improvement outside the plan is non-blocking at most.
             output: review.md
       - id: sign-off
         inputs: [review]
@@ -564,12 +642,28 @@ steps:
                 output: execute-report.md
                 prompt: |
                   Implement stage {{ stage.index }} of {{ stage.total }}: {{ stage.title }}.
-                  Earlier stages are implemented and committed — read the tree or \`git log\`
-                  if you need them. Implement only this stage, and leave it uncommitted:
-                  that is how an earlier stage came to be committed — a human read its
-                  working tree at the gate below and the workflow committed it after they
-                  accepted. If a tests log marked VERDICT: FAIL is attached, fix every
-                  failure first; if review findings are attached, address every point.
+                  Earlier stages are implemented and already committed by the workflow —
+                  read the tree or \`git log\` if you need them. Implement only this stage,
+                  and leave it uncommitted: committing is the workflow's job, not yours. A
+                  human reads the working tree at the gate below, and the workflow commits
+                  it once they have accepted. If a tests log marked VERDICT: FAIL is
+                  attached, fix every failure first; if review findings are attached,
+                  address every point.
+                  Implement everything the stage asks. If something can't or shouldn't be
+                  done, don't drop it silently: say so in the report.
+                  Your report, the artifact, has these sections under exactly these headings:
+                  ## Changed
+                  The files you changed or added, one line each.
+                  ## Verified
+                  The exact commands you ran and their result. Run the tests relevant to
+                  what you changed, not only the workflow's test command.
+                  ## Not done / not verified
+                  Anything you did not do or check, with the reason.
+                  ## Deviations from the plan
+                  Where you departed from the stage, with the reason.
+                  ## Findings addressed
+                  Only when a tests log, review findings or rejection feedback were
+                  attached: one line per point, and how you addressed it.
               - id: tests
                 kind: command
                 run: eval "{{ inputs.test_command }}"
@@ -586,9 +680,20 @@ steps:
             writes: false
             output: review.md
             prompt: |
-              Review the working-tree diff against this stage only. If the implementer's
+              Review the uncommitted working-tree diff (\`git diff\` plus untracked
+              files) against this stage only. Walk the stage requirement by
+              requirement and state for each whether it is met. If the implementer's
               report says a previous rejection's feedback was addressed, check that every
               point it names was actually addressed.
+              Check every claim in the execute report against the diff. A false claim
+              is blocking. Also blocking:
+              - HEAD moved, or the executor committed (check \`git log\`)
+              - changes outside the stage's scope
+              - an empty diff when the stage requires changes
+              - a review or rejection point that was not addressed
+              If the attached tests log does not exercise the changed code, say so and
+              run the relevant tests yourself, with read-only commands only.
+              An improvement outside the stage is non-blocking at most.
       - id: accept
         inputs: [stage, review]
         kind: approval

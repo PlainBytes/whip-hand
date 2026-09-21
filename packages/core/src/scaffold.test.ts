@@ -222,6 +222,73 @@ test('every shipped template tells its implementer to leave the work uncommitted
 });
 
 /**
+ * The execute report and the review checklist are prompt contracts, so the
+ * prompt text is the whole mechanism and is pinned here — in the four shipped
+ * templates and in the repo's own four local copies, which must not drift from
+ * them. Past runs: a test file "updated" that was not, agreed items silently
+ * not built, a reviewer passing an empty diff or an executor's own commit.
+ */
+test('every shipped and local workflow gives execute a report contract and review a checklist', async () => {
+  const localDir = new URL('../../../.whiphand/workflows/', import.meta.url);
+  const sources: Array<[string, string]> = [
+    ['template feature', workflowTemplate('feature')],
+    ['template feature-development', featureDevelopmentTemplate()],
+    ['template spec-driven', specDrivenTemplate()],
+    ['template staged-feature-development', stagedFeatureDevelopmentTemplate()],
+  ];
+  for (const name of ['feature', 'feature-development', 'spec-driven', 'staged-feature-development']) {
+    sources.push([`local ${name}`, await readFile(new URL(`${name}.yaml`, localDir), 'utf8')]);
+  }
+  const flat = (prompt: string | undefined): string => (prompt ?? '').replace(/\s+/g, ' ');
+  for (const [label, source] of sources) {
+    const wf = parseWorkflow(source);
+    assert.deepEqual(validateWorkflowSemantics(wf), [], `${label} validates`);
+    const execute = findStep(wf.steps, 'execute');
+    const review = findStep(wf.steps, 'review');
+    if (execute?.kind !== 'agent' || review?.kind !== 'agent') return assert.fail(`${label} has execute and review agents`);
+
+    const run = flat(execute.prompt);
+    assert.match(run, /Implement everything the .+ asks\. If something can't or shouldn't be done, don't drop it silently/, label);
+    for (const heading of [
+      '## Changed', '## Verified', '## Not done / not verified', '## Deviations from the plan', '## Findings addressed',
+    ]) {
+      assert.ok(run.includes(heading), `${label}'s execute prompt names the report section '${heading}'`);
+    }
+    assert.match(run, /exact commands you ran and their result\. Run the tests relevant to what you changed, not only the workflow's test command/, label);
+    assert.match(run, /leave (your work|it) uncommitted/i, label);
+
+    const check = flat(review.prompt);
+    assert.match(check, /Review the uncommitted working-tree diff \(`git diff` plus untracked files\)/, label);
+    assert.match(check, /requirement by requirement and state for each whether it is met/, label);
+    assert.match(check, /Check every claim in the execute report against the diff\. A false claim is blocking/, label);
+    for (const blocking of [
+      '- HEAD moved, or the executor committed',
+      '- changes outside ',
+      '- an empty diff when ',
+      ' point that was not addressed',
+    ]) {
+      assert.ok(check.includes(blocking), `${label}'s review prompt lists '${blocking}' as blocking`);
+    }
+    assert.match(check, /does not exercise the changed code, say so and run the relevant tests yourself, with read-only commands only/, label);
+    assert.match(check, /non-blocking at most/, label);
+  }
+});
+
+/**
+ * "Earlier stages are … committed" is background for the staged implementer,
+ * not a task: the sentence is worded as the workflow's doing and followed by an
+ * explicit "committing is the workflow's job", so it cannot be read as an
+ * instruction to commit.
+ */
+test('the staged execute prompt says the workflow, not the implementer, commits', () => {
+  const execute = findStep(parseWorkflow(stagedFeatureDevelopmentTemplate()).steps, 'execute');
+  assert.ok(execute?.kind === 'agent');
+  const prompt = (execute.prompt ?? '').replace(/\s+/g, ' ');
+  assert.match(prompt, /Earlier stages are implemented and already committed by the workflow/);
+  assert.match(prompt, /leave it uncommitted: committing is the workflow's job, not yours/);
+});
+
+/**
  * A command step's real spec — argv, env and all, exactly what a run would
  * spawn — executed through the resolved POSIX shell. Templates are identical
  * bytes on every platform now, so these run on the Windows leg too (where Git's

@@ -24,6 +24,7 @@ import { toWorkspace } from '../path-form.ts';
 import { eventPathsToWorkspace } from '../event-paths.ts';
 import { CORE_VERSION } from '../version.ts';
 import { parseVerdict, verdictFromExit, verdictFromChoice, VERDICT_INSTRUCTION } from './verdict.ts';
+import { headlessPrompt } from './headless-guidance.ts';
 import { createProgressParser, progressErrorMessage } from './progress.ts';
 import { commandSpec, captureHeader, captureFooter } from './command.ts';
 import { buildManualRequest, noteArtifact, reviewArtifact } from './manual.ts';
@@ -755,9 +756,11 @@ export async function runWorkflow(options: RunOptions): Promise<RunResult> {
       let eff = effectiveStep(withFindings(scopeInputs(step, frame)));
       if (step.mode === 'headless') {
         // A headless step cannot know its run dir; name the artifact path explicitly.
+        // The guidance goes on here, the one point all three adapters pass through,
+        // so every runner is handed the same words.
         eff = {
           ...eff,
-          prompt: `${eff.prompt}\n\nWrite your '${step.output}' artifact to: ${toWorkspace(ctx.artifacts[step.id], workdir)}`,
+          prompt: `${headlessPrompt(step, eff.prompt)}\n\nWrite your '${step.output}' artifact to: ${toWorkspace(ctx.artifacts[step.id], workdir)}`,
         };
       }
 

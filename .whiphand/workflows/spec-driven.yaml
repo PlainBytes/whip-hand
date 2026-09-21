@@ -22,10 +22,13 @@ steps:
     output: functional-plan.md
     prompt: |
       We are settling WHAT to build, not how: {{ inputs.feature }}
+      Before exploring, ask me whether there are files or docs you should read first.
       Work with me on the problem, who it serves, the behaviour, the edge
       cases, what is explicitly out of scope, and how we will know it works.
       Stay out of implementation — no file layout, no APIs, no libraries.
       One question at a time. Do not modify files.
+      The artifact you write is the agreed plan as it now stands, not a transcript of our
+      conversation.
 
   - id: functional-grill      # live chat: it attacks the draft, you defend it
     runner: claude
@@ -53,8 +56,13 @@ steps:
     prompt: |
       The functional spec is settled. Work with me on HOW to build it in this
       codebase: the components and their boundaries, data flow, what existing
-      code changes, error handling, and how it gets tested. Read the code
-      before proposing structure. One question at a time. Do not modify files.
+      code changes, error handling, and how it gets tested. Before exploring,
+      ask me whether there are files or docs you should read first. Then read
+      the code before proposing structure. One question at a time. Do not
+      modify files.
+      The artifact you write is the agreed plan as it now stands, not a transcript of our
+      conversation. End it with a `## Verify` section: the exact command(s) that exercise
+      this change, because the workflow's test command may not cover it.
 
   - id: technical-grill
     runner: claude

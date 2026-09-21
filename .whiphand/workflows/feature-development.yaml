@@ -36,12 +36,13 @@ steps:
     writes: false
     inputs: [attachments] # files attached at start (--attach); dropped when there are none
     output: plan.md
-    prompt: >
-      We are planning: {{ inputs.feature }}. Work with me on a plan.
-
-      Do not modify files.
-
-      Before you start your discovery, ask the user if there are any files that you should be aware of. If there are, ask the user to provide them.
+    prompt: |
+      We are planning: {{ inputs.feature }}.
+      Before exploring, ask me whether there are files or docs you should read first.
+      Work with me on a plan. Do not modify files.
+      The artifact you write is the agreed plan as it now stands, not a transcript of our
+      conversation. End it with a `## Verify` section: the exact command(s) that exercise
+      this change, because the workflow's test command may not cover it.
 
   - kind: loop # unchanged from the current local copy
     id: human-review

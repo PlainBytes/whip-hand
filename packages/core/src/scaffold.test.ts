@@ -275,6 +275,91 @@ test('every shipped and local workflow gives execute a report contract and revie
 });
 
 /**
+ * The plan prompts are contracts too. Past runs: a staged planner that wrote no
+ * `plans/*.md` (run 956e, "matched no stage files"), stage files in the wrong
+ * folder so the build took `docs/design.md` for a stage (run d8ba), and a root
+ * `npm test` that ran nothing of the stage being built. Every plan prompt, in
+ * the shipped templates and the local copies, opens the same way, says the
+ * artifact is the plan and not the chat, and (except the WHAT-only functional
+ * plan) asks for a `## Verify` section.
+ */
+test('every shipped and local plan prompt shares the ask-for-files opening and the artifact contract', async () => {
+  const localDir = new URL('../../../.whiphand/workflows/', import.meta.url);
+  const sources: Array<[string, string]> = [
+    ['template feature', workflowTemplate('feature')],
+    ['template feature-development', featureDevelopmentTemplate()],
+    ['template spec-driven', specDrivenTemplate()],
+    ['template staged-feature-development', stagedFeatureDevelopmentTemplate()],
+  ];
+  for (const name of ['feature', 'feature-development', 'spec-driven', 'staged-feature-development']) {
+    sources.push([`local ${name}`, await readFile(new URL(`${name}.yaml`, localDir), 'utf8')]);
+  }
+  const flat = (prompt: string | undefined): string => (prompt ?? '').replace(/\s+/g, ' ');
+  const planIds = ['plan', 'functional-plan', 'technical-plan'];
+  for (const [label, source] of sources) {
+    const wf = parseWorkflow(source);
+    assert.deepEqual(validateWorkflowSemantics(wf), [], `${label} validates`);
+    const plans = planIds.flatMap((id) => {
+      const step = findStep(wf.steps, id);
+      return step === undefined ? [] : [{ id, step }];
+    });
+    assert.ok(plans.length > 0, `${label} has a plan step`);
+    for (const { id, step } of plans) {
+      if (step.kind !== 'agent') return assert.fail(`${label} ${id} is an agent step`);
+      const prompt = flat(step.prompt);
+      const at = `${label} ${id}`;
+      assert.match(prompt, /Before exploring, ask me whether there are files or docs you should read first\./, at);
+      assert.match(prompt, /The artifact you write is the agreed plan as it now stands, not a transcript of our conversation\./, at);
+      assert.doesNotMatch(prompt, /ask the user|always ask for initial files/, `${at} has no ad-hoc ask-for-files wording`);
+      if (id === 'functional-plan') {
+        assert.ok(!prompt.includes('## Verify'), `${at} stays out of implementation, so it has no Verify section`);
+      } else if (!label.endsWith('staged-feature-development')) {
+        // The staged plan puts Verify in each stage file instead; the next test pins that.
+        assert.match(prompt, /End it with a `## Verify` section: the exact command\(s\) that exercise this change, because the workflow's test command may not cover it\./, at);
+      }
+    }
+  }
+});
+
+/**
+ * The staged plan prompt is the only thing that tells the planner what a stage
+ * file is, where it goes and how to check it did that: the build's `items` glob
+ * takes whatever `.md` it finds, so the prompt is the whole guard.
+ */
+test('the staged plan prompt carries the stage-file template and the listing self-check', async () => {
+  const localDir = new URL('../../../.whiphand/workflows/', import.meta.url);
+  const sources: Array<[string, string]> = [
+    ['template', stagedFeatureDevelopmentTemplate()],
+    ['local', await readFile(new URL('staged-feature-development.yaml', localDir), 'utf8')],
+  ];
+  for (const [label, source] of sources) {
+    const plan = findStep(parseWorkflow(source).steps, 'plan');
+    assert.ok(plan?.kind === 'agent', `${label} has a plan agent`);
+    const raw = plan.prompt ?? '';
+    const prompt = raw.replace(/\s+/g, ' ');
+
+    // The template is a heading and five sections, in order, each on its own line.
+    const headings = raw.split('\n').filter((line) => /^#{1,2} /.test(line));
+    assert.deepEqual(
+      headings,
+      ['# <Stage title>', '## Goal', '## Scope', '## Out of scope', '## Files', '## Acceptance criteria', '## Verify'],
+      `${label} stage-file template`,
+    );
+    assert.match(prompt, /## Verify The exact command\(s\) that exercise this stage, because the workflow's test command may not cover it\./, label);
+
+    assert.match(prompt, /Order them so each builds on the earlier ones, which the workflow will already have committed/, label);
+    assert.match(prompt, /small enough to review in one sitting/, label);
+    assert.match(prompt, /Write one file per stage into \{\{ run\.dir \}\}\/plans\/, named NN-slug\.md, and nowhere else\./, label);
+    assert.match(prompt, /Change nothing in the repository\./, label);
+    assert.match(
+      prompt,
+      /Before you tell me the plan is done, list \{\{ run\.dir \}\}\/plans\/ and confirm that every stage file is there and that nothing was written elsewhere\./,
+      label,
+    );
+  }
+});
+
+/**
  * "Earlier stages are … committed" is background for the staged implementer,
  * not a task: the sentence is worded as the workflow's doing and followed by an
  * explicit "committing is the workflow's job", so it cannot be read as an

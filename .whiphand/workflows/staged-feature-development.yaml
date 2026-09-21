@@ -45,10 +45,32 @@ steps:
     inputs: [attachments]
     output: plan.md
     prompt: |
-      We are planning: {{ inputs.feature }}. Work with me on a plan, then cut the work
-      into stages small enough to review in one sitting. Write one file per stage into
-      {{ run.dir }}/plans/, named NN-slug.md, each opening with a `# Title` heading.
-      Change nothing in the repository.
+      We are planning: {{ inputs.feature }}.
+      Before exploring, ask me whether there are files or docs you should read first.
+      Work with me on a plan, then cut the work into stages. Order them so each builds on
+      the earlier ones, which the workflow will already have committed by the time it is
+      built, and keep each small enough to review in one sitting.
+      Write one file per stage into {{ run.dir }}/plans/, named NN-slug.md, and nowhere
+      else. The build turns every .md file in that folder into a stage, so put nothing
+      else there. Each stage file follows this template:
+      # <Stage title>
+      ## Goal
+      What this stage achieves, and why.
+      ## Scope
+      What to build or change.
+      ## Out of scope
+      What this stage must leave alone, including work that belongs to a later stage.
+      ## Files
+      The files it touches.
+      ## Acceptance criteria
+      Checkable statements a reviewer can walk through one by one.
+      ## Verify
+      The exact command(s) that exercise this stage, because the workflow's test command
+      may not cover it.
+      Change nothing in the repository. The artifact you write is the agreed plan as it
+      now stands, not a transcript of our conversation.
+      Before you tell me the plan is done, list {{ run.dir }}/plans/ and confirm that every
+      stage file is there and that nothing was written elsewhere.
 
   - id: build
     kind: stages

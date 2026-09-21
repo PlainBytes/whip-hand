@@ -20,11 +20,13 @@ steps:
     writes: false
     inputs: [attachments] # files attached at start (--attach); dropped when there are none
     output: plan.md
-    prompt: |-
+    prompt: |
       We are planning: {{ inputs.feature }}.
+      Before exploring, ask me whether there are files or docs you should read first.
       Work with me on a plan. Do not modify files.
-
-      Before getting started, always ask for initial files that will allow you to improve your discovery.
+      The artifact you write is the agreed plan as it now stands, not a transcript of our
+      conversation. End it with a `## Verify` section: the exact command(s) that exercise
+      this change, because the workflow's test command may not cover it.
 
   # Repeats until 'sign-off' is approved. Requesting changes there attaches
   # fresh feedback ('sign-off' as a forward reference) and sends fix-cycle

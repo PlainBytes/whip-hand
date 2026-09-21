@@ -51,7 +51,12 @@ steps:
     writes: false
     output: plan.md
     prompt: |
-      We are planning: {{ inputs.feature }}. Work with me on a plan. Do not modify files.
+      We are planning: {{ inputs.feature }}.
+      Before exploring, ask me whether there are files or docs you should read first.
+      Work with me on a plan. Do not modify files.
+      The artifact you write is the agreed plan as it now stands, not a transcript of our
+      conversation. End it with a \`## Verify\` section: the exact command(s) that exercise
+      this change, because the workflow's test command may not cover it.
 
   # Repeats until 'sign-off' is approved. Requesting changes there attaches
   # fresh feedback ('sign-off' as a forward reference) and sends fix-cycle
@@ -185,10 +190,13 @@ steps:
     output: functional-plan.md
     prompt: |
       We are settling WHAT to build, not how: {{ inputs.feature }}
+      Before exploring, ask me whether there are files or docs you should read first.
       Work with me on the problem, who it serves, the behaviour, the edge
       cases, what is explicitly out of scope, and how we will know it works.
       Stay out of implementation — no file layout, no APIs, no libraries.
       One question at a time. Do not modify files.
+      The artifact you write is the agreed plan as it now stands, not a transcript of our
+      conversation.
 
   - id: functional-grill      # live chat: it attacks the draft, you defend it
     runner: claude
@@ -216,8 +224,13 @@ steps:
     prompt: |
       The functional spec is settled. Work with me on HOW to build it in this
       codebase: the components and their boundaries, data flow, what existing
-      code changes, error handling, and how it gets tested. Read the code
-      before proposing structure. One question at a time. Do not modify files.
+      code changes, error handling, and how it gets tested. Before exploring,
+      ask me whether there are files or docs you should read first. Then read
+      the code before proposing structure. One question at a time. Do not
+      modify files.
+      The artifact you write is the agreed plan as it now stands, not a transcript of our
+      conversation. End it with a \`## Verify\` section: the exact command(s) that exercise
+      this change, because the workflow's test command may not cover it.
 
   - id: technical-grill
     runner: claude
@@ -392,13 +405,13 @@ steps:
     mode: interactive
     writes: false
     output: plan.md
-    prompt: >
-      We are planning: {{ inputs.feature }}. Work with me on a plan.
-
-      Do not modify files.
-
-      Before you start your discovery, ask the user if there are any files that
-      you should be aware of. If there are, ask the user to provide them.
+    prompt: |
+      We are planning: {{ inputs.feature }}.
+      Before exploring, ask me whether there are files or docs you should read first.
+      Work with me on a plan. Do not modify files.
+      The artifact you write is the agreed plan as it now stands, not a transcript of our
+      conversation. End it with a \`## Verify\` section: the exact command(s) that exercise
+      this change, because the workflow's test command may not cover it.
 
   - kind: loop
     id: human-review
@@ -604,10 +617,32 @@ steps:
     inputs: [attachments]
     output: plan.md
     prompt: |
-      We are planning: {{ inputs.feature }}. Work with me on a plan, then cut the work
-      into stages small enough to review in one sitting. Write one file per stage into
-      {{ run.dir }}/plans/, named NN-slug.md, each opening with a \`# Title\` heading.
-      Change nothing in the repository.
+      We are planning: {{ inputs.feature }}.
+      Before exploring, ask me whether there are files or docs you should read first.
+      Work with me on a plan, then cut the work into stages. Order them so each builds on
+      the earlier ones, which the workflow will already have committed by the time it is
+      built, and keep each small enough to review in one sitting.
+      Write one file per stage into {{ run.dir }}/plans/, named NN-slug.md, and nowhere
+      else. The build turns every .md file in that folder into a stage, so put nothing
+      else there. Each stage file follows this template:
+      # <Stage title>
+      ## Goal
+      What this stage achieves, and why.
+      ## Scope
+      What to build or change.
+      ## Out of scope
+      What this stage must leave alone, including work that belongs to a later stage.
+      ## Files
+      The files it touches.
+      ## Acceptance criteria
+      Checkable statements a reviewer can walk through one by one.
+      ## Verify
+      The exact command(s) that exercise this stage, because the workflow's test command
+      may not cover it.
+      Change nothing in the repository. The artifact you write is the agreed plan as it
+      now stands, not a transcript of our conversation.
+      Before you tell me the plan is done, list {{ run.dir }}/plans/ and confirm that every
+      stage file is there and that nothing was written elsewhere.
 
   - id: build
     kind: stages

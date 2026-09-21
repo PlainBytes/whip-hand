@@ -1500,6 +1500,14 @@ describe('RunDetailPage: cycles and manual steps', () => {
     expect(frame).toHaveStyle({ height: '100%', flexDirection: 'column' });
   });
 
+  it('caps the stepper strip and scrolls it, so expanded stages cannot squeeze the tabs', async () => {
+    renderRunDetail('job-strip-cap');
+
+    // jsdom does not compute the clamp; this compares the inline string, which is all the guard needs.
+    const strip = await screen.findByTestId('run-stepper-strip');
+    expect(strip).toHaveStyle({ maxHeight: 'clamp(140px, 38%, 460px)', overflowY: 'auto' });
+  });
+
   it('collapses the stepper strip and brings it back', async () => {
     const { transport } = renderRunDetail('job-collapse');
     emitWhiphandEvent(transport, 'job-collapse', 'run-collapse', { type: 'step:start', stepId: 'one', kind: 'agent', runner: 'claude', mode: 'headless' }, 't1');

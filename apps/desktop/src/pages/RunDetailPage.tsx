@@ -1325,7 +1325,22 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
         </div>
       )}
 
-      <div style={{ flexShrink: 0, paddingTop: 8, paddingBottom: 8 }}>
+      {/*
+        Capped so a run with many expanded stages cannot squeeze the tabs panel
+        away. A percentage max-height resolves because the frame above has a
+        definite height; no measurement is needed. The collapse chevron stays
+        as the way to hide the strip entirely.
+      */}
+      <div
+        data-testid="run-stepper-strip"
+        style={{
+          flexShrink: 0,
+          maxHeight: 'clamp(140px, 38%, 460px)',
+          overflowY: 'auto',
+          paddingTop: 8,
+          paddingBottom: 8,
+        }}
+      >
         <RunStepper
           // Remounting on a different run is what resets the stages' follow-the-run latch.
           key={effectiveRunId ?? jobId}

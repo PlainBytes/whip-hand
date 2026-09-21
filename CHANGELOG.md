@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### The run's step strip is smaller and stays put
+
+- On a run with several stages, each stage now collapses to a single line showing its step count, elapsed time and
+  spend, and opens on click. The stage that is running stays open by itself and follows the run along, until you
+  open or close one yourself.
+- The strip has a height limit: with many stages open it scrolls instead of pushing the Terminal, Artifacts and Logs
+  panel off the screen. The chevron still hides it completely.
+- Resizing the window no longer rearranges the strip. Steps that do not fit scroll sideways instead of wrapping onto
+  new rows.
+
 ### Doctor says when an installed tool is not logged in, or not set up
 
 - `whiphand doctor` and the desktop's Doctor page add a note under `claude`, `copilot`, `opencode` and `gh` when the

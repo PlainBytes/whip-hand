@@ -158,7 +158,9 @@ The tab carries **output only**. Which step is running, how long it has been goi
 phase it is in and what it has spent are facts *about* a step, so they live on that step's
 pill in the stepper above — as does whether it is waiting on you. The rule is that no fact
 on this screen is stated in two places: a status line over the feed repeated the pill's
-clock and the feed's own last line, and read as a hang whenever the two disagreed.
+clock and the feed's own last line, and read as a hang whenever the two disagreed. The rule
+is per scope: a pill owns one step's facts, and a stage row owns the rollup over its stage
+(step count, elapsed time, spend), and neither restates the other.
 
 ## The interactive handoff
 
@@ -1157,6 +1159,25 @@ rows, or notifications. One workspace is active at a time — there are no works
 no second window — but the Activity page, sidebar job badges, and notifications all carry
 cross-workspace *awareness*, and pinning plus Ctrl+K make switching cheap enough that
 simultaneity is rarely what was actually wanted.
+
+**The run's step strip.** The strip above the tabs on the run screen follows five rules, so
+that a run with many stages fits on screen and looks the same at any window size:
+
+- **Nothing in it wraps.** A row of step pills scrolls sideways instead, so the layout does
+  not depend on window width.
+- **The top level stacks into bands.** Consecutive ordinary steps share a band; a `stages`
+  step takes a full-width block of its own between bands.
+- **Each stage is one collapsible row.** Closed, a stage is a single line carrying its
+  rollup; open, it shows its steps. A stage starts open only if it holds the focused step,
+  is running, or has failed.
+- **The strip is capped and scrolls.** It is limited to a clamp of the frame's height
+  (`clamp(140px, 38%, 460px)`), so expanded stages cannot squeeze the tabs panel away. The
+  cap is CSS, not a measurement: the page's `<main>` is its only scroller and the run frame
+  fills it, so the percentage resolves with no JavaScript. The collapse chevron remains the
+  way to hide the strip entirely.
+- **The open stage follows the run until the reader touches it.** The first explicit open
+  or close latches the following off for that run, and from then on stages neither fold nor
+  steal focus as the run moves on. Reopening a run starts following again.
 
 ## Out of scope
 

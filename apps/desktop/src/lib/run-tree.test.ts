@@ -1,14 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildRunTree, flattenNodes, type LoopNode, type StagesNode, type StepNode } from './run-tree.ts';
-import { executionKey, type StepState } from '../state/store.ts';
-
-function step(partial: Partial<StepState> & { id: string }): StepState {
-  return {
-    key: executionKey(partial.id, partial.iteration, partial.outerLoops, partial.stage),
-    status: 'pending',
-    ...partial,
-  } as StepState;
-}
+import type { StepState } from '../state/store.ts';
+import { step } from '../test/step-fixture.ts';
 
 /** The shape of feature-development.yaml: a step, a loop of two, an approval. */
 function planned(): StepState[] {

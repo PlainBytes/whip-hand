@@ -270,6 +270,22 @@ describe('RunDetailPage', () => {
     expect(screen.queryByRole('button', { name: /cancel run/i })).not.toBeInTheDocument();
   });
 
+  it('scrolls the current step into view on both axes, since a stage\'s pills scroll sideways', async () => {
+    // jsdom has no scrollIntoView; give elements one for this case only.
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { value: scrollIntoView, configurable: true, writable: true });
+    try {
+      const { transport } = renderRunDetail('job-1');
+      emitWhiphandEvent(transport, 'job-1', 'run-1', { type: 'step:start', stepId: 'review', kind: 'agent', runner: 'claude', model: 'opus', mode: 'headless' }, 't1');
+
+      const pill = await screen.findByTestId('step-card-review');
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' }));
+      expect(scrollIntoView.mock.contexts.some(el => (el as HTMLElement).contains(pill) || el === pill)).toBe(true);
+    } finally {
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
   it('marks a step failed on non-zero exit and shows a fail verdict badge', async () => {
     const { transport } = renderRunDetail('job-3');
 
@@ -1042,6 +1058,8 @@ describe('RunDetailPage', () => {
 
     expect(await screen.findByTestId('step-card-implement@02-b#1')).toHaveAttribute('data-current', 'true');
     expect(screen.getByTestId('step-card-build')).not.toHaveAttribute('data-current');
+    // The finished stage is collapsed until opened.
+    fireEvent.click(screen.getByTestId('stage-toggle-build@01-a'));
     expect(screen.getByTestId('step-card-implement@01-a#1')).not.toHaveAttribute('data-current');
   });
 
@@ -1480,6 +1498,14 @@ describe('RunDetailPage: cycles and manual steps', () => {
 
     const frame = await screen.findByTestId('run-detail-frame');
     expect(frame).toHaveStyle({ height: '100%', flexDirection: 'column' });
+  });
+
+  it('caps the stepper strip and scrolls it, so expanded stages cannot squeeze the tabs', async () => {
+    renderRunDetail('job-strip-cap');
+
+    // jsdom does not compute the clamp; this compares the inline string, which is all the guard needs.
+    const strip = await screen.findByTestId('run-stepper-strip');
+    expect(strip).toHaveStyle({ maxHeight: 'clamp(140px, 38%, 460px)', overflowY: 'auto' });
   });
 
   it('collapses the stepper strip and brings it back', async () => {

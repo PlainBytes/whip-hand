@@ -481,7 +481,10 @@ test('doctor reports one entry per built-in tool (shape only)', async () => {
   const agent = startAgent();
   try {
     agent.send({ id: 1, method: 'doctor', params: {} });
-    const res = await agent.waitFor(m => m.id === 1);
+    // Probes run in parallel, but a row's check (gh auth token) follows its own
+    // probe, each bounded by PROBE_TIMEOUT_MS: a slow machine legitimately
+    // outlasts waitFor's 5s default. Under --test-timeout, so its stderr still shows.
+    const res = await agent.waitFor(m => m.id === 1, 20_000);
     assert.ok(Array.isArray(res.result));
     // The registered harnesses, then the support built-ins, then this machine's own facts (the
     // POSIX shell, and on Windows the git launcher and token-file gaps) — the same rows the CLI's

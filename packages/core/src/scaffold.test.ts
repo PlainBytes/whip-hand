@@ -13,7 +13,7 @@ import { resolveShell } from './shell.ts';
 import type { CommandStep, RunCtx } from './types.ts';
 import {
   createWorkflow, deleteWorkflow, cloneWorkflow, initWorkspace, workflowTemplate, specDrivenTemplate, featureDevelopmentTemplate,
-  stagedFeatureDevelopmentTemplate, updateWorkflow,
+  stagedFeatureDevelopmentTemplate, researchTemplate, updateWorkflow,
 } from './scaffold.ts';
 import { parseWorkflow, validateWorkflowWarnings, validateWorkflowSemantics, WorkflowError } from './schema.ts';
 import { loadWorkspaceConfig } from './config.ts';
@@ -416,6 +416,128 @@ test('the staged execute prompt says the workflow, not the implementer, commits'
 });
 
 /**
+ * The research workflow answers a question; it builds nothing. Its shape is what
+ * keeps that true: the framing is a read-only chat, both headless steps are
+ * read-only, the check's verdict ends the inner loop, and the human's read of
+ * the report ends the outer one, so a rejection reaches `research` as feedback.
+ * Its steps read `frame`, the step id that writes `brief.md`.
+ */
+test('researchTemplate frames a question, researches and checks it in a loop, and gates the report on a human read', () => {
+  const wf = parseWorkflow(researchTemplate());
+  assert.equal(wf.name, 'research');
+  assert.deepEqual(validateWorkflowSemantics(wf), []);
+  // The one warning is deliberate: `read` shows a report, not a diff, so its
+  // review capture takes an overall comment only.
+  assert.deepEqual(validateWorkflowWarnings(wf), [
+    "step 'read': capture 'review' without 'show_diff: true' has no files to comment on, so it only takes an overall comment",
+  ]);
+
+  const question = wf.inputs?.question;
+  assert.equal(question?.required, true);
+  assert.equal(question?.multiline, true);
+  assert.equal(question?.prompt, 'What do you want to find out?');
+  assert.deepEqual(Object.keys(wf.inputs ?? {}), ['question'], 'no test_command: nothing here is built');
+
+  assert.deepEqual(wf.steps.map(s => s.id), ['frame', 'human-review']);
+  const frame = wf.steps[0];
+  assert.ok(frame?.kind === 'agent');
+  assert.equal(frame.mode, 'interactive');
+  assert.equal(frame.writes, false);
+  assert.equal(frame.model, 'opus');
+  assert.equal(frame.output, 'brief.md');
+
+  const humanReview = wf.steps[1];
+  assert.ok(humanReview?.kind === 'loop');
+  assert.equal(humanReview.until, 'read');
+  assert.deepEqual(humanReview.steps.map(s => s.id), ['investigate', 'read']);
+  const investigate = humanReview.steps[0];
+  assert.ok(investigate?.kind === 'loop');
+  assert.equal(investigate.until, 'check');
+  assert.equal(investigate.max_iterations, 3);
+  assert.deepEqual(investigate.steps.map(s => s.id), ['research', 'check']);
+
+  const [research, check] = investigate.steps;
+  assert.ok(research?.kind === 'agent');
+  assert.equal(research.mode, 'headless');
+  assert.equal(research.writes, false);
+  assert.equal(research.output, 'report.md');
+  assert.ok(research.inputs?.includes('frame'), 'research reads the brief');
+  assert.ok(research.inputs?.includes('check'), "research reads the previous iteration's findings");
+  assert.ok(research.inputs?.includes('read'), "research reads the human's feedback from the previous round");
+
+  assert.ok(check?.kind === 'agent');
+  assert.equal(check.mode, 'headless');
+  assert.equal(check.writes, false);
+  assert.equal(check.verdict, true);
+  assert.ok(check.inputs?.includes('frame'), 'check reads the brief');
+  assert.ok(check.inputs?.includes('research'), 'check reads the report');
+  assert.ok(check.inputs?.includes('read'), 'check reads the human feedback, to enforce it');
+
+  const read = humanReview.steps[1];
+  assert.ok(read?.kind === 'approval');
+  assert.equal(read.verdict, true);
+  assert.equal(read.capture, 'review');
+  assert.ok(read.inputs?.includes('research'), 'the human is shown the report');
+  assert.ok(read.output !== undefined, 'read writes the feedback research reads back');
+  assert.notEqual(read.show_diff, true, 'a read-only workflow has no diff to show');
+});
+
+/**
+ * The research prompts are the whole mechanism, so they are pinned — in the
+ * shipped template and in the repo's own copy, which must be the same bytes.
+ */
+test('the research prompts carry the brief, the report contract and the check criteria', async () => {
+  const template = researchTemplate();
+  const local = await readFile(new URL('../../../.whiphand/workflows/research.yaml', import.meta.url), 'utf8');
+  assert.equal(local, template, 'the local research.yaml is the template, byte for byte');
+
+  const wf = parseWorkflow(template);
+  const flat = (prompt: string | undefined): string => (prompt ?? '').replace(/\s+/g, ' ');
+  const frame = findStep(wf.steps, 'frame');
+  const research = findStep(wf.steps, 'research');
+  const check = findStep(wf.steps, 'check');
+  if (frame?.kind !== 'agent' || research?.kind !== 'agent' || check?.kind !== 'agent') {
+    return assert.fail('frame, research and check are agent steps');
+  }
+
+  const framing = flat(frame.prompt);
+  assert.match(framing, /Before exploring, ask me whether there are files or docs you should read first\./);
+  assert.match(framing, /The artifact you write is the agreed brief as it now stands, not a transcript of our conversation\./);
+  assert.match(framing, /the precise question or questions/);
+  assert.match(framing, /what is in scope and what is out/);
+  assert.match(framing, /which sources count \(code in this repo, docs, the web\)/);
+  assert.match(framing, /what the answer must contain to be useful/);
+  assert.match(framing, /Do not modify files/);
+  assert.ok(frame.inputs?.includes('attachments'), 'the files the human hands over reach the framing chat');
+
+  const report = flat(research.prompt);
+  const rawReport = research.prompt ?? '';
+  assert.deepEqual(
+    rawReport.split('\n').filter((line) => line.startsWith('## ')),
+    ['## Answer', '## Evidence', '## Confidence and gaps', '## Open questions'],
+    'the report has exactly these sections, in this order',
+  );
+  assert.match(report, /No claim without a source\./);
+  assert.match(report, /a `file:line` or a URL/);
+  assert.match(report, /use web search or fetch tools if you have them/);
+  assert.match(report, /Change nothing in the repository\./);
+  assert.match(report, /If check findings or read feedback are attached, address every point/);
+
+  const checking = flat(check.prompt);
+  assert.match(checking, /Walk the brief question by question and state for each whether the report answers it\./);
+  assert.match(checking, /If read feedback is attached, FAIL unless every requested change is addressed\./);
+  for (const failure of [
+    '- the report does not answer a question in the brief',
+    '- a claim in the report has no source',
+    '- a source you spot-check does not say what the report claims',
+  ]) {
+    assert.ok(checking.includes(failure), `the check prompt fails the report when '${failure}'`);
+  }
+  assert.match(checking, /Spot-check by opening at least three of the report's sources/);
+  assert.match(checking, /Change nothing in the repository\./);
+});
+
+/**
  * A command step's real spec — argv, env and all, exactly what a run would
  * spawn — executed through the resolved POSIX shell. Templates are identical
  * bytes on every platform now, so these run on the Windows leg too (where Git's
@@ -553,7 +675,8 @@ test('initWorkspace creates config + starter workflows once, then is a no-op', a
     join('.whiphand', 'workflows', 'feature.yaml'),
     join('.whiphand', 'workflows', 'spec-driven.yaml'),
     join('.whiphand', 'workflows', 'staged-feature-development.yaml'),
-  ]);
+    join('.whiphand', 'workflows', 'research.yaml'),
+  ].sort());
   await loadWorkspaceConfig(ws); // parses
   const second = await initWorkspace(ws);
   assert.deepEqual(second.created, []);

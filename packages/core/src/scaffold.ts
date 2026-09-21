@@ -790,6 +790,135 @@ steps:
 `;
 }
 
+/**
+ * The fifth workflow `whiphand init` ships: a research workflow, not a build.
+ * It settles the question with the human, has a headless agent investigate and
+ * write a sourced report, has a second agent check that report against the
+ * brief and spot-check its sources, then puts the report in front of the human
+ * to accept or send round again. Nothing in it writes to the repository, so it
+ * has no branch, no test command and no commit. Fixed content, unlike
+ * `workflowTemplate` — `whiphand new-workflow` does not offer this shape.
+ * Exported only so scaffold.test.ts can parse it directly, and so its
+ * byte-identical dogfood copy at `.whiphand/workflows/research.yaml` can be
+ * generated from the same source rather than kept in sync by hand.
+ *
+ * The loops follow the other templates: an outer loop, `until: read`, wraps
+ * the inner research/check cycle and the human gate. `read` has no `show_diff`
+ * — there is no diff to show — so `validateWorkflowWarnings` says its
+ * `capture: review` only takes an overall comment, which is all a report needs.
+ * Web access is whatever the runner's tools give it; the prompt only says to
+ * use them if there are any.
+ */
+export function researchTemplate(): string {
+  return `# research — settle the question with you, investigate and check the findings
+# in a cycle until the check passes, then a human read that can send the report
+# back for another round. Reference: docs/design.md
+name: research
+description: Settle a question with a human, then research and check it in a cycle until the report holds up.
+inputs:
+  question:
+    required: true
+    multiline: true
+    prompt: What do you want to find out?
+steps:
+  - id: frame         # live terminal chat; artifact harvested afterwards
+    runner: claude
+    model: opus
+    mode: interactive
+    writes: false
+    inputs: [attachments]
+    output: brief.md
+    prompt: |
+      We are framing a research question: {{ inputs.question }}
+      Before exploring, ask me whether there are files or docs you should read first.
+      Work with me until the brief is settled: the precise question or questions, what is
+      in scope and what is out, which sources count (code in this repo, docs, the web),
+      and what the answer must contain to be useful to me. One question at a time. Do not
+      modify files, and do not start the research itself.
+      The artifact you write is the agreed brief as it now stands, not a transcript of our
+      conversation.
+
+  # Repeats until 'read' is approved. Requesting changes there attaches fresh
+  # feedback ('read' as a forward reference) and sends investigate round
+  # again — delete this whole loop, keeping investigate at the top level, to
+  # let the workflow run unattended instead.
+  - id: human-review
+    kind: loop
+    until: read
+    max_iterations: 5
+    steps:
+      - id: investigate   # repeats its body until 'check' returns VERDICT: PASS
+        kind: loop
+        until: check
+        max_iterations: 3
+        steps:
+          - id: research    # headless, read-only; the artifact is the report
+            runner: claude
+            model: opus
+            mode: headless
+            writes: false
+            # 'check' is later in THIS loop, so it means the PREVIOUS iteration's
+            # findings; 'read' is a later sibling of the OUTER loop, so it means
+            # the previous ROUND's feedback — both are simply skipped, on the
+            # first pass of each, when there is nothing yet to read.
+            inputs: [frame, check, read]
+            output: report.md
+            prompt: |
+              Investigate the attached brief and answer it. Read the code and docs it names,
+              and use web search or fetch tools if you have them and the brief lets the web
+              count as a source. Change nothing in the repository.
+              If check findings or read feedback are attached, address every point: fix what
+              was wrong, source what was unsourced, and say so in the report.
+              No claim without a source. A source is a file and line, or a URL, that you
+              opened and that says what you claim. Do not cite from memory, and do not
+              cite a source you did not open.
+              Your report, the artifact, has these sections under exactly these headings:
+              ## Answer
+              Short and direct: answer each of the brief's questions, in the brief's order.
+              ## Evidence
+              Each claim, with its source: a \`file:line\` or a URL.
+              ## Confidence and gaps
+              How sure you are of each part of the answer, and what you could not find or
+              verify, with the reason.
+              ## Open questions
+              What the evidence leaves unsettled, or raises and the brief did not ask.
+          - id: check       # headless, read-only, must end with VERDICT: PASS|FAIL
+            runner: claude
+            model: opus
+            mode: headless
+            writes: false
+            verdict: true
+            inputs: [frame, research, read]
+            output: check.md
+            prompt: |
+              Check the attached report against the attached brief. Change nothing in the
+              repository. Walk the brief question by question and state for each whether the
+              report answers it. If read feedback is attached, FAIL unless every requested
+              change is addressed. FAIL if any of these hold:
+              - the report does not answer a question in the brief
+              - a claim in the report has no source
+              - a source you spot-check does not say what the report claims
+              - a required section is missing, or is not under its exact heading
+              Spot-check by opening at least three of the report's sources, choosing the ones
+              the answer leans on most, and say which you opened and what you found. If it
+              cites fewer than three, open them all. A source you cannot open counts as one
+              that does not say what is claimed.
+              List every problem you found, so the next round can fix all of them at once.
+              Gaps and open questions the report states honestly are not failures.
+
+      # A human gate. Its answer becomes the 'read' both steps above read:
+      # approving exits both loops, requesting changes sends investigate round again.
+      - id: read
+        kind: approval
+        verdict: true
+        title: Accept this report?
+        instructions: Read the report. Approve it, or request changes with a comment saying what to look into or fix.
+        capture: review
+        inputs: [research]
+        output: feedback.md
+`;
+}
+
 /** Where a scoped workflow file lives — a global write `mkdir -p`s its directory on demand, same as project. */
 function workflowsDir(workdir: string, scope: Scope): string {
   return scope === 'global' ? globalWorkflowsDir() : join(workdir, '.whiphand', 'workflows');
@@ -908,6 +1037,7 @@ export async function initWorkspace(workdir: string): Promise<{ created: string[
     ['feature-development', featureDevelopmentTemplate()],
     ['spec-driven', specDrivenTemplate()],
     ['staged-feature-development', stagedFeatureDevelopmentTemplate()],
+    ['research', researchTemplate()],
   ];
   for (const [name, content] of shipped) {
     const rel = join('.whiphand', 'workflows', `${name}.yaml`);

@@ -985,6 +985,48 @@ though round 1's stays on disk under its own round directory (see "Nested loops"
 `human-review` can itself run out of rounds after enough `retry`s, the same as any other
 loop — it stays resumable, and a resume grants one more round by default.
 
+### The research workflow
+
+`whiphand init` also ships `research`, which answers a question instead of building anything, so
+it has no branch, no `test_command` and no commit. It is the same two-loop pattern with a report
+where the diff would be:
+
+```yaml
+- id: frame                # interactive, read-only: settle the brief with the human
+  output: brief.md
+- id: human-review
+  kind: loop
+  until: read
+  steps:
+    - id: investigate
+      kind: loop
+      until: check
+      max_iterations: 3
+      steps:
+        - id: research     # headless, read-only: writes report.md
+          inputs: [frame, check, read]
+        - id: check        # headless, read-only, verdict: true
+          inputs: [frame, research, read]
+    - id: read             # approval, capture: review, shows the report
+      verdict: true
+      inputs: [research]
+```
+
+`frame` opens by asking for files or docs to read first, then settles the precise question, what
+is in and out of scope, which sources count, and what the answer must contain. Its artifact is
+`brief.md`. `research` writes `report.md` with four sections — `## Answer`, `## Evidence` (each
+claim tied to a `file:line` or a URL), `## Confidence and gaps` and `## Open questions` — and may
+make no claim without a source. Web access is whatever tools the runner gives the step; the
+prompt only says to use them if there are any. `check` fails the report when it does not answer
+the brief's questions, when a claim has no source, or when a source it spot-checks does not say
+what the report claims, and sends `research` round again with its findings. `read` shows the
+report; approving ends the run, and requesting changes sends `investigate` round again with the
+comment attached to both `research` and `check`.
+
+`read` has no `show_diff`, since nothing in the working tree changes, so `capture: review` takes
+an overall comment and no per-file ones, and `validateWorkflowWarnings` says so. That is the
+intended shape here, not a mistake to fix.
+
 ### The desktop's review screen
 
 The run is *blocked* at this point, so the decision gets the whole page rather than a card

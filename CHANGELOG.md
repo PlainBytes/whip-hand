@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### A real `research` workflow
+
+- `whiphand init` now ships `research`, which answers a question instead of building something. You settle the
+  question with the agent in a live chat first (the precise questions, what is in and out of scope, which sources
+  count, what the answer must contain). A headless agent then writes a report with an answer, evidence, confidence
+  and gaps, and open questions, tying every claim to a `file:line` or a URL. A second agent checks the report
+  against your question and spot-checks its sources, and the two go round up to three times until the check passes.
+  You then read the report and either accept it or send it round again with a comment.
+- It replaces the old `research.yaml` stub in this repo, which asked "What are we building?" and ran only a plan.
+  An existing `.whiphand/workflows/research.yaml` in your own project is left alone; delete it and run `whiphand init` to get
+  the new one. It has no test command and never changes your files. Web access depends on the tools your runner has.
+- Running it prints a warning that the `read` step's review has no diff to comment on. That is expected here.
+
 ### An agent step that commits now fails the run
 
 - A workflow's agents are told not to commit, and in one run four of five stages were committed by the executor

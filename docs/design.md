@@ -304,6 +304,21 @@ the model not to edit files is a request, not a control:
    what changed. This is the same idea as Archon's `mutates_checkout` field (see "Background"
    above), implemented independently rather than adopted wholesale.
 
+**HEAD is guarded the same way, for every agent step.** Layer 2 only sees the working tree, and
+an agent that commits leaves the tree clean: the reviewers after it then review "the commit"
+rather than the working tree, and the commit-message step finds an empty index. Prompt wording
+alone did not stop it (in one run 4 of 5 stages were committed by the executor itself), so the
+engine also records `git rev-parse HEAD` before each agent step and compares it after the step
+— after the harvest, for an interactive one, where the tree check runs. If HEAD moved, the step
+fails, naming the step and both commits. `allow_commits: true` on an agent step opts out, for
+an agent that is meant to commit; the workflow's own `command` steps are never checked, because
+committing is what they are for. Nothing is reverted: the failure is loud and the human decides.
+A repository with no commits yet counts (its first commit is a move from "no commits"); a
+workspace that is not a repository is skipped silently, and git failing where the tree guard's
+snapshot worked is a `run:degraded` `git-guard` record, as everywhere else. Each step compares
+against HEAD *as it began*, so a resumed run never trips over a commit the interrupted attempt
+made — that commit is the human's to have noticed.
+
 Layer 2 exists precisely because layer 1 can be bypassed by a model that ignores its tool
 policy, or by a future adapter whose `toolDenial` capability turns out to be unreliable —
 and, for opencode specifically, because a permission quirk on any given release could make

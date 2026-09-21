@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### An agent step that commits now fails the run
+
+- A workflow's agents are told not to commit, and in one run four of five stages were committed by the executor
+  anyway — so the reviewers looked at "the commit" instead of the working tree, and the commit-message step found
+  nothing staged. whiphand now compares `HEAD` before and after every agent step and fails the step if it moved,
+  naming the step and both commits. Nothing is reverted; you decide what to do with the commit.
+- `allow_commits: true` on an agent step lets that one step commit (it is a switch on the step in the workflow editor
+  too). `command` steps are never checked. It is an error on any other kind of step. The shipped workflows need no
+  change.
+
 ### The run's step strip is smaller and stays put
 
 - On a run with several stages, each stage now collapses to a single line showing its step count, elapsed time and

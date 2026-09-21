@@ -309,6 +309,46 @@ test('names a field that belongs to another kind, instead of silently dropping i
     `expected a foreign-field error, got: ${foreign.join(' | ')}`);
 });
 
+test('allow_commits is an agent field: parsed there, an error naming the kind on anything else', () => {
+  const agent = (extra: string) => `
+name: w
+steps:
+  - id: a
+    runner: claude
+    mode: headless
+    writes: true
+    prompt: p
+    output: a.md${extra}
+`;
+  const on = parseWorkflow(agent('\n    allow_commits: true')).steps[0];
+  assert.equal(on.kind === 'agent' && on.allow_commits, true);
+  const off = parseWorkflow(agent('')).steps[0];
+  assert.equal(off.kind === 'agent' && off.allow_commits, undefined, 'unset stays unset — no default is serialised');
+  assert.throws(() => parseWorkflow(agent('\n    allow_commits: yes please')));
+
+  const onCommand = problemsOf(`
+name: w
+steps:
+  - kind: command
+    id: c
+    run: git commit -am x
+    allow_commits: true
+`);
+  assert.ok(onCommand.some(p => p.includes("kind 'command' has no 'allow_commits' field (it belongs to kind 'agent')")),
+    `expected a foreign-field error, got: ${onCommand.join(' | ')}`);
+  const onApproval = problemsOf(`
+name: w
+steps:
+  - kind: approval
+    id: ok
+    title: Ship it?
+    instructions: Look.
+    allow_commits: true
+`);
+  assert.ok(onApproval.some(p => p.includes("kind 'approval' has no 'allow_commits' field")),
+    `expected a foreign-field error, got: ${onApproval.join(' | ')}`);
+});
+
 test('rejects enabled on the workflow root — it belongs on a step, not the workflow', () => {
   const y = `name: x\nenabled: false\nsteps:\n  - id: a\n    prompt: hi\n    output: a.md\n    writes: false\n    mode: headless\n    runner: claude\n`;
   const problems = problemsOf(y);

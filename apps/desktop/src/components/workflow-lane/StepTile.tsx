@@ -51,6 +51,7 @@ function StepPopoverContent({ step, dataFlowEntry }: { step: LeafStep; dataFlowE
     if (step.effort) rows.push({ label: 'Effort', value: step.effort });
     if (step.allow_paths?.length) rows.push({ label: 'Allowed paths', value: step.allow_paths.join(', ') });
     rows.push({ label: 'Edits files', value: step.writes ? 'yes' : 'no' });
+    if (step.allow_commits) rows.push({ label: 'Commits', value: 'allowed' });
   } else if (isManualStep(step)) {
     rows.push({ label: 'Instructions', value: step.instructions });
     if (step.capture) rows.push({ label: 'Capture', value: step.capture });

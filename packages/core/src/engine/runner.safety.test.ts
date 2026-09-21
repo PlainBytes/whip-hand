@@ -182,3 +182,175 @@ test('a degradation the caller opened the workspace with is recorded on the run 
   assert.equal(result.ok, true);
   assert.ok(h.events.some(e => e.type === 'run:degraded' && e.capability === 'workspace-identity' && e.reason === reason));
 });
+
+// ---------------------------------------------------------------------------
+// HEAD guard: an agent step that moves HEAD fails unless it opted in.
+// ---------------------------------------------------------------------------
+
+/** What an agent that commits does: writes a file and commits just that file, so the tree is clean again. */
+async function commitFile(dir: string, name: string): Promise<void> {
+  await writeFile(join(dir, name), 'made by a step\n');
+  await git(dir, 'add', name);
+  await git(dir, '-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', 'commit', '-m', name);
+}
+
+/**
+ * The fake runner's headless spawns (and, via `runInteractive`, its interactive
+ * session) commit a file when `commits` says so; a command step's spawn — no
+ * `fake` argv — always does, since a command step is the workflow committing.
+ */
+function committingHarness(dir: string, commits: (stepId: string) => boolean) {
+  const h = harness(fakeRunner());
+  const spawnHeadless = async (spec: SpawnSpec): Promise<number> => {
+    if (spec.argv[0] !== 'fake') { await commitFile(dir, 'from-command.txt'); return 0; }
+    if (spec.argv[1] === 'headless' && commits(spec.argv[2])) await commitFile(dir, `${spec.argv[2]}.txt`);
+    return h.spawnHeadless(spec);
+  };
+  const frontend: Frontend = {
+    ...h.frontend,
+    runInteractive: async spec => {
+      if (commits(spec.argv[2])) await commitFile(dir, `${spec.argv[2]}.txt`);
+      return 0;
+    },
+  };
+  return { ...h, spawnHeadless, frontend };
+}
+
+const agentWorkflow = (extra = '', mode = 'headless') => parseWorkflow(`
+name: head-guard
+steps:
+  - id: work
+    runner: fake
+    mode: ${mode}
+    writes: true${extra}
+    prompt: Do it
+    output: work.md
+`);
+
+const runIn = (dir: string, workflow: ReturnType<typeof parseWorkflow>, h: ReturnType<typeof committingHarness>) =>
+  runWorkflow({
+    workflow, workdir: dir, inputs: {}, config: DEFAULT_CONFIG,
+    registry: h.registry, frontend: h.frontend, spawnHeadless: h.spawnHeadless,
+  });
+
+const errorOf = (h: { events: WhiphandEvent[] }) => {
+  const error = h.events.find(e => e.type === 'run:error');
+  assert.ok(error && error.type === 'run:error', 'the run recorded a run:error');
+  return error;
+};
+
+test('an agent step that commits FAILS, naming the step, both commits and the way out', async () => {
+  const dir = await repoWithPlans();
+  const before = (await git(dir, 'rev-parse', 'HEAD')).stdout.trim();
+  const h = committingHarness(dir, () => true);
+  const result = await runIn(dir, agentWorkflow(), h);
+  const after = (await git(dir, 'rev-parse', 'HEAD')).stdout.trim();
+  assert.notEqual(after, before, 'the fake agent really did commit');
+  assert.equal(result.ok, false);
+  const error = errorOf(h);
+  assert.equal(error.stepId, 'work');
+  assert.ok(error.message.includes(`step 'work' moved HEAD from ${before.slice(0, 12)} to ${after.slice(0, 12)}`), error.message);
+  assert.match(error.message, /the workflow commits/);
+  assert.match(error.message, /set `allow_commits: true` on the step/);
+});
+
+test('a read-only step that commits fails too — its clean tree afterwards is exactly what hid the commit', async () => {
+  const dir = await repoWithPlans();
+  const h = committingHarness(dir, () => true);
+  const result = await runIn(dir, parseWorkflow(`
+name: read-only
+steps:
+  - id: look
+    runner: fake
+    mode: headless
+    writes: false
+    prompt: Look
+    output: look.md
+`), h);
+  assert.equal(result.ok, false);
+  assert.match(errorOf(h).message, /step 'look' moved HEAD from/);
+});
+
+test('an interactive step that commits fails after the session, at the same place the tree guard looks', async () => {
+  const dir = await repoWithPlans();
+  const h = committingHarness(dir, () => true);
+  const result = await runIn(dir, agentWorkflow('', 'interactive'), h);
+  assert.equal(result.ok, false);
+  assert.match(errorOf(h).message, /step 'work' moved HEAD from/);
+});
+
+test('allow_commits: true lets the step commit', async () => {
+  const dir = await repoWithPlans();
+  const h = committingHarness(dir, () => true);
+  const result = await runIn(dir, agentWorkflow('\n    allow_commits: true'), h);
+  assert.equal(result.ok, true, JSON.stringify(h.events.find(e => e.type === 'run:error')));
+  assert.equal(h.events.some(e => e.type === 'run:degraded'), false);
+});
+
+test('an agent step that does not commit is unaffected', async () => {
+  const dir = await repoWithPlans();
+  const h = committingHarness(dir, () => false);
+  const result = await runIn(dir, agentWorkflow(), h);
+  assert.equal(result.ok, true);
+});
+
+test('a command step that commits still passes — the workflow is allowed to commit', async () => {
+  const dir = await repoWithPlans();
+  const before = (await git(dir, 'rev-parse', 'HEAD')).stdout.trim();
+  const h = committingHarness(dir, () => false);
+  const result = await runIn(dir, parseWorkflow(`
+name: commit-step
+steps:
+  - kind: command
+    id: commit
+    run: exit 0
+`), h);
+  assert.equal(result.ok, true, JSON.stringify(h.events.find(e => e.type === 'run:error')));
+  assert.notEqual((await git(dir, 'rev-parse', 'HEAD')).stdout.trim(), before, 'the command step really did commit');
+});
+
+test('the first commit into a repository with no commits yet is seen too', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'whiphand-unborn-'));
+  tmpDirs.push(dir);
+  await git(dir, 'init', '-b', 'main');
+  const h = committingHarness(dir, () => true);
+  const result = await runIn(dir, agentWorkflow(), h);
+  assert.equal(result.ok, false);
+  assert.match(errorOf(h).message, /step 'work' moved HEAD from \(no commits\) to [0-9a-f]{12};/);
+});
+
+test('a workspace that is not a repository is unaffected, and the HEAD guard says nothing about it', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'whiphand-nogit-'));
+  tmpDirs.push(dir);
+  const h = harness(fakeRunner());
+  const result = await runWorkflow({
+    workflow: agentWorkflow(), workdir: dir, inputs: {}, config: DEFAULT_CONFIG,
+    registry: h.registry, frontend: h.frontend, spawnHeadless: h.spawnHeadless,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(h.events.some(e => e.type === 'run:degraded'), false, 'a writes: true step in a plain folder raises nothing');
+  assert.equal(h.events.some(e => e.type === 'guard:warning'), false);
+});
+
+test('each step is compared against HEAD as it began: a second step that does not commit passes after a first that was allowed to', async () => {
+  const dir = await repoWithPlans();
+  const h = committingHarness(dir, id => id === 'first');
+  const result = await runIn(dir, parseWorkflow(`
+name: two
+steps:
+  - id: first
+    runner: fake
+    mode: headless
+    writes: true
+    allow_commits: true
+    prompt: one
+    output: first.md
+  - id: second
+    runner: fake
+    mode: headless
+    writes: true
+    prompt: two
+    output: second.md
+`), h);
+  assert.equal(result.ok, true, JSON.stringify(h.events.find(e => e.type === 'run:error')));
+});

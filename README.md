@@ -37,7 +37,7 @@ Workflows live in `.whiphand/workflows/<name>.yaml` (so `whiphand run feature` w
 path. Artifacts land in `.whiphand/runs/<run-id>/` as plain markdown. Workspace defaults live in
 `.whiphand/config.yaml`.
 
-`whiphand init` ships five starter workflows. Four of them build something, and every one of those
+`whiphand init` ships six starter workflows. Five of them build something, and every one of those
 ends the same way: a human sign-off that can send the work back with comments for another cycle,
 not just ship it or kill it. `feature` plans once, interactively, then implements and reviews in a
 cycle until the sign-off approves it — pick it when the shape of the change is already clear.
@@ -45,7 +45,11 @@ cycle until the sign-off approves it — pick it when the shape of the change is
 before any code is written, before its own implement/review/sign-off cycle. `feature-development`
 does the same as `feature` but on its own branch — it syncs your trunk, cuts `feature/<run slug>`,
 and commits the signed-off work with a message it writes from the diff. `staged-feature-development`
-cuts the plan into stages and builds, reviews, accepts and commits them one at a time.
+cuts the plan into stages and builds, reviews, accepts and commits them one at a time. `bugfix`
+fixes a bug test-first: it cuts `fix/<run slug>`, settles the root cause, the regression test and
+the command that runs just that test with you, has an agent write only that test, and stops the run
+unless the test fails. Only then does it fix the bug, in the usual test-and-review cycle, so
+"fixed" means a failing test turned green.
 
 `research` builds nothing. You settle the question with the agent in a live chat, then a headless
 agent investigates and writes a report whose every claim carries a `file:line` or a URL, a second

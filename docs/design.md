@@ -1027,6 +1027,79 @@ comment attached to both `research` and `check`.
 an overall comment and no per-file ones, and `validateWorkflowWarnings` says so. That is the
 intended shape here, not a mistake to fix.
 
+### The bugfix workflow
+
+`whiphand init` also ships `bugfix`, which fixes a bug test-first so that "fixed" is evidence and
+not a claim. It is `feature-development` with a diagnosis in place of the plan, and a red gate
+between writing the test and touching any code:
+
+```yaml
+- id: sync-base / branch    # git checkout <base> && pull; then git checkout -b fix/<run slug>
+- id: diagnose              # interactive, read-only, opus: writes diagnosis.md
+- id: reproduce             # headless, writes: the regression test and repro.sh, no fix
+  inputs: [diagnose]
+- id: confirm-red           # command: repro.sh must FAIL, or the run fails
+- id: human-review
+  kind: loop
+  until: sign-off
+  steps:
+    - id: fix-cycle
+      kind: loop
+      until: review
+      max_iterations: 3
+      steps:
+        - id: test-fix
+          kind: loop
+          until: tests
+          steps:
+            - id: execute   # inputs: [diagnose, reproduce, tests, review, sign-off]
+            - id: tests     # command, verdict: ( . repro.sh ) && eval "<test_command>"
+        - id: review        # verdict: root cause, regression test intact, no unrelated change
+    - id: sign-off
+- id: stage / commit-message / commit
+```
+
+`diagnose` opens like every plan step, by asking for files to read first, and asks for logs and
+stack traces too. Its artifact, `diagnosis.md`, has five sections: `## Symptom`, `## Root cause`,
+`## Regression test` (the file, and what it asserts), `## Test command` (one line, just that test)
+and `## Fix outline`. `reproduce` writes only the test. It puts the command that runs it in
+`<run dir>/repro.sh` and reports, under `## How it fails`, the failure it saw and why that is the
+bug's symptom and not a mistake in the test.
+
+**How the command reaches the gate.** The command is diagnosed after the run has started, and
+inputs are all collected before it does (a missing required one is refused up front), so a second
+input `repro_command` has no point at which to be asked. Instead `reproduce` writes the command
+into `repro.sh` in the run folder, and the command steps source it in a subshell, `( . repro.sh )`,
+rather than run `sh repro.sh`. Command steps already run under a POSIX shell on every OS (see
+"Command steps and shell injection"), so the `if`/`$?` around it mean the same on Windows, through
+Git's `sh.exe`, as on Linux. That shell is started by absolute path and is not a login shell, so on
+Windows a second `sh` looked up by name resolves only if the user has Git's `usr\bin` on their
+PATH, and when it does not it exits 127, which the red gate would report as the agent's script
+failing to run the test. Sourcing looks nothing up, and an `exit N` in the script ends only the
+subshell, with N, so the 0 / 126 / 127 / other handling below is unchanged. A script file needs no
+extracting from markdown, no requoting into a `run:` line and no CRLF handling, which reading the
+command out of the diagnosis's `## Test command` section would.
+
+**The red gate.** `confirm-red` runs `repro.sh` and inverts the result by hand. `expect_exit` lists
+the exit codes that count as success, and "any failure" is not a list: runners disagree on what a
+failing test exits with (1, 2, 101), so there is no short list to write. The gate opens on any
+non-zero code except 126 and 127, which mean the test never ran and so prove nothing about the bug.
+A missing `repro.sh` is checked for by name, because sourcing a file that is not there is a
+shell-dependent error, and 2 is a plausible failing-test code. A test that passes fails the run with `the regression test passed,
+so it does not reproduce the bug` in the step's log, before any fix is attempted. The gate cannot
+tell a test that fails for the bug's reason from one that fails for another; that is what
+`reproduce`'s `## How it fails` and the review are for.
+
+**The fix cycle.** The shape is `feature-development`'s. `tests` sources `repro.sh` first, then the
+`test_command`, so the fix is checked against the regression test even when the test command is
+blank or does not pick the new test up, and the suite runs only once that test is green. `execute`
+is told to fix the root cause, to leave the regression test alone (it may strengthen it, never
+weaken, skip or delete it), and to change nothing the fix does not need. `review` fails a fix that
+masks the symptom (a special case for the failing input, a swallowed error, a widened tolerance, a
+retry), a regression test weaker than the diagnosis and the `reproduce` report say it is, and
+changes outside the diagnosis. The test and the fix are one uncommitted diff, so `review` compares
+the test against those two descriptions and not against a snapshot of the test as first written.
+
 ### The desktop's review screen
 
 The run is *blocked* at this point, so the decision gets the whole page rather than a card

@@ -13,7 +13,7 @@ import { resolveShell } from './shell.ts';
 import type { CommandStep, RunCtx } from './types.ts';
 import {
   createWorkflow, deleteWorkflow, cloneWorkflow, initWorkspace, workflowTemplate, specDrivenTemplate, featureDevelopmentTemplate,
-  stagedFeatureDevelopmentTemplate, researchTemplate, updateWorkflow,
+  stagedFeatureDevelopmentTemplate, researchTemplate, bugfixTemplate, updateWorkflow,
 } from './scaffold.ts';
 import { parseWorkflow, validateWorkflowWarnings, validateWorkflowSemantics, WorkflowError } from './schema.ts';
 import { loadWorkspaceConfig } from './config.ts';
@@ -90,6 +90,7 @@ test('every shipped template gives the human sign-off the same send-it-back shap
     [parseWorkflow(workflowTemplate('my-flow')), 'fix-cycle'],
     [parseWorkflow(specDrivenTemplate()), 'build-cycle'],
     [parseWorkflow(featureDevelopmentTemplate()), 'do-review'],
+    [parseWorkflow(bugfixTemplate()), 'fix-cycle'],
   ] as const) {
     assertHumanReviewShape(workflow, innerLoopId);
     assert.deepEqual(validateWorkflowWarnings(workflow), []);
@@ -204,6 +205,7 @@ test('every shipped template tells its implementer to leave the work uncommitted
     ['feature-development', featureDevelopmentTemplate()],
     ['spec-driven', specDrivenTemplate()],
     ['staged-feature-development', stagedFeatureDevelopmentTemplate()],
+    ['bugfix', bugfixTemplate()],
   ];
   for (const [name, source] of shipped) {
     const wf = parseWorkflow(source);
@@ -235,8 +237,9 @@ test('every shipped and local workflow gives execute a report contract and revie
     ['template feature-development', featureDevelopmentTemplate()],
     ['template spec-driven', specDrivenTemplate()],
     ['template staged-feature-development', stagedFeatureDevelopmentTemplate()],
+    ['template bugfix', bugfixTemplate()],
   ];
-  for (const name of ['feature', 'feature-development', 'spec-driven', 'staged-feature-development']) {
+  for (const name of ['feature', 'feature-development', 'spec-driven', 'staged-feature-development', 'bugfix']) {
     sources.push([`local ${name}`, await readFile(new URL(`${name}.yaml`, localDir), 'utf8')]);
   }
   const flat = (prompt: string | undefined): string => (prompt ?? '').replace(/\s+/g, ' ');
@@ -373,8 +376,9 @@ test('every shipped and local commit-message prompt carries the same message-for
   const sources: Array<[string, string]> = [
     ['template feature-development', featureDevelopmentTemplate()],
     ['template staged-feature-development', stagedFeatureDevelopmentTemplate()],
+    ['template bugfix', bugfixTemplate()],
   ];
-  for (const name of ['feature-development', 'staged-feature-development']) {
+  for (const name of ['feature-development', 'staged-feature-development', 'bugfix']) {
     sources.push([`local ${name}`, await readFile(new URL(`${name}.yaml`, localDir), 'utf8')]);
   }
   const flat = (prompt: string): string => prompt.replace(/\s+/g, ' ').trim();
@@ -548,14 +552,31 @@ const withShell = { skip: shell.ok ? false : 'no POSIX shell on this machine' };
 
 async function runStep(
   step: CommandStep, cwd: string, env: Record<string, string> = {}, ctx: Partial<RunCtx> = {},
-): Promise<void> {
+): Promise<{ stdout: string; stderr: string }> {
   const base: RunCtx = {
     workdir: cwd, runId: 'r1', runDir: join(cwd, '.whiphand', 'runs', 'r1'), runSlug: 'r1',
     shell: shell.ok ? shell.path : '/bin/sh',
     sessionIds: {}, artifacts: {}, attempts: {}, verdicts: {}, inputs: {}, ...ctx,
   };
   const spec = commandSpec(step, base);
-  await execRunner(spec.argv, { cwd, env: { ...process.env, ...spec.env, ...env } });
+  // An override of PATH replaces the inherited one whatever its case: Windows
+  // spells it `Path`, and two spellings in one env block leave it ambiguous.
+  const inherited = Object.fromEntries(Object.entries(process.env)
+    .filter(([key]) => !Object.keys(env).some(own => own.toUpperCase() === key.toUpperCase())));
+  return execRunner(spec.argv, { cwd, env: { ...inherited, ...spec.env, ...env } });
+}
+
+/** `runStep` for a step that may exit non-zero: the exit code and stderr, not a rejection. */
+async function stepOutcome(
+  step: CommandStep, cwd: string, ctx: Partial<RunCtx> = {}, env: Record<string, string> = {},
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  try {
+    return { code: 0, ...await runStep(step, cwd, env, ctx) };
+  } catch (e) {
+    const failure = e as { code?: number; stdout?: string; stderr?: string };
+    assert.equal(typeof failure.code, 'number', `the step failed by exiting, not by not starting: ${String(e)}`);
+    return { code: failure.code ?? -1, stdout: failure.stdout ?? '', stderr: failure.stderr ?? '' };
+  }
 }
 
 test('featureDevelopmentTemplate stage step works when the runs dir is gitignored and files are already staged', withShell, async () => {
@@ -656,6 +677,297 @@ test("the staged workflow's stage-body commit step exits 0 on an empty index ins
     commit as CommandStep, ws, { WHIPHAND_ARTIFACT_COMMIT_MESSAGE: join(ws, 'no-such-file.txt') }));
 });
 
+/**
+ * The bugfix workflow is test-first: nothing is fixed until a regression test
+ * has been shown to fail. Its shape is what keeps that true: `reproduce` writes
+ * (the test, and no fix), `confirm-red` is a command that gates the run before
+ * the fix cycle starts, and the fix cycle is the usual test-fix / review loop
+ * under a human sign-off, on a `fix/` branch.
+ */
+test('bugfixTemplate diagnoses, reproduces, gates on a red test, then fixes in a cycle behind a sign-off', () => {
+  const wf = parseWorkflow(bugfixTemplate());
+  assert.equal(wf.name, 'bugfix');
+  assert.deepEqual(validateWorkflowSemantics(wf), []);
+  assert.deepEqual(validateWorkflowWarnings(wf), []);
+
+  const bug = wf.inputs?.bug;
+  assert.equal(bug?.required, true);
+  assert.equal(bug?.multiline, true);
+  assert.equal(bug?.prompt, 'What is broken? Steps, expected vs actual');
+  assert.equal(wf.inputs?.base?.default, 'main');
+  assert.equal(wf.inputs?.test_command?.default, 'npm test');
+  assert.equal(wf.inputs?.test_command?.remember, true, 'the test command is remembered, like the other templates');
+
+  assert.deepEqual(wf.steps.map(s => s.id), [
+    'sync-base', 'branch', 'diagnose', 'reproduce', 'confirm-red', 'human-review', 'stage', 'commit-message', 'commit',
+  ]);
+  const branch = findStep(wf.steps, 'branch');
+  assert.ok(branch?.kind === 'command');
+  assert.equal(branch.run, 'git checkout -b "fix/{{ run.slug }}"');
+  const syncBase = findStep(wf.steps, 'sync-base');
+  assert.ok(syncBase?.kind === 'command');
+  assert.equal(syncBase.run, 'git checkout "{{ inputs.base }}" && git pull --ff-only');
+
+  const diagnose = findStep(wf.steps, 'diagnose');
+  assert.ok(diagnose?.kind === 'agent');
+  assert.equal(diagnose.mode, 'interactive');
+  assert.equal(diagnose.writes, false, 'diagnosing is read-only');
+  assert.equal(diagnose.model, 'opus');
+  assert.equal(diagnose.output, 'diagnosis.md');
+  assert.ok(diagnose.inputs?.includes('attachments'), 'the logs the human hands over reach the chat');
+
+  const reproduce = findStep(wf.steps, 'reproduce');
+  assert.ok(reproduce?.kind === 'agent');
+  assert.equal(reproduce.mode, 'headless');
+  assert.equal(reproduce.writes, true, 'it writes the test');
+  assert.deepEqual(reproduce.inputs, ['diagnose']);
+  const stepIds = wf.steps.map(s => s.id);
+  assert.ok(stepIds.indexOf('reproduce') > stepIds.indexOf('diagnose'));
+
+  // The red gate sits between the test being written and any fixing, and does
+  // not use a verdict: a green test fails the run rather than looping.
+  const confirmRed = findStep(wf.steps, 'confirm-red');
+  assert.ok(confirmRed?.kind === 'command');
+  assert.ok(stepIds.indexOf('confirm-red') === stepIds.indexOf('reproduce') + 1, 'confirm-red runs right after reproduce');
+  assert.ok(stepIds.indexOf('confirm-red') < stepIds.indexOf('human-review'), 'nothing is fixed before the test is red');
+  assert.notEqual(confirmRed.verdict, true);
+  assert.equal(confirmRed.expect_exit, undefined, 'the inversion is by hand: expect_exit cannot say "any failure"');
+  assert.equal(confirmRed.output, 'confirm-red.log');
+
+  const humanReview = wf.steps.find(s => s.id === 'human-review');
+  assert.ok(humanReview?.kind === 'loop');
+  assert.equal(humanReview.until, 'sign-off');
+  assert.deepEqual(humanReview.steps.map(s => s.id), ['fix-cycle', 'sign-off']);
+  const fixCycle = humanReview.steps[0];
+  assert.ok(fixCycle?.kind === 'loop');
+  assert.equal(fixCycle.until, 'review');
+  assert.equal(fixCycle.max_iterations, 3);
+  assert.deepEqual(fixCycle.steps.map(s => s.id), ['test-fix', 'review']);
+  const testFix = fixCycle.steps[0];
+  assert.ok(testFix?.kind === 'loop');
+  assert.equal(testFix.until, 'tests');
+  assert.deepEqual(testFix.steps.map(s => s.id), ['execute', 'tests']);
+
+  const [execute, tests] = testFix.steps;
+  assert.ok(execute?.kind === 'agent');
+  assert.equal(execute.writes, true);
+  for (const input of ['diagnose', 'reproduce', 'tests', 'review', 'sign-off']) {
+    assert.ok(execute.inputs?.includes(input), `execute reads ${input}`);
+  }
+  assert.ok(tests?.kind === 'command');
+  assert.equal(tests.verdict, true);
+  assert.equal(tests.output, 'tests.log');
+
+  const review = fixCycle.steps[1];
+  assert.ok(review?.kind === 'agent');
+  assert.equal(review.mode, 'headless');
+  assert.equal(review.writes, false);
+  assert.equal(review.verdict, true);
+  assert.equal(review.model, 'opus');
+  for (const input of ['diagnose', 'reproduce', 'execute', 'tests', 'sign-off']) {
+    assert.ok(review.inputs?.includes(input), `review reads ${input}`);
+  }
+
+  const signOff = humanReview.steps[1];
+  assert.ok(signOff?.kind === 'approval');
+  assert.equal(signOff.show_diff, true);
+  assert.equal(signOff.capture, 'review');
+  assert.equal(signOff.verdict, true);
+
+  const commit = findStep(wf.steps, 'commit');
+  assert.ok(commit?.kind === 'command');
+  assert.equal(commit.run, 'git commit -F ".whiphand/runs/{{ run.id }}/commit-message.md"');
+});
+
+/**
+ * The bugfix prompts are the whole mechanism, so they are pinned — in the
+ * shipped template and in the repo's own copy, which must be the same bytes.
+ */
+test('the bugfix prompts carry the diagnosis contract, the test-only reproduce and the masked-symptom review', async () => {
+  const template = bugfixTemplate();
+  const local = await readFile(new URL('../../../.whiphand/workflows/bugfix.yaml', import.meta.url), 'utf8');
+  assert.equal(local, template, 'the local bugfix.yaml is the template, byte for byte');
+
+  const wf = parseWorkflow(template);
+  const flat = (prompt: string | undefined): string => (prompt ?? '').replace(/\s+/g, ' ');
+  const diagnose = findStep(wf.steps, 'diagnose');
+  const reproduce = findStep(wf.steps, 'reproduce');
+  const execute = findStep(wf.steps, 'execute');
+  const review = findStep(wf.steps, 'review');
+  if (diagnose?.kind !== 'agent' || reproduce?.kind !== 'agent' || execute?.kind !== 'agent' || review?.kind !== 'agent') {
+    return assert.fail('diagnose, reproduce, execute and review are agent steps');
+  }
+  const headings = (prompt: string | undefined): string[] => (prompt ?? '').split('\n').filter((line) => line.startsWith('## '));
+
+  const diagnosing = flat(diagnose.prompt);
+  assert.match(diagnosing, /We are diagnosing a bug: \{\{ inputs\.bug \}\}/);
+  assert.match(diagnosing, /Before exploring, ask me whether there are files or docs you should read first\./);
+  assert.match(diagnosing, /Ask for logs, stack traces/);
+  assert.match(diagnosing, /Do not modify files\./);
+  assert.match(diagnosing, /the root cause .+, where the regression test goes, and the exact command that runs just that test, not the whole suite/);
+  assert.match(diagnosing, /The artifact you write is the agreed diagnosis as it now stands, not a transcript of our conversation\./);
+  assert.deepEqual(
+    headings(diagnose.prompt),
+    ['## Symptom', '## Root cause', '## Regression test', '## Test command', '## Fix outline'],
+    'the diagnosis has exactly these sections, in this order',
+  );
+
+  const reproducing = flat(reproduce.prompt);
+  assert.match(reproducing, /Write the regression test the attached diagnosis asks for, and nothing else: no fix, and no change to the code under test\./);
+  assert.match(reproducing, /Leave your work uncommitted/);
+  assert.match(reproducing, /into \{\{ run\.dir \}\}\/repro\.sh, and write it nowhere else/);
+  assert.match(reproducing, /the last command in the file must be the test itself, so the script exits with the test's own status/i);
+  assert.match(reproducing, /It must fail because of the bug/);
+  assert.match(reproducing, /The next step runs repro\.sh and stops the whole run unless it fails\./);
+  assert.deepEqual(headings(reproduce.prompt), ['## Changed', '## How it fails', '## Not done / not verified']);
+
+  const fixing = flat(execute.prompt);
+  assert.match(fixing, /do not weaken, skip or delete it, loosen an assertion or change an expected value/);
+  assert.match(fixing, /you may strengthen it/);
+  assert.match(fixing, /Change only what the fix needs: no unrelated cleanup or refactor\./);
+  assert.match(fixing, /at its root cause and not only where it shows/);
+  assert.ok(fixing.includes('## Regression test'), 'the execute report says what became of the regression test');
+
+  const reviewing = flat(review.prompt);
+  assert.match(reviewing, /against the attached diagnosis\./);
+  for (const blocking of [
+    '- the fix masks the symptom instead of removing the root cause the diagnosis names',
+    '- the regression test is weaker than the diagnosis and the reproduce report say it is',
+    '- changes outside the diagnosis\'s scope',
+    '- an empty diff when the diagnosis requires a fix',
+  ]) {
+    assert.ok(reviewing.includes(blocking), `the review prompt lists '${blocking}' as blocking`);
+  }
+  assert.match(reviewing, /Strengthening it is fine\./);
+});
+
+/**
+ * The red gate runs the real command step, through the real shell, against a
+ * repro.sh standing in for what `reproduce` writes. It passes the run only when
+ * the regression test fails for a reason that could be the bug. Nothing here
+ * hardcodes a POSIX path or a pid, and the scripts use only `exit` and a
+ * missing command name, so the Windows leg (Git's `sh.exe`) runs the same
+ * bytes; only that leg proves the gate on Windows.
+ */
+test('the bugfix red gate fails the run when the regression test passes, and only then', withShell, async () => {
+  const confirmRed = findStep(parseWorkflow(bugfixTemplate()).steps, 'confirm-red');
+  assert.ok(confirmRed?.kind === 'command');
+  if (confirmRed?.kind !== 'command') return;
+
+  const ws = await mkdtemp(join(tmpdir(), 'whiphand-red-'));
+  const runDir = join(ws, '.whiphand', 'runs', 'r1');
+  await mkdir(runDir, { recursive: true });
+  const repro = async (script: string | undefined) => {
+    if (script === undefined) await rm(join(runDir, 'repro.sh'), { force: true });
+    else await writeFile(join(runDir, 'repro.sh'), script);
+    return stepOutcome(confirmRed, ws);
+  };
+
+  // Red: whatever non-zero code the runner uses, the gate opens.
+  for (const code of [1, 2, 101]) {
+    const red = await repro(`exit ${code}\n`);
+    assert.equal(red.code, 0, `exit ${code} is a failing test, so the gate opens`);
+    assert.match(red.stdout, new RegExp(`fails \\(exit ${code}\\)`));
+  }
+
+  // Green: the test does not reproduce the bug, so the run fails, saying so.
+  const green = await repro('exit 0\n');
+  assert.notEqual(green.code, 0);
+  assert.match(green.stderr, /the regression test passed, so it does not reproduce the bug/);
+
+  // A test whose last command is missing never ran: its "failure" proves nothing.
+  const notFound = await repro('whiphand-no-such-test-runner\n');
+  assert.notEqual(notFound.code, 0);
+  assert.match(notFound.stderr, /could not run the test \(exit 127\)/);
+  const notRunnable = await repro('exit 126\n');
+  assert.notEqual(notRunnable.code, 0);
+  assert.match(notRunnable.stderr, /could not run the test \(exit 126\)/);
+
+  // repro.sh never written: dash exits 2 for a script it cannot open, which
+  // would read as a failing test, so the gate checks for the file itself.
+  const missing = await repro(undefined);
+  assert.notEqual(missing.code, 0);
+  assert.match(missing.stderr, /reproduce wrote no repro\.sh/);
+});
+
+test('the bugfix tests step runs the regression test first, then the suite, and keeps the suite gate when it is blank', withShell, async () => {
+  const tests = findStep(parseWorkflow(bugfixTemplate()).steps, 'tests');
+  assert.ok(tests?.kind === 'command');
+  if (tests?.kind !== 'command') return;
+
+  const ws = await mkdtemp(join(tmpdir(), 'whiphand-fixtests-'));
+  const runDir = join(ws, '.whiphand', 'runs', 'r1');
+  await mkdir(runDir, { recursive: true });
+  const outcome = async (repro: string, testCommand: string) => {
+    await writeFile(join(runDir, 'repro.sh'), repro);
+    await rm(join(ws, 'suite-ran'), { force: true });
+    const result = await stepOutcome(tests, ws, { inputs: { test_command: testCommand } });
+    const suiteRan = await access(join(ws, 'suite-ran')).then(() => true, () => false);
+    return { ...result, suiteRan };
+  };
+
+  // Still red: the fix has not made the regression test pass, and the suite never runs.
+  const stillRed = await outcome('exit 1\n', ': > suite-ran');
+  assert.notEqual(stillRed.code, 0);
+  assert.equal(stillRed.suiteRan, false);
+
+  // Green, and the suite is the workflow's own command.
+  const green = await outcome('exit 0\n', ': > suite-ran');
+  assert.equal(green.code, 0);
+  assert.equal(green.suiteRan, true);
+
+  // The suite still gates: a green regression test does not excuse a red suite.
+  const suiteRed = await outcome('exit 0\n', ': > suite-ran; exit 3');
+  assert.notEqual(suiteRed.code, 0);
+  assert.equal(suiteRed.suiteRan, true);
+
+  // A blank test_command skips the suite (eval "" exits 0), not the regression test.
+  const blank = await outcome('exit 0\n', '');
+  assert.equal(blank.code, 0);
+  const blankRed = await outcome('exit 1\n', '');
+  assert.notEqual(blankRed.code, 0);
+});
+
+/**
+ * Neither bugfix step may look anything up on PATH to run repro.sh. The shell a
+ * command step gets is started by absolute path and is not a login shell, so on
+ * Windows Git's `usr\bin` (and a second `sh` in it) is on PATH only if the user
+ * put it there, and a runner image that does can hide the difference. An empty
+ * PATH takes that away on every leg: `sh repro.sh` exits 127 under it, sourcing
+ * the file in a subshell does not. `exit` and `:` are builtins, and the failing
+ * and passing cases are told apart by the step's own messages, so a lookup that
+ * fails cannot pass for a red test.
+ */
+test('the bugfix steps run repro.sh without finding anything on PATH', withShell, async () => {
+  const wf = parseWorkflow(bugfixTemplate());
+  const confirmRed = findStep(wf.steps, 'confirm-red');
+  const tests = findStep(wf.steps, 'tests');
+  assert.ok(confirmRed?.kind === 'command' && tests?.kind === 'command');
+  if (confirmRed?.kind !== 'command' || tests?.kind !== 'command') return;
+
+  const ws = await mkdtemp(join(tmpdir(), 'whiphand-nopath-'));
+  const runDir = join(ws, '.whiphand', 'runs', 'r1');
+  const emptyBin = join(ws, 'empty-bin');
+  await mkdir(runDir, { recursive: true });
+  await mkdir(emptyBin);
+  const noPath = { PATH: emptyBin };
+
+  await writeFile(join(runDir, 'repro.sh'), 'exit 3\n');
+  const red = await stepOutcome(confirmRed, ws, {}, noPath);
+  assert.equal(red.code, 0, `a failing test opens the gate with nothing on PATH: ${red.stderr}`);
+  assert.match(red.stdout, /fails \(exit 3\)/);
+  const stillRed = await stepOutcome(tests, ws, { inputs: { test_command: ':' } }, noPath);
+  assert.notEqual(stillRed.code, 0, 'a failing regression test fails the tests step');
+  assert.doesNotMatch(stillRed.stderr, /not found/);
+
+  await writeFile(join(runDir, 'repro.sh'), 'exit 0\n');
+  const green = await stepOutcome(confirmRed, ws, {}, noPath);
+  assert.notEqual(green.code, 0);
+  assert.match(green.stderr, /the regression test passed, so it does not reproduce the bug/);
+  const passing = await stepOutcome(tests, ws, { inputs: { test_command: ':' } }, noPath);
+  assert.equal(passing.code, 0, `a passing test and a builtin suite pass with nothing on PATH: ${passing.stderr}`);
+});
+
 test('createWorkflow writes the file, refuses overwrite, validates the name', async () => {
   const ws = await mkdtemp(join(tmpdir(), 'whiphand-scaffold-'));
   const { path } = await createWorkflow(ws, 'my-flow');
@@ -676,6 +988,7 @@ test('initWorkspace creates config + starter workflows once, then is a no-op', a
     join('.whiphand', 'workflows', 'spec-driven.yaml'),
     join('.whiphand', 'workflows', 'staged-feature-development.yaml'),
     join('.whiphand', 'workflows', 'research.yaml'),
+    join('.whiphand', 'workflows', 'bugfix.yaml'),
   ].sort());
   await loadWorkspaceConfig(ws); // parses
   const second = await initWorkspace(ws);

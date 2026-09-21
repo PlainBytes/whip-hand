@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### A `bugfix` workflow that proves the bug before fixing it
+
+- `whiphand init` now ships `bugfix`, which fixes a bug test-first. It syncs your trunk and cuts `fix/<run slug>`,
+  then you and the agent settle the diagnosis in a live chat: the root cause, where the regression test goes, and
+  the exact command that runs just that test. A headless agent writes only that test and the command, and the
+  run stops with a clear message unless the test fails. A test that passes before the fix does not reproduce the
+  bug, and a command that could not run does not count as a failure.
+- Only then does the fix start. It runs in the usual cycle of fix, tests and review, then your sign-off, then a
+  commit. The tests step runs the regression test first and your test command after it, so a blank test command
+  still checks the fix against the test that proves the bug. The review fails a fix that masks the symptom
+  instead of removing the root cause, a regression test that was weakened, and unrelated changes.
+- It asks what is broken (steps, expected against actual), the branch to start from, and a test command that is
+  remembered like the other workflows'. The agent hands the test command to the workflow as a file, `repro.sh` in
+  the run folder, so it must be POSIX `sh`, the same shell command steps use on Windows. The steps source it in a
+  subshell rather than run `sh repro.sh`, so they need no `sh` on the Windows PATH.
+
 ### A real `research` workflow
 
 - `whiphand init` now ships `research`, which answers a question instead of building something. You settle the

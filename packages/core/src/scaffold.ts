@@ -525,12 +525,19 @@ steps:
     writes: false       # Write/Edit denied; Bash stays, which is how it reads the diff
     output: commit-message.md
     prompt: |
-      Write the commit message for the change staged on this branch. Read it with
-      \`git diff --cached\`, and read the attached plan, review and sign-off feedback
-      for why it was made.
-      A subject line in the imperative mood, at most 72 characters, no trailing
-      period. Then a blank line, then one to three short lines on what changed and
-      why. Write the message and nothing else — no preamble, no fences, no review.
+      Write the commit message for the change staged on this branch.
+      Its source of truth is \`git diff --cached\`, plus the attached plan or stage
+      file, review and feedback for why the change was made. Do not copy or
+      paraphrase an existing commit message, such as one from \`git log\`.
+      The subject is the first line: imperative mood, at most 72 characters, no
+      trailing period. Then one blank line, then a body of one to three lines, each
+      wrapped at 72 characters, in plain sentences with no bullets. The body says
+      what changed and why.
+      Trailers such as \`Co-Authored-By\` are allowed. If you add any, put them after
+      the body, separated from it by one blank line.
+      The file holds the message and nothing else: no preamble, no code fences, no
+      review.
+      If the index is empty, write a one-line subject saying so instead of asking.
 
   - id: commit
     kind: command
@@ -750,11 +757,19 @@ steps:
         writes: false
         output: commit-message.md
         prompt: |
-          Write the commit message for this stage, staged on this branch. Read it with
-          \`git diff --cached\`, and read the attached stage file, review and feedback for
-          why it was made. A subject line in the imperative mood, at most 72 characters,
-          no trailing period; then a blank line, then one to three short lines. Write the
-          message and nothing else.
+          Write the commit message for the change staged on this branch.
+          Its source of truth is \`git diff --cached\`, plus the attached plan or stage
+          file, review and feedback for why the change was made. Do not copy or
+          paraphrase an existing commit message, such as one from \`git log\`.
+          The subject is the first line: imperative mood, at most 72 characters, no
+          trailing period. Then one blank line, then a body of one to three lines, each
+          wrapped at 72 characters, in plain sentences with no bullets. The body says
+          what changed and why.
+          Trailers such as \`Co-Authored-By\` are allowed. If you add any, put them after
+          the body, separated from it by one blank line.
+          The file holds the message and nothing else: no preamble, no code fences, no
+          review.
+          If the index is empty, write a one-line subject saying so instead of asking.
       - id: commit
         inputs: [commit-message]
         kind: command

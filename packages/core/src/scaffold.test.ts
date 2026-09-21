@@ -360,6 +360,48 @@ test('the staged plan prompt carries the stage-file template and the listing sel
 });
 
 /**
+ * The commit-message writer is a small model that has produced 15-line bodies
+ * copied from an existing commit (`git log`), 200-350 character unwrapped
+ * lines, and trailers with no blank line before them. The prompt is the only
+ * guard (no lint step), so all four copies carry the same rules in the same
+ * words: the diff is the source, a 72-column subject and a one-to-three line
+ * wrapped body, trailers after a blank line, message only, and a one-line
+ * subject rather than a question when the index is empty.
+ */
+test('every shipped and local commit-message prompt carries the same message-format rules', async () => {
+  const localDir = new URL('../../../.whiphand/workflows/', import.meta.url);
+  const sources: Array<[string, string]> = [
+    ['template feature-development', featureDevelopmentTemplate()],
+    ['template staged-feature-development', stagedFeatureDevelopmentTemplate()],
+  ];
+  for (const name of ['feature-development', 'staged-feature-development']) {
+    sources.push([`local ${name}`, await readFile(new URL(`${name}.yaml`, localDir), 'utf8')]);
+  }
+  const flat = (prompt: string): string => prompt.replace(/\s+/g, ' ').trim();
+  const prompts: string[] = [];
+  for (const [label, source] of sources) {
+    const wf = parseWorkflow(source);
+    assert.deepEqual(validateWorkflowSemantics(wf), [], `${label} validates`);
+    const step = findStep(wf.steps, 'commit-message');
+    if (step?.kind !== 'agent') return assert.fail(`${label} commit-message is an agent step`);
+    assert.equal(step.model, 'haiku', `${label} keeps the cheap model`);
+    const prompt = flat(step.prompt ?? '');
+    prompts.push(prompt);
+
+    assert.match(prompt, /Its source of truth is `git diff --cached`, plus the attached plan or stage file, review and feedback/, label);
+    assert.match(prompt, /Do not copy or paraphrase an existing commit message, such as one from `git log`\./, label);
+    assert.match(prompt, /imperative mood, at most 72 characters, no trailing period\./, label);
+    assert.match(prompt, /Then one blank line, then a body of one to three lines, each wrapped at 72 characters, in plain sentences with no bullets\./, label);
+    assert.match(prompt, /Trailers such as `Co-Authored-By` are allowed\. If you add any, put them after the body, separated from it by one blank line\./, label);
+    assert.match(prompt, /The file holds the message and nothing else: no preamble, no code fences, no review\./, label);
+    assert.match(prompt, /If the index is empty, write a one-line subject saying so instead of asking\./, label);
+  }
+  for (const [i, prompt] of prompts.entries()) {
+    assert.equal(prompt, prompts[0], `${sources[i]?.[0]} is worded like ${sources[0]?.[0]}`);
+  }
+});
+
+/**
  * "Earlier stages are … committed" is background for the staged implementer,
  * not a task: the sentence is worded as the workflow's doing and followed by an
  * explicit "committing is the workflow's job", so it cannot be read as an

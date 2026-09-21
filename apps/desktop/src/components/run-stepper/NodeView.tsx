@@ -129,9 +129,13 @@ function groupsByStage(groups: readonly StageGroup[]): StageGroup[][] {
  * badged `attempt N`, rather than folding them into one another.
  */
 function StagesView({ node, focusKey, awaitingKey, awaiting, clock, nodeRef }: NodeProps & { node: StagesNode }) {
-  // Explicit toggles only. What is open when nobody has touched a row is
-  // `defaultExpandedStage`'s answer, computed each render, so it follows the
-  // run as it moves on and a click always wins over it.
+  // Until a row is clicked, what is open is `defaultExpandedStage`'s answer,
+  // computed each render, so the open row follows the run as it moves on. The
+  // first click latches `touched`: from then on the default contributes
+  // nothing and only `overrides` say what is open, so a stage that finishes
+  // does not fold and one that starts does not steal the view. Held per mount
+  // — RunDetailPage keys the stepper on the run, so visiting a run again follows again.
+  const [touched, setTouched] = useState(false);
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
   const rows = useMemo(() => groupsByStage(node.children).map(attempts => {
     const first = attempts[0];
@@ -148,7 +152,8 @@ function StagesView({ node, focusKey, awaitingKey, awaiting, clock, nodeRef }: N
       group => flattenNodes(group.children).some(child => child.key === focusKey),
     ))?.stageKey;
   }, [rows, focusKey]);
-  const defaultStage = defaultExpandedStage(rows, focusStageKey);
+  const fallback = touched ? undefined : defaultExpandedStage(rows, focusStageKey);
+  const isExpanded = (stageKey: string) => overrides[stageKey] ?? stageKey === fallback;
 
   const pill = (meta: string, withDuration: boolean) => (
     <StepPill
@@ -201,7 +206,7 @@ function StagesView({ node, focusKey, awaitingKey, awaiting, clock, nodeRef }: N
         // Badged only once a stage has been attempted more than once: an
         // "attempt 1" on every stage that passed first time is noise.
         const badged = attempts.length > 1 || (attempts[0].attempt ?? 1) > 1;
-        const expanded = overrides[stageKey] ?? stageKey === defaultStage;
+        const expanded = isExpanded(stageKey);
         return (
           <StageRow
             key={stageKey}
@@ -209,7 +214,17 @@ function StagesView({ node, focusKey, awaitingKey, awaiting, clock, nodeRef }: N
             label={label}
             rollup={rollup}
             expanded={expanded}
-            onToggle={() => setOverrides(current => ({ ...current, [stageKey]: !expanded }))}
+            onToggle={() => {
+              // Pin every row as it is drawn right now, this one flipped: the
+              // latch drops the default, and a row that was open only because
+              // of it (the running stage) would otherwise fold under the
+              // click. `expanded` was read before the latch closed, so the
+              // clicked row flips from what the reader saw.
+              setTouched(true);
+              setOverrides(Object.fromEntries(
+                rows.map(row => [row.stageKey, row.stageKey === stageKey ? !expanded : isExpanded(row.stageKey)]),
+              ));
+            }}
           >
             {attempts.map(group => badged ? (
               <div

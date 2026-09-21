@@ -481,7 +481,8 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
     // jsdom (vitest) doesn't implement scrollIntoView; this is a real-browser nicety.
     const el = currentStep ? stepRefs.current[currentStep.key] : null;
     if (!el || typeof el.scrollIntoView !== 'function') return;
-    el.scrollIntoView({ block: 'nearest' });
+    // Pill rows scroll sideways, so the current step may be off-screen on either axis.
+    el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [currentStep?.key]);
 
   // Keep the terminal mounted (read-only once ptyExit lands) until the
@@ -1326,6 +1327,8 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
 
       <div style={{ flexShrink: 0, paddingTop: 8, paddingBottom: 8 }}>
         <RunStepper
+          // Remounting on a different run is what resets the stages' follow-the-run latch.
+          key={effectiveRunId ?? jobId}
           steps={steps}
           focusStepId={focusStep?.id}
           collapsed={stepsCollapsed}

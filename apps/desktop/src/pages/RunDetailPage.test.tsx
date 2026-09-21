@@ -270,6 +270,22 @@ describe('RunDetailPage', () => {
     expect(screen.queryByRole('button', { name: /cancel run/i })).not.toBeInTheDocument();
   });
 
+  it('scrolls the current step into view on both axes, since a stage\'s pills scroll sideways', async () => {
+    // jsdom has no scrollIntoView; give elements one for this case only.
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { value: scrollIntoView, configurable: true, writable: true });
+    try {
+      const { transport } = renderRunDetail('job-1');
+      emitWhiphandEvent(transport, 'job-1', 'run-1', { type: 'step:start', stepId: 'review', kind: 'agent', runner: 'claude', model: 'opus', mode: 'headless' }, 't1');
+
+      const pill = await screen.findByTestId('step-card-review');
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' }));
+      expect(scrollIntoView.mock.contexts.some(el => (el as HTMLElement).contains(pill) || el === pill)).toBe(true);
+    } finally {
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
   it('marks a step failed on non-zero exit and shows a fail verdict badge', async () => {
     const { transport } = renderRunDetail('job-3');
 

@@ -710,6 +710,72 @@ describe('stages', () => {
     expect(screen.getByTestId('stage-toggle-build@02-b')).toHaveAttribute('aria-expanded', 'false');
   });
 
+  // -------------------------------------------------------------------------
+  // Following a live run, until the reader takes over.
+  // -------------------------------------------------------------------------
+
+  const LIVE_STAGES = ['01-a', '02-b', '03-c', '04-d'];
+  /** A stage that has not started has no row yet, and so is not open. */
+  const isOpen = (id: string) => screen.queryByTestId(`stage-toggle-build@${id}`)?.getAttribute('aria-expanded') === 'true';
+
+  /** A four-stage run with stage `running` (1-based) in flight and the ones before it accepted. */
+  function liveRows(running: number): StepState[] {
+    const started = LIVE_STAGES.slice(0, running);
+    return [
+      stagesRow({
+        total: 4,
+        currentStage: { id: started[running - 1], title: `Stage ${running}`, index: running },
+        completedStages: started.slice(0, -1),
+        startedStages: Object.fromEntries(started.map((id, i) => [id, { title: `Stage ${i + 1}`, index: i + 1, maxAttempts: 3 }])),
+      }),
+      ...started.map((id, i) => stageRow('implement', id, 1, i === running - 1 ? { status: 'running' } : {})),
+    ];
+  }
+
+  it('moves the open stage along with the run while nothing has been touched', () => {
+    const { rerender } = render(<RunStepper steps={liveRows(3)} />);
+    expect(LIVE_STAGES.map(isOpen)).toEqual([false, false, true, false]);
+
+    rerender(<RunStepper steps={liveRows(4)} />);
+    expect(LIVE_STAGES.map(isOpen)).toEqual([false, false, false, true]);
+    expect(screen.getByTestId('step-card-implement@04-d#1')).toBeInTheDocument();
+    expect(screen.queryByTestId('step-card-implement@03-c#1')).not.toBeInTheDocument();
+  });
+
+  it('stops following once the reader has opened a stage of their own', () => {
+    const { rerender } = render(<RunStepper steps={liveRows(3)} />);
+    fireEvent.click(screen.getByTestId('stage-toggle-build@02-b'));
+    // Nothing moved under the click: the running stage the reader could see stays as it was.
+    expect(LIVE_STAGES.map(isOpen)).toEqual([false, true, true, false]);
+
+    rerender(<RunStepper steps={liveRows(4)} />);
+    // The new stage does not steal the view, and the finished one does not fold itself.
+    expect(LIVE_STAGES.map(isOpen)).toEqual([false, true, true, false]);
+    expect(screen.queryByTestId('step-card-implement@04-d#1')).not.toBeInTheDocument();
+  });
+
+  it('collapses the auto-opened stage on the first click, and keeps it collapsed as the run moves on', () => {
+    const { rerender } = render(<RunStepper steps={liveRows(3)} />);
+    fireEvent.click(screen.getByTestId('stage-toggle-build@03-c'));
+    expect(LIVE_STAGES.map(isOpen)).toEqual([false, false, false, false]);
+
+    // Same stage, still running: were the default still contributing it would re-open.
+    rerender(<RunStepper steps={[...liveRows(3), stageRow('accept', '03-c', 1, { kind: 'approval', status: 'running' })]} />);
+    expect(isOpen('03-c')).toBe(false);
+
+    rerender(<RunStepper steps={liveRows(4)} />);
+    expect(LIVE_STAGES.map(isOpen)).toEqual([false, false, false, false]);
+  });
+
+  it('follows the run again on a fresh mount', () => {
+    const first = render(<RunStepper steps={liveRows(3)} />);
+    fireEvent.click(screen.getByTestId('stage-toggle-build@01-a'));
+    first.unmount();
+
+    render(<RunStepper steps={liveRows(4)} />);
+    expect(LIVE_STAGES.map(isOpen)).toEqual([false, false, false, true]);
+  });
+
   it('summarises a stage as steps, time and spend on its header line', () => {
     render(<RunStepper steps={[
       stagesRow({ status: 'done', total: 1, currentStage: undefined, completedStages: ['01-a'] }),

@@ -20,8 +20,11 @@ const FIXTURE_WORKSPACE = fileURLToPath(new URL('./fixtures/workspace', import.m
 // The doctor fixtures' stub runners, minted at start in the shape this platform
 // launches (see test-support) rather than the checked-in bash scripts, which need
 // the executable bit and are invisible to a Windows PATHEXT walk. Same versions.
+// gh is stubbed too: the real one is probed twice (--version, then auth token),
+// and a cold start on a Windows runner can outlast PROBE_TIMEOUT_MS in one of the
+// two doctor runs but not the other, so the sides "disagree" on the machine.
 const FIXTURE_BIN = mintVersionStubs({
-  claude: '9.9.9-stub', copilot: '9.9.9-stub', opencode: '9.9.9-stub',
+  claude: '9.9.9-stub', copilot: '9.9.9-stub', opencode: '9.9.9-stub', gh: '9.9.9-stub',
 });
 
 /**
@@ -426,8 +429,8 @@ function normalize(facts: DoctorFact[]): DoctorFact[] {
 test('doctor parity: CLI human output and agent doctor() report the same tool facts', async () => {
   // The login notes are a fact about whoever runs the suite (`~/.claude`, the
   // keychain, gh's config), so give every tool a credential to keep them out of
-  // the comparison: the stub runners then report no auth note, and the real gh
-  // (when installed) answers `gh auth token` from GH_TOKEN. The stub opencode
+  // the comparison: the stub runners then report no auth note, and the stub gh
+  // exits zero for `gh auth token`. The stub opencode
   // answers `auth list` with nothing, which is an answer we do not recognise.
   const stubEnv = {
     PATH: pathWith(FIXTURE_BIN).PATH ?? '',

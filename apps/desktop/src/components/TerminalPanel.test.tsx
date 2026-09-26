@@ -36,6 +36,7 @@ vi.mock('./xterm-runtime.ts', () => ({ createTerminal: vi.fn(), TERMINAL_BACKGRO
  */
 function makeFakeHandle() {
   let dataCb: ((data: string) => void) | undefined;
+  let keyCb: ((event: KeyboardEvent) => boolean) | undefined;
   let cols = 80;
   let rows = 24;
   const term = {
@@ -46,6 +47,9 @@ function makeFakeHandle() {
     onData: vi.fn((cb: (data: string) => void) => {
       dataCb = cb;
       return { dispose: vi.fn() };
+    }),
+    attachCustomKeyEventHandler: vi.fn((cb: (event: KeyboardEvent) => boolean) => {
+      keyCb = cb;
     }),
     write: vi.fn(),
     dispose: vi.fn(),
@@ -60,6 +64,9 @@ function makeFakeHandle() {
     term,
     fitAddon,
     emitData: (data: string) => dataCb?.(data),
+    /** Fires a synthetic key event through the registered custom handler; returns what xterm would see (false = xterm skips it). */
+    emitKey: (type: 'keydown' | 'keypress' | 'keyup', init: KeyboardEventInit) =>
+      keyCb!(new KeyboardEvent(type, { key: 'Enter', ...init })),
   };
 }
 
@@ -127,6 +134,64 @@ describe('TerminalPanel', () => {
     const sent = transport.sent.map(line => JSON.parse(line) as { method: string; params: unknown });
     const req = sent.find(r => r.method === 'ptyInput');
     expect(req?.params).toEqual({ jobId: 'job-2', data: encodeToBase64('héllo→🚀') });
+  });
+
+  describe('Shift+Enter inserts a newline instead of submitting', () => {
+    const ptyInputs = (transport: MockTransport) =>
+      transport.sent
+        .map(line => JSON.parse(line) as { method: string; params: unknown })
+        .filter(r => r.method === 'ptyInput');
+
+    it('sends ESC CR once on keydown and tells xterm to skip the event', () => {
+      const { transport } = renderPanel('job-nl');
+
+      let result: boolean | undefined;
+      act(() => {
+        result = handle.emitKey('keydown', { shiftKey: true });
+      });
+
+      expect(result).toBe(false);
+      expect(ptyInputs(transport)).toHaveLength(1);
+      expect(ptyInputs(transport)[0].params).toEqual({ jobId: 'job-nl', data: encodeToBase64('\x1b\r') });
+    });
+
+    it('swallows keypress and keyup without sending anything, so xterm sends no CR of its own', () => {
+      const { transport } = renderPanel('job-nl-up');
+
+      expect(handle.emitKey('keypress', { shiftKey: true })).toBe(false);
+      expect(handle.emitKey('keyup', { shiftKey: true })).toBe(false);
+
+      expect(ptyInputs(transport)).toHaveLength(0);
+    });
+
+    it.each([
+      ['plain Enter', {}],
+      ['Alt+Enter', { altKey: true }],
+      ['Alt+Shift+Enter', { altKey: true, shiftKey: true }],
+      ['Ctrl+Shift+Enter', { ctrlKey: true, shiftKey: true }],
+      ['Meta+Shift+Enter', { metaKey: true, shiftKey: true }],
+      ['Shift+Enter during IME composition', { shiftKey: true, isComposing: true }],
+      ['Shift+A', { key: 'A', shiftKey: true }],
+    ])('leaves %s to xterm and sends nothing itself', (_name, init) => {
+      const { transport } = renderPanel('job-nl-other');
+
+      expect(handle.emitKey('keydown', init)).toBe(true);
+
+      expect(ptyInputs(transport)).toHaveLength(0);
+    });
+
+    it('sends nothing once the PTY has exited (disableStdin), but still swallows the key', () => {
+      useAppStore.getState().applyPtyStarted({ jobId: 'job-nl-exit', stepId: 'triage', cols: 80, rows: 24 });
+      const { transport } = renderPanel('job-nl-exit');
+      act(() => {
+        useAppStore.getState().applyPtyExit({ jobId: 'job-nl-exit', exitCode: 0 });
+      });
+      expect(handle.term.options.disableStdin).toBe(true);
+
+      expect(handle.emitKey('keydown', { shiftKey: true })).toBe(false);
+
+      expect(ptyInputs(transport)).toHaveLength(0);
+    });
   });
 
   it('replays buffered ptyData already in the store on mount, in order, decoded to bytes', () => {

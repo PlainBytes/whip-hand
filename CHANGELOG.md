@@ -40,6 +40,10 @@
 - `allow_commits: true` on an agent step lets that one step commit (it is a switch on the step in the workflow editor
   too). `command` steps are never checked. It is an error on any other kind of step. The shipped workflows need no
   change.
+### Shift+Enter and Alt+Enter add a new line in the terminal
+
+- In an interactive session's terminal, Shift+Enter and Alt+Enter now insert a newline in the CLI's prompt instead
+  of submitting it. Enter still submits. The same applies in the web build.
 
 ### The run's step strip is smaller and stays put
 

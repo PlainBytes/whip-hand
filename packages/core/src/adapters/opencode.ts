@@ -8,9 +8,32 @@
  * `captureSessionId` below). Harvest then resumes that id exactly like claude
  * and copilot resume theirs.
  *
+ * OpenCode 2.0 (verified against 2.0.18 with real spawns) changed the CLI
+ * under this adapter in ways its help text does not make obvious:
+ *
+ * - By default a command talks to a shared background service, which keeps
+ *   the config it booted with — so a spawn's own `OPENCODE_CONFIG_CONTENT`
+ *   (agent, permissions, plugin) is silently ignored. Every spawn therefore
+ *   passes `--standalone`, which boots a private server from this process's
+ *   environment. It is a per-command flag: it must come *after* the
+ *   subcommand (`opencode run --standalone`); `opencode --standalone run` is
+ *   rejected as an unrecognized flag. Sessions live in the same store either
+ *   way, so a standalone `session list` or `run -s` sees every session.
+ * - The TUI accepts neither `--agent` nor `-m`. It is pointed at the agent by
+ *   `default_agent` in the inline config, and the agent's own `model` field
+ *   supplies the model.
+ * - `--variant` is gone: `run -m` takes `provider/model#variant` instead. The
+ *   agent config's `variant` field is accepted but ignored (a bogus value
+ *   does not even error), and so is a `#variant` suffix on the agent's
+ *   `model` — so an interactive step's effort cannot be set at all, and a
+ *   headless one's only rides on `-m`, i.e. only when a model is named too.
+ * - `OPENCODE_CONFIG_CONTENT` is merged over the user's global and project
+ *   config, not in place of it: their plugins, permissions and agents still
+ *   load. The inline config only wins where the two overlap.
+ *
  * Two behaviours below deliberately depart from the shape a first reading of
  * opencode's own docs suggests, both verified against the installed 1.17.13
- * binary with real spawns before landing here:
+ * binary with real spawns before landing here and not yet re-verified on 2.0:
  *
  * - The `edit` permission's own per-path patterns never match a path outside
  *   the project root — neither an absolute pattern nor a `../`-relative one —
@@ -56,7 +79,7 @@ import { endMarkerPath } from '../engine/session-end.ts';
 import { shQuote, toFwd, toWorkspace } from '../path-form.ts';
 import { awaitStatePath } from '../engine/await-state.ts';
 import { sessionCapturePath, readSessionCapture } from '../engine/session-capture.ts';
-import { opencodeGuidancePath, opencodePluginPath } from '../engine/opencode-files.ts';
+import { opencodeGuidancePath, opencodePluginPath, opencodePluginIndexPath } from '../engine/opencode-files.ts';
 import { isRecord } from '../engine/progress.ts';
 import { execRunner } from '../exec.ts';
 import { PROBE_TIMEOUT_MS, probeRunner } from '../tools.ts';
@@ -64,7 +87,7 @@ import { liveAuthDeps, withAuthNote, type AuthProbeDeps } from './auth.ts';
 import {
   flagArgs, harvestPrompt, isResumedStep, lf, listModelsVia, promptPointer, requireSessionId, spawnSpec,
 } from './common.ts';
-import { pathToFileURL } from 'node:url';
+
 
 /** No PTY harness was available to verify a real quit keystroke sequence (see the module doc). */
 export const OPENCODE_QUIT_SEQUENCE = '';
@@ -74,21 +97,25 @@ const AGENT_NAME = 'whiphand';
 /** suggestName's own agent: no filesystem access at all, so a naming spawn cannot touch the tree. */
 const NAME_AGENT_NAME = 'whiphand-name';
 
+/** Goes after the subcommand, never before it (see the module doc). */
+const STANDALONE = '--standalone';
+
 function modelArgs(step: AgentStep): string[] {
   return flagArgs('-m', step.model);
 }
-/** `--variant` is a real `run` flag but not a TUI one — the agent config's own `variant` field covers the TUI instead. */
-function variantArgs(step: AgentStep): string[] {
-  return flagArgs('--variant', step.effort);
+/** `run -m provider/model#variant` is 2.0's only way to set effort (see the module doc). */
+function modelWithVariantArgs(step: AgentStep): string[] {
+  const variant = step.model !== undefined && step.effort !== undefined ? `#${step.effort}` : '';
+  return flagArgs('-m', step.model === undefined ? undefined : `${step.model}${variant}`);
 }
 function sessionId(step: AgentStep, ctx: RunCtx): string {
   return requireSessionId(step, ctx, 'captured yet');
 }
 /**
  * Every opencode spawn carries its whole agent config in
- * `OPENCODE_CONFIG_CONTENT` — which *replaces* any value already in the
- * environment (hence detect()'s note), so the config each spawn builds is the
- * only one opencode sees.
+ * `OPENCODE_CONFIG_CONTENT`, set for the child alone — any value already in
+ * whiphand's environment is replaced for it (hence detect()'s note). opencode
+ * merges it over the user's own config files (see the module doc).
  */
 function opencodeSpec(ctx: RunCtx, argv: string[], interactive: boolean, config: string): SpawnSpec {
   return spawnSpec(ctx, argv, interactive, { OPENCODE_CONFIG_CONTENT: config });
@@ -154,96 +181,127 @@ interface ConfigOpts {
   agentName: string;
   permission: Record<string, unknown>;
   model?: string;
-  variant?: string;
   instructionsPath?: string;
   pluginPath?: string;
 }
 
-/** The one `OPENCODE_CONFIG_CONTENT` value every opencode spec is built from. */
+/**
+ * The one `OPENCODE_CONFIG_CONTENT` value every opencode spec is built from.
+ * `default_agent` is how the TUI, which has no `--agent`, lands on it; the
+ * agent's `model` is how it gets its model. No `variant`: 2.0 ignores it.
+ */
 function configContent(opts: ConfigOpts): string {
   const agentBody: Record<string, unknown> = {
     mode: 'primary',
     ...(opts.model !== undefined ? { model: opts.model } : {}),
-    ...(opts.variant !== undefined ? { variant: opts.variant } : {}),
     permission: opts.permission,
   };
   const root: Record<string, unknown> = {
     ...(opts.instructionsPath !== undefined ? { instructions: [toFwd(opts.instructionsPath)] } : {}),
-    // A real file URL: `file://C:/…` parses `C:` as the authority, not a drive.
-    ...(opts.pluginPath !== undefined ? { plugin: [pathToFileURL(opts.pluginPath).href] } : {}),
+    // OpenCode 2.0+ plugins are directories; the path is relative to the run dir.
+    ...(opts.pluginPath !== undefined ? { plugin: [opts.pluginPath] } : {}),
+    default_agent: opts.agentName,
     agent: { [opts.agentName]: agentBody },
   };
   return JSON.stringify(root);
 }
 
 /**
- * The await-state/session-capture plugin, one instance per interactive spawn
- * (paths and, when known, the session id itself, are baked in as literals —
- * the plugin has no other way to learn what step it belongs to).
+ * The await-state/session-capture plugin, one instance per interactive spawn.
+ * OpenCode 2.0 requires plugins to be directories with a default export
+ * `{ id: string, setup(ctx) { ... } }`. The plugin subscribes to events via
+ * `ctx.event.subscribe()` and writes two files:
+ * - session-capture: the root session id (written on first `session.created`
+ *   for a root session, or immediately if `knownSessionId` was provided for a
+ *   resume)
+ * - await-state: written when the session is idle or a permission/question is
+ *   asked, cleared when busy or the permission/question is answered.
  *
  * `knownSessionId` is set only when resuming: `-s` resume fires no
  * `session.created` for the root session (verified against 1.17.13), so
  * there is nothing to learn it from — the plugin is told instead. On a fresh
  * spawn it starts `null` and the first root `session.created` fills it in.
  *
- * Subagent sessions (`session.created` with `info.parentID` set) are tracked
+ * Subagent sessions (`session.created` with `parentID` set) are tracked
  * separately and always excluded: their own status/permission chatter must
  * never flap the root session's await-state.
+ *
+ * 2.0 emits both 1.x event names (`permission.asked`, `session.status`) and
+ * v2 names (`permission.v2.asked`, `session.idle`). The plugin listens to all
+ * of them so it keeps working whichever set a given build actually emits.
  */
 function pluginSource(runDir: string, stepId: string, knownSessionId: string | undefined): string {
   const sessionFile = JSON.stringify(sessionCapturePath(runDir, stepId));
   const awaitFile = JSON.stringify(awaitStatePath(runDir, stepId));
   const known = JSON.stringify(knownSessionId ?? null);
+  // OpenCode 2.0 plugin: must be a directory with index.mjs that default-exports { id, setup }
   return `// Generated by whiphand for step '${stepId}'. Do not edit by hand.
-export const Whiphand = async () => {
-  const fs = await import('node:fs/promises');
-  const SESSION_FILE = ${sessionFile};
-  const AWAIT_FILE = ${awaitFile};
-  let rootId = ${known};
-  const subIds = new Set();
-  const isRoot = (id) => typeof id === 'string' && id === rootId && !subIds.has(id);
-  const writeAwait = async (reason) => {
-    try { await fs.writeFile(AWAIT_FILE, JSON.stringify({ r: reason })); } catch {}
-  };
-  const clearAwait = async () => {
-    try { await fs.rm(AWAIT_FILE, { force: true }); } catch {}
-  };
-  return {
-    event: async ({ event }) => {
+// OpenCode 2.0+ plugin: directory with index.mjs, default export { id, setup }
+import { promises as fs } from 'node:fs';
+const SESSION_FILE = ${sessionFile};
+const AWAIT_FILE = ${awaitFile};
+let rootId = ${known};
+const subIds = new Set();
+const isRoot = (id) => typeof id === 'string' && id === rootId && !subIds.has(id);
+const writeAwait = async (reason) => {
+  try { await fs.writeFile(AWAIT_FILE, JSON.stringify({ r: reason })); } catch {}
+};
+const clearAwait = async () => {
+  try { await fs.rm(AWAIT_FILE, { force: true }); } catch {}
+};
+
+export default {
+  id: 'whiphand-capture-${stepId}',
+  setup(ctx) {
+    const controller = new AbortController();
+    (async () => {
       try {
-        const props = event && event.properties ? event.properties : {};
-        switch (event.type) {
-          case 'session.created': {
-            const info = props.info || {};
-            if (info.parentID) { subIds.add(info.id); break; }
-            if (rootId === null) rootId = info.id;
-            if (info.id === rootId) await fs.writeFile(SESSION_FILE, rootId);
-            break;
+        // Write session file immediately if we already know the id (resume case)
+        if (rootId !== null) {
+          try { await fs.writeFile(SESSION_FILE, rootId); } catch {}
+        }
+        for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+          const props = event.properties ?? event.data ?? {};
+          switch (event.type) {
+            case 'session.created': {
+              const info = props.info ?? props;
+              if (info.parentID) { subIds.add(info.id); break; }
+              if (rootId === null) rootId = info.id;
+              if (info.id === rootId) await fs.writeFile(SESSION_FILE, rootId);
+              break;
+            }
+            case 'session.status': {
+              if (!isRoot(props.sessionID)) break;
+              const status = props.status?.type;
+              if (status === 'idle') await writeAwait('turn');
+              else if (status === 'busy') await clearAwait();
+              break;
+            }
+            case 'session.idle':
+              if (isRoot(props.sessionID)) await writeAwait('turn');
+              break;
+            case 'permission.asked':
+            case 'permission.v2.asked':
+            case 'question.asked':
+            case 'question.v2.asked':
+              if (isRoot(props.sessionID)) await writeAwait('permission');
+              break;
+            case 'permission.replied':
+            case 'permission.v2.replied':
+            case 'question.replied':
+            case 'question.v2.replied':
+            case 'question.rejected':
+            case 'question.v2.rejected':
+              if (isRoot(props.sessionID)) await clearAwait();
+              break;
           }
-          case 'session.status': {
-            if (!isRoot(props.sessionID)) break;
-            const status = props.status ? props.status.type : undefined;
-            if (status === 'idle') await writeAwait('turn');
-            else if (status === 'busy') await clearAwait();
-            break;
-          }
-          case 'permission.asked':
-          case 'question.asked':
-            if (isRoot(props.sessionID)) await writeAwait('permission');
-            break;
-          case 'permission.replied':
-          case 'question.replied':
-          case 'question.rejected':
-            if (isRoot(props.sessionID)) await clearAwait();
-            break;
-          default:
-            break;
         }
       } catch {
         // A plugin fault must never break the user's session.
       }
-    },
-  };
+    })();
+    return () => controller.abort();
+  },
 };
 `;
 }
@@ -258,18 +316,19 @@ export function parseOpencodeModels(output: string): ModelInfo[] {
     .map(id => ({ id }));
 }
 
-const ANSI_RE = /\x1b\[[0-9;]*m/g;
-
 /**
- * Whether opencode has no provider to talk to. Verified against opencode
- * 1.18.31: `opencode auth list` is local (no connection, seen with strace) and
- * prints a "Credentials" block (`N credentials`, from `auth.json`) and, only
- * when there are any, an "Environment" block of provider API keys it found in
- * the environment. Its answer is the whole truth, but it takes ~0.8s, which
- * would double the Doctor page's wall time — so the common case reads
- * `auth.json` (`$XDG_DATA_HOME/opencode/`, default `~/.local/share/opencode/`)
- * instead, and the subcommand only runs when that file has nothing to show.
- * A wrong guess at the path therefore costs time, never a wrong note.
+ * Whether opencode has no provider to talk to. The common case reads
+ * `auth.json` (`$XDG_DATA_HOME/opencode/`, default `~/.local/share/opencode/`),
+ * which 2.0 still writes, and the subcommand only runs when that file has
+ * nothing to show — so a wrong guess at the path costs time, never a wrong note.
+ *
+ * Verified against opencode 2.0.18: `opencode auth list --standalone --format
+ * json` is local and prints one entry per provider, each with its
+ * `connections` — stored credentials (`type: "credential"`) and provider API
+ * keys found in the environment (`type: "env"`) alike. `--standalone` matters
+ * here too: the background service would report *its* environment, not ours.
+ * Only a parsed, empty answer earns the note; output we cannot read says
+ * nothing, and a failed or timed-out run rejects for `withAuthNote` to absorb.
  *
  * "Not logged in" would be too strong here: opencode also has free models that
  * need no key, and providers can be configured in opencode.json. The note
@@ -283,9 +342,16 @@ export async function opencodeAuthNote(deps: AuthProbeDeps = liveAuthDeps()): Pr
   } catch {
     // missing or unreadable: ask opencode itself
   }
-  const listing = (await deps.run(['opencode', 'auth', 'list'])).replace(ANSI_RE, '');
-  if (!/\b0 credentials\b/.test(listing) || /environment variable/i.test(listing)) return undefined;
-  return 'no provider credentials — run `opencode auth login`';
+  const listing = await deps.run(['opencode', 'auth', 'list', STANDALONE, '--format', 'json']);
+  let providers: unknown;
+  try {
+    providers = JSON.parse(listing);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(providers)) return undefined;
+  const connected = providers.some(p => isRecord(p) && Array.isArray(p.connections) && p.connections.length > 0);
+  return connected ? undefined : 'no provider credentials — run `opencode auth login`';
 }
 
 export const opencodeAdapter: RunnerAdapter = {
@@ -293,7 +359,7 @@ export const opencodeAdapter: RunnerAdapter = {
   doctor: {
     label: 'opencode', url: 'https://opencode.ai',
     argv: ['opencode', '--version'], optional: true,
-    minVersion: '1.17.13',
+    minVersion: '2.0.0',
   },
   capabilities: {
     sessionIdInjection: false, sessionIdCapture: true, sessionResume: true,
@@ -324,31 +390,33 @@ export const opencodeAdapter: RunnerAdapter = {
     const awaitPath = awaitStatePath(ctx.runDir, step.id);
     const guidance = opencodeGuidancePath(ctx.runDir, step.id);
     const prompt = promptPath(ctx.runDir, step.id);
-    const plugin = opencodePluginPath(ctx.runDir, step.id);
+    const pluginDir = opencodePluginPath(ctx.runDir, step.id);
+    const pluginIndex = opencodePluginIndexPath(ctx.runDir, step.id);
     const resumed = isResumedStep(step, ctx);
 
     const config = configContent({
       agentName: AGENT_NAME,
       permission: agentPermission({ editAllowed: step.writes, workdir: ctx.workdir, runDir: ctx.runDir, markerPath: marker }),
       model: step.model,
-      variant: step.effort,
       instructionsPath: guidance,
-      pluginPath: plugin,
+      pluginPath: pluginDir,
     });
 
-    // A resumed step already knows its id (from the manifest); --prompt does
-    // not auto-submit alongside -s, so it is omitted rather than shipped
+    // No --agent or -m: the TUI rejects both (see the module doc). A resumed
+    // step already knows its id (from the manifest); --prompt did not
+    // auto-submit alongside -s in 1.x, so it is omitted rather than shipped
     // knowing it will be ignored.
     const argv = resumed
-      ? ['opencode', '-s', sessionId(step, ctx), '--agent', AGENT_NAME, ...modelArgs(step)]
-      : ['opencode', '--agent', AGENT_NAME, ...modelArgs(step), '--prompt', promptPointer(prompt, ctx)];
+      ? ['opencode', STANDALONE, '-s', sessionId(step, ctx)]
+      : ['opencode', STANDALONE, '--prompt', promptPointer(prompt, ctx)];
 
     return {
       ...opencodeSpec(ctx, argv, true, config),
       files: [
         { path: prompt, content: lf(buildPrompt(step, ctx)) },
         { path: guidance, content: lf(interactiveGuidance(step, ctx)) },
-        { path: plugin, content: pluginSource(ctx.runDir, step.id, resumed ? ctx.sessionIds[step.id] : undefined) },
+        // OpenCode 2.0+ requires plugins to be directories with index.mjs
+        { path: pluginIndex, content: pluginSource(ctx.runDir, step.id, resumed ? ctx.sessionIds[step.id] : undefined) },
       ],
       endSession: { markerPath: marker, quitSequence: OPENCODE_QUIT_SEQUENCE },
       awaitState: { statePath: awaitPath },
@@ -360,13 +428,12 @@ export const opencodeAdapter: RunnerAdapter = {
       agentName: AGENT_NAME,
       permission: agentPermission({ editAllowed: step.writes, workdir: ctx.workdir, runDir: ctx.runDir }),
       model: step.model,
-      variant: step.effort,
     });
     // opencode's stdin support for `run` is not verified, so it takes the pointer.
     const prompt = promptPath(ctx.runDir, step.id);
     const argv = [
-      'opencode', 'run', '--format', 'json', '--agent', AGENT_NAME,
-      ...modelArgs(step), ...variantArgs(step), promptPointer(prompt, ctx),
+      'opencode', 'run', STANDALONE, '--format', 'json', '--agent', AGENT_NAME,
+      ...modelWithVariantArgs(step), promptPointer(prompt, ctx),
     ];
     return {
       ...opencodeSpec(ctx, argv, false, config),
@@ -391,7 +458,7 @@ export const opencodeAdapter: RunnerAdapter = {
     });
     const file = harvestPromptPath(ctx.runDir, step.id);
     const argv = [
-      'opencode', 'run', '--format', 'json', '-s', sessionId(step, ctx), '--agent', AGENT_NAME,
+      'opencode', 'run', STANDALONE, '--format', 'json', '-s', sessionId(step, ctx), '--agent', AGENT_NAME,
       ...modelArgs(step), promptPointer(file, ctx),
     ];
     return {
@@ -417,7 +484,7 @@ export const opencodeAdapter: RunnerAdapter = {
     try {
       const guidanceMtime = await stat(opencodeGuidancePath(ctx.runDir, step.id)).then(s => s.mtimeMs);
       const { stdout } = await execRunner(
-        ['opencode', 'session', 'list', '--format', 'json', '-n', '20'],
+        ['opencode', 'session', 'list', STANDALONE, '--format', 'json', '-n', '20'],
         { cwd: ctx.workdir, timeout: PROBE_TIMEOUT_MS },
       );
       const sessions: unknown = JSON.parse(stdout);
@@ -444,7 +511,7 @@ export const opencodeAdapter: RunnerAdapter = {
       agent: { [NAME_AGENT_NAME]: { mode: 'primary', permission: { '*': 'deny' } } },
     });
     const file = join(ctx.runDir, SUGGEST_PROMPT_NAME);
-    const argv = ['opencode', 'run', '--agent', NAME_AGENT_NAME, promptPointer(file, ctx)];
+    const argv = ['opencode', 'run', STANDALONE, '--agent', NAME_AGENT_NAME, promptPointer(file, ctx)];
     return {
       ...opencodeSpec(ctx, argv, false, config),
       files: [{ path: file, content: lf(prompt) }],

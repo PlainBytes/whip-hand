@@ -204,13 +204,15 @@ test('copilot: a config we cannot read, parse or recognise leaves us unsure, so 
 
 const OPENCODE_AUTH = join(HOME, '.local', 'share', 'opencode', 'auth.json');
 const OPENCODE_NOTE = 'no provider credentials — run `opencode auth login`';
-const listing = (body: string): string =>
-  `\n┌  Credentials ~/.local/share/opencode/auth.json\n│\n${body}\n`;
+const OPENCODE_AUTH_LIST = ['opencode', 'auth', 'list', '--standalone', '--format', 'json'];
+/** `opencode auth list --standalone --format json`, in the shape 2.0.18 prints it. */
+const providers = (...list: Array<{ id: string; connections: Array<Record<string, string>> }>): string =>
+  JSON.stringify(list.map(p => ({ name: p.id, ...p })), null, 2);
 
 test('opencode: stored credentials answer it from the file, with nothing spawned', async () => {
   const deps = fakeDeps({ files: { [OPENCODE_AUTH]: JSON.stringify({ mistral: { type: 'api', key: 'k' } }) } });
   assert.equal(await opencodeAuthNote(deps), undefined);
-  assert.deepEqual(deps.spawned, [], '`opencode auth list` is ~0.8s; a logged-in machine should not pay it');
+  assert.deepEqual(deps.spawned, [], '`opencode auth list` is slow; a logged-in machine should not pay it');
 });
 
 test('opencode: XDG_DATA_HOME moves the file', async () => {
@@ -223,29 +225,29 @@ test('opencode: XDG_DATA_HOME moves the file', async () => {
   assert.deepEqual(deps.spawned, []);
 });
 
-test('opencode: nothing stored and `0 credentials` from the subcommand → the note', async () => {
-  const empty = fakeDeps({ run: listing('└  0 credentials') });
+test('opencode: nothing stored and no providers from the subcommand → the note', async () => {
+  const empty = fakeDeps({ run: '[]\n' });
   assert.equal(await opencodeAuthNote(empty), OPENCODE_NOTE);
-  assert.deepEqual(empty.spawned, [['opencode', 'auth', 'list']]);
-  const emptyFile = fakeDeps({ files: { [OPENCODE_AUTH]: '{}' }, run: listing('└  0 credentials') });
+  assert.deepEqual(empty.spawned, [OPENCODE_AUTH_LIST], '--standalone after the subcommand, or 2.0 rejects it');
+  const emptyFile = fakeDeps({ files: { [OPENCODE_AUTH]: '{}' }, run: '[]\n' });
   assert.equal(await opencodeAuthNote(emptyFile), OPENCODE_NOTE, 'an empty auth.json is asked about, not trusted');
 });
 
-test('opencode: colour codes in the listing do not hide the count', async () => {
-  const coloured = '\x1b[90m└\x1b[0m  0 credentials\n';
-  assert.equal(await opencodeAuthNote(fakeDeps({ run: coloured })), OPENCODE_NOTE);
-});
-
 test('opencode: a provider key found in the environment means it has a provider', async () => {
-  const withEnv = listing('└  0 credentials') +
-    '\n┌  Environment\n│\n●  Anthropic ANTHROPIC_API_KEY\n│\n└  1 environment variable\n';
+  const withEnv = providers({ id: 'anthropic', connections: [{ type: 'env', name: 'ANTHROPIC_API_KEY' }] });
   assert.equal(await opencodeAuthNote(fakeDeps({ run: withEnv })), undefined);
 });
 
 test('opencode: credentials the subcommand finds that the file check missed → no note', async () => {
-  assert.equal(await opencodeAuthNote(fakeDeps({ run: listing('●  Mistral api\n│\n└  1 credential') })), undefined);
-  assert.equal(await opencodeAuthNote(fakeDeps({ run: listing('└  10 credentials') })), undefined,
-    '10 is not 0');
+  const stored = providers(
+    { id: 'mistral', connections: [{ type: 'credential', id: 'cred_1', method: 'key' }] },
+    { id: 'opencode', connections: [{ type: 'credential', id: 'cred_2', method: 'key' }] },
+  );
+  assert.equal(await opencodeAuthNote(fakeDeps({ run: stored })), undefined);
+});
+
+test('opencode: a provider listed with no connections is not a provider we can use', async () => {
+  assert.equal(await opencodeAuthNote(fakeDeps({ run: providers({ id: 'mistral', connections: [] }) })), OPENCODE_NOTE);
 });
 
 test('opencode: a timeout, a nonzero exit or an answer we do not recognise → no note', async () => {
@@ -256,6 +258,8 @@ test('opencode: a timeout, a nonzero exit or an answer we do not recognise → n
     undefined, '…and the wrapper turns it into no note');
   assert.equal(await opencodeAuthNote(fakeDeps({ run: '9.9.9-stub\n' })), undefined);
   assert.equal(await opencodeAuthNote(fakeDeps({ run: '' })), undefined);
+  assert.equal(await opencodeAuthNote(fakeDeps({ run: '{"providers":[]}' })), undefined, 'not the array 2.0 prints');
+  assert.equal(await opencodeAuthNote(fakeDeps({ run: '└  0 credentials\n' })), undefined, 'nor the 1.x text listing');
 });
 
 // --- detect() wiring ---------------------------------------------------------
@@ -312,9 +316,10 @@ test('copilot detect(): the login note leads and the beep note still follows', a
   });
 });
 
-test('opencode detect(): asks `opencode auth list` only when auth.json has nothing, and notes `0 credentials`', async () => {
+test('opencode detect(): asks `opencode auth list` only when auth.json has nothing, and notes no providers', async () => {
   const data = await emptyDir();
-  const behaviour = `console.log(process.argv[2] === 'auth' ? '└  0 credentials' : '9.9.9');`;
+  // Answers only the exact argv 2.0 accepts, so a misplaced flag fails this rather than passing by accident.
+  const behaviour = `console.log(process.argv.slice(2).join(' ') === 'auth list --standalone --format json' ? '[]' : '9.9.9');`;
   await withStubBin('opencode', behaviour, async () => {
     const result = await withEnv({ XDG_DATA_HOME: data, OPENCODE_CONFIG_CONTENT: undefined }, () => opencodeAdapter.detect());
     assert.equal(result.installed, true);

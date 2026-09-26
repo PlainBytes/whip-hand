@@ -538,5 +538,5 @@ test('probeRunner: an unparseable version gets no floor note, and a missing bina
 
 test('the three harness adapters state the version their comments were verified against', () => {
   const floors = Object.fromEntries(defaultRegistry().list().map(a => [a.id, a.doctor.minVersion]));
-  assert.deepEqual(floors, { claude: '2.1.260', copilot: '1.0.83', opencode: '1.17.13' });
+  assert.deepEqual(floors, { claude: '2.1.260', copilot: '1.0.83', opencode: '2.0.0' });
 });

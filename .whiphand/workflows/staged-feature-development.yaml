@@ -45,10 +45,32 @@ steps:
     inputs: [attachments]
     output: plan.md
     prompt: |
-      We are planning: {{ inputs.feature }}. Work with me on a plan, then cut the work
-      into stages small enough to review in one sitting. Write one file per stage into
-      {{ run.dir }}/plans/, named NN-slug.md, each opening with a `# Title` heading.
-      Change nothing in the repository.
+      We are planning: {{ inputs.feature }}.
+      Before exploring, ask me whether there are files or docs you should read first.
+      Work with me on a plan, then cut the work into stages. Order them so each builds on
+      the earlier ones, which the workflow will already have committed by the time it is
+      built, and keep each small enough to review in one sitting.
+      Write one file per stage into {{ run.dir }}/plans/, named NN-slug.md, and nowhere
+      else. The build turns every .md file in that folder into a stage, so put nothing
+      else there. Each stage file follows this template:
+      # <Stage title>
+      ## Goal
+      What this stage achieves, and why.
+      ## Scope
+      What to build or change.
+      ## Out of scope
+      What this stage must leave alone, including work that belongs to a later stage.
+      ## Files
+      The files it touches.
+      ## Acceptance criteria
+      Checkable statements a reviewer can walk through one by one.
+      ## Verify
+      The exact command(s) that exercise this stage, because the workflow's test command
+      may not cover it.
+      Change nothing in the repository. The artifact you write is the agreed plan as it
+      now stands, not a transcript of our conversation.
+      Before you tell me the plan is done, list {{ run.dir }}/plans/ and confirm that every
+      stage file is there and that nothing was written elsewhere.
 
   - id: build
     kind: stages
@@ -83,12 +105,28 @@ steps:
                 output: execute-report.md
                 prompt: |
                   Implement stage {{ stage.index }} of {{ stage.total }}: {{ stage.title }}.
-                  Earlier stages are implemented and committed — read the tree or `git log`
-                  if you need them. Implement only this stage, and leave it uncommitted:
-                  that is how an earlier stage came to be committed — a human read its
-                  working tree at the gate below and the workflow committed it after they
-                  accepted. If a tests log marked VERDICT: FAIL is attached, fix every
-                  failure first; if review findings are attached, address every point.
+                  Earlier stages are implemented and already committed by the workflow —
+                  read the tree or `git log` if you need them. Implement only this stage,
+                  and leave it uncommitted: committing is the workflow's job, not yours. A
+                  human reads the working tree at the gate below, and the workflow commits
+                  it once they have accepted. If a tests log marked VERDICT: FAIL is
+                  attached, fix every failure first; if review findings are attached,
+                  address every point.
+                  Implement everything the stage asks. If something can't or shouldn't be
+                  done, don't drop it silently: say so in the report.
+                  Your report, the artifact, has these sections under exactly these headings:
+                  ## Changed
+                  The files you changed or added, one line each.
+                  ## Verified
+                  The exact commands you ran and their result. Run the tests relevant to
+                  what you changed, not only the workflow's test command.
+                  ## Not done / not verified
+                  Anything you did not do or check, with the reason.
+                  ## Deviations from the plan
+                  Where you departed from the stage, with the reason.
+                  ## Findings addressed
+                  Only when a tests log, review findings or rejection feedback were
+                  attached: one line per point, and how you addressed it.
               - id: tests
                 kind: command
                 run: eval "{{ inputs.test_command }}"
@@ -105,9 +143,20 @@ steps:
             writes: false
             output: review.md
             prompt: |
-              Review the working-tree diff against this stage only. If the implementer's
+              Review the uncommitted working-tree diff (`git diff` plus untracked
+              files) against this stage only. Walk the stage requirement by
+              requirement and state for each whether it is met. If the implementer's
               report says a previous rejection's feedback was addressed, check that every
               point it names was actually addressed.
+              Check every claim in the execute report against the diff. A false claim
+              is blocking. Also blocking:
+              - HEAD moved, or the executor committed (check `git log`)
+              - changes outside the stage's scope
+              - an empty diff when the stage requires changes
+              - a review or rejection point that was not addressed
+              If the attached tests log does not exercise the changed code, say so and
+              run the relevant tests yourself, with read-only commands only.
+              An improvement outside the stage is non-blocking at most.
       - id: accept
         inputs: [stage, review]
         kind: approval
@@ -129,11 +178,19 @@ steps:
         writes: false
         output: commit-message.md
         prompt: |
-          Write the commit message for this stage, staged on this branch. Read it with
-          `git diff --cached`, and read the attached stage file, review and feedback for
-          why it was made. A subject line in the imperative mood, at most 72 characters,
-          no trailing period; then a blank line, then one to three short lines. Write the
-          message and nothing else.
+          Write the commit message for the change staged on this branch.
+          Its source of truth is `git diff --cached`, plus the attached plan or stage
+          file, review and feedback for why the change was made. Do not copy or
+          paraphrase an existing commit message, such as one from `git log`.
+          The subject is the first line: imperative mood, at most 72 characters, no
+          trailing period. Then one blank line, then a body of one to three lines, each
+          wrapped at 72 characters, in plain sentences with no bullets. The body says
+          what changed and why.
+          Trailers such as `Co-Authored-By` are allowed. If you add any, put them after
+          the body, separated from it by one blank line.
+          The file holds the message and nothing else: no preamble, no code fences, no
+          review.
+          If the index is empty, write a one-line subject saying so instead of asking.
       - id: commit
         inputs: [commit-message]
         kind: command

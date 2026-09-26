@@ -18,6 +18,8 @@ export type GitResult<T> =
 
 export type TreeSnapshot = GitResult<{ tree: string }>;
 export type HeadResult = GitResult<{ sha: string }>;
+/** `sha: null` is a repository with no commits yet — a fact about it, not a failure to read it. */
+export type HeadPosition = GitResult<{ sha: string | null }>;
 
 /**
  * The classification allowlist has exactly one entry: exit 128 **and** stderr
@@ -73,6 +75,26 @@ export async function headSha(workdir: string): Promise<HeadResult> {
     const { stdout } = await execRunner(['git', 'rev-parse', 'HEAD'], { cwd: workdir });
     return { kind: 'ok', sha: stdout.trim() };
   } catch (error) {
+    return classifyGitFailure(error);
+  }
+}
+
+/**
+ * Where HEAD points, for the check that an agent step did not commit. Unlike
+ * `headSha` it tells a repository with no commits yet apart from git failing:
+ * `--verify --quiet` exits 1 with no output for an unborn HEAD, where every
+ * real fatal (not a repository, dubious ownership) exits 128 and says why. A
+ * fresh `git init` is exactly where an agent's first commit must still be seen.
+ * (Git cannot tell an unborn HEAD from a branch ref whose file is unreadable
+ * either — it answers both the same way — so neither can this.)
+ */
+export async function headPosition(workdir: string): Promise<HeadPosition> {
+  try {
+    const { stdout } = await execRunner(['git', 'rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: workdir });
+    return { kind: 'ok', sha: stdout.trim() };
+  } catch (error) {
+    const e = error as { code?: number | string; stderr?: string };
+    if (e.code === 1 && (typeof e.stderr !== 'string' || e.stderr.trim() === '')) return { kind: 'ok', sha: null };
     return classifyGitFailure(error);
   }
 }

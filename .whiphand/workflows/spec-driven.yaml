@@ -22,10 +22,13 @@ steps:
     output: functional-plan.md
     prompt: |
       We are settling WHAT to build, not how: {{ inputs.feature }}
+      Before exploring, ask me whether there are files or docs you should read first.
       Work with me on the problem, who it serves, the behaviour, the edge
       cases, what is explicitly out of scope, and how we will know it works.
       Stay out of implementation — no file layout, no APIs, no libraries.
       One question at a time. Do not modify files.
+      The artifact you write is the agreed plan as it now stands, not a transcript of our
+      conversation.
 
   - id: functional-grill      # live chat: it attacks the draft, you defend it
     runner: claude
@@ -53,8 +56,13 @@ steps:
     prompt: |
       The functional spec is settled. Work with me on HOW to build it in this
       codebase: the components and their boundaries, data flow, what existing
-      code changes, error handling, and how it gets tested. Read the code
-      before proposing structure. One question at a time. Do not modify files.
+      code changes, error handling, and how it gets tested. Before exploring,
+      ask me whether there are files or docs you should read first. Then read
+      the code before proposing structure. One question at a time. Do not
+      modify files.
+      The artifact you write is the agreed plan as it now stands, not a transcript of our
+      conversation. End it with a `## Verify` section: the exact command(s) that exercise
+      this change, because the workflow's test command may not cover it.
 
   - id: technical-grill
     runner: claude
@@ -121,6 +129,21 @@ steps:
                   address every requested change. Leave your work uncommitted: a
                   human reads the working tree at the gate below, and the workflow
                   commits it once they have approved.
+                  Implement everything the technical spec asks. If something can't or shouldn't be
+                  done, don't drop it silently: say so in the report.
+                  Your report, the artifact, has these sections under exactly these headings:
+                  ## Changed
+                  The files you changed or added, one line each.
+                  ## Verified
+                  The exact commands you ran and their result. Run the tests relevant to
+                  what you changed, not only the workflow's test command.
+                  ## Not done / not verified
+                  Anything you did not do or check, with the reason.
+                  ## Deviations from the plan
+                  Where you departed from the technical spec, with the reason.
+                  ## Findings addressed
+                  Only when a tests log, review findings or sign-off feedback were
+                  attached: one line per point, and how you addressed it.
               - id: tests
                 kind: command
                 run: eval "{{ inputs.test_command }}"
@@ -137,10 +160,21 @@ steps:
             inputs: [functional-grill, technical-grill, execute, tests, sign-off]
             output: review.md
             prompt: |
-              Review the implementation against both specs — the functional one
-              for whether it does the right thing, the technical one for whether
-              it was built the agreed way. If sign-off feedback is attached, FAIL
-              unless every requested change is addressed.
+              Review the uncommitted working-tree diff (`git diff` plus untracked
+              files) against both specs — the functional one for whether it does the
+              right thing, the technical one for whether it was built the agreed way.
+              Walk each spec requirement by requirement and state for each whether it
+              is met. If sign-off feedback is attached, FAIL unless every requested
+              change is addressed.
+              Check every claim in the execute report against the diff. A false claim
+              is blocking. Also blocking:
+              - HEAD moved, or the executor committed (check `git log`)
+              - changes outside the specs' scope
+              - an empty diff when the specs require changes
+              - a review or sign-off point that was not addressed
+              If the attached tests log does not exercise the changed code, say so and
+              run the relevant tests yourself, with read-only commands only.
+              An improvement outside the specs is non-blocking at most.
               End with VERDICT: PASS or VERDICT: FAIL.
 
       # A human gate. Its answer becomes the 'sign-off' both steps above read:

@@ -18,12 +18,13 @@ import { disabledIds, droppedRefs, droppedRefSentence, pruneDisabled } from '../
 import { ATTACHMENTS_REF } from '../attachments.ts';
 import { copyAttachments, recordOf, validateAttachments } from './attachments.ts';
 import { artifactPath, assertArtifact, ArtifactError, ensureArtifactDir } from './artifacts.ts';
-import { snapshotTree, diffSnapshots, headSha, pathsFromStatusLines, pathsOutside } from './git-guard.ts';
+import { snapshotTree, diffSnapshots, headSha, headPosition, pathsFromStatusLines, pathsOutside } from './git-guard.ts';
 import { renderTemplate } from '../template.ts';
 import { toWorkspace } from '../path-form.ts';
 import { eventPathsToWorkspace } from '../event-paths.ts';
 import { CORE_VERSION } from '../version.ts';
 import { parseVerdict, verdictFromExit, verdictFromChoice, VERDICT_INSTRUCTION } from './verdict.ts';
+import { headlessPrompt } from './headless-guidance.ts';
 import { createProgressParser, progressErrorMessage } from './progress.ts';
 import { commandSpec, captureHeader, captureFooter } from './command.ts';
 import { buildManualRequest, noteArtifact, reviewArtifact } from './manual.ts';
@@ -114,6 +115,9 @@ export interface RunResult {
  * runStage carries on to the gate.
  */
 type StepOutcome = RunResult | 'verdict-fail' | 'stage-exhausted' | null;
+
+/** HEAD as an agent step began: `sha` is null in a repository with no commits yet. */
+interface HeadBefore { sha: string | null }
 
 /** A step whose promise about the tree only git can keep: read-only, or scoped by `allow_paths`. */
 const isGuardedStep = (step: Step): boolean =>
@@ -563,10 +567,24 @@ export async function runWorkflow(options: RunOptions): Promise<RunResult> {
      * words. A workspace that simply is not a repository keeps working, with a
      * visible record that the guard is off.
      */
-    const guardBefore = async (step: Step): Promise<{ before: string | null; failure?: string }> => {
+    const guardBefore = async (step: Step): Promise<{ before: string | null; head?: HeadBefore; failure?: string }> => {
       if (!isAgentStep(step) && !isCommandStep(step)) return { before: null };
       const snapshot = await snapshotTree(workdir);
-      if (snapshot.kind === 'ok') return { before: snapshot.tree };
+      if (snapshot.kind === 'ok') {
+        // Only an agent step that has not opted in is held to HEAD; a command
+        // step legitimately commits. Read after the tree snapshot succeeded, so
+        // not-a-repository and git-unavailable are already on record above and
+        // this adds no second report of either.
+        if (!isAgentStep(step) || step.allow_commits === true) return { before: snapshot.tree };
+        const head = await headPosition(workdir);
+        if (head.kind === 'ok') return { before: snapshot.tree, head: { sha: head.sha } };
+        // Status worked and HEAD did not: the commit guard is off for this
+        // step, and that is worth a line rather than a silent pass.
+        if (head.kind === 'unavailable') {
+          emit({ type: 'run:degraded', capability: 'git-guard', stepId: step.id, reason: head.reason });
+        }
+        return { before: snapshot.tree };
+      }
       const guarded = isGuardedStep(step);
       if (snapshot.kind === 'not-a-repo') {
         if (isAgentStep(step) && !step.writes && !warnedNoGit) {
@@ -586,6 +604,28 @@ export async function runWorkflow(options: RunOptions): Promise<RunResult> {
       }
       emit({ type: 'run:degraded', capability: 'git-guard', stepId: step.id, reason: snapshot.reason });
       return { before: null };
+    };
+
+    /**
+     * The commit half of the git guard: an agent step that left HEAD somewhere
+     * else than it found it fails, unless it set `allow_commits`. The workflow
+     * commits; an agent that does it first hides its own diff from the tree
+     * guard and from every reviewer after it. Reverting is the human's call, so
+     * this only names the step and both commits. Returns the failure, or null.
+     */
+    const checkHead = async (step: AgentStep, head: HeadBefore | undefined): Promise<string | null> => {
+      if (head === undefined) return null;
+      const now = await headPosition(workdir);
+      // Same rule as the post-step tree snapshot: a guard that could see the
+      // start and not the end has not passed, so it fails rather than clears.
+      if (now.kind !== 'ok') {
+        const why = now.kind === 'unavailable' ? now.reason : 'the workspace is no longer a git repository';
+        return `could not verify HEAD after step '${step.id}': ${why}`;
+      }
+      if (now.sha === head.sha) return null;
+      const short = (sha: string | null): string => sha === null ? '(no commits)' : sha.slice(0, 12);
+      return `step '${step.id}' moved HEAD from ${short(head.sha)} to ${short(now.sha)}; the workflow commits, `
+        + `so an agent step must not — set \`allow_commits: true\` on the step if this agent is meant to commit`;
     };
 
     /**
@@ -755,9 +795,11 @@ export async function runWorkflow(options: RunOptions): Promise<RunResult> {
       let eff = effectiveStep(withFindings(scopeInputs(step, frame)));
       if (step.mode === 'headless') {
         // A headless step cannot know its run dir; name the artifact path explicitly.
+        // The guidance goes on here, the one point all three adapters pass through,
+        // so every runner is handed the same words.
         eff = {
           ...eff,
-          prompt: `${eff.prompt}\n\nWrite your '${step.output}' artifact to: ${toWorkspace(ctx.artifacts[step.id], workdir)}`,
+          prompt: `${headlessPrompt(step, eff.prompt)}\n\nWrite your '${step.output}' artifact to: ${toWorkspace(ctx.artifacts[step.id], workdir)}`,
         };
       }
 
@@ -786,6 +828,7 @@ export async function runWorkflow(options: RunOptions): Promise<RunResult> {
       const guard = await guardBefore(step);
       if (guard.failure !== undefined) return fail(guard.failure, step.id);
       const before = guard.before;
+      const headBefore = guard.head;
 
       if (step.mode === 'interactive') {
         const prepared = await prepareInteractiveSpawn(adapter, eff);
@@ -849,6 +892,9 @@ export async function runWorkflow(options: RunOptions): Promise<RunResult> {
         if (exitCode !== 0) return fail(sink.failure(`step '${step.id}' exited with code ${exitCode}`), step.id);
       }
 
+      // After the session and the harvest, where the tree guard looks too.
+      const moved = await checkHead(step, headBefore);
+      if (moved !== null) return fail(moved, step.id);
       return finishStep(step, before);
     }
 

@@ -73,6 +73,7 @@ const agentStepSchema = z.object({
   prompt: requiredText(),
   output: requiredText(),
   allow_paths: z.array(requiredText()).optional(),
+  allow_commits: z.boolean().optional(),
   effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
 });
 
@@ -188,7 +189,7 @@ export const workflowSchema: z.ZodType<Workflow, unknown> = z.object({
  */
 const FIELD_OWNER: Record<string, StepKind> = {
   runner: 'agent', model: 'agent', mode: 'agent', writes: 'agent', prompt: 'agent',
-  allow_paths: 'agent', effort: 'agent',
+  allow_paths: 'agent', allow_commits: 'agent', effort: 'agent',
   run: 'command', shell: 'command', expect_exit: 'command', timeout_ms: 'command',
   title: 'manual', instructions: 'manual', capture: 'manual', show_diff: 'manual',
   steps: 'loop', until: 'loop', max_iterations: 'loop', on_exhausted: 'loop',
@@ -686,6 +687,7 @@ const FIELD_LABELS: Record<string, string> = {
   max_iterations: 'Max iterations',
   cwd: 'Working directory',
   allow_paths: 'Allowed paths',
+  allow_commits: 'Allow commits',
   inputs: 'Reads from',
   steps: 'Steps',
   items: 'Stage files',

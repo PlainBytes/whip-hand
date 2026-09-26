@@ -151,7 +151,7 @@ describe('WorkflowEditor: the step rail', () => {
   // field is its own grid cell. A wrapper <div> around a kind's fields would
   // make them one tall cell, and the two columns would come out lopsided.
   it.each([
-    ['agent', 'execute', ['Runner', 'Model', 'Mode', 'Effort', 'Writes', 'Allowed paths']],
+    ['agent', 'execute', ['Runner', 'Model', 'Mode', 'Effort', 'Writes', 'Allow commits', 'Allowed paths']],
     ['command', 'sync-base', ['Working directory', 'Successful exit codes', 'Timeout (ms)']],
     ['approval', 'sign-off', ['Title', 'Capture', 'Show the diff', 'Default without a human']],
   ])('every field of a %s step is a direct child of the rail', (_kind, id, kindFields) => {
@@ -276,6 +276,37 @@ describe('WorkflowEditor: insert below and rename', () => {
     const req = await lastRequest(transport, 'updateWorkflow');
     const wf = (req.params as { workflow: Workflow }).workflow;
     expect(wf.steps.some(s => s.id === 'planning')).toBe(true);
+  });
+
+  it('the Allow commits switch saves allow_commits: true on an agent step', async () => {
+    const { transport } = renderEditor(NESTED_WORKFLOW);
+    fireEvent.click(screen.getByTestId('step-collapse-plan'));
+    const toggle = within(screen.getByTestId('step-rail-plan')).getByLabelText('Allow commits');
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    expect(toggle).toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    const req = await lastRequest(transport, 'updateWorkflow');
+    const plan = (req.params as { workflow: Workflow }).workflow.steps.find(s => s.id === 'plan') as AgentStep;
+    expect(plan.allow_commits).toBe(true);
+  });
+
+  it('switching Allow commits off drops the key rather than saving allow_commits: false', async () => {
+    const workflow: Workflow = {
+      ...NESTED_WORKFLOW,
+      steps: NESTED_WORKFLOW.steps.map(s => (s.id === 'plan' ? { ...s, allow_commits: true } as Step : s)),
+    };
+    const { transport } = renderEditor(workflow);
+    fireEvent.click(screen.getByTestId('step-collapse-plan'));
+    const toggle = within(screen.getByTestId('step-rail-plan')).getByLabelText('Allow commits');
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    const req = await lastRequest(transport, 'updateWorkflow');
+    const plan = (req.params as { workflow: Workflow }).workflow.steps.find(s => s.id === 'plan') as AgentStep;
+    expect(plan.allow_commits).toBeUndefined();
   });
 
   it('refuses a rename that collides with an existing id', () => {

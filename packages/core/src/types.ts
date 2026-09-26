@@ -75,6 +75,11 @@ export interface AgentStep extends StepCommon {
   prompt: string;
   output: string;           // required: an agent step must name its artifact
   allow_paths?: string[];
+  /**
+   * Whether this agent may move HEAD (commit, reset, switch branch). Absent
+   * means no: the workflow commits, so an agent step that moved HEAD fails.
+   */
+  allow_commits?: boolean;
   effort?: EffortLevel;
 }
 

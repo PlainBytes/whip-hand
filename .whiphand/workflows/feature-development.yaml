@@ -36,12 +36,13 @@ steps:
     writes: false
     inputs: [attachments] # files attached at start (--attach); dropped when there are none
     output: plan.md
-    prompt: >
-      We are planning: {{ inputs.feature }}. Work with me on a plan.
-
-      Do not modify files.
-
-      Before you start your discovery, ask the user if there are any files that you should be aware of. If there are, ask the user to provide them.
+    prompt: |
+      We are planning: {{ inputs.feature }}.
+      Before exploring, ask me whether there are files or docs you should read first.
+      Work with me on a plan. Do not modify files.
+      The artifact you write is the agreed plan as it now stands, not a transcript of our
+      conversation. End it with a `## Verify` section: the exact command(s) that exercise
+      this change, because the workflow's test command may not cover it.
 
   - kind: loop # unchanged from the current local copy
     id: human-review
@@ -81,6 +82,21 @@ steps:
                   every point. Leave your work uncommitted: a human reads the
                   working tree at the gate below, and the workflow commits it
                   once they have approved.
+                  Implement everything the plan asks. If something can't or shouldn't be
+                  done, don't drop it silently: say so in the report.
+                  Your report, the artifact, has these sections under exactly these headings:
+                  ## Changed
+                  The files you changed or added, one line each.
+                  ## Verified
+                  The exact commands you ran and their result. Run the tests relevant to
+                  what you changed, not only the workflow's test command.
+                  ## Not done / not verified
+                  Anything you did not do or check, with the reason.
+                  ## Deviations from the plan
+                  Where you departed from the plan, with the reason.
+                  ## Findings addressed
+                  Only when a tests log, review findings or sign-off feedback were
+                  attached: one line per point, and how you addressed it.
                 output: execute-report.md
               - id: tests
                 kind: command
@@ -97,8 +113,19 @@ steps:
             mode: headless
             writes: false
             prompt: |
-              Review the implementation against the attached plan. If sign-off
+              Review the uncommitted working-tree diff (`git diff` plus untracked
+              files) against the attached plan. Walk the plan requirement by
+              requirement and state for each whether it is met. If sign-off
               feedback is attached, FAIL unless every requested change is addressed.
+              Check every claim in the execute report against the diff. A false claim
+              is blocking. Also blocking:
+              - HEAD moved, or the executor committed (check `git log`)
+              - changes outside the plan's scope
+              - an empty diff when the plan requires changes
+              - a review or sign-off point that was not addressed
+              If the attached tests log does not exercise the changed code, say so and
+              run the relevant tests yourself, with read-only commands only.
+              An improvement outside the plan is non-blocking at most.
             output: review.md
       - id: sign-off
         inputs: [review]
@@ -124,12 +151,19 @@ steps:
     writes: false # Write/Edit denied; Bash stays, which is how it reads the diff
     output: commit-message.md
     prompt: |
-      Write the commit message for the change staged on this branch. Read it with
-      `git diff --cached`, and read the attached plan, review and sign-off feedback
-      for why it was made.
-      A subject line in the imperative mood, at most 72 characters, no trailing
-      period. Then a blank line, then one to three short lines on what changed and
-      why. Write the message and nothing else — no preamble, no fences, no review.
+      Write the commit message for the change staged on this branch.
+      Its source of truth is `git diff --cached`, plus the attached plan or stage
+      file, review and feedback for why the change was made. Do not copy or
+      paraphrase an existing commit message, such as one from `git log`.
+      The subject is the first line: imperative mood, at most 72 characters, no
+      trailing period. Then one blank line, then a body of one to three lines, each
+      wrapped at 72 characters, in plain sentences with no bullets. The body says
+      what changed and why.
+      Trailers such as `Co-Authored-By` are allowed. If you add any, put them after
+      the body, separated from it by one blank line.
+      The file holds the message and nothing else: no preamble, no code fences, no
+      review.
+      If the index is empty, write a one-line subject saying so instead of asking.
 
   - id: commit
     kind: command

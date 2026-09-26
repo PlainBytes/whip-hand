@@ -9,6 +9,11 @@ import { promisify } from 'node:util';
 import { runWorkflow } from './runner.ts';
 import { buildPrompt } from '../template.ts';
 import { toWorkspace } from '../path-form.ts';
+import { headlessGuidance } from './headless-guidance.ts';
+import { VERDICT_INSTRUCTION } from './verdict.ts';
+import { claudeAdapter } from '../adapters/claude.ts';
+import { copilotAdapter } from '../adapters/copilot.ts';
+import { opencodeAdapter } from '../adapters/opencode.ts';
 import { endMarkerPath } from './session-end.ts';
 import { awaitStatePath } from './await-state.ts';
 import type { RunManifest } from './manifest.ts';
@@ -747,11 +752,70 @@ test('headless steps get their artifact path appended to the prompt', async () =
     workflow, workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: registry(), frontend,
     spawnHeadless: async spec => { seenPrompt = spec.argv[4]; await writeFile(spec.argv[3], 'x'); return 0; },
   });
-  assert.ok(seenPrompt.startsWith('do it'));
+  // The guidance leads, the step's own prompt follows under its heading, the artifact path closes.
+  assert.ok(seenPrompt.startsWith(headlessGuidance({ id: 'a', writes: true })));
+  assert.ok(seenPrompt.includes('## Your task\n\ndo it\n\nWrite your'), seenPrompt);
   // Workspace-relative with forward slashes, like every path a model is shown.
   assert.ok(seenPrompt.includes(`Write your 'out.md' artifact to: ${toWorkspace(result.artifacts['a'], dir)}`));
   assert.ok(seenPrompt.includes(`artifact to: .whiphand/runs/${result.runId}/out.md`), seenPrompt);
   assert.ok(!seenPrompt.includes(dir), 'no absolute path reaches the prompt');
+});
+
+// What each real adapter writes into its prompt file, seen through a dry run:
+// the runner is the one assembly point, so this is what the model is handed.
+async function promptFilesFor(runner: 'claude' | 'copilot' | 'opencode', step: Partial<AgentStep>) {
+  const dir = await mkdtemp(join(tmpdir(), 'whiphand-run-'));
+  const reg = new AdapterRegistry();
+  reg.register(runner === 'claude' ? claudeAdapter : runner === 'copilot' ? copilotAdapter : opencodeAdapter);
+  const workflow: Workflow = {
+    name: 'r',
+    steps: [{ id: 'a', kind: 'agent', runner, mode: 'headless', writes: true, prompt: 'do it', output: 'out.md', ...step }],
+  };
+  const { events, frontend } = collector();
+  await runWorkflow({
+    workflow, workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: reg, frontend, dryRun: true,
+  });
+  const spawn = events.find(e => e.type === 'step:spawn' && e.phase === 'main');
+  assert.ok(spawn && spawn.type === 'step:spawn');
+  return (spawn.spec.files ?? []).map(f => f.content);
+}
+
+for (const runner of ['claude', 'copilot', 'opencode'] as const) {
+  test(`a headless ${runner} spawn carries the guidance in the variant its step.writes selects`, async () => {
+    const rw = (await promptFilesFor(runner, { writes: true })).find(c => c.includes('## Your task'));
+    assert.ok(rw, 'the prompt file is among the spawn files');
+    assert.ok(rw.startsWith(headlessGuidance({ id: 'a', writes: true })));
+    assert.ok(!rw.includes('READ-ONLY'));
+    assert.ok(rw.includes('## Your task\n\ndo it'));
+    const ro = (await promptFilesFor(runner, { writes: false })).find(c => c.includes('## Your task'));
+    assert.ok(ro);
+    assert.ok(ro.startsWith(headlessGuidance({ id: 'a', writes: false })));
+    assert.ok(ro.includes('READ-ONLY'));
+  });
+
+  test(`a headless ${runner} verdict step carries the verdict instruction after its own prompt`, async () => {
+    const prompt = (await promptFilesFor(runner, { writes: false, verdict: true })).find(c => c.includes('## Your task'));
+    assert.ok(prompt);
+    assert.ok(prompt.includes(`do it\n\n${VERDICT_INSTRUCTION}\n\nWrite your 'out.md' artifact to:`), prompt);
+  });
+}
+
+test('an interactive step is not given the headless guidance', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'whiphand-run-'));
+  const workflow: Workflow = {
+    name: 'r',
+    steps: [{ id: 'a', kind: 'agent', runner: 'fake', mode: 'interactive', writes: false, prompt: 'plan it', output: 'p.md' }],
+  };
+  const { events, frontend } = collector();
+  await runWorkflow({
+    workflow, workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: registry(), frontend, dryRun: true,
+  });
+  for (const e of events) {
+    if (e.type === 'step:spawn') assert.ok(!e.spec.argv.join(' ').includes('no human is watching'), e.phase);
+  }
+  const main = events.find(e => e.type === 'step:spawn' && e.phase === 'main');
+  assert.ok(main && main.type === 'step:spawn');
+  assert.equal(main.spec.argv[3], 'plan it');
 });
 
 test('an unexpected throw still persists a terminal run.json instead of leaving it running', async () => {

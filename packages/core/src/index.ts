@@ -92,6 +92,7 @@ export {
 } from './engine/await-state.ts';
 export type { AwaitReason, AwaitParse } from './engine/await-state.ts';
 export { interactiveGuidance } from './engine/interactive-guidance.ts';
+export { headlessGuidance, headlessPrompt } from './engine/headless-guidance.ts';
 export { runWorkflow } from './engine/runner.ts';
 export type { RunOptions, RunResult } from './engine/runner.ts';
 export {

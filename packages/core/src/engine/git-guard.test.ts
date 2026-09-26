@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { snapshotTree, diffSnapshots, pathsOutside, headSha, classifyGitFailure } from './git-guard.ts';
+import { snapshotTree, diffSnapshots, pathsOutside, headSha, headPosition, classifyGitFailure } from './git-guard.ts';
 
 const run = promisify(execFile);
 
@@ -76,6 +76,20 @@ test('headSha reports the commit', async () => {
   const head = await headSha(dir);
   assert.equal(head.kind, 'ok');
   if (head.kind === 'ok') assert.match(head.sha, /^[0-9a-f]{40}$/);
+});
+
+test('headPosition reports the commit, and an unborn HEAD as a null sha rather than a failure', async () => {
+  const dir = await gitRepo();
+  const head = await headPosition(dir);
+  assert.equal(head.kind, 'ok');
+  if (head.kind === 'ok') assert.match(head.sha ?? '', /^[0-9a-f]{40}$/);
+
+  const fresh = await mkdtemp(join(tmpdir(), 'whiphand-unborn-'));
+  await run('git', ['init', '-b', 'main'], { cwd: fresh });
+  assert.deepEqual(await headPosition(fresh), { kind: 'ok', sha: null }, 'no commits yet is a fact, not a failure');
+
+  const plain = await mkdtemp(join(tmpdir(), 'whiphand-plain-'));
+  assert.deepEqual(await headPosition(plain), { kind: 'not-a-repo' });
 });
 
 test('unchanged tree diffs empty', async () => {

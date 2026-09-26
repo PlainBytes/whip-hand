@@ -38,10 +38,11 @@ export interface StepRailProps {
 
 /**
  * The kind-dependent right rail, in one or two fixed-width columns depending
- * on the card's width: runner, model, mode, effort, writes, verdict, then the
- * wiring — what it reads, what it writes, allowed paths. Everything a step's
- * prose sits beside, none of it stacked beneath a textarea any more. Each
- * field is a direct child, so each is its own cell of the rail's grid.
+ * on the card's width: runner, model, mode, effort, writes, allow commits,
+ * verdict, then the wiring — what it reads, what it writes, allowed paths.
+ * Everything a step's prose sits beside, none of it stacked beneath a textarea
+ * any more. Each field is a direct child, so each is its own cell of the rail's
+ * grid.
  */
 export function StepRail({ step, earlierStepIds, inStages, guardedByLoopId, onUpdate, fieldErrors }: StepRailProps) {
   const styles = useStepLayoutStyles();
@@ -227,6 +228,11 @@ export function StepRail({ step, earlierStepIds, inStages, guardedByLoopId, onUp
             </Dropdown>
           </Field>
           <Switch label="Writes" checked={step.writes} onChange={(_e, data) => patch({ writes: data.checked } as Partial<Step>)} />
+          <Switch
+            label="Allow commits"
+            checked={step.allow_commits ?? false}
+            onChange={(_e, data) => patch({ allow_commits: data.checked || undefined } as Partial<Step>)}
+          />
           <Field label="Allowed paths" hint="Comma-separated.">
             <Input value={allowPathsText} onChange={(_e, data) => setAllowPaths(data.value)} />
           </Field>

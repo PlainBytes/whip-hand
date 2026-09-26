@@ -20,11 +20,13 @@ steps:
     writes: false
     inputs: [attachments] # files attached at start (--attach); dropped when there are none
     output: plan.md
-    prompt: |-
+    prompt: |
       We are planning: {{ inputs.feature }}.
+      Before exploring, ask me whether there are files or docs you should read first.
       Work with me on a plan. Do not modify files.
-
-      Before getting started, always ask for initial files that will allow you to improve your discovery.
+      The artifact you write is the agreed plan as it now stands, not a transcript of our
+      conversation. End it with a `## Verify` section: the exact command(s) that exercise
+      this change, because the workflow's test command may not cover it.
 
   # Repeats until 'sign-off' is approved. Requesting changes there attaches
   # fresh feedback ('sign-off' as a forward reference) and sends fix-cycle
@@ -67,6 +69,21 @@ steps:
                   every point. Leave your work uncommitted: a human reads the
                   working tree at the gate below, and the workflow commits it
                   once they have approved.
+                  Implement everything the plan asks. If something can't or shouldn't be
+                  done, don't drop it silently: say so in the report.
+                  Your report, the artifact, has these sections under exactly these headings:
+                  ## Changed
+                  The files you changed or added, one line each.
+                  ## Verified
+                  The exact commands you ran and their result. Run the tests relevant to
+                  what you changed, not only the workflow's test command.
+                  ## Not done / not verified
+                  Anything you did not do or check, with the reason.
+                  ## Deviations from the plan
+                  Where you departed from the plan, with the reason.
+                  ## Findings addressed
+                  Only when a tests log, review findings or sign-off feedback were
+                  attached: one line per point, and how you addressed it.
                 model: sonnet
               - id: tests
                 kind: command
@@ -83,8 +100,19 @@ steps:
             inputs: [plan, execute, tests, sign-off]
             output: review.md
             prompt: |
-              Review the implementation against the attached plan. If sign-off
+              Review the uncommitted working-tree diff (`git diff` plus untracked
+              files) against the attached plan. Walk the plan requirement by
+              requirement and state for each whether it is met. If sign-off
               feedback is attached, FAIL unless every requested change is addressed.
+              Check every claim in the execute report against the diff. A false claim
+              is blocking. Also blocking:
+              - HEAD moved, or the executor committed (check `git log`)
+              - changes outside the plan's scope
+              - an empty diff when the plan requires changes
+              - a review or sign-off point that was not addressed
+              If the attached tests log does not exercise the changed code, say so and
+              run the relevant tests yourself, with read-only commands only.
+              An improvement outside the plan is non-blocking at most.
 
       # A human gate. Its answer becomes the 'sign-off' both steps above read:
       # approving exits both loops, requesting changes sends fix-cycle round again.

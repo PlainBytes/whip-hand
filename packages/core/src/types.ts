@@ -81,6 +81,7 @@ export interface AgentStep extends StepCommon {
    */
   allow_commits?: boolean;
   effort?: EffortLevel;
+  harvest_timeout_ms?: number;
 }
 
 /** A shell command. Deterministic, spends no tokens, needs no runner. */
@@ -221,6 +222,12 @@ export interface SpawnSpec {
    * there are no pipe writes and no backpressure. Serializes fine: it is a path.
    */
   stdinFile?: string;
+  /**
+   * The runner can remain alive after it has written an interactive session's
+   * artifact. Core aborts this spawn once that artifact is newly non-empty;
+   * only adapters that have verified this behaviour set it.
+   */
+  completeWhenArtifactWritten?: boolean;
 }
 
 export type ProgressFormat = 'claude-stream-json' | 'copilot-jsonl' | 'opencode-json';

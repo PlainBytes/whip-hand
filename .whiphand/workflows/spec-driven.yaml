@@ -1,7 +1,8 @@
-# spec-driven — settle WHAT, then HOW, grilling each with you, then build and
-# review in a cycle until the review passes. Reference: docs/design.md
+# spec-driven — settle WHAT, then HOW, grilling each with you, then build,
+# gate on tests passing, and review in a cycle until the review passes.
+# Reference: docs/design.md
 name: spec-driven
-description: A functional spec and a technical spec, each grilled, then a build/review cycle.
+description: A functional spec and a technical spec, each grilled, then a build/test/review cycle.
 inputs:
   feature:
     required: true
@@ -18,7 +19,6 @@ steps:
     model: opus
     mode: interactive
     writes: false
-    inputs: [attachments]     # files attached at start (--attach); dropped when there are none
     output: functional-plan.md
     prompt: |
       We are settling WHAT to build, not how: {{ inputs.feature }}
@@ -102,7 +102,7 @@ steps:
         steps:
           # Repeats until the tests pass, handing the failing log back to
           # 'execute' each time. 'review' only runs once they are green. A
-          # blank test_command runs 'sh -c ""', which exits 0, so tests pass
+          # blank test_command runs eval "", which exits 0, so tests pass
           # immediately and are effectively skipped.
           - id: test-fix
             kind: loop
@@ -147,9 +147,9 @@ steps:
               - id: tests
                 kind: command
                 run: eval "{{ inputs.test_command }}"
-                verdict: true # a failing exit sends the loop round again, not a crash
+                verdict: true         # a failing exit sends the loop round again, not a crash
                 output: tests.log
-                timeout_ms: 1800000 # a hung suite fails the run (resumable) rather than blocking forever
+                timeout_ms: 1800000   # a hung suite fails the run (resumable) rather than blocking forever
 
           - id: review
             runner: claude

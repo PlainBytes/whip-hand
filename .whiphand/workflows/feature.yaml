@@ -1,8 +1,8 @@
-# feature — plan interactively, then implement and review in a cycle
-# until the review passes, then a human sign-off that can send it back for
-# another cycle. Reference: docs/design.md
+# feature — plan interactively, then implement, gate on tests passing, and
+# review in a cycle until the review passes, then a human sign-off that can
+# send it back for another cycle. Reference: docs/design.md
 name: feature
-description: Plan with a human, then implement and review in a cycle until the review passes.
+description: Plan with a human, then implement, gate on tests, and review in a cycle until the review passes.
 inputs:
   feature:
     required: true
@@ -14,11 +14,10 @@ inputs:
     remember: true
     multiline: false
 steps:
-  - id: plan # live terminal chat; artifact harvested afterwards
+  - id: plan          # live terminal chat; artifact harvested afterwards
     runner: claude
     mode: interactive
     writes: false
-    inputs: [attachments] # files attached at start (--attach); dropped when there are none
     output: plan.md
     prompt: |
       We are planning: {{ inputs.feature }}.
@@ -37,21 +36,21 @@ steps:
     until: sign-off
     max_iterations: 5
     steps:
-      - id: fix-cycle # repeats its body until 'review' returns VERDICT: PASS
+      - id: fix-cycle   # repeats its body until 'review' returns VERDICT: PASS
         kind: loop
         until: review
         max_iterations: 3
         steps:
           # Repeats until the tests pass, handing the failing log back to
           # 'execute' each time. 'review' only runs once they are green. A
-          # blank test_command runs 'sh -c ""', which exits 0, so tests pass
+          # blank test_command runs eval "", which exits 0, so tests pass
           # immediately and are effectively skipped.
           - id: test-fix
             kind: loop
             until: tests
             max_iterations: 3
             steps:
-              - id: execute # headless; may write
+              - id: execute   # headless; may write
                 runner: claude
                 mode: headless
                 writes: true
@@ -84,15 +83,14 @@ steps:
                   ## Findings addressed
                   Only when a tests log, review findings or sign-off feedback were
                   attached: one line per point, and how you addressed it.
-                model: sonnet
               - id: tests
                 kind: command
                 run: eval "{{ inputs.test_command }}"
-                verdict: true # a failing exit sends the loop round again, not a crash
+                verdict: true         # a failing exit sends the loop round again, not a crash
                 output: tests.log
-                timeout_ms: 1800000 # a hung suite fails the run (resumable) rather than blocking forever
+                timeout_ms: 1800000   # a hung suite fails the run (resumable) rather than blocking forever
 
-          - id: review # headless, read-only, must end with VERDICT: PASS|FAIL
+          - id: review    # headless, read-only, must end with VERDICT: PASS|FAIL
             runner: claude
             mode: headless
             writes: false

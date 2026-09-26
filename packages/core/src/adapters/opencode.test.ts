@@ -171,6 +171,7 @@ test('harvest: resumes by id, unconditionally allows edit regardless of the step
   assert.ok(spec.argv.includes('--agent'));
   assert.equal(configOf(spec).agent.whiphand.permission.edit['*'], 'allow');
   assert.deepEqual(spec.progress, { format: 'opencode-json' });
+  assert.equal(spec.completeWhenArtifactWritten, true);
 });
 
 test('harvest: prompt asks for the same artifact write claude/copilot harvest asks for', () => {

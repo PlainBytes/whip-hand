@@ -397,6 +397,7 @@ export const opencodeAdapter: RunnerAdapter = {
       ...opencodeSpec(ctx, argv, false, config),
       files: [{ path: file, content: lf(harvestPrompt(step, ctx)) }],
       progress: { format: 'opencode-json' },
+      completeWhenArtifactWritten: true,
     };
   },
 

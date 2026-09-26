@@ -1,7 +1,7 @@
-# feature-development — branch off trunk, plan, implement and review in a cycle,
-# then commit on sign-off. Reference: docs/design.md
+# feature-development — branch off trunk, plan, implement, gate on tests
+# passing, and review in a cycle, then commit on sign-off. Reference: docs/design.md
 name: feature-development
-description: Branch off trunk, plan, implement and review in a cycle, then commit on sign-off.
+description: Branch off trunk, plan, implement, gate on tests, and review in a cycle, then commit on sign-off.
 inputs:
   feature:
     required: true
@@ -28,13 +28,12 @@ steps:
     run: git checkout -b "feature/{{ run.slug }}"
     output: branch.log
 
-  - id: plan # unchanged from the current local copy
+  - id: plan
     kind: agent
-    runner: claude
-    model: opus
+    runner: opencode
+    model: opencode/gpt-5.6-terra
     mode: interactive
     writes: false
-    inputs: [attachments] # files attached at start (--attach); dropped when there are none
     output: plan.md
     prompt: |
       We are planning: {{ inputs.feature }}.
@@ -44,7 +43,7 @@ steps:
       conversation. End it with a `## Verify` section: the exact command(s) that exercise
       this change, because the workflow's test command may not cover it.
 
-  - kind: loop # unchanged from the current local copy
+  - kind: loop
     id: human-review
     until: sign-off
     max_iterations: 5
@@ -56,7 +55,7 @@ steps:
         steps:
           # Repeats until the tests pass, handing the failing log back to
           # 'execute' each time. 'review' only runs once they are green. A
-          # blank test_command runs 'sh -c ""', which exits 0, so tests pass
+          # blank test_command runs eval "", which exits 0, so tests pass
           # immediately and are effectively skipped.
           - id: test-fix
             kind: loop
@@ -71,8 +70,8 @@ steps:
                 # first pass of each, when there is nothing yet to read.
                 inputs: [plan, tests, review, sign-off]
                 kind: agent
-                runner: claude
-                model: sonnet
+                runner: opencode
+                model: mistral/mistral-medium-latest
                 mode: headless
                 writes: true
                 prompt: |
@@ -108,8 +107,8 @@ steps:
             inputs: [plan, execute, tests, sign-off]
             verdict: true
             kind: agent
-            runner: claude
-            model: opus
+            runner: opencode
+            model: opencode/gpt-5.6-terra
             mode: headless
             writes: false
             prompt: |
@@ -137,16 +136,21 @@ steps:
         capture: review
         output: feedback.md
 
-  - id: stage # everything but the run artifacts, so the message
-    kind: command # writer below sees the whole change as one diff
+  # Everything but the run artifacts, so the message writer below sees the whole
+  # change as one diff. [.] rather than . because git rejects an exclude pathspec
+  # whose literal prefix is gitignored, and most repos ignore .whiphand/runs.
+  # The short :! form because cmd.exe cannot carry a quote next to the parens
+  # of :(exclude); without glob magic the * already spans subdirectories.
+  - id: stage
+    kind: command
     run: git add -A -- . ":![.]whiphand/runs/*"
     output: stage.log
 
   - id: commit-message
     inputs: [plan, review, sign-off]
     kind: agent
-    runner: claude
-    model: haiku # summarising a diff is not what the workflow's model is for
+    runner: opencode
+    model: mistral/mistral-medium-latest # summarising a diff is not what the workflow's model is for
     mode: headless
     writes: false # Write/Edit denied; Bash stays, which is how it reads the diff
     output: commit-message.md
@@ -169,6 +173,3 @@ steps:
     kind: command
     run: git commit -F ".whiphand/runs/{{ run.id }}/commit-message.md"
     output: commit.log
-  - id: push
-    kind: command
-    run: git push

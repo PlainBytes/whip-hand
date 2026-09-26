@@ -874,10 +874,39 @@ export async function runWorkflow(options: RunOptions): Promise<RunResult> {
         if (hFailed !== null) return hFailed;
         emit({ type: 'step:spawn', stepId: step.id, spec: hSpec, phase: 'harvest' });
         const harvestSink = lineSink(step.id, hSpec);
-        const harvestExit = await spawnHeadless(hSpec, opts.signal, harvestSink.onLine);
+        const HARVEST_TIMEOUT_MS = step.harvest_timeout_ms ?? 300_000;
+        const harvestTimeout = AbortSignal.timeout(HARVEST_TIMEOUT_MS);
+        const artifact = ctx.artifacts[step.id];
+        const artifactBefore = await stat(artifact)
+          .then(s => ({ size: s.size, mtimeMs: s.mtimeMs }))
+          .catch(() => undefined);
+        const artifactWritten = new AbortController();
+        let artifactPoll: NodeJS.Timeout | undefined;
+        if (hSpec.completeWhenArtifactWritten) {
+          artifactPoll = setInterval(() => {
+            void stat(artifact).then(s => {
+              const changed = artifactBefore === undefined
+                || s.size !== artifactBefore.size || s.mtimeMs !== artifactBefore.mtimeMs;
+              if (changed && s.size > 0) artifactWritten.abort();
+            }).catch(() => {});
+          }, 100);
+          artifactPoll.unref?.();
+        }
+        const harvestSignal = opts.signal
+          ? AbortSignal.any([opts.signal, harvestTimeout, artifactWritten.signal])
+          : AbortSignal.any([harvestTimeout, artifactWritten.signal]);
+        let harvestExit: number;
+        try {
+          harvestExit = await spawnHeadless(hSpec, harvestSignal, harvestSink.onLine);
+        } finally {
+          if (artifactPoll !== undefined) clearInterval(artifactPoll);
+        }
+        if (!artifactWritten.signal.aborted && harvestTimeout.aborted) {
+          return fail(`harvest for step '${step.id}' timed out after ${HARVEST_TIMEOUT_MS}ms`, step.id);
+        }
         if (opts.signal?.aborted) return cancelled();
-        emit({ type: 'step:done', stepId: step.id, exitCode: harvestExit });
-        if (harvestExit !== 0) {
+        emit({ type: 'step:done', stepId: step.id, exitCode: artifactWritten.signal.aborted ? 0 : harvestExit });
+        if (!artifactWritten.signal.aborted && harvestExit !== 0) {
           return fail(harvestSink.failure(`harvest for step '${step.id}' exited with code ${harvestExit}`), step.id);
         }
       } else {

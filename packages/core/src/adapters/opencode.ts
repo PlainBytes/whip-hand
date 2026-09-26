@@ -372,6 +372,7 @@ export const opencodeAdapter: RunnerAdapter = {
       ...opencodeSpec(ctx, argv, false, config),
       files: [{ path: prompt, content: lf(buildPrompt(step, ctx)) }],
       progress: { format: 'opencode-json' },
+      completeWhenArtifactWritten: true,
     };
   },
 

@@ -150,7 +150,7 @@ steps:
     inputs: [plan, review, sign-off]
     kind: agent
     runner: opencode
-    model: mistral/mistral-medium-latest # summarising a diff is not what the workflow's model is for
+    model: haiku # summarising a diff is not what the workflow's model is for
     mode: headless
     writes: false # Write/Edit denied; Bash stays, which is how it reads the diff
     output: commit-message.md

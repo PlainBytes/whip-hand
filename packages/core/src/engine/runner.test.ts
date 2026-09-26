@@ -495,6 +495,33 @@ test('an opencode-style harvest completes once its artifact is written, even if 
   assert.ok(events.some(e => e.type === 'step:done' && e.stepId === 'plan' && e.exitCode === 0));
 });
 
+test('an opencode-style headless step completes once its artifact is written, even if the runner stays alive', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'whiphand-run-'));
+  const workflow: Workflow = {
+    name: 'r',
+    steps: [{ id: 'review', kind: 'agent', runner: 'fake', mode: 'headless', writes: false, prompt: 'p', output: 'review.md' }],
+  };
+  const adapter = fakeRunner();
+  adapter.headless = (step, ctx) => ({
+    argv: ['fake', 'headless', step.id, ctx.artifacts[step.id]], cwd: ctx.workdir, env: {}, interactive: false,
+    completeWhenArtifactWritten: true,
+  });
+  const registryWithLingeringHeadless = new AdapterRegistry();
+  registryWithLingeringHeadless.register(adapter);
+  const { events, frontend } = collector();
+  const result = await runWorkflow({
+    workflow, workdir: dir, inputs: {}, config: DEFAULT_CONFIG, registry: registryWithLingeringHeadless, frontend,
+    spawnHeadless: async (spec, signal) => {
+      await writeFile(spec.argv[3], 'VERDICT: PASS\n');
+      await new Promise<void>(resolve => signal?.addEventListener('abort', () => resolve(), { once: true }));
+      return 130;
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.ok(events.some(e => e.type === 'step:done' && e.stepId === 'review' && e.exitCode === 0));
+});
+
 test('interactive step fails the run when harvest writes nothing', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'whiphand-run-'));
   const workflow: Workflow = {

@@ -147,6 +147,7 @@ test('headless: format json, agent flag, model and variant argv', () => {
   assert.equal(spec.stdinFile, undefined, "opencode's stdin support for `run` is not verified");
   assert.equal(spec.interactive, false);
   assert.deepEqual(spec.progress, { format: 'opencode-json' });
+  assert.equal(spec.completeWhenArtifactWritten, true);
 });
 
 test('headless: no support files beyond the prompt — a headless step has no human to collaborate with', () => {

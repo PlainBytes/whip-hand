@@ -503,10 +503,12 @@ test('plugin: captures the root session, ignores a subagent session entirely', a
     await assert.rejects(() => stat(sessionCapturePath(runDir, 'plan')), 'a subagent session must not be captured');
 
     await plugin.emit({ type: 'session.created', properties: { info: { id: 'root1' } } });
+    await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(await readFile(sessionCapturePath(runDir, 'plan'), 'utf8'), 'root1');
 
     // The subagent's own status chatter must never touch the await file.
     await plugin.emit({ type: 'session.status', properties: { sessionID: 'sub1', status: { type: 'idle' } } });
+    await new Promise(resolve => setTimeout(resolve, 20));
     await assert.rejects(() => stat(awaitStatePath(runDir, 'plan')));
   } finally {
     if (plugin) await rm(plugin.pluginDir, { recursive: true, force: true });
@@ -608,6 +610,7 @@ test('plugin: a resumed spawn bakes in the known session id, with no session.cre
     plugin = await loadPlugin(opencodeAdapter.interactive(planStep, runCtx));
     // No session.created at all — resume fires none for the root session.
     await plugin.emit({ type: 'session.status', properties: { sessionID: 'ses_known', status: { type: 'idle' } } });
+    await new Promise(resolve => setTimeout(resolve, 20));
     assert.deepEqual(JSON.parse(await readFile(awaitStatePath(runDir, 'plan'), 'utf8')), { r: 'turn' });
   } finally {
     if (plugin) await rm(plugin.pluginDir, { recursive: true, force: true });

@@ -26,7 +26,7 @@ async function waitFor(check: () => boolean, ms = 5000): Promise<void> {
  * `/bin/sh` does not exist on the Windows CI leg.
  */
 function nodeSpec(script: string): SpawnSpec {
-  return { argv: [process.execPath, '-e', script], cwd: process.cwd(), env: {}, interactive: false };
+  return { argv: [process.execPath, '-e', script], cwd: process.cwd(), env: { NO_COLOR: '1', FORCE_COLOR: '0' }, interactive: false };
 }
 
 /**

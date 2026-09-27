@@ -19,11 +19,11 @@ const FILES = {
   'apps/desktop/src-tauri/Cargo.lock':
     '[[package]]\nname = "other"\nversion = "9.9.9"\n\n[[package]]\nname = "whiphand"\nversion = "0.1.0"\ndependencies = [\n "serde",\n]\n',
   'apps/desktop/src-tauri/tauri.conf.json':
-    '{\n  "productName": "Whiphand",\n  "version": "0.1.0",\n'
-    + '  "plugins": { "updater": {\n'
-    + '    "pubkey": "REPLACE_WITH_OPERATOR_GENERATED_PUBKEY",\n'
-    + '    "endpoints": ["https://github.com/PlainBytes/whip-hand/releases/latest/download/latest.json"]\n'
-    + '  } }\n}\n',
+    '{\n  "productName": "Whiphand",\n  "version": "0.1.0",' +
+    '  "plugins": { "updater": {' +
+    '    "pubkey": "REPLACE_WITH_OPERATOR_GENERATED_PUBKEY",' +
+    '    "endpoints": ["https://github.com/PlainBytes/whip-hand/releases/latest/download/latest.json"]' +
+    '  } }\n}\n',
   'apps/desktop/src/lib/updater.ts':
     "const RELEASE_PAGE_URL = 'https://github.com/PlainBytes/whip-hand/releases/latest';\n",
   'packages/core/src/version.ts': "export const CORE_VERSION = '0.1.0';\n",
@@ -43,10 +43,6 @@ const FILES = {
   }, null, 2)}\n`,
 };
 
-// version.mjs resolves its target files relative to its own location on
-// disk (the same pattern sea.mjs uses for repoRoot), not the caller's cwd —
-// so exercising it against a fixture means giving the fixture its own copy
-// at scripts/version.mjs, not pointing a fixed path at the real repo.
 function makeFixtureRepo() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whiphand-version-'));
   for (const [relPath, content] of Object.entries(FILES)) {
@@ -63,6 +59,7 @@ function run(root, args) {
   return execFileSync(process.execPath, [path.join(root, 'scripts/version.mjs'), ...args], {
     cwd: root,
     encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
 }
 
@@ -95,7 +92,7 @@ test('--check exits non-zero and lists every mismatch', () => {
   }
 });
 
-test('writing a version updates every location, including the CLI’s pinned @whiphand/core dependency, Cargo.lock and package-lock.json', () => {
+test('writing a version updates every location, including the CLI\'s pinned @whiphand/core dependency, Cargo.lock and package-lock.json', () => {
   const root = makeFixtureRepo();
   try {
     run(root, ['0.2.0']);
@@ -106,7 +103,6 @@ test('writing a version updates every location, including the CLI’s pinned @wh
     const cliPkg = JSON.parse(fs.readFileSync(path.join(root, 'packages/cli/package.json'), 'utf8'));
     assert.equal(cliPkg.version, '0.2.0');
     assert.equal(cliPkg.dependencies['@whiphand/core'], '0.2.0');
-    // A dependency the script must not touch.
     assert.equal(cliPkg.dependencies.commander, '^14.0.0');
 
     const cargoToml = fs.readFileSync(path.join(root, 'apps/desktop/src-tauri/Cargo.toml'), 'utf8');
@@ -114,7 +110,6 @@ test('writing a version updates every location, including the CLI’s pinned @wh
 
     const cargoLock = fs.readFileSync(path.join(root, 'apps/desktop/src-tauri/Cargo.lock'), 'utf8');
     assert.match(cargoLock, /name = "whiphand"\nversion = "0\.2\.0"/);
-    // An unrelated dependency's version, left alone.
     assert.match(cargoLock, /name = "other"\nversion = "9\.9\.9"/);
 
     const tauriConf = JSON.parse(fs.readFileSync(path.join(root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'));
@@ -129,7 +124,6 @@ test('writing a version updates every location, including the CLI’s pinned @wh
       assert.equal(lock.packages[workspace].version, '0.2.0', workspace);
     }
     assert.equal(lock.packages['packages/cli'].dependencies['@whiphand/core'], '0.2.0');
-    // Left alone: a third-party package, a non-pinned range, and npm's own formatting.
     assert.equal(lock.packages['node_modules/commander'].version, '14.0.0');
     assert.equal(lock.packages['packages/agent'].dependencies['@whiphand/core'], '*');
     assert.equal(lockText, `${JSON.stringify(lock, null, 2)}\n`);
@@ -161,8 +155,6 @@ test('--check-release refuses a tree whose updater is still a placeholder', () =
     assert.throws(() => run(root, ['--check-release']), error => {
       assert.equal(error.status, 1);
       const stderr = error.stderr.toString();
-      // The signing key is the one thing left that only an operator can fill
-      // in; the endpoint URLs were resolved when the repo got its remote.
       assert.match(stderr, /plugins\.updater\.pubkey/);
       return true;
     });

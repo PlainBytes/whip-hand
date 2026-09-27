@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { opencodeAdapter, parseOpencodeModels, OPENCODE_QUIT_SEQUENCE } from './opencode.ts';
 import { interactiveGuidance } from '../engine/interactive-guidance.ts';
@@ -435,8 +435,8 @@ test('captureSessionId: never throws, even when the fallback command itself fail
  * plugin directory for cleanup.
  */
 async function loadPlugin(spec: { files?: Array<{ path: string; content: string }> }): Promise<{ emit: (evt: any) => Promise<void>; pluginDir: string }> {
-  const pluginIndex = spec.files!.find(f => f.path.endsWith('/index.mjs'))!;
-  const pluginDir = pluginIndex.path.replace('/index.mjs', '');
+  const pluginIndex = spec.files!.find(f => basename(f.path) === 'index.mjs')!;
+  const pluginDir = dirname(pluginIndex.path);
   await mkdir(pluginDir, { recursive: true });
   await writeFile(pluginIndex.path, pluginIndex.content, 'utf8');
   

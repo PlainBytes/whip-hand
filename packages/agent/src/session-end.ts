@@ -34,6 +34,7 @@ export function watchForMarker(
 ): MarkerWatcher {
   let stopped = false;
   let checking = false;
+  let lastErrorTime = 0;
 
   const timer = setInterval(() => {
     if (stopped || checking) return;
@@ -45,7 +46,14 @@ export function watchForMarker(
         clearInterval(timer);
         onAppear();
       })
-      .catch(() => {})
+      .catch((err: NodeJS.ErrnoException) => {
+        if (err.code === 'ENOENT') return;
+        const now = Date.now();
+        if (now - lastErrorTime > 30_000) {
+          console.warn(`[watchForMarker] Cannot stat ${path}: ${err.message}`);
+          lastErrorTime = now;
+        }
+      })
       .finally(() => { checking = false; });
   }, intervalMs);
   // Never let a forgotten watcher hold the sidecar open past shutdown.

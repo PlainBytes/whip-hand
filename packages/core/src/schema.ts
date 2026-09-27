@@ -75,6 +75,7 @@ const agentStepSchema = z.object({
   allow_paths: z.array(requiredText()).optional(),
   allow_commits: z.boolean().optional(),
   effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+  harvest_timeout_ms: z.number().int().positive().optional(),
 });
 
 /** `expect_exit: 0` and `expect_exit: [0, 1]` both normalize to an array. */

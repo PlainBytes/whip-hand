@@ -773,6 +773,32 @@ export async function runWorkflow(options: RunOptions): Promise<RunResult> {
       return { onLine, failure };
     };
 
+    async function watchArtifactCompletion(spec: SpawnSpec, artifact: string): Promise<{
+      signal: AbortSignal;
+      completed(): boolean;
+      stop(): void;
+    }> {
+      const completed = new AbortController();
+      if (!spec.completeWhenArtifactWritten) {
+        return { signal: completed.signal, completed: () => false, stop: () => {} };
+      }
+      const before = await stat(artifact)
+        .then(s => ({ size: s.size, mtimeMs: s.mtimeMs }))
+        .catch(() => undefined);
+      const poll = setInterval(() => {
+        void stat(artifact).then(s => {
+          const changed = before === undefined || s.size !== before.size || s.mtimeMs !== before.mtimeMs;
+          if (changed && s.size > 0) completed.abort();
+        }).catch(() => {});
+      }, 100);
+      poll.unref?.();
+      return {
+        signal: completed.signal,
+        completed: () => completed.signal.aborted,
+        stop: () => clearInterval(poll),
+      };
+    }
+
     /** Records where a step's artifact went, both as "latest" and in the history. */
     const recordArtifact = (stepId: string, path: string): void => {
       ctx.artifacts[stepId] = path;
@@ -874,10 +900,25 @@ export async function runWorkflow(options: RunOptions): Promise<RunResult> {
         if (hFailed !== null) return hFailed;
         emit({ type: 'step:spawn', stepId: step.id, spec: hSpec, phase: 'harvest' });
         const harvestSink = lineSink(step.id, hSpec);
-        const harvestExit = await spawnHeadless(hSpec, opts.signal, harvestSink.onLine);
+        const HARVEST_TIMEOUT_MS = step.harvest_timeout_ms ?? 300_000;
+        const harvestTimeout = AbortSignal.timeout(HARVEST_TIMEOUT_MS);
+        const artifact = ctx.artifacts[step.id];
+        const artifactCompletion = await watchArtifactCompletion(hSpec, artifact);
+        const harvestSignal = opts.signal
+          ? AbortSignal.any([opts.signal, harvestTimeout, artifactCompletion.signal])
+          : AbortSignal.any([harvestTimeout, artifactCompletion.signal]);
+        let harvestExit: number;
+        try {
+          harvestExit = await spawnHeadless(hSpec, harvestSignal, harvestSink.onLine);
+        } finally {
+          artifactCompletion.stop();
+        }
+        if (!artifactCompletion.completed() && harvestTimeout.aborted) {
+          return fail(`harvest for step '${step.id}' timed out after ${HARVEST_TIMEOUT_MS}ms`, step.id);
+        }
         if (opts.signal?.aborted) return cancelled();
-        emit({ type: 'step:done', stepId: step.id, exitCode: harvestExit });
-        if (harvestExit !== 0) {
+        emit({ type: 'step:done', stepId: step.id, exitCode: artifactCompletion.completed() ? 0 : harvestExit });
+        if (!artifactCompletion.completed() && harvestExit !== 0) {
           return fail(harvestSink.failure(`harvest for step '${step.id}' exited with code ${harvestExit}`), step.id);
         }
       } else {
@@ -886,10 +927,21 @@ export async function runWorkflow(options: RunOptions): Promise<RunResult> {
         if (specFailed !== null) return specFailed;
         emit({ type: 'step:spawn', stepId: step.id, spec, phase: 'main' });
         const sink = lineSink(step.id, spec);
-        const exitCode = await spawnHeadless(spec, opts.signal, sink.onLine);
+        const artifactCompletion = await watchArtifactCompletion(spec, ctx.artifacts[step.id]);
+        const signal = opts.signal
+          ? AbortSignal.any([opts.signal, artifactCompletion.signal])
+          : artifactCompletion.signal;
+        let exitCode: number;
+        try {
+          exitCode = await spawnHeadless(spec, signal, sink.onLine);
+        } finally {
+          artifactCompletion.stop();
+        }
         if (opts.signal?.aborted) return cancelled();
-        emit({ type: 'step:done', stepId: step.id, exitCode });
-        if (exitCode !== 0) return fail(sink.failure(`step '${step.id}' exited with code ${exitCode}`), step.id);
+        emit({ type: 'step:done', stepId: step.id, exitCode: artifactCompletion.completed() ? 0 : exitCode });
+        if (!artifactCompletion.completed() && exitCode !== 0) {
+          return fail(sink.failure(`step '${step.id}' exited with code ${exitCode}`), step.id);
+        }
       }
 
       // After the session and the harvest, where the tree guard looks too.

@@ -69,6 +69,12 @@ describe('FileTree', () => {
     expect(screen.queryByText('node_modules')).not.toBeInTheDocument();
   });
 
+  it('keeps row labels on one line so deep names scroll instead of wrapping', async () => {
+    renderTree(workspace());
+    const label = await screen.findByText('README.md');
+    expect(label).toHaveStyle({ whiteSpace: 'nowrap' });
+  });
+
   it('loads a directory lazily, only when it is expanded', async () => {
     renderTree(workspace());
     await screen.findByText('docs');

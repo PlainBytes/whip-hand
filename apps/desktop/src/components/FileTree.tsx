@@ -138,6 +138,9 @@ function NodeRows({
             onSelect(path);
           },
           style: { background: selected ? 'var(--colorNeutralBackground1Selected)' : undefined },
+          // Names never wrap: a deep name that outgrows the panel scrolls
+          // the tree sideways instead of hiding behind a wrapped line.
+          main: { style: { whiteSpace: 'nowrap' as const, overflow: 'visible' } },
           // Controlled for every row, always: letting `visible` appear only
           // on the selected row flips the slot between uncontrolled and
           // controlled, which Fluent warns about. Fluent still decides when
@@ -208,6 +211,8 @@ export function FileTree(props: FileTreeProps) {
     <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
       <Tree
         aria-label="Workspace files"
+        // Grow with the widest row so the wrapper below scrolls horizontally.
+        style={{ minWidth: 'max-content' }}
         // treegrid: the right arrow key walks from a row into its actions,
         // so the row operations are reachable without a mouse.
         navigationMode="treegrid"

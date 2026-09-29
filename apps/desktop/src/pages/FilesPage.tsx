@@ -15,6 +15,7 @@ import { useFileSystem } from '../files/fs-context.tsx';
 import { joinPath, parentPath, validateName } from '../files/tree-model.ts';
 import { DocumentAdd16Regular, FolderAdd16Regular } from '@fluentui/react-icons';
 import { FileTree } from '../components/FileTree.tsx';
+import { ResizablePane } from '../components/ResizablePane.tsx';
 import { FilePreview } from '../components/FilePreview.tsx';
 import { PageHeader } from '../components/PageHeader.tsx';
 import { RECESSED_SURFACE } from '../components/recessed-surface.ts';
@@ -294,16 +295,8 @@ export function FilesPage() {
         </div>
       </PageHeader>
 
-      <div style={{ display: 'flex', flex: 1, minHeight: 0, paddingTop: 8, gap: 8 }}>
-        <div
-          style={{
-            width: 320,
-            flexShrink: 0,
-            minHeight: 0,
-            display: 'flex',
-            overflow: 'hidden',
-          }}
-        >
+      <div style={{ display: 'flex', flex: 1, minHeight: 0, paddingTop: 8 }}>
+        <ResizablePane storageKey="whiphand.files.treeWidth">
           <FileTree
             root={workspacePath}
             nodes={tree.nodes}
@@ -316,12 +309,12 @@ export function FilesPage() {
             onRename={path => guarded({ kind: 'ops', mode: 'rename', target: path })}
             onDelete={path => guarded({ kind: 'delete', path })}
           />
-        </div>
+        </ResizablePane>
         <div
           style={{
             // The recessed surface the run page reads its output on — the
-            // only boundary; the tree sits on the page background with an
-            // 8px gap before it.
+            // only boundary; the tree sits on the page background with a
+            // resize handle before it.
             ...RECESSED_SURFACE,
             flex: 1, minWidth: 0, minHeight: 0, display: 'flex', overflow: 'hidden',
           }}

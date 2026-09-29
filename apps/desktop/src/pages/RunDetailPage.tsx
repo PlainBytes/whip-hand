@@ -53,6 +53,7 @@ import { FileSystemProvider } from '../files/fs-context.tsx';
 import { ArtifactFileSystem } from '../files/artifact-fs.ts';
 import { joinPath, makeRootNode, type TreeNodes } from '../files/tree-model.ts';
 import { FileTree } from '../components/FileTree.tsx';
+import { ResizablePane } from '../components/ResizablePane.tsx';
 import { FilePreview } from '../components/FilePreview.tsx';
 import { RECESSED_SURFACE } from '../components/recessed-surface.ts';
 import { resolveInArtifacts } from '../markdown/resolve.ts';
@@ -1553,19 +1554,11 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
             </div>
           ) : (
             <FileSystemProvider fs={artifactFs}>
-              {/* Laid out like FilesPage's browser — same widths, same 8px gap
-                  — so a tree of files behaves the same wherever you meet it.
-                  The preview's own surface is the only boundary. */}
-              <div style={{ display: 'flex', width: '100%', minHeight: 0, gap: 8 }}>
-                <div
-                  style={{
-                    width: 320,
-                    flexShrink: 0,
-                    minHeight: 0,
-                    display: 'flex',
-                    overflow: 'hidden',
-                  }}
-                >
+              {/* Laid out like FilesPage's browser: both use ResizablePane,
+                  each with its own saved width. The preview's own surface is
+                  the only boundary. */}
+              <div style={{ display: 'flex', width: '100%', minHeight: 0 }}>
+                <ResizablePane storageKey="whiphand.run.artifactsTreeWidth">
                   <FileTree
                     root={runDir}
                     nodes={artifactNodes}
@@ -1576,7 +1569,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
                     ))}
                     onSelect={setSelectedArtifactPath}
                   />
-                </div>
+                </ResizablePane>
                 <div
                   style={{
                     // The same recessed surface the log tail and the activity

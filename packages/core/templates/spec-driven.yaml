@@ -1,0 +1,190 @@
+# spec-driven — settle WHAT, then HOW, grilling each with you, then build,
+# gate on tests passing, and review in a cycle until the review passes.
+# Reference: docs/design.md
+name: spec-driven
+description: A functional spec and a technical spec, each grilled, then a build/test/review cycle.
+inputs:
+  feature:
+    required: true
+    prompt: What are we building?
+  test_command:
+    required: false
+    default: npm test
+    prompt: Test command (leave blank to skip tests)
+    remember: true
+    multiline: false
+steps:
+  - id: functional-plan       # live chat: what it must do, and for whom
+    runner: claude
+    model: opus
+    mode: interactive
+    writes: false
+    output: functional-plan.md
+    prompt: |
+      We are settling WHAT to build, not how: {{ inputs.feature }}
+      Before exploring, ask me whether there are files or docs you should read first.
+      Work with me on the problem, who it serves, the behaviour, the edge
+      cases, what is explicitly out of scope, and how we will know it works.
+      Stay out of implementation — no file layout, no APIs, no libraries.
+      One question at a time. Do not modify files.
+      The artifact you write is the agreed plan as it now stands, not a transcript of our
+      conversation.
+
+  - id: functional-grill      # live chat: it attacks the draft, you defend it
+    runner: claude
+    model: opus
+    mode: interactive
+    writes: false
+    inputs: [functional-plan]
+    output: functional-spec.md
+    prompt: |
+      Grill me on the attached functional plan for: {{ inputs.feature }}
+      Attack it: unstated assumptions, success criteria too vague to fail,
+      missing edge cases, scope that crept in, requirements that can be read
+      two ways. One challenge at a time; push back when an answer hand-waves.
+      When it holds up, the artifact you write is the REVISED functional
+      spec as it now stands — not a transcript of the argument.
+      Do not modify files.
+
+  - id: technical-plan        # live chat: how, against the settled spec
+    runner: claude
+    model: opus
+    mode: interactive
+    writes: false
+    inputs: [functional-grill]
+    output: technical-plan.md
+    prompt: |
+      The functional spec is settled. Work with me on HOW to build it in this
+      codebase: the components and their boundaries, data flow, what existing
+      code changes, error handling, and how it gets tested. Before exploring,
+      ask me whether there are files or docs you should read first. Then read
+      the code before proposing structure. One question at a time. Do not
+      modify files.
+      The artifact you write is the agreed plan as it now stands, not a transcript of our
+      conversation. End it with a `## Verify` section: the exact command(s) that exercise
+      this change, because the workflow's test command may not cover it.
+
+  - id: technical-grill
+    runner: claude
+    model: opus
+    mode: interactive
+    writes: false
+    inputs: [functional-grill, technical-plan]
+    output: technical-spec.md
+    prompt: |
+      Grill me on the attached technical plan. Attack it: does it actually
+      deliver the functional spec, what breaks under failure, what did it
+      invent that the codebase already has, where are the boundaries wrong,
+      what is unnecessary. One challenge at a time.
+      The artifact you write is the REVISED technical spec as it now stands.
+      Do not modify files.
+
+  - id: build-it              # the brake: stop before spending on implementation
+    kind: approval
+    title: Build this?
+    instructions: |
+      Both specs are settled. Continuing starts the implementation cycle,
+      which writes code without stopping to ask.
+    inputs: [functional-grill, technical-grill]
+
+  # Repeats until 'sign-off' is approved. Requesting changes there attaches
+  # fresh feedback ('sign-off' as a forward reference) and sends build-cycle
+  # round again.
+  - id: human-review
+    kind: loop
+    until: sign-off
+    max_iterations: 5
+    steps:
+      - id: build-cycle
+        kind: loop
+        until: review
+        max_iterations: 3
+        steps:
+          # Repeats until the tests pass, handing the failing log back to
+          # 'execute' each time. 'review' only runs once they are green. A
+          # blank test_command runs eval "", which exits 0, so tests pass
+          # immediately and are effectively skipped.
+          - id: test-fix
+            kind: loop
+            until: tests
+            max_iterations: 3
+            steps:
+              - id: execute
+                runner: claude
+                model: sonnet     # the specs did the thinking; this half is cheap
+                mode: headless
+                writes: true
+                # 'tests' is later in THIS loop, so it means the PREVIOUS
+                # iteration's log; 'review' and 'sign-off' are later siblings
+                # of the OUTER loops, so they mean the previous ROUND's
+                # findings/feedback — all three are simply skipped, on the
+                # first pass of each, when there is nothing yet to read.
+                inputs: [functional-grill, technical-grill, tests, review, sign-off]
+                output: execute-report.md
+                prompt: |
+                  Implement the attached technical spec. It serves the functional
+                  spec; where they disagree, say so rather than guessing. If a
+                  tests log marked VERDICT: FAIL is attached, fix every failure it
+                  shows before anything else. If sign-off feedback is attached,
+                  address every requested change. Leave your work uncommitted: a
+                  human reads the working tree at the gate below, and the workflow
+                  commits it once they have approved.
+                  Implement everything the technical spec asks. If something can't or shouldn't be
+                  done, don't drop it silently: say so in the report.
+                  Your report, the artifact, has these sections under exactly these headings:
+                  ## Changed
+                  The files you changed or added, one line each.
+                  ## Verified
+                  The exact commands you ran and their result. Run the tests relevant to
+                  what you changed, not only the workflow's test command.
+                  ## Not done / not verified
+                  Anything you did not do or check, with the reason.
+                  ## Deviations from the plan
+                  Where you departed from the technical spec, with the reason.
+                  ## Findings addressed
+                  Only when a tests log, review findings or sign-off feedback were
+                  attached: one line per point, and how you addressed it.
+              - id: tests
+                kind: command
+                run: eval "{{ inputs.test_command }}"
+                verdict: true         # a failing exit sends the loop round again, not a crash
+                output: tests.log
+                timeout_ms: 1800000   # a hung suite fails the run (resumable) rather than blocking forever
+
+          - id: review
+            runner: claude
+            model: opus
+            mode: headless
+            writes: false
+            verdict: true
+            inputs: [functional-grill, technical-grill, execute, tests, sign-off]
+            output: review.md
+            prompt: |
+              Review the uncommitted working-tree diff (`git diff` plus untracked
+              files) against both specs — the functional one for whether it does the
+              right thing, the technical one for whether it was built the agreed way.
+              Walk each spec requirement by requirement and state for each whether it
+              is met. If sign-off feedback is attached, FAIL unless every requested
+              change is addressed.
+              Check every claim in the execute report against the diff. A false claim
+              is blocking. Also blocking:
+              - HEAD moved, or the executor committed (check `git log`)
+              - changes outside the specs' scope
+              - an empty diff when the specs require changes
+              - a review or sign-off point that was not addressed
+              If the attached tests log does not exercise the changed code, say so and
+              run the relevant tests yourself, with read-only commands only.
+              An improvement outside the specs is non-blocking at most.
+              End with VERDICT: PASS or VERDICT: FAIL.
+
+      # A human gate. Its answer becomes the 'sign-off' both steps above read:
+      # approving exits both loops, requesting changes sends build-cycle round again.
+      - id: sign-off
+        kind: approval
+        verdict: true
+        title: Ship it?
+        instructions: Approve, or request changes with comments on the whole change or on individual files.
+        show_diff: true
+        capture: review
+        inputs: [review]
+        output: feedback.md

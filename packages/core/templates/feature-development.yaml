@@ -1,0 +1,175 @@
+# feature-development — branch off trunk, plan, implement, gate on tests
+# passing, and review in a cycle, then commit on sign-off. Reference: docs/design.md
+name: feature-development
+description: Branch off trunk, plan, implement, gate on tests, and review in a cycle, then commit on sign-off.
+inputs:
+  feature:
+    required: true
+    prompt: What are we building?
+  base:
+    required: false
+    default: main
+    prompt: Branch to start from
+    multiline: false
+  test_command:
+    required: false
+    default: npm test
+    prompt: Test command (leave blank to skip tests)
+    remember: true
+    multiline: false
+steps:
+  - id: sync-base       # a dirty tree or a diverged trunk fails the run here,
+    kind: command       # with git's own message in the artifact
+    run: git checkout "{{ inputs.base }}" && git pull --ff-only
+    output: sync-base.log
+
+  - id: branch
+    kind: command
+    run: git checkout -b "feature/{{ run.slug }}"
+    output: branch.log
+
+  - id: plan
+    kind: agent
+    runner: claude
+    model: opus
+    mode: interactive
+    writes: false
+    output: plan.md
+    prompt: |
+      We are planning: {{ inputs.feature }}.
+      Before exploring, ask me whether there are files or docs you should read first.
+      Work with me on a plan. Do not modify files.
+      The artifact you write is the agreed plan as it now stands, not a transcript of our
+      conversation. End it with a `## Verify` section: the exact command(s) that exercise
+      this change, because the workflow's test command may not cover it.
+
+  - kind: loop
+    id: human-review
+    until: sign-off
+    max_iterations: 5
+    steps:
+      - kind: loop
+        id: do-review
+        until: review
+        max_iterations: 10
+        steps:
+          # Repeats until the tests pass, handing the failing log back to
+          # 'execute' each time. 'review' only runs once they are green. A
+          # blank test_command runs eval "", which exits 0, so tests pass
+          # immediately and are effectively skipped.
+          - id: test-fix
+            kind: loop
+            until: tests
+            max_iterations: 3
+            steps:
+              - id: execute
+                # 'tests' is later in THIS loop, so it means the PREVIOUS
+                # iteration's log; 'review' and 'sign-off' are later siblings
+                # of the OUTER loops, so they mean the previous ROUND's
+                # findings/feedback — all three are simply skipped, on the
+                # first pass of each, when there is nothing yet to read.
+                inputs: [plan, tests, review, sign-off]
+                kind: agent
+                runner: claude
+                model: sonnet
+                mode: headless
+                writes: true
+                prompt: |
+                  Implement the attached plan. If a tests log marked VERDICT: FAIL
+                  is attached, fix every failure it shows before anything else.
+                  If review findings or sign-off feedback are attached, address
+                  every point. Leave your work uncommitted: a human reads the
+                  working tree at the gate below, and the workflow commits it
+                  once they have approved.
+                  Implement everything the plan asks. If something can't or shouldn't be
+                  done, don't drop it silently: say so in the report.
+                  Your report, the artifact, has these sections under exactly these headings:
+                  ## Changed
+                  The files you changed or added, one line each.
+                  ## Verified
+                  The exact commands you ran and their result. Run the tests relevant to
+                  what you changed, not only the workflow's test command.
+                  ## Not done / not verified
+                  Anything you did not do or check, with the reason.
+                  ## Deviations from the plan
+                  Where you departed from the plan, with the reason.
+                  ## Findings addressed
+                  Only when a tests log, review findings or sign-off feedback were
+                  attached: one line per point, and how you addressed it.
+                output: execute-report.md
+              - id: tests
+                kind: command
+                run: eval "{{ inputs.test_command }}"
+                verdict: true         # a failing exit sends the loop round again, not a crash
+                output: tests.log
+                timeout_ms: 1800000   # a hung suite fails the run (resumable) rather than blocking forever
+          - id: review
+            inputs: [plan, execute, tests, sign-off]
+            verdict: true
+            kind: agent
+            runner: claude
+            model: opus
+            mode: headless
+            writes: false
+            prompt: |
+              Review the uncommitted working-tree diff (`git diff` plus untracked
+              files) against the attached plan. Walk the plan requirement by
+              requirement and state for each whether it is met. If sign-off
+              feedback is attached, FAIL unless every requested change is addressed.
+              Check every claim in the execute report against the diff. A false claim
+              is blocking. Also blocking:
+              - HEAD moved, or the executor committed (check `git log`)
+              - changes outside the plan's scope
+              - an empty diff when the plan requires changes
+              - a review or sign-off point that was not addressed
+              If the attached tests log does not exercise the changed code, say so and
+              run the relevant tests yourself, with read-only commands only.
+              An improvement outside the plan is non-blocking at most.
+            output: review.md
+      - id: sign-off
+        inputs: [review]
+        kind: approval
+        verdict: true
+        title: Ship it?
+        instructions: Review the diff and the findings before this goes any further.
+        show_diff: true
+        capture: review
+        output: feedback.md
+
+  # Everything but the run artifacts, so the message writer below sees the whole
+  # change as one diff. [.] rather than . because git rejects an exclude pathspec
+  # whose literal prefix is gitignored, and most repos ignore .whiphand/runs.
+  # The short :! form because cmd.exe cannot carry a quote next to the parens
+  # of :(exclude); without glob magic the * already spans subdirectories.
+  - id: stage
+    kind: command
+    run: git add -A -- . ":![.]whiphand/runs/*"
+    output: stage.log
+
+  - id: commit-message
+    inputs: [plan, review, sign-off]
+    kind: agent
+    runner: claude
+    model: haiku        # summarising a diff is not what the workflow's model is for
+    mode: headless
+    writes: false       # Write/Edit denied; Bash stays, which is how it reads the diff
+    output: commit-message.md
+    prompt: |
+      Write the commit message for the change staged on this branch.
+      Its source of truth is `git diff --cached`, plus the attached plan or stage
+      file, review and feedback for why the change was made. Do not copy or
+      paraphrase an existing commit message, such as one from `git log`.
+      The subject is the first line: imperative mood, at most 72 characters, no
+      trailing period. Then one blank line, then a body of one to three lines, each
+      wrapped at 72 characters, in plain sentences with no bullets. The body says
+      what changed and why.
+      Trailers such as `Co-Authored-By` are allowed. If you add any, put them after
+      the body, separated from it by one blank line.
+      The file holds the message and nothing else: no preamble, no code fences, no
+      review.
+      If the index is empty, write a one-line subject saying so instead of asking.
+
+  - id: commit
+    kind: command
+    run: git commit -F ".whiphand/runs/{{ run.id }}/commit-message.md"
+    output: commit.log

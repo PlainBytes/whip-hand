@@ -16,7 +16,6 @@ inputs:
 steps:
   - id: plan          # live terminal chat; artifact harvested afterwards
     runner: claude
-    model: claude-opus-5-5
     mode: interactive
     writes: false
     output: plan.md
@@ -53,7 +52,6 @@ steps:
             steps:
               - id: execute   # headless; may write
                 runner: claude
-                model: sonnet
                 mode: headless
                 writes: true
                 # 'tests' is later in THIS loop, so it means the PREVIOUS
@@ -94,7 +92,6 @@ steps:
 
           - id: review    # headless, read-only, must end with VERDICT: PASS|FAIL
             runner: claude
-            model: claude-opus-5-5
             mode: headless
             writes: false
             verdict: true

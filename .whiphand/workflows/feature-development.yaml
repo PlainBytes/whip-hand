@@ -30,8 +30,8 @@ steps:
 
   - id: plan
     kind: agent
-    runner: opencode
-    model: opencode/gpt-5.6-terra
+    runner: claude
+    model: claude-opus-5-5
     mode: interactive
     writes: false
     output: plan.md
@@ -70,8 +70,8 @@ steps:
                 # first pass of each, when there is nothing yet to read.
                 inputs: [plan, tests, review, sign-off]
                 kind: agent
-                runner: opencode
-                model: mistral/mistral-medium-latest
+                runner: claude
+                model: sonnet
                 mode: headless
                 writes: true
                 prompt: |
@@ -107,8 +107,8 @@ steps:
             inputs: [plan, execute, tests, sign-off]
             verdict: true
             kind: agent
-            runner: opencode
-            model: opencode/gpt-5.6-terra
+            runner: claude
+            model: claude-opus-5-5
             mode: headless
             writes: false
             prompt: |
@@ -149,7 +149,7 @@ steps:
   - id: commit-message
     inputs: [plan, review, sign-off]
     kind: agent
-    runner: opencode
+    runner: claude
     model: haiku # summarising a diff is not what the workflow's model is for
     mode: headless
     writes: false # Write/Edit denied; Bash stays, which is how it reads the diff

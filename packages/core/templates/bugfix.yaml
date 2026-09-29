@@ -20,8 +20,8 @@ inputs:
     remember: true
     multiline: false
 steps:
-  - id: sync-base # a dirty tree or a diverged trunk fails the run here,
-    kind: command # with git's own message in the artifact
+  - id: sync-base       # a dirty tree or a diverged trunk fails the run here,
+    kind: command       # with git's own message in the artifact
     run: git checkout "{{ inputs.base }}" && git pull --ff-only
     output: sync-base.log
 
@@ -30,10 +30,10 @@ steps:
     run: git checkout -b "fix/{{ run.slug }}"
     output: branch.log
 
-  - id: diagnose # live terminal chat; artifact harvested afterwards
+  - id: diagnose        # live terminal chat; artifact harvested afterwards
     kind: agent
     runner: claude
-    model: claude-opus-5-5
+    model: opus
     mode: interactive
     writes: false
     inputs: [attachments]
@@ -71,7 +71,7 @@ steps:
   # name may not be on PATH under the Windows shell, and sourcing looks nothing
   # up. A script file needs no extracting from markdown or requoting into a run
   # line.
-  - id: reproduce # headless; writes the test and repro.sh, and no fix
+  - id: reproduce       # headless; writes the test and repro.sh, and no fix
     kind: agent
     runner: claude
     model: sonnet
@@ -147,7 +147,7 @@ steps:
     until: sign-off
     max_iterations: 5
     steps:
-      - id: fix-cycle # repeats its body until 'review' returns VERDICT: PASS
+      - id: fix-cycle   # repeats its body until 'review' returns VERDICT: PASS
         kind: loop
         until: review
         max_iterations: 3
@@ -211,16 +211,16 @@ steps:
               - id: tests
                 kind: command
                 run: ( . "{{ run.dir }}/repro.sh" ) && eval "{{ inputs.test_command }}"
-                verdict: true # a failing exit sends the loop round again, not a crash
+                verdict: true         # a failing exit sends the loop round again, not a crash
                 output: tests.log
-                timeout_ms: 1800000 # a hung suite fails the run (resumable) rather than blocking forever
+                timeout_ms: 1800000   # a hung suite fails the run (resumable) rather than blocking forever
 
           - id: review
             inputs: [diagnose, reproduce, execute, tests, sign-off]
             verdict: true
             kind: agent
             runner: claude
-            model: claude-opus-5-5
+            model: opus
             mode: headless
             writes: false
             prompt: |
@@ -271,9 +271,9 @@ steps:
     inputs: [diagnose, review, sign-off]
     kind: agent
     runner: claude
-    model: haiku # summarising a diff is not what the workflow's model is for
+    model: haiku        # summarising a diff is not what the workflow's model is for
     mode: headless
-    writes: false # Write/Edit denied; Bash stays, which is how it reads the diff
+    writes: false       # Write/Edit denied; Bash stays, which is how it reads the diff
     output: commit-message.md
     prompt: |
       Write the commit message for the change staged on this branch.

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -15,6 +15,7 @@ import {
   createWorkflow, deleteWorkflow, cloneWorkflow, initWorkspace, workflowTemplate, specDrivenTemplate, featureDevelopmentTemplate,
   stagedFeatureDevelopmentTemplate, researchTemplate, bugfixTemplate, updateWorkflow,
 } from './scaffold.ts';
+import { SHIPPED_TEMPLATES, readTemplate } from './templates.ts';
 import { parseWorkflow, validateWorkflowWarnings, validateWorkflowSemantics, WorkflowError } from './schema.ts';
 import { loadWorkspaceConfig } from './config.ts';
 import { findStep, flattenSteps } from './steps.ts';
@@ -225,13 +226,11 @@ test('every shipped template tells its implementer to leave the work uncommitted
 
 /**
  * The execute report and the review checklist are prompt contracts, so the
- * prompt text is the whole mechanism and is pinned here — in the four shipped
- * templates and in the repo's own four local copies, which must not drift from
- * them. Past runs: a test file "updated" that was not, agreed items silently
+ * prompt text is the whole mechanism and is pinned here, in every shipped
+ * template. Past runs: a test file "updated" that was not, agreed items silently
  * not built, a reviewer passing an empty diff or an executor's own commit.
  */
-test('every shipped and local workflow gives execute a report contract and review a checklist', async () => {
-  const localDir = new URL('../../../.whiphand/workflows/', import.meta.url);
+test('every shipped workflow gives execute a report contract and review a checklist', () => {
   const sources: Array<[string, string]> = [
     ['template feature', workflowTemplate('feature')],
     ['template feature-development', featureDevelopmentTemplate()],
@@ -239,9 +238,6 @@ test('every shipped and local workflow gives execute a report contract and revie
     ['template staged-feature-development', stagedFeatureDevelopmentTemplate()],
     ['template bugfix', bugfixTemplate()],
   ];
-  for (const name of ['feature', 'feature-development', 'spec-driven', 'staged-feature-development', 'bugfix']) {
-    sources.push([`local ${name}`, await readFile(new URL(`${name}.yaml`, localDir), 'utf8')]);
-  }
   const flat = (prompt: string | undefined): string => (prompt ?? '').replace(/\s+/g, ' ');
   for (const [label, source] of sources) {
     const wf = parseWorkflow(source);
@@ -281,22 +277,18 @@ test('every shipped and local workflow gives execute a report contract and revie
  * The plan prompts are contracts too. Past runs: a staged planner that wrote no
  * `plans/*.md` (run 956e, "matched no stage files"), stage files in the wrong
  * folder so the build took `docs/design.md` for a stage (run d8ba), and a root
- * `npm test` that ran nothing of the stage being built. Every plan prompt, in
- * the shipped templates and the local copies, opens the same way, says the
+ * `npm test` that ran nothing of the stage being built. Every plan prompt in
+ * the shipped templates opens the same way, says the
  * artifact is the plan and not the chat, and (except the WHAT-only functional
  * plan) asks for a `## Verify` section.
  */
-test('every shipped and local plan prompt shares the ask-for-files opening and the artifact contract', async () => {
-  const localDir = new URL('../../../.whiphand/workflows/', import.meta.url);
+test('every shipped plan prompt shares the ask-for-files opening and the artifact contract', () => {
   const sources: Array<[string, string]> = [
     ['template feature', workflowTemplate('feature')],
     ['template feature-development', featureDevelopmentTemplate()],
     ['template spec-driven', specDrivenTemplate()],
     ['template staged-feature-development', stagedFeatureDevelopmentTemplate()],
   ];
-  for (const name of ['feature', 'feature-development', 'spec-driven', 'staged-feature-development']) {
-    sources.push([`local ${name}`, await readFile(new URL(`${name}.yaml`, localDir), 'utf8')]);
-  }
   const flat = (prompt: string | undefined): string => (prompt ?? '').replace(/\s+/g, ' ');
   const planIds = ['plan', 'functional-plan', 'technical-plan'];
   for (const [label, source] of sources) {
@@ -329,11 +321,9 @@ test('every shipped and local plan prompt shares the ask-for-files opening and t
  * file is, where it goes and how to check it did that: the build's `items` glob
  * takes whatever `.md` it finds, so the prompt is the whole guard.
  */
-test('the staged plan prompt carries the stage-file template and the listing self-check', async () => {
-  const localDir = new URL('../../../.whiphand/workflows/', import.meta.url);
+test('the staged plan prompt carries the stage-file template and the listing self-check', () => {
   const sources: Array<[string, string]> = [
     ['template', stagedFeatureDevelopmentTemplate()],
-    ['local', await readFile(new URL('staged-feature-development.yaml', localDir), 'utf8')],
   ];
   for (const [label, source] of sources) {
     const plan = findStep(parseWorkflow(source).steps, 'plan');
@@ -366,21 +356,17 @@ test('the staged plan prompt carries the stage-file template and the listing sel
  * The commit-message writer is a small model that has produced 15-line bodies
  * copied from an existing commit (`git log`), 200-350 character unwrapped
  * lines, and trailers with no blank line before them. The prompt is the only
- * guard (no lint step), so all four copies carry the same rules in the same
+ * guard (no lint step), so every shipped template carries the same rules in the same
  * words: the diff is the source, a 72-column subject and a one-to-three line
  * wrapped body, trailers after a blank line, message only, and a one-line
  * subject rather than a question when the index is empty.
  */
-test('every shipped and local commit-message prompt carries the same message-format rules', async () => {
-  const localDir = new URL('../../../.whiphand/workflows/', import.meta.url);
+test('every shipped commit-message prompt carries the same message-format rules', () => {
   const sources: Array<[string, string]> = [
     ['template feature-development', featureDevelopmentTemplate()],
     ['template staged-feature-development', stagedFeatureDevelopmentTemplate()],
     ['template bugfix', bugfixTemplate()],
   ];
-  for (const name of ['feature-development', 'staged-feature-development', 'bugfix']) {
-    sources.push([`local ${name}`, await readFile(new URL(`${name}.yaml`, localDir), 'utf8')]);
-  }
   const flat = (prompt: string): string => prompt.replace(/\s+/g, ' ').trim();
   const prompts: string[] = [];
   for (const [label, source] of sources) {
@@ -486,14 +472,9 @@ test('researchTemplate frames a question, researches and checks it in a loop, an
   assert.notEqual(read.show_diff, true, 'a read-only workflow has no diff to show');
 });
 
-/**
- * The research prompts are the whole mechanism, so they are pinned — in the
- * shipped template and in the repo's own copy, which must be the same bytes.
- */
-test('the research prompts carry the brief, the report contract and the check criteria', async () => {
+/** The research prompts are the whole mechanism, so they are pinned in the shipped template. */
+test('the research prompts carry the brief, the report contract and the check criteria', () => {
   const template = researchTemplate();
-  const local = await readFile(new URL('../../../.whiphand/workflows/research.yaml', import.meta.url), 'utf8');
-  assert.equal(local, template, 'the local research.yaml is the template, byte for byte');
 
   const wf = parseWorkflow(template);
   const flat = (prompt: string | undefined): string => (prompt ?? '').replace(/\s+/g, ' ');
@@ -779,14 +760,9 @@ test('bugfixTemplate diagnoses, reproduces, gates on a red test, then fixes in a
   assert.equal(commit.run, 'git commit -F ".whiphand/runs/{{ run.id }}/commit-message.md"');
 });
 
-/**
- * The bugfix prompts are the whole mechanism, so they are pinned — in the
- * shipped template and in the repo's own copy, which must be the same bytes.
- */
-test('the bugfix prompts carry the diagnosis contract, the test-only reproduce and the masked-symptom review', async () => {
+/** The bugfix prompts are the whole mechanism, so they are pinned in the shipped template. */
+test('the bugfix prompts carry the diagnosis contract, the test-only reproduce and the masked-symptom review', () => {
   const template = bugfixTemplate();
-  const local = await readFile(new URL('../../../.whiphand/workflows/bugfix.yaml', import.meta.url), 'utf8');
-  assert.equal(local, template, 'the local bugfix.yaml is the template, byte for byte');
 
   const wf = parseWorkflow(template);
   const flat = (prompt: string | undefined): string => (prompt ?? '').replace(/\s+/g, ' ');
@@ -976,6 +952,35 @@ test('createWorkflow writes the file, refuses overwrite, validates the name', as
 
   await assert.rejects(() => createWorkflow(ws, 'my-flow'), /already exists/);
   await assert.rejects(() => createWorkflow(ws, 'Bad Name!'), /invalid workflow name/);
+});
+
+/**
+ * The shipped workflows are plain files in packages/core/templates/, and the
+ * packaging scripts embed whatever is in that folder: a file that is not in
+ * SHIPPED_TEMPLATES would ship but never be scaffolded, and a listed name with
+ * no file would break `init`.
+ */
+test('packages/core/templates holds exactly the shipped templates, each a valid workflow', async () => {
+  const files = (await readdir(new URL('../templates/', import.meta.url))).filter(f => f.endsWith('.yaml'));
+  assert.deepEqual(files.sort(), SHIPPED_TEMPLATES.map(n => `${n}.yaml`).sort());
+  for (const name of SHIPPED_TEMPLATES) {
+    const wf = parseWorkflow(readTemplate(name));
+    assert.equal(wf.name, name, `${name}.yaml names itself ${name}`);
+    assert.deepEqual(validateWorkflowSemantics(wf), [], `${name} validates`);
+  }
+});
+
+test('workflowTemplate renames only the header and name: of feature.yaml', () => {
+  const feature = readTemplate('feature');
+  const renamed = workflowTemplate('ship-it');
+  assert.ok(renamed.startsWith('# ship-it — '), 'the header comment names the workflow');
+  assert.match(renamed, /^name: ship-it$/m);
+  assert.equal(
+    renamed.replace(/^# ship-it — /, '# feature — ').replace(/^name: ship-it$/m, 'name: feature'),
+    feature,
+    'nothing else differs from the template',
+  );
+  assert.equal(workflowTemplate('feature'), feature);
 });
 
 test('initWorkspace creates config + starter workflows once, then is a no-op', async () => {

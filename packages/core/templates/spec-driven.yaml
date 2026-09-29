@@ -16,7 +16,7 @@ inputs:
 steps:
   - id: functional-plan       # live chat: what it must do, and for whom
     runner: claude
-    model: claude-opus-5-5
+    model: opus
     mode: interactive
     writes: false
     output: functional-plan.md
@@ -32,7 +32,7 @@ steps:
 
   - id: functional-grill      # live chat: it attacks the draft, you defend it
     runner: claude
-    model: claude-opus-5-5
+    model: opus
     mode: interactive
     writes: false
     inputs: [functional-plan]
@@ -48,7 +48,7 @@ steps:
 
   - id: technical-plan        # live chat: how, against the settled spec
     runner: claude
-    model: claude-opus-5-5
+    model: opus
     mode: interactive
     writes: false
     inputs: [functional-grill]
@@ -66,7 +66,7 @@ steps:
 
   - id: technical-grill
     runner: claude
-    model: claude-opus-5-5
+    model: opus
     mode: interactive
     writes: false
     inputs: [functional-grill, technical-plan]
@@ -153,7 +153,7 @@ steps:
 
           - id: review
             runner: claude
-            model: claude-opus-5-5
+            model: opus
             mode: headless
             writes: false
             verdict: true

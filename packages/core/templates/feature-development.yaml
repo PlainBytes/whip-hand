@@ -1,12 +1,16 @@
-# feature — plan interactively, then implement, gate on tests passing, and
-# review in a cycle until the review passes, then a human sign-off that can
-# send it back for another cycle. Reference: docs/design.md
-name: feature
-description: Plan with a human, then implement, gate on tests, and review in a cycle until the review passes.
+# feature-development — branch off trunk, plan, implement, gate on tests
+# passing, and review in a cycle, then commit on sign-off. Reference: docs/design.md
+name: feature-development
+description: Branch off trunk, plan, implement, gate on tests, and review in a cycle, then commit on sign-off.
 inputs:
   feature:
     required: true
     prompt: What are we building?
+  base:
+    required: false
+    default: main
+    prompt: Branch to start from
+    multiline: false
   test_command:
     required: false
     default: npm test
@@ -14,9 +18,20 @@ inputs:
     remember: true
     multiline: false
 steps:
-  - id: plan          # live terminal chat; artifact harvested afterwards
+  - id: sync-base       # a dirty tree or a diverged trunk fails the run here,
+    kind: command       # with git's own message in the artifact
+    run: git checkout "{{ inputs.base }}" && git pull --ff-only
+    output: sync-base.log
+
+  - id: branch
+    kind: command
+    run: git checkout -b "feature/{{ run.slug }}"
+    output: branch.log
+
+  - id: plan
+    kind: agent
     runner: claude
-    model: claude-opus-5-5
+    model: opus
     mode: interactive
     writes: false
     output: plan.md
@@ -28,19 +43,15 @@ steps:
       conversation. End it with a `## Verify` section: the exact command(s) that exercise
       this change, because the workflow's test command may not cover it.
 
-  # Repeats until 'sign-off' is approved. Requesting changes there attaches
-  # fresh feedback ('sign-off' as a forward reference) and sends fix-cycle
-  # round again — delete this whole loop, keeping fix-cycle at the top level,
-  # to let the workflow run unattended instead.
-  - id: human-review
-    kind: loop
+  - kind: loop
+    id: human-review
     until: sign-off
     max_iterations: 5
     steps:
-      - id: fix-cycle   # repeats its body until 'review' returns VERDICT: PASS
-        kind: loop
+      - kind: loop
+        id: do-review
         until: review
-        max_iterations: 3
+        max_iterations: 10
         steps:
           # Repeats until the tests pass, handing the failing log back to
           # 'execute' each time. 'review' only runs once they are green. A
@@ -51,18 +62,18 @@ steps:
             until: tests
             max_iterations: 3
             steps:
-              - id: execute   # headless; may write
-                runner: claude
-                model: sonnet
-                mode: headless
-                writes: true
+              - id: execute
                 # 'tests' is later in THIS loop, so it means the PREVIOUS
                 # iteration's log; 'review' and 'sign-off' are later siblings
                 # of the OUTER loops, so they mean the previous ROUND's
                 # findings/feedback — all three are simply skipped, on the
                 # first pass of each, when there is nothing yet to read.
                 inputs: [plan, tests, review, sign-off]
-                output: execute-report.md
+                kind: agent
+                runner: claude
+                model: sonnet
+                mode: headless
+                writes: true
                 prompt: |
                   Implement the attached plan. If a tests log marked VERDICT: FAIL
                   is attached, fix every failure it shows before anything else.
@@ -85,21 +96,21 @@ steps:
                   ## Findings addressed
                   Only when a tests log, review findings or sign-off feedback were
                   attached: one line per point, and how you addressed it.
+                output: execute-report.md
               - id: tests
                 kind: command
                 run: eval "{{ inputs.test_command }}"
                 verdict: true         # a failing exit sends the loop round again, not a crash
                 output: tests.log
                 timeout_ms: 1800000   # a hung suite fails the run (resumable) rather than blocking forever
-
-          - id: review    # headless, read-only, must end with VERDICT: PASS|FAIL
+          - id: review
+            inputs: [plan, execute, tests, sign-off]
+            verdict: true
+            kind: agent
             runner: claude
-            model: claude-opus-5-5
+            model: opus
             mode: headless
             writes: false
-            verdict: true
-            inputs: [plan, execute, tests, sign-off]
-            output: review.md
             prompt: |
               Review the uncommitted working-tree diff (`git diff` plus untracked
               files) against the attached plan. Walk the plan requirement by
@@ -114,15 +125,51 @@ steps:
               If the attached tests log does not exercise the changed code, say so and
               run the relevant tests yourself, with read-only commands only.
               An improvement outside the plan is non-blocking at most.
-
-      # A human gate. Its answer becomes the 'sign-off' both steps above read:
-      # approving exits both loops, requesting changes sends fix-cycle round again.
+            output: review.md
       - id: sign-off
+        inputs: [review]
         kind: approval
         verdict: true
         title: Ship it?
-        instructions: Approve, or request changes with comments on the whole change or on individual files.
+        instructions: Review the diff and the findings before this goes any further.
         show_diff: true
         capture: review
-        inputs: [review]
         output: feedback.md
+
+  # Everything but the run artifacts, so the message writer below sees the whole
+  # change as one diff. [.] rather than . because git rejects an exclude pathspec
+  # whose literal prefix is gitignored, and most repos ignore .whiphand/runs.
+  # The short :! form because cmd.exe cannot carry a quote next to the parens
+  # of :(exclude); without glob magic the * already spans subdirectories.
+  - id: stage
+    kind: command
+    run: git add -A -- . ":![.]whiphand/runs/*"
+    output: stage.log
+
+  - id: commit-message
+    inputs: [plan, review, sign-off]
+    kind: agent
+    runner: claude
+    model: haiku        # summarising a diff is not what the workflow's model is for
+    mode: headless
+    writes: false       # Write/Edit denied; Bash stays, which is how it reads the diff
+    output: commit-message.md
+    prompt: |
+      Write the commit message for the change staged on this branch.
+      Its source of truth is `git diff --cached`, plus the attached plan or stage
+      file, review and feedback for why the change was made. Do not copy or
+      paraphrase an existing commit message, such as one from `git log`.
+      The subject is the first line: imperative mood, at most 72 characters, no
+      trailing period. Then one blank line, then a body of one to three lines, each
+      wrapped at 72 characters, in plain sentences with no bullets. The body says
+      what changed and why.
+      Trailers such as `Co-Authored-By` are allowed. If you add any, put them after
+      the body, separated from it by one blank line.
+      The file holds the message and nothing else: no preamble, no code fences, no
+      review.
+      If the index is empty, write a one-line subject saying so instead of asking.
+
+  - id: commit
+    kind: command
+    run: git commit -F ".whiphand/runs/{{ run.id }}/commit-message.md"
+    output: commit.log

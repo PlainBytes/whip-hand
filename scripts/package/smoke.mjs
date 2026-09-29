@@ -24,6 +24,7 @@ import assert from 'node:assert/strict';
 import { runSync, spawnRunner } from '../../packages/core/src/exec.ts';
 import { repoRoot, distDir } from './sea.mjs';
 import { assembleNodePtyResource } from './node-pty-resource.mjs';
+import { TEMPLATES_DIR } from './templates.mjs';
 
 const exeSuffix = process.platform === 'win32' ? '.exe' : '';
 const FIXTURE_BIN = path.join(repoRoot, 'scripts/package/fixtures/bin');
@@ -76,6 +77,23 @@ export function smokeCli() {
       assert.match(stdout, /Consider packaging/, 'inputs were not interpolated');
       assert.match(stdout, /step check/, 'the command step was not resolved');
       assert.match(stdout, /run complete/);
+    } finally {
+      fs.rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  check('init scaffolds the shipped workflows from the embedded templates', () => {
+    // The templates are SEA assets, not files beside the binary: a build that
+    // left one out fails here, not on a user's first `init`.
+    const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'whiphand-smoke-init-'));
+    try {
+      runSync([whiphand, 'init'], { stdio: ['ignore', 'pipe', 'inherit'], cwd: workdir, check: true });
+      const shipped = fs.readdirSync(TEMPLATES_DIR).filter(file => file.endsWith('.yaml'));
+      assert.ok(shipped.length > 0, 'no templates to compare against');
+      for (const file of shipped) {
+        const written = fs.readFileSync(path.join(workdir, '.whiphand/workflows', file), 'utf8');
+        assert.equal(written, fs.readFileSync(path.join(TEMPLATES_DIR, file), 'utf8'), `${file} is the template`);
+      }
     } finally {
       fs.rmSync(workdir, { recursive: true, force: true });
     }

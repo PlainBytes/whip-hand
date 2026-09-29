@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Profiler, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { RunDetailPage } from './RunDetailPage.tsx';
@@ -2287,8 +2287,10 @@ describe('RunDetailPage: Logs tab (run audit)', () => {
       { type: 'step:log', stepId: 'build', stream: 'stderr', line: 'a warning appeared' }, 't4', 4,
     );
 
-    const rows = await screen.findAllByTestId('log-row');
-    expect(rows).toHaveLength(4);
+    // step:log lines are coalesced into one commit per window, so the second
+    // one lands a moment after the first.
+    await waitFor(() => expect(screen.getAllByTestId('log-row')).toHaveLength(4));
+    const rows = screen.getAllByTestId('log-row');
     expect(rows[0]).toHaveTextContent(/run started/);
     expect(rows[1]).toHaveTextContent(/step started/);
     expect(rows[2]).toHaveTextContent('compiling now');
@@ -2330,7 +2332,8 @@ describe('RunDetailPage: Logs tab (run audit)', () => {
       transport, 'job-logs3', 'r-logs3',
       { type: 'step:log', stepId: 'a', stream: 'stderr', line: 'a real error' }, 't2', 2,
     );
-    await screen.findAllByTestId('log-row');
+    // The stderr line is coalesced behind the first step:log, so wait for it.
+    expect(await screen.findByText('a real error')).toBeInTheDocument();
 
     const errorsOnly = screen.getByTestId('log-filter-errors-only');
     fireEvent.click(errorsOnly);
@@ -2642,5 +2645,73 @@ describe('RunDetailPage: Logs tab (run audit)', () => {
     // jsdom doesn't lay out) — what matters is the effect ran without throwing
     // and the earlier row rendered above the original one.
     expect(screen.queryByTestId('log-load-earlier')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * A command step (a test runner, say) can write output far faster than the
+ * page can repaint. Tauri hands the webview one IPC event per line, so each
+ * notification arrives in its own task and React cannot batch it with the
+ * next: the page must coalesce them itself, or the UI freezes while the
+ * command runs.
+ */
+describe('RunDetailPage: a burst of command output', () => {
+  beforeEach(() => {
+    useAppStore.setState({ workspacePath: '/ws', jobs: {} });
+  });
+
+  afterEach(() => {
+    useAppStore.setState({ workspacePath: null, jobs: {} });
+  });
+
+  it('coalesces a burst of command output', async () => {
+    const LINES = 300;
+    const MAX_COMMITS = 20;
+    const transport = new MockTransport();
+    const client = new AgentClient(transport);
+    let commits = 0;
+    render(
+      <AgentClientProvider client={client}>
+        <Profiler id="run-detail" onRender={() => { commits++; }}>
+          <RunDetailPage jobId="job-burst" onBack={vi.fn()} onRunAgain={vi.fn()} onResumed={vi.fn()} />
+        </Profiler>
+      </AgentClientProvider>,
+    );
+    emitWhiphandEvent(transport, 'job-burst', 'run-burst', { type: 'run:start', runId: 'run-burst', workflow: 'w' }, 't0');
+    emitWhiphandEvent(transport, 'job-burst', 'run-burst', { type: 'step:start', stepId: 'tests', kind: 'command' }, 't1');
+    await respondGetRun(transport, { runId: 'run-burst', runDir: '/ws/.whiphand/runs/run-burst', status: 'running', artifacts: [] });
+    fireEvent.click(screen.getByRole('tab', { name: /terminal/i }));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+
+    // Fake timers, one millisecond per line: the burst spans the same 300ms on
+    // every machine, so the count does not depend on how fast the runner is
+    // (a slow CI host took 3s of wall clock, which is 30 honest windows).
+    vi.useFakeTimers();
+    const before = commits;
+    try {
+      for (let i = 0; i < LINES; i++) {
+        // One act per line, as Tauri delivers them in separate tasks; a
+        // synchronous loop would let React batch the whole burst into a single render.
+        await act(async () => {
+          transport.emitLine({ method: 'stepLog', params: { jobId: 'job-burst', stream: 'stdout', line: `output line ${i}`, seq: i } });
+          emitWhiphandEvent(
+            transport, 'job-burst', 'run-burst',
+            { type: 'step:log', stepId: 'tests', stream: 'stdout', line: `output line ${i}` }, `t${i + 2}`,
+          );
+          await vi.advanceTimersByTimeAsync(1);
+        });
+      }
+      await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(commits - before, `commits while ${LINES} lines arrived one per task`).toBeLessThanOrEqual(MAX_COMMITS);
+
+    // Coalescing must not lose output.
+    fireEvent.click(screen.getByRole('tab', { name: /logs/i }));
+    const rows = await screen.findAllByTestId('log-row');
+    const text = rows.map(r => r.textContent ?? '').join('\n');
+    for (let i = 0; i < LINES; i++) expect(text).toContain(`output line ${i}`);
   });
 });

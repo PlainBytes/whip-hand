@@ -2683,20 +2683,28 @@ describe('RunDetailPage: a burst of command output', () => {
     fireEvent.click(screen.getByRole('tab', { name: /terminal/i }));
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
 
+    // Fake timers, one millisecond per line: the burst spans the same 300ms on
+    // every machine, so the count does not depend on how fast the runner is
+    // (a slow CI host took 3s of wall clock, which is 30 honest windows).
+    vi.useFakeTimers();
     const before = commits;
-    for (let i = 0; i < LINES; i++) {
-      // One task per line, as Tauri delivers them; a synchronous loop would
-      // let React batch the whole burst into a single render.
-      await act(async () => {
-        transport.emitLine({ method: 'stepLog', params: { jobId: 'job-burst', stream: 'stdout', line: `output line ${i}`, seq: i } });
-        emitWhiphandEvent(
-          transport, 'job-burst', 'run-burst',
-          { type: 'step:log', stepId: 'tests', stream: 'stdout', line: `output line ${i}` }, `t${i + 2}`,
-        );
-        await new Promise(resolve => setTimeout(resolve, 0));
-      });
+    try {
+      for (let i = 0; i < LINES; i++) {
+        // One act per line, as Tauri delivers them in separate tasks; a
+        // synchronous loop would let React batch the whole burst into a single render.
+        await act(async () => {
+          transport.emitLine({ method: 'stepLog', params: { jobId: 'job-burst', stream: 'stdout', line: `output line ${i}`, seq: i } });
+          emitWhiphandEvent(
+            transport, 'job-burst', 'run-burst',
+            { type: 'step:log', stepId: 'tests', stream: 'stdout', line: `output line ${i}` }, `t${i + 2}`,
+          );
+          await vi.advanceTimersByTimeAsync(1);
+        });
+      }
+      await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    } finally {
+      vi.useRealTimers();
     }
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 200)); });
 
     expect(commits - before, `commits while ${LINES} lines arrived one per task`).toBeLessThanOrEqual(MAX_COMMITS);
 

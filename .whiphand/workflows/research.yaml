@@ -11,7 +11,7 @@ inputs:
 steps:
   - id: frame         # live terminal chat; artifact harvested afterwards
     runner: claude
-    model: opus
+    model: claude-opus-5-5
     mode: interactive
     writes: false
     inputs: [attachments]
@@ -42,7 +42,7 @@ steps:
         steps:
           - id: research    # headless, read-only; the artifact is the report
             runner: claude
-            model: opus
+            model: sonnet
             mode: headless
             writes: false
             # 'check' is later in THIS loop, so it means the PREVIOUS iteration's
@@ -72,7 +72,7 @@ steps:
               What the evidence leaves unsettled, or raises and the brief did not ask.
           - id: check       # headless, read-only, must end with VERDICT: PASS|FAIL
             runner: claude
-            model: opus
+            model: claude-opus-5-5
             mode: headless
             writes: false
             verdict: true

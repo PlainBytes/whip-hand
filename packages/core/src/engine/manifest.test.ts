@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { chmod, mkdtemp, readFile, readdir, writeFile, mkdir } from 'node:fs/promises';
 import { mkdtempSync } from 'node:fs';
@@ -1342,16 +1343,18 @@ test('getRun lists a bookkeeping name below the top level — an attachment call
   const journal = new RunJournal(baseInit(runDir, runId));
   journal.record({ type: 'run:done', runId, ok: true });
   await journal.flush();
-  for (const name of ['run.json', 'events.ndjson', WORKFLOW_SNAPSHOT_NAME, '.locked']) {
+  for (const name of ['run.json', 'events.ndjson', WORKFLOW_SNAPSHOT_NAME, '.locked', '.fenced']) {
     await writeFile(join(runDir, 'attachments', name), 'mine');
   }
   await writeFile(join(runDir, WORKFLOW_SNAPSHOT_NAME), 'name: r');
   await setRunLocked(runDir, true);
+  await writeFile(join(runDir, '.fenced'), JSON.stringify({ leaseId: 'someone-else', reason: 'lease-expired' }));
 
   const detail = await getRun(workdir, DEFAULT_CONFIG, runId);
   assert.deepEqual(detail!.artifacts.map(a => a.name), [
-    'attachments/.locked', 'attachments/events.ndjson', 'attachments/run.json', 'attachments/workflow.yaml',
-  ], 'the top-level run.json, workflow.yaml and .locked are still bookkeeping');
+    'attachments/.fenced', 'attachments/.locked', 'attachments/events.ndjson', 'attachments/run.json',
+    'attachments/workflow.yaml',
+  ], 'the top-level run.json, workflow.yaml, .locked and .fenced are still bookkeeping');
 });
 
 // ---------------------------------------------------------------------------
@@ -1804,37 +1807,52 @@ test('version 5 is written, and v1..v4 manifests still parse', async () => {
 // Lease fencing, degradations, and run-dir-relative paths
 // ---------------------------------------------------------------------------
 
-async function untilTrue(check: () => boolean, ms = 3000): Promise<void> {
-  const deadline = Date.now() + ms;
-  while (!check()) {
-    if (Date.now() > deadline) throw new Error('timed out waiting for condition');
-    await sleep(10);
-  }
+/**
+ * A journal whose heartbeat fires only when the test says so. With a live
+ * timer the owner renews its lease whenever the runner's clock allows, and a
+ * test that stands in for another process by editing run.json races it: on a
+ * slow runner the renewal lands between the edit and the read that was meant
+ * to judge it.
+ */
+function manualHeartbeatJournal(t: TestContext, runDir: string, runId: string, reasons: string[]) {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const journal = new RunJournal({
+    ...baseInit(runDir, runId), heartbeatIntervalMs: 30, onLeaseLost: reason => reasons.push(reason),
+  });
+  const beat = async (): Promise<void> => {
+    t.mock.timers.tick(30);
+    await journal.flush();
+  };
+  return { journal, beat };
 }
 
-test('fencing: an owner whose lease was repaired by another process stops, and never writes running back', async () => {
+/** Stands in for a suspended host's reader: the lease on disk goes stale. */
+async function staleLeaseOnDisk(runDir: string): Promise<void> {
+  const onDisk = JSON.parse(await readFile(join(runDir, 'run.json'), 'utf8')) as RunManifest;
+  onDisk.heartbeatAt = staleStamp();
+  await writeFile(join(runDir, 'run.json'), JSON.stringify(onDisk));
+}
+
+test('fencing: an owner whose lease was repaired by another process stops, and never writes running back', async t => {
   const workdir = await tmpRunDir();
   const runId = '20260101-000020-fnce';
   const runDir = join(workdir, DEFAULT_CONFIG.artifacts_dir, runId);
   await mkdir(runDir, { recursive: true });
   const reasons: string[] = [];
-  const journal = new RunJournal({
-    ...baseInit(runDir, runId), heartbeatIntervalMs: 30, onLeaseLost: reason => reasons.push(reason),
-  });
+  const { journal, beat } = manualHeartbeatJournal(t, runDir, runId, reasons);
   journal.record({ type: 'run:start', runId, workflow: 'r' });
   journal.record({ type: 'step:start', stepId: 'a', kind: 'agent', runner: 'fake', mode: 'headless' });
   await journal.flush();
 
   // The host "slept" past the window: the lease on disk is stale, and a second
   // process (any reader of the store) repairs the run to a terminal state.
-  const onDisk = JSON.parse(await readFile(join(runDir, 'run.json'), 'utf8')) as RunManifest;
-  onDisk.heartbeatAt = staleStamp();
-  await writeFile(join(runDir, 'run.json'), JSON.stringify(onDisk));
+  await staleLeaseOnDisk(runDir);
   const [repaired] = await listRuns(workdir, DEFAULT_CONFIG);
   assert.equal(repaired.status, 'interrupted');
 
   // The owner wakes and its heartbeat fires.
-  await untilTrue(() => reasons.length > 0);
+  await beat();
+  assert.equal(reasons.length, 1);
   assert.match(reasons[0], /lease lost \(host suspended\?\)/);
   assert.equal(journal.lostLease, true);
 
@@ -1842,10 +1860,71 @@ test('fencing: an owner whose lease was repaired by another process stops, and n
   journal.record({ type: 'step:done', stepId: 'a', exitCode: 0 });
   journal.record({ type: 'run:error', message: 'lease lost (host suspended?)' });
   await journal.flush();
-  await sleep(100);
+  await beat();
   const final = JSON.parse(await readFile(join(runDir, 'run.json'), 'utf8')) as RunManifest;
   assert.equal(final.status, 'interrupted', 'the other process\'s verdict stands');
   assert.equal(reasons.length, 1, 'reported once');
+});
+
+test('fencing: a renewal that checked run.json just before the repair cannot resurrect the run', async t => {
+  const workdir = await tmpRunDir();
+  const runId = '20260101-000022-fnce';
+  const runDir = join(workdir, DEFAULT_CONFIG.artifacts_dir, runId);
+  await mkdir(runDir, { recursive: true });
+  const reasons: string[] = [];
+  const { journal, beat } = manualHeartbeatJournal(t, runDir, runId, reasons);
+  journal.record({ type: 'run:start', runId, workflow: 'r' });
+  journal.record({ type: 'step:start', stepId: 'a', kind: 'agent', runner: 'fake', mode: 'headless' });
+  await journal.flush();
+
+  await staleLeaseOnDisk(runDir);
+  const [repaired] = await listRuns(workdir, DEFAULT_CONFIG);
+  assert.equal(repaired.status, 'interrupted');
+
+  // The owner's renewal read `running` before the repair and writes after it:
+  // a fresh lease, over the other process's verdict.
+  journal.manifest.heartbeatAt = new Date().toISOString();
+  await writeFile(join(runDir, 'run.json'), JSON.stringify(journal.manifest));
+
+  const [again] = await listRuns(workdir, DEFAULT_CONFIG);
+  assert.equal(again.status, 'interrupted', 'the fence outranks the late write');
+  assert.equal(again.status === 'interrupted' && again.interruptedReason, 'lease-expired');
+  const onDisk = JSON.parse(await readFile(join(runDir, 'run.json'), 'utf8')) as RunManifest;
+  assert.equal(onDisk.status, 'interrupted', 'and the repair is written back');
+
+  await beat();
+  assert.equal(journal.lostLease, true, 'the owner still finds out it lost the lease');
+  assert.equal(reasons.length, 1);
+});
+
+test('fencing: a resumed run takes a fresh lease that the earlier repair does not fence', async t => {
+  const workdir = await tmpRunDir();
+  const runId = '20260101-000023-fnce';
+  const runDir = join(workdir, DEFAULT_CONFIG.artifacts_dir, runId);
+  await mkdir(runDir, { recursive: true });
+  const reasons: string[] = [];
+  const { journal } = manualHeartbeatJournal(t, runDir, runId, reasons);
+  journal.record({ type: 'run:start', runId, workflow: 'r' });
+  await journal.flush();
+  journal.close();
+  await staleLeaseOnDisk(runDir);
+  const [repaired] = await listRuns(workdir, DEFAULT_CONFIG);
+  assert.equal(repaired.status, 'interrupted');
+
+  const stopped = JSON.parse(await readFile(join(runDir, 'run.json'), 'utf8')) as RunManifest;
+  const resumed = RunJournal.reopen(runDir, stopped, {
+    heartbeatIntervalMs: 30, onLeaseLost: reason => reasons.push(reason),
+  });
+  await resumed.flush();
+  assert.notEqual(resumed.manifest.leaseId, stopped.leaseId);
+  t.mock.timers.tick(30);
+  await resumed.flush();
+  resumed.close();
+
+  assert.equal(resumed.lostLease, false);
+  assert.deepEqual(reasons, []);
+  const [live] = await listRuns(workdir, DEFAULT_CONFIG);
+  assert.equal(live.status, 'running');
 });
 
 test('fencing does not fire for a healthy owner: the lease is renewed', async () => {

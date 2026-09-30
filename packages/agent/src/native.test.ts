@@ -9,6 +9,10 @@ import { resolveNodePty } from './native.ts';
 // for — resolves fine at runtime under nodenext, just untyped.
 // @ts-expect-error TS7016 — no declaration file for this .mjs
 import { assembleNodePtyResource } from '../../../scripts/package/node-pty-resource.mjs';
+import { exitWhenTestsFinishOnWindows } from '@whiphand/test-support';
+
+// These tests spawn real ptys: see the helper for why Windows needs it.
+exitWhenTestsFinishOnWindows();
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 

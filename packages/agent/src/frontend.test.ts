@@ -7,6 +7,10 @@ import { join } from 'node:path';
 import type { SpawnSpec } from '@whiphand/core';
 import { createFrontend, type RunIdBox } from './frontend.ts';
 import type { Job } from './jobs.ts';
+import { exitWhenTestsFinishOnWindows } from '@whiphand/test-support';
+
+// These tests spawn real ptys: see the helper for why Windows needs it.
+exitWhenTestsFinishOnWindows();
 
 function fakeJob(overrides: Partial<Job> = {}): Job {
   return {

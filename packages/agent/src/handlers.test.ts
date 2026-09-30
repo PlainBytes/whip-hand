@@ -1,4 +1,5 @@
 import { withStubBin } from '@whiphand/test-support';
+import type { StubBin } from '@whiphand/test-support';
 import { test, before, after } from 'node:test';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -1048,16 +1049,25 @@ test('statArtifact: the same containment as readArtifact, symlink escape include
 /**
  * A stub `copilot` on PATH, standing in for the real binary so the test
  * controls exactly what one probe answers — and, by rewriting the script
- * between calls, whether a later call re-probed at all. `claude` is left off
- * PATH entirely: its probe fails fast (ENOENT) and always falls back, which
- * is fine here since these tests are about caching and invalidation, not
- * claude's own wire format (that's claude-models.test.ts).
+ * between calls, whether a later call re-probed at all. `claude` and
+ * `opencode` are stubbed too, answering nothing: the stubs only go in front
+ * of PATH, so without them a machine that has the real CLIs installed runs
+ * them, and a real claude probe sits out its whole timeout. Their probes fall
+ * back at once, which is fine here since these tests are about caching and
+ * invalidation, not each runner's own wire format (that's claude-models.test.ts
+ * and friends).
  *
  * The stub is minted by test-support in the shape the platform launches (a
  * `#!/bin/sh` script, or a `.cmd` in npm shim shape on Windows) with its
  * behaviour written once, in JS — so these run on every leg instead of being
  * skipped where an extensionless bash script is invisible to the PATHEXT walk.
  */
+function withOnlyCopilot<T>(copilot: string, fn: (stub: StubBin) => Promise<T>): Promise<T> {
+  const answersNothing = 'process.exit(1);';
+  return withStubBin('claude', answersNothing, () =>
+    withStubBin('opencode', answersNothing, () => withStubBin('copilot', copilot, fn)));
+}
+
 function copilotStub(id: string): string {
   return [
     "const [a, b] = process.argv.slice(2);",
@@ -1073,16 +1083,18 @@ function copilotStub(id: string): string {
 }
 
 test('listModels: returns one ModelList per adapter that offers listModels, keyed by runner id', async () => {
+  await withOnlyCopilot(copilotStub('model-a'), async () => {
   const { listModels } = await setup();
   const result = await listModels({}, { notify: () => {} }) as Record<string, { source: string; models: unknown[] }>;
   assert.deepEqual(Object.keys(result).sort(), ['claude', 'copilot', 'opencode']);
   for (const row of Object.values(result)) {
     assert.ok(['live', 'fallback', 'unavailable'].includes(row.source));
   }
+  });
 });
 
 test('listModels caches within the agent process; doctor invalidates it so the next call re-probes', async () => {
-  await withStubBin('copilot', copilotStub('model-a'), async stub => {
+  await withOnlyCopilot(copilotStub('model-a'), async stub => {
   const rewrite = async (id: string): Promise<void> => stub.rewrite(copilotStub(id));
   const { listModels, doctor } = await setup();
 
@@ -1102,7 +1114,7 @@ test('listModels caches within the agent process; doctor invalidates it so the n
 });
 
 test('listModels: refresh: true re-probes even without a doctor call', async () => {
-  await withStubBin('copilot', copilotStub('model-a'), async stub => {
+  await withOnlyCopilot(copilotStub('model-a'), async stub => {
   const rewrite = async (id: string): Promise<void> => stub.rewrite(copilotStub(id));
   const { listModels } = await setup();
   await listModels({}, { notify: () => {} });

@@ -4,6 +4,7 @@
   "workflow": "staged",
   "workdir": "<WORKSPACE>",
   "dryRun": false,
+  "leaseId": "<UUID>",
   "startedAt": "<TIMESTAMP>",
   "updatedAt": "<TIMESTAMP>",
   "heartbeatAt": "<TIMESTAMP>",

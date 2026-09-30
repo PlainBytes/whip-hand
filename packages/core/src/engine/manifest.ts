@@ -1,5 +1,6 @@
 import { appendFile, readdir, readFile, stat } from 'node:fs/promises';
 import { readlinkSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { basename, join, relative, sep } from 'node:path';
 import { z } from 'zod';
@@ -14,6 +15,7 @@ import { isSessionCaptureName } from './session-capture.ts';
 import { isOpencodeSupportFileName } from './opencode-files.ts';
 import { SUGGEST_PROMPT_NAME, isSpawnFileName } from './spawn-files.ts';
 import { LOCK_MARKER_NAME, isRunLocked } from './run-lock.ts';
+import { FENCE_MARKER_NAME, readFence, writeFence } from './run-fence.ts';
 import { NAME_MARKER_NAME, SUGGEST_CAPTURE_NAME, readRunName, setRunName } from './run-name.ts';
 import { RUN_LOG_NAME, DEFAULT_RUN_LOG_CAP_BYTES } from './run-log.ts';
 import { summarizeEvent, formatLogLine, mergeUsage, progressActionText } from '../log-rows.ts';
@@ -202,6 +204,11 @@ export const runManifestSchema = z.object({
   // legitimately produces no events for many minutes. Optional so manifests
   // written before heartbeats existed still parse.
   heartbeatAt: z.string().optional(),
+  // Names the journal that holds the lease: a fresh one per start and per
+  // resume. A repair fences this id (run-fence.ts), so a late write from the
+  // owner it ended cannot resurrect the run. Optional so manifests written
+  // before fencing existed still parse; those are judged by status alone.
+  leaseId: z.string().optional(),
   endedAt: z.string().optional(),
   /**
    * One ISO stamp per resume. Optional like `progress`, so manifests written
@@ -418,6 +425,7 @@ export class RunJournal {
           dryRun: init.dryRun,
           pid: process.pid,
           pidScope: currentPidScope(),
+          leaseId: randomUUID(),
           startedAt: now,
           updatedAt: now,
           heartbeatAt: now,
@@ -440,6 +448,7 @@ export class RunJournal {
           ...existing,
           pid: process.pid,
           pidScope: currentPidScope(),
+          leaseId: randomUUID(),
           interruptedReason: undefined,
           status: 'running',
           updatedAt: now,
@@ -520,12 +529,19 @@ export class RunJournal {
    * The lease is fenced. Anyone reading the store may judge a lease stale and
    * repair the run to a terminal state; a host that was merely suspended past
    * the window then wakes up still believing it owns a running run. So before
-   * renewing, re-read run.json: a terminal status there means the lease is
-   * lost, and this journal stops rather than writing `running` back.
+   * renewing, look for a fence on this lease (run-fence.ts) and re-read
+   * run.json: either one saying the run is over means the lease is lost, and
+   * this journal stops rather than writing `running` back.
+   *
+   * The check cannot make the write that follows it atomic — a repair can
+   * still land in between, and this write then puts `running` over it. The
+   * fence is what makes that harmless: readers let it outrank run.json, and
+   * the next heartbeat finds it and stops.
    */
   private async renewLease(): Promise<void> {
     if (this.leaseLost || this.manifest.status !== 'running') return;
-    const onDisk = await this.statusOnDisk();
+    const fence = await readFence(this.runDir);
+    const onDisk = fence?.leaseId === this.manifest.leaseId ? 'interrupted' : await this.statusOnDisk();
     if (onDisk !== undefined && onDisk !== 'running') {
       this.leaseLost = true;
       this.close();
@@ -1130,16 +1146,25 @@ async function readRunSummary(runDir: string, dirName: string, mtimeMs = 0): Pro
     return { runId: dirName, runDir, status: 'unknown', locked, mtimeMs, ...name };
   }
   const manifest = resolveManifestPaths(parsed.data, runDir);
-  const reason = abandonedReason(manifest, Date.now());
+  // A fence on this lease is an earlier repair's verdict, and it outranks
+  // run.json: the owner it ended may have written over the repair since.
+  const fence = manifest.leaseId === undefined ? undefined : await readFence(runDir);
+  const fenced = fence !== undefined && fence.leaseId === manifest.leaseId;
+  if (fenced && manifest.status === 'interrupted') return { ...manifest, runDir, locked, ...name };
+  const reason = fenced ? fence.reason : abandonedReason(manifest, Date.now());
   if (reason === undefined) return { ...manifest, runDir, locked, ...name };
 
   const repaired = repairAbandoned(manifest, reason);
-  // Write the repair back so the state is final: readers stop re-deriving it.
-  // Idempotent — the repaired status is terminal, so a subsequent read never
-  // reaches here. Best-effort: an unwritable run dir must not break listRuns,
-  // so the caller still gets the repaired view either way. The temp name is
-  // unique per write (durable-fs), so this can never collide with a live
-  // journal's own write.
+  // The fence goes first: once it is down the verdict is final, whatever the
+  // owner writes to run.json after. Then write the repair back so readers
+  // stop re-deriving it. Idempotent — the repaired status is terminal and the
+  // fence names the same lease, so a subsequent read settles above. Best-effort:
+  // an unwritable run dir must not break listRuns, so the caller still gets
+  // the repaired view either way. Temp names are unique per write
+  // (durable-fs), so neither can collide with a live journal's own write.
+  if (!fenced && manifest.leaseId !== undefined) {
+    await writeFence(runDir, { leaseId: manifest.leaseId, reason }).catch(() => {});
+  }
   await writeManifestAtomic(runDir, repaired).catch(() => {});
   return { ...repaired, runDir, locked, ...name };
 }
@@ -1186,7 +1211,7 @@ export function isSafeRunId(runId: string): boolean {
  */
 function isBookkeepingFile(name: string): boolean {
   return name === 'run.json' || name === 'events.ndjson' || name === RUN_LOG_NAME || name.endsWith('.tmp')
-    || name === LOCK_MARKER_NAME || name === NAME_MARKER_NAME
+    || name === LOCK_MARKER_NAME || name === FENCE_MARKER_NAME || name === NAME_MARKER_NAME
     || name === SUGGEST_CAPTURE_NAME
     || name === WORKFLOW_SNAPSHOT_NAME
     || isEndMarkerName(name) || isAwaitStateName(name)

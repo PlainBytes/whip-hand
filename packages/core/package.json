@@ -1,6 +1,6 @@
 {
   "name": "@whiphand/core",
-  "version": "0.3.0",
+  "version": "0.3.5",
   "type": "module",
   "exports": { ".": "./src/index.ts" },
   "dependencies": { "zod": "^4.0.0", "yaml": "^2.6.0" }

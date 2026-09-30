@@ -35,6 +35,16 @@ function rowAction(rowName: string, action: RegExp) {
 describe('FilesPage', () => {
   afterEach(() => useAppStore.setState({ workspacePath: null }));
 
+  it('offers a resize handle that saves under the Files page key only', async () => {
+    window.localStorage.clear();
+    renderFilesPage(workspace());
+    await screen.findByText('README.md');
+    fireEvent.keyDown(screen.getByRole('separator', { name: /resize file list/i }), { key: 'ArrowRight' });
+    expect(window.localStorage.getItem('whiphand.files.treeWidth')).toBe('336');
+    expect(window.localStorage.getItem('whiphand.run.artifactsTreeWidth')).toBeNull();
+    window.localStorage.clear();
+  });
+
   it('previews the file clicked in the tree', async () => {
     renderFilesPage(workspace());
     fireEvent.click(await screen.findByText('README.md'));

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+import { withStubBin } from '@whiphand/test-support';
 import { copilotAdapter, parseCopilotModels, COPILOT_QUIT_SEQUENCE } from './copilot.ts';
 import { interactiveGuidance } from '../engine/interactive-guidance.ts';
 import { endMarkerPath } from '../engine/session-end.ts';
@@ -173,21 +174,25 @@ test('detect notes that copilot cannot signal for attention while beep is off', 
     else process.env.COPILOT_GITHUB_TOKEN = previousToken;
   });
 
+  // A stub copilot, so the notes are checked on every machine — including one
+  // without copilot, where detect() would report "not installed" and say nothing
+  // about beep — and no real CLI is launched three times over.
+  await withStubBin('copilot', "console.log('9.9.9');", async () => {
   const noConfig = await copilotAdapter.detect();
-  if (noConfig.installed) {
-    assert.ok(noConfig.notes?.some(n => n.includes('beep') && n.includes(join(home, 'settings.json'))),
-      'no config means the default, which is off — and user settings go in settings.json');
-  }
+  assert.equal(noConfig.installed, true);
+  assert.ok(noConfig.notes?.some(n => n.includes('beep') && n.includes(join(home, 'settings.json'))),
+    'no config means the default, which is off — and user settings go in settings.json');
 
   // copilot 1.0.83 writes config.json itself, starting with `//` comment lines.
   await writeFile(join(home, 'config.json'), `// This file is managed automatically.\n${JSON.stringify({ beep: true })}`);
   const inManagedConfig = await copilotAdapter.detect();
-  if (inManagedConfig.installed) assert.deepEqual(inManagedConfig.notes, [], 'a commented config.json still reads');
+  assert.deepEqual(inManagedConfig.notes, [], 'a commented config.json still reads');
 
   await writeFile(join(home, 'config.json'), '// This file is managed automatically.\n{}');
   await writeFile(join(home, 'settings.json'), JSON.stringify({ beep: true }));
   const inSettings = await copilotAdapter.detect();
-  if (inSettings.installed) assert.deepEqual(inSettings.notes, [], 'nothing to say once settings.json turns it on');
+  assert.deepEqual(inSettings.notes, [], 'nothing to say once settings.json turns it on');
+  });
 });
 
 test('headless asks for streaming jsonl so a running step can report progress', () => {

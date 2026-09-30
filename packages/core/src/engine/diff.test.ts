@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
-  MAX_DIFF_FILES, MAX_PATCH_BYTES, pairPatches, parseNumstatZ, splitPatch, workingDiffFiles,
+  MAX_PATCH_BYTES, pairPatches, parseNumstatZ, splitPatch, workingDiffFiles,
 } from './diff.ts';
 import type { DiffFileEntry, WorkingDiff } from './diff.ts';
 
@@ -278,12 +278,15 @@ test('a repo with no commits reports everything as added', async () => {
 
 test('caps the file list and says how many it dropped', async () => {
   const dir = await gitRepo();
+  // A small cap: at the real MAX_DIFF_FILES this spends seconds in git on a
+  // Windows runner, and past the test timeout on a slow one.
+  const cap = 5;
   const extra = 20;
-  for (let i = 0; i < MAX_DIFF_FILES + extra; i++) {
+  for (let i = 0; i < cap + extra; i++) {
     await writeFile(join(dir, `f${i}.txt`), `${i}\n`);
   }
-  const result = await workingDiffFiles(dir);
-  assert.equal(result!.files.length, MAX_DIFF_FILES);
+  const result = await workingDiffFiles(dir, cap);
+  assert.equal(result!.files.length, cap);
   // a.txt is unchanged, so the tree holds exactly the files we just wrote.
   assert.equal(result!.filesTruncated, extra);
 });

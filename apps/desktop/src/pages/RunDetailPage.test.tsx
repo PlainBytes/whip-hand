@@ -477,6 +477,22 @@ describe('RunDetailPage', () => {
     expect(screen.getByText(/VERDICT: PASS/)).toBeInTheDocument();
   });
 
+  it('resizes the artifacts tree under its own storage key', async () => {
+    window.localStorage.clear();
+    const { transport } = renderRunDetail('job-rz');
+    emitWhiphandEvent(transport, 'job-rz', 'run-rz', { type: 'step:start', stepId: 'review', kind: 'agent', runner: 'claude', mode: 'headless' }, 't1');
+    await respondGetRun(transport, {
+      runId: 'run-rz', runDir: '/ws/.whiphand/runs/run-rz', status: 'succeeded',
+      artifacts: [{ name: 'review.md', path: '/ws/.whiphand/runs/run-rz/review.md' }],
+    });
+    fireEvent.click(screen.getByRole('tab', { name: /artifacts/i }));
+    await screen.findByRole('treeitem', { name: /review\.md/ });
+    fireEvent.keyDown(screen.getByRole('separator', { name: /resize file list/i }), { key: 'ArrowRight' });
+    expect(window.localStorage.getItem('whiphand.run.artifactsTreeWidth')).toBe('336');
+    expect(window.localStorage.getItem('whiphand.files.treeWidth')).toBeNull();
+    window.localStorage.clear();
+  });
+
   /**
    * Fake-timer twin of answerReadArtifact: testing-library's waitFor polls on
    * real timers, which never advance inside vi.useFakeTimers().

@@ -17,5 +17,12 @@ export default defineConfig({
       // Vite's transform pipeline instead fixes `createTabster` resolving.
       deps: { inline: [/tabster/, /@fluentui\//, /@griffel\//] },
     },
+    // Pre-bundles Fluent once per run. Inlined alone, every worker re-transformed
+    // the whole of it for every test file: two thirds of the suite's wall time.
+    deps: {
+      optimizer: {
+        client: { enabled: true, include: ['@fluentui/react-components', '@fluentui/react-icons'] },
+      },
+    },
   },
 });

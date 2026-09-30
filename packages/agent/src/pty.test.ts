@@ -5,6 +5,10 @@ import { basename } from 'node:path';
 import type { SpawnSpec } from '@whiphand/core';
 import { msvcrtQuote, planLaunch } from '@whiphand/core';
 import { ptyArgs, startPty } from './pty.ts';
+import { exitWhenTestsFinishOnWindows } from '@whiphand/test-support';
+
+// These tests spawn real ptys: see the helper for why Windows needs it.
+exitWhenTestsFinishOnWindows();
 
 function ptySpec(argv: string[]): SpawnSpec {
   return { argv, cwd: process.cwd(), env: {}, interactive: true };

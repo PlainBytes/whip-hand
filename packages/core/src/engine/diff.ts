@@ -218,7 +218,12 @@ export function pairPatches(entries: NumstatEntry[], chunks: string[]): WorkingD
  * tracked edits, deletes, renames and untracked files in one uniform pass —
  * no per-file spawns, and the real index is never touched.
  */
-export async function workingDiffFiles(workdir: string): Promise<WorkingDiff | null> {
+export async function workingDiffFiles(
+  workdir: string,
+  // Only a test lowers it: proving the cap with 500+ files costs seconds of
+  // git time per run on Windows, and the logic does not care about the number.
+  maxFiles = MAX_DIFF_FILES,
+): Promise<WorkingDiff | null> {
   let head: string;
   try {
     // Also the "is this a git repo" probe: everything after this point may
@@ -273,7 +278,7 @@ export async function workingDiffFiles(workdir: string): Promise<WorkingDiff | n
 
     const numstat = await gitStdout([...shared, '--numstat', '-z', ...pathspec], workdir, env);
     const all = parseNumstatZ(numstat);
-    const entries = all.slice(0, MAX_DIFF_FILES);
+    const entries = all.slice(0, maxFiles);
     const filesTruncated = all.length - entries.length;
 
     // Nothing to fetch a patch for, and no reason to pay for the second spawn.

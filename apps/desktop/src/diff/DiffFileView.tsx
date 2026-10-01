@@ -20,21 +20,14 @@
  * than none. What actually carries the meaning — which side changed — is the
  * cell tint and the gutters.
  */
-import { useMemo, useState, type CSSProperties } from 'react';
+import { useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Switch, Text } from '@fluentui/react-components';
 import {
   isLineEndingsOnly, parsePatch, toRows, toUnifiedRows, type DiffLine, type Row,
 } from './parse-patch.ts';
 import type { DiffFileEntry } from './types.ts';
 import { EmptyState } from '../components/EmptyState.tsx';
-
-/**
- * How many rows of one file we will draw. No virtualization library is
- * installed and the codebase's habit is to cap rather than virtualize
- * (MAX_DIR_ENTRIES, MAX_PREVIEW_BYTES): past this nobody is reading line by
- * line anyway, and the file is one click from the Files page.
- */
-export const MAX_DIFF_ROWS = 2000;
+import { spacerHeights, useVirtualRows, VIRTUAL_SCROLLER_PROPS } from '../lib/use-virtual-rows.ts';
 
 /** A minified file is one line; without this it is one absurdly tall row. */
 const MAX_LINE_CHARS = 2000;
@@ -143,8 +136,16 @@ export function DiffFileView({ file }: DiffFileViewProps) {
   // about the file, not about how it is being looked at.
   const lineEndingsOnly = useMemo(() => isLineEndingsOnly(toRows(parsed)), [parsed]);
 
-  const shown = rows.slice(0, MAX_DIFF_ROWS);
-  const hidden = rows.length - shown.length;
+  // Windowed rather than capped: a file's whole patch is drawable, because
+  // only the rows near the viewport are ever in the DOM. The agent's own
+  // patch budget (256KB a file, 4MB a diff) still bounds what arrives.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const virtual = useVirtualRows({ count: rows.length, scrollRef, estimateSize: 18 });
+  const { before, after } = spacerHeights(virtual);
+  // Fixed rather than `auto`: an auto column sizes to the rows in the DOM,
+  // and with only a window of them there the gutters would jitter as the
+  // widest line number scrolled in and out.
+  const gutter = useMemo(() => `calc(${String(maxLineNumber(rows)).length}ch + 16px)`, [rows]);
 
   function chooseSplit(next: boolean): void {
     setSplit(next);
@@ -192,7 +193,7 @@ export function DiffFileView({ file }: DiffFileViewProps) {
         </Text>
       )}
 
-      <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+      <div ref={scrollRef} {...VIRTUAL_SCROLLER_PROPS} style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
         {file.binary ? (
           <EmptyState>Binary file — {file.status}. Nothing to show line by line.</EmptyState>
         ) : file.truncated ? (
@@ -225,26 +226,39 @@ export function DiffFileView({ file }: DiffFileViewProps) {
               // numL, textL, numR, textR. One grid for the whole file, so both
               // sides share every row boundary without any measurement.
               gridTemplateColumns: split
-                ? 'auto minmax(0,1fr) auto minmax(0,1fr)'
-                : 'auto auto minmax(0,1fr)',
+                ? `${gutter} minmax(0,1fr) ${gutter} minmax(0,1fr)`
+                : `${gutter} ${gutter} minmax(0,1fr)`,
             }}
           >
-            {shown.map((row, index) => (
-              <RowCells key={index} row={row} index={index} split={split} />
+            <div style={{ gridColumn: '1 / -1', height: before }} />
+            {virtual.getVirtualItems().map(item => (
+              // One measurable box per row: a subgrid spanning the columns,
+              // so its cells still line up with every other row's.
+              <div
+                key={item.key}
+                data-index={item.index}
+                ref={virtual.measureElement}
+                style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: 'subgrid' }}
+              >
+                <RowCells row={rows[item.index]} index={item.index} split={split} />
+              </div>
             ))}
+            <div style={{ gridColumn: '1 / -1', height: after }} />
           </div>
-        )}
-        {hidden > 0 && (
-          <Text
-            data-testid="diff-row-cap"
-            style={{ display: 'block', padding: 8, color: 'var(--colorNeutralForeground3)' }}
-          >
-            …and {hidden} more lines. Open the file to see the rest.
-          </Text>
         )}
       </div>
     </div>
   );
+}
+
+/** The widest line number either side shows, for the gutters' width. */
+function maxLineNumber(rows: readonly Row[]): number {
+  let max = 0;
+  for (const row of rows) {
+    if (row.kind === 'hunk') continue;
+    max = Math.max(max, row.left?.oldLine ?? 0, row.left?.newLine ?? 0, row.right?.oldLine ?? 0, row.right?.newLine ?? 0);
+  }
+  return max;
 }
 
 function RowCells({ row, index, split }: { row: Row; index: number; split: boolean }) {

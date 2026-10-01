@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { DiffFileView } from './DiffFileView.tsx';
 import type { DiffFileEntry } from './types.ts';
+import { setVirtualViewportHeight, VIRTUAL_ROW_HEIGHT } from '../test/setup.ts';
 
 function entry(overrides: Partial<DiffFileEntry> = {}): DiffFileEntry {
   return {
@@ -141,5 +142,39 @@ describe('DiffFileView', () => {
   it('names a rename with both paths', () => {
     render(<DiffFileView file={entry({ oldPath: 'src/old.ts', status: 'renamed' })} />);
     expect(screen.getByTestId('diff-file-path')).toHaveTextContent('src/old.ts → src/x.ts');
+  });
+
+  describe('a file past the old 2000-row cap', () => {
+    const LINES = 5000;
+    const big = () => entry({
+      additions: LINES, deletions: 0,
+      patch: [
+        'diff --git a/big.txt b/big.txt', '--- a/big.txt', '+++ b/big.txt', `@@ -0,0 +1,${LINES} @@`,
+        ...Array.from({ length: LINES }, (_, i) => `+line ${i + 1}`),
+      ].join('\n'),
+    });
+    /** One wrapper per drawn row (see DiffFileView's subgrid rows). */
+    const drawnRows = (container: HTMLElement) => container.querySelectorAll('[data-index]');
+
+    it('draws the whole file instead of cutting it off', () => {
+      render(<DiffFileView file={big()} />);
+      expect(screen.queryByText(/more lines/)).toBeNull();
+      expect(screen.getByText(`+line ${LINES}`)).toBeInTheDocument();
+    });
+
+    it('keeps only the rows near the viewport in the DOM, and scrolls to the rest', async () => {
+      setVirtualViewportHeight(400);
+      const { container } = render(<DiffFileView file={big()} />);
+      expect(screen.getByText('+line 1')).toBeInTheDocument();
+      expect(screen.queryByText(`+line ${LINES}`)).toBeNull();
+      expect(drawnRows(container).length).toBeLessThan(100);
+
+      const scroller = container.querySelector('[data-virtual-scroller]') as HTMLElement;
+      // jsdom does not keep a scrollTop it cannot lay out; pin one past the end.
+      Object.defineProperty(scroller, 'scrollTop', { value: LINES * VIRTUAL_ROW_HEIGHT, configurable: true, writable: true });
+      fireEvent.scroll(scroller);
+      expect(await screen.findByText(`+line ${LINES}`)).toBeInTheDocument();
+      expect(screen.queryByText('+line 1')).toBeNull();
+    });
   });
 });

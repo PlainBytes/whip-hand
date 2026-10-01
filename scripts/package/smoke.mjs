@@ -117,7 +117,7 @@ export function smokeCli() {
 }
 
 /** One request in, one response out. */
-function request(binary, message, env, timeoutMs = 20_000) {
+export function request(binary, message, env, timeoutMs = 20_000) {
   return new Promise((resolve, reject) => {
     const child = spawnRunner([binary], { stdio: ['pipe', 'pipe', 'pipe'], env });
     let stdout = '';
@@ -151,7 +151,7 @@ function request(binary, message, env, timeoutMs = 20_000) {
  * the first line, since a `startRun` response is followed by a stream of
  * notifications on the same stdout.
  */
-function streamNdjson(child, onMessage) {
+export function streamNdjson(child, onMessage) {
   let buffer = '';
   child.stdout.on('data', chunk => {
     buffer += chunk;
@@ -172,7 +172,7 @@ function streamNdjson(child, onMessage) {
  * waiting for `close` means those handles are gone before anything tries to
  * delete underneath them.
  */
-function terminate(child) {
+export function terminate(child) {
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
   const closed = new Promise(resolve => child.once('close', resolve));
   if (process.platform === 'win32') runSync(['taskkill', '/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
@@ -187,7 +187,7 @@ function terminate(child) {
  * directory we could not remove is not a reason to fail a packaging run whose
  * question is already answered.
  */
-function discard(dir) {
+export function discard(dir) {
   try {
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   } catch (error) {

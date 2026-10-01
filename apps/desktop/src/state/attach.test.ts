@@ -150,6 +150,16 @@ describe('applyEventReplay', () => {
     expect(job.steps.execute).toMatchObject({ status: 'running', inferred: undefined });
   });
 
+  it('learns the run id from a replayed run:start, so a mid-run attach binds to its run', () => {
+    // listJobs carries no runId while the run is live; the replay is the only source.
+    store().applyJobSummaries([{ jobId: 'j1', workdir: '/w', status: 'running', pty: null }]);
+    store().applyEventReplay('j1', [
+      { jobId: 'j1', runId: 'r1', ts: 't0', seq: 0, event: { type: 'run:start', runId: 'r1', workflow: 'wf', name: 'Named' } },
+      start('execute', 1),
+    ]);
+    expect(store().jobs.j1).toMatchObject({ runId: 'r1', runName: 'Named' });
+  });
+
   it('routes a loop iteration to its own key, not iteration 1\'s', () => {
     store().applyEventReplay('j1', [start('execute', 0, 2)]);
     expect(store().jobs.j1!.steps['execute#2']).toMatchObject({ status: 'running', iteration: 2 });

@@ -1,0 +1,16 @@
+# scripts/bench's live-streaming scenario. The command step prints a flood of
+# lines as fast as a pipe takes them; the interactive step's `claude` is
+# ./bin's stub, which writes ~2 MB into the pty and then idles until killed so
+# the job stays attachable for the reload-and-replay measurement.
+name: flood
+steps:
+  - id: flood
+    kind: command
+    run: node flood.mjs 50000
+  - id: chat
+    kind: agent
+    runner: claude
+    mode: interactive
+    writes: false
+    prompt: 'Bench.'
+    output: chat.md

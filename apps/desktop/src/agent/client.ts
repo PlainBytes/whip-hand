@@ -1,4 +1,5 @@
 import type { Transport } from './transport.ts';
+import { perfEnabled, recordRpc } from '../lib/perf-probe.ts';
 import type {
   CancelRunParams,
   CancelRunResult,
@@ -198,6 +199,8 @@ interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  /** Set only while the perf probe is on (lib/perf-probe.ts). */
+  perf?: { method: string; startedAt: number };
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -264,7 +267,8 @@ export class AgentClient {
         this.pending.delete(id);
         reject(new Error(`request "${method}" timed out after ${this.requestTimeoutMs}ms`));
       }, this.requestTimeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      const perf = perfEnabled() ? { method, startedAt: performance.now() } : undefined;
+      this.pending.set(id, { resolve, reject, timer, perf });
       this.transport.send(line);
     });
     return promise as Promise<MethodMap[M]['result']>;
@@ -346,6 +350,7 @@ export class AgentClient {
       if (!entry) return;
       this.pending.delete(id);
       clearTimeout(entry.timer);
+      if (entry.perf) recordRpc(entry.perf.method, performance.now() - entry.perf.startedAt);
       if ('error' in value) {
         const { error } = value as { error: { message: string } };
         entry.reject(new Error(error.message));

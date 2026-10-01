@@ -3,6 +3,7 @@ import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
 import { decodeBase64ToBytes, encodeToBase64 } from '../lib/base64.ts';
 import { createTerminal, TERMINAL_BACKGROUND, type TerminalHandle } from './xterm-runtime.ts';
+import { perfEnabled, perfMark } from '../lib/perf-probe.ts';
 
 export interface TerminalPanelProps {
   /** The job whose interactive PTY this panel mounts for. */
@@ -157,6 +158,8 @@ export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProp
       handle.term.write(decodeBase64ToBytes(ptyDataBuffer[i]));
     }
     writtenAbsoluteRef.current = ptyDataBaseIndex + ptyDataBuffer.length;
+    // The callback runs once xterm has parsed everything queued before it.
+    if (perfEnabled()) handle.term.write('', () => perfMark('terminal:flushed'));
   }, [ptyDataBuffer, ptyDataBaseIndex]);
 
   // Go read-only once the store reports the PTY exited.

@@ -1164,6 +1164,12 @@ export const useAppStore = create<AppState>((set) => ({
 
     const next: JobState = {
       ...current,
+      // listJobs leaves runId out until a run ends (the agent only records it
+      // then), so for a client attaching mid-run the replayed run:start is the
+      // only place it comes from. Without it RunDetailPage, which finds its
+      // job by run id, never binds to the live session.
+      runId: current.runId ?? fold.runId,
+      runName: current.runName ?? fold.runName,
       steps: fold.steps,
       stepOrder: fold.stepOrder,
       currentExecution: fold.currentExecution,

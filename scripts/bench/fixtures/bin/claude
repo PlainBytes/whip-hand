@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# scripts/bench stub runner: see claude-flood.js.
+exec node "$(dirname "$0")/claude-flood.js" "$@"

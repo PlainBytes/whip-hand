@@ -206,6 +206,81 @@ describe('TerminalPanel', () => {
     expect(writes[1]).toEqual(Array.from(new TextEncoder().encode('world')));
   });
 
+  describe('a large backlog', () => {
+    // ~200k base64 chars each: two fit in a 256k replay slice's budget check.
+    const chunkText = (n: number) => `${n}`.repeat(150_000);
+    /** Everything written, as text, minus the empty writes that only carry a callback. */
+    const decodedWrites = () => handle.term.write.mock.calls
+      .filter(call => call[0] !== '')
+      .map(call => (call[0] instanceof Uint8Array ? new TextDecoder().decode(call[0]) : String(call[0])));
+    /** The continuation the pump parked on: the last write('') with a callback. */
+    const continuation = () => {
+      const call = handle.term.write.mock.calls.findLast(c => c[0] === '' && typeof c[1] === 'function');
+      return call?.[1] as (() => void) | undefined;
+    };
+
+    /** Runs each slice's continuation as xterm would, until the pump is done. */
+    function drain() {
+      let ran = -1;
+      for (;;) {
+        const calls = handle.term.write.mock.calls;
+        const index = calls.findLastIndex(c => c[0] === '' && typeof c[1] === 'function');
+        if (index <= ran) return;
+        ran = index;
+        act(() => (calls[index][1] as () => void)());
+      }
+    }
+
+    function seed(jobId: string, count: number) {
+      useAppStore.getState().applyPtyStarted({ jobId, stepId: 's', cols: 80, rows: 24 });
+      for (let n = 1; n <= count; n += 1) {
+        useAppStore.getState().applyPtyData({ jobId, data: encodeToBase64(chunkText(n)) });
+      }
+    }
+
+    it('replays in slices, each started from the previous slice\'s write callback', () => {
+      seed('job-big', 4);
+      renderPanel('job-big');
+
+      expect(decodedWrites()).toEqual([chunkText(1), chunkText(2)]);
+      act(() => continuation()!());
+      expect(decodedWrites()).toEqual([chunkText(1), chunkText(2), chunkText(3), chunkText(4)]);
+    });
+
+    it('takes a trim that lands between slices: a marker, then only what is left', () => {
+      seed('job-trim', 4);
+      renderPanel('job-trim');
+      const next = continuation()!;
+      // Pushes the buffer past its ~2M-char budget, so chunks 3 and 4 — not
+      // yet written — are trimmed away before the next slice runs.
+      act(() => {
+        for (let n = 5; n <= 13; n += 1) {
+          useAppStore.getState().applyPtyData({ jobId: 'job-trim', data: encodeToBase64(chunkText(n)) });
+        }
+      });
+      expect(decodedWrites()).toHaveLength(2); // still waiting on the slice callback
+      act(() => next());
+      drain();
+      const written = decodedWrites();
+      expect(written.slice(0, 2)).toEqual([chunkText(1), chunkText(2)]);
+      expect(written).not.toContain(chunkText(3));
+      expect(written).toContain('\x1b[2m[earlier output truncated]\x1b[0m\r\n');
+      expect(written.at(-1)).toBe(chunkText(13));
+      // Each surviving chunk exactly once, in order.
+      const ids = written.filter(w => !w.includes('truncated')).map(w => Number(w.slice(0, w.length / 150_000)));
+      expect(ids).toEqual([...new Set(ids)].sort((a, b) => a - b));
+    });
+
+    it('stops when the panel unmounts mid-replay', () => {
+      seed('job-gone', 4);
+      const { unmount } = renderPanel('job-gone');
+      const next = continuation()!;
+      unmount();
+      next();
+      expect(decodedWrites()).toEqual([chunkText(1), chunkText(2)]);
+    });
+  });
+
   it('writes newly arriving ptyData live, after already-replayed chunks', () => {
     renderPanel('job-4');
     useAppStore.getState().applyPtyStarted({ jobId: 'job-4', stepId: 'triage', cols: 80, rows: 24 });
@@ -298,22 +373,26 @@ describe('TerminalPanel', () => {
       useAppStore.getState().applyPtyData({ jobId: 'job-11', data: encodeToBase64(rawChunk('c')) });
     });
 
+    // Each 800k chunk is over a replay slice, so 'c' waits on the slice
+    // callback after 'b' — the empty write that carries it.
     const writes = handle.term.write.mock.calls;
-    expect(writes).toHaveLength(3); // marker + 'b' + 'c' — 'a' was trimmed before this panel wrote it
+    expect(writes).toHaveLength(3); // marker + 'b' + the slice continuation — 'a' was trimmed before this panel wrote it
     expect(String(writes[0][0])).toMatch(/earlier output truncated/i);
     // Decode back to a string for comparison rather than a deep-equal over
     // 600,000-element byte arrays, which is needlessly slow for what's just a
     // content check.
     expect(new TextDecoder().decode(writes[1][0] as Uint8Array)).toBe(rawChunk('b'));
-    expect(new TextDecoder().decode(writes[2][0] as Uint8Array)).toBe(rawChunk('c'));
+    expect(writes[2][0]).toBe('');
+    act(() => (writes[2][1] as () => void)());
+    expect(new TextDecoder().decode(writes[3][0] as Uint8Array)).toBe(rawChunk('c'));
 
     // A subsequent chunk continues normally, without repeating the marker.
     act(() => {
       useAppStore.getState().applyPtyData({ jobId: 'job-11', data: encodeToBase64('d') });
     });
 
-    expect(handle.term.write).toHaveBeenCalledTimes(4);
-    expect(Array.from(handle.term.write.mock.calls[3][0] as Uint8Array)).toEqual(Array.from(new TextEncoder().encode('d')));
+    expect(handle.term.write).toHaveBeenCalledTimes(5);
+    expect(Array.from(handle.term.write.mock.calls[4][0] as Uint8Array)).toEqual(Array.from(new TextEncoder().encode('d')));
   });
 
   it('goes read-only and writes an exit line when the store reports ptyExit', () => {

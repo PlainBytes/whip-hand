@@ -198,12 +198,14 @@ function walkFiles(dir) {
 
 function benchSizes() {
   log('sizes');
+  // dist/ keeps every version's installers; only this version's are this build.
+  const { version } = JSON.parse(fs.readFileSync(path.join(repoRoot, 'apps/desktop/package.json'), 'utf8'));
   const installers = {};
   for (const name of fs.existsSync(distDir) ? fs.readdirSync(distDir) : []) {
-    const match = /^Whiphand_[^_]+_.*?\.(deb|AppImage|exe|msi|dmg)$/.exec(name);
-    if (match) installers[match[1]] = fileSize(path.join(distDir, name));
+    const match = /\.(deb|AppImage|exe|msi|dmg)$/.exec(name);
+    if (match && name.startsWith(`Whiphand_${version}_`)) installers[match[1]] = fileSize(path.join(distDir, name));
   }
-  if (Object.keys(installers).length === 0) note('no installers in dist/ — run `npm run package` for installer sizes');
+  if (Object.keys(installers).length === 0) note(`no ${version} installers in dist/ — run \`npm run package\` for installer sizes`);
   const web = path.join(repoRoot, 'apps/desktop/dist-web');
   const webFiles = walkFiles(web);
   if (webFiles.length === 0) note('apps/desktop/dist-web missing — run `npm run build:web -w desktop` for web bundle sizes');

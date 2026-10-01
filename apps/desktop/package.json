@@ -13,6 +13,7 @@
   "dependencies": {
     "@fluentui/react-components": "^9.74.7",
     "@fluentui/react-icons": "^2.0.339",
+    "@tanstack/react-virtual": "^3.14.13",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.3",
     "@tauri-apps/plugin-fs": "^2.5.2",
@@ -40,7 +41,6 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
-    "@whiphand/core": "*",
     "@tauri-apps/cli": "^2.11.4",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.3.3",
@@ -50,6 +50,7 @@
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^6.1.1",
+    "@whiphand/core": "*",
     "jsdom": "^30.0.1",
     "rehype-parse": "^9.0.1",
     "rehype-stringify": "^10.0.1",

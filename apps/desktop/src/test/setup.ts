@@ -31,3 +31,31 @@ class ResizeObserverStub {
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test polyfill, not worth typing precisely
 (globalThis as any).ResizeObserver ??= ResizeObserverStub;
+
+// jsdom lays nothing out, so every offsetHeight is 0 — and a windowed list
+// (lib/use-virtual-rows.ts) measures its scroll container and its rows that
+// way. With no viewport it renders almost nothing; with zero-height rows its
+// binary search for the first visible row lands anywhere. So scroll
+// containers marked data-virtual-scroller get a very tall box, and the rows
+// it measures (data-index) a fixed height: every list a test builds renders
+// whole, as it did before it was windowed. A test of the windowing itself
+// shrinks the viewport with setVirtualViewportHeight().
+export const VIRTUAL_ROW_HEIGHT = 20;
+const VIRTUAL_VIEWPORT = { offsetHeight: 200_000, offsetWidth: 1200 };
+export function setVirtualViewportHeight(height: number): void {
+  VIRTUAL_VIEWPORT.offsetHeight = height;
+}
+afterEach(() => {
+  VIRTUAL_VIEWPORT.offsetHeight = 200_000;
+});
+for (const prop of ['offsetHeight', 'offsetWidth'] as const) {
+  const native = Object.getOwnPropertyDescriptor(HTMLElement.prototype, prop);
+  Object.defineProperty(HTMLElement.prototype, prop, {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (this.hasAttribute('data-virtual-scroller')) return VIRTUAL_VIEWPORT[prop];
+      if (prop === 'offsetHeight' && this.hasAttribute('data-index')) return VIRTUAL_ROW_HEIGHT;
+      return native?.get?.call(this) ?? 0;
+    },
+  });
+}

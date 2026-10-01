@@ -1,6 +1,7 @@
 import { Profiler, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { setVirtualViewportHeight, VIRTUAL_ROW_HEIGHT } from '../test/setup.ts';
 import { RunDetailPage } from './RunDetailPage.tsx';
 import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
@@ -2664,6 +2665,51 @@ describe('RunDetailPage: Logs tab (run audit)', () => {
   });
 });
 
+describe('RunDetailPage: a long log', () => {
+  beforeEach(() => {
+    useAppStore.setState({ workspacePath: '/ws', jobs: {} });
+  });
+
+  it('keeps only the rows near the viewport in the DOM', async () => {
+    setVirtualViewportHeight(400);
+    const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'r-long');
+    await respondGetRun(transport, {
+      runId: 'r-long', runDir: '/ws/.whiphand/runs/r-long', status: 'succeeded',
+      workflow: 'w', inputs: {}, artifacts: [], steps: [],
+    });
+    const req = await waitFor(() => {
+      const i = transport.sent.findIndex(l => (JSON.parse(l) as { method?: string }).method === 'readRunLog');
+      if (i === -1) throw new Error('readRunLog not sent yet');
+      return transport.sentRequest(i);
+    });
+    const lines = Array.from({ length: 3000 }, (_, i) =>
+      `2026-01-01T00:00:00.000Z  ${i + 1}  step:log:stdout  a  output line ${i}`);
+    transport.emitLine({ id: req.id, result: { lines, startByte: 0, atStart: true } });
+
+    // jsdom has no Element.scrollTo, so the view stays where it starts: the
+    // top. The DOM holds a viewport's worth plus overscan, not 3000 rows.
+    expect(await screen.findByText('output line 0')).toBeInTheDocument();
+    expect(screen.queryByText('output line 2999')).not.toBeInTheDocument();
+    const rendered = screen.getAllByTestId('log-row').length;
+    expect(rendered).toBeGreaterThan(400 / VIRTUAL_ROW_HEIGHT);
+    expect(rendered).toBeLessThan(100);
+    // The count still describes the whole log, not the window.
+    expect(screen.getByTestId('log-filter-count')).toHaveTextContent('3,000');
+
+    // Scrolling moves the window. Where exactly it lands depends on the
+    // estimate the rows not yet measured are sized by, so assert the region.
+    const logTail = screen.getByTestId('log-tail');
+    // jsdom does not keep a scrollTop it cannot lay out; pin one.
+    Object.defineProperty(logTail, 'scrollTop', { value: 2000 * VIRTUAL_ROW_HEIGHT, configurable: true, writable: true });
+    fireEvent.scroll(logTail);
+    const lineNumbers = () => screen.getAllByTestId('log-row')
+      .map(row => Number(/output line (\d+)/.exec(row.textContent ?? '')?.[1]));
+    await waitFor(() => expect(Math.min(...lineNumbers())).toBeGreaterThan(1500));
+    expect(Math.max(...lineNumbers())).toBeLessThan(2600);
+    expect(screen.getAllByTestId('log-row').length).toBeLessThan(100);
+  });
+});
+
 /**
  * A command step (a test runner, say) can write output far faster than the
  * page can repaint. Tauri hands the webview one IPC event per line, so each
@@ -2724,10 +2770,12 @@ describe('RunDetailPage: a burst of command output', () => {
 
     expect(commits - before, `commits while ${LINES} lines arrived one per task`).toBeLessThanOrEqual(MAX_COMMITS);
 
-    // Coalescing must not lose output.
+    // Coalescing must not lose output. The list is windowed, so wait for the
+    // pass after its first measure, which brings every row into the DOM here.
     fireEvent.click(screen.getByRole('tab', { name: /logs/i }));
-    const rows = await screen.findAllByTestId('log-row');
-    const text = rows.map(r => r.textContent ?? '').join('\n');
-    for (let i = 0; i < LINES; i++) expect(text).toContain(`output line ${i}`);
+    await waitFor(() => {
+      const text = screen.getAllByTestId('log-row').map(r => r.textContent ?? '').join('\n');
+      for (let i = 0; i < LINES; i++) expect(text).toContain(`output line ${i}`);
+    });
   });
 });

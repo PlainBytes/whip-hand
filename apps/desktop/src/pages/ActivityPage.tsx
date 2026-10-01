@@ -5,6 +5,7 @@ import {
 } from '@fluentui/react-components';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { liveStageProgress, useAppStore, waitingRunIds } from '../state/store.ts';
+import { sameSet, sameStageProgress, useAppStoreStable } from '../state/use-stable-selector.ts';
 import { sameWorkspace } from '../../../../packages/core/src/path-form.ts';
 import { openWorkspace } from '../lib/workspace-switch.ts';
 import { basename } from '../lib/workspace-identity.ts';
@@ -45,14 +46,13 @@ export function ActivityPage({ onSelectRun }: ActivityPageProps) {
   const client = useAgentClient();
   const workspacePath = useAppStore(state => state.workspacePath);
   const identityKey = useAppStore(state => state.workspaceIdentityKey);
-  const jobs = useAppStore(state => state.jobs);
   const [runs, setRuns] = useState<RecentRun[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   // Unfiltered: every workspace's waiting jobs are relevant here, which is
   // exactly what this page is for.
-  const waiting = useMemo(() => waitingRunIds(jobs), [jobs]);
-  const stages = useMemo(() => liveStageProgress(jobs), [jobs]);
+  const waiting = useAppStoreStable(state => waitingRunIds(state.jobs), sameSet);
+  const stages = useAppStoreStable(state => liveStageProgress(state.jobs), sameStageProgress);
   const columns = useMemo(() => makeColumns(waiting, stages), [waiting, stages]);
 
   useEffect(() => {

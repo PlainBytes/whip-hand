@@ -1,10 +1,11 @@
 import { Button, CounterBadge, Tooltip, type CounterBadgeProps } from '@fluentui/react-components';
 import { pagesInGroup, type NavGroup, type PageDef, type PageId } from '../nav.ts';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher.tsx';
-import { OngoingRuns } from './OngoingRuns.tsx';
+import { OngoingRuns, sameOngoingRows } from './OngoingRuns.tsx';
 import { RowGlyph, RowTrailing, SIDEBAR_GROUP_GAP, SIDEBAR_ROW_GAP, SIDEBAR_ROW_STYLE } from './sidebar-row.tsx';
 import { WAITING_BADGE_COLOR, STATUS_BADGE_SIZE } from '../lib/status-style.ts';
 import { useAppStore, ongoingJobs, waitingJobs, type JobState } from '../state/store.ts';
+import { useAppStoreStable } from '../state/use-stable-selector.ts';
 import { useCapabilities } from '../capabilities.tsx';
 
 /** Fluent's CounterBadge restricts `color` in its types only — see NavItem. */
@@ -127,14 +128,13 @@ function NavItem({ def, selected, disabled, badge, badgeUrgent, onSelect }: {
 export function Sidebar({ page, onSelectPage, onOpenRun }: SidebarProps) {
   const capabilities = useCapabilities();
   const workspacePath = useAppStore(state => state.workspacePath);
-  const jobs = useAppStore(state => state.jobs);
   const showOngoingRuns = useAppStore(state => state.appState?.showOngoingRuns ?? true);
 
   // Activity is the one item that counts: live jobs across every workspace,
   // which is precisely what it lists. Turns urgent when one wants an answer.
-  const running = Object.values(jobs).filter(j => !j.finished).length;
-  const urgent = waitingJobs(jobs).length > 0;
-  const ongoing = ongoingJobs(jobs);
+  const running = useAppStore(state => Object.values(state.jobs).filter(j => !j.finished).length);
+  const urgent = useAppStore(state => waitingJobs(state.jobs).length > 0);
+  const ongoing = useAppStoreStable(state => ongoingJobs(state.jobs), sameOngoingRows);
   const remoteListening = useAppStore(state => state.remoteAccess?.listening ?? false);
   const hasOngoingRuns = showOngoingRuns && ongoing.length > 0;
 

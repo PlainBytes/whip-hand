@@ -288,22 +288,86 @@ const ACTIVITY_TAIL_CAP = LOG_TAIL_CAP;
 const PTY_DATA_BUFFER_CAP_CHARS = 2_000_000; // ~2MB of base64 text per job
 
 /**
- * Trims `buffer` from the front until its total size is back under the cap
- * (but never drops the newest chunk, even if that one chunk alone exceeds
- * the cap). Returns the new buffer, the new base index (advanced by however
- * many chunks were dropped), and whether anything was actually trimmed.
+ * Summed chunk length per buffer array, so appending stays O(chunks appended)
+ * instead of re-summing the whole ~2MB buffer on every chunk. Keyed by the
+ * array itself: every write makes a new array, and an array this map has not
+ * seen (a snapshot merge, a test fixture) is summed once on first use.
  */
-function capPtyDataBuffer(buffer: string[], baseIndex: number): { buffer: string[]; baseIndex: number; trimmed: boolean } {
-  let total = buffer.reduce((sum, chunk) => sum + chunk.length, 0);
+const ptyBufferChars = new WeakMap<readonly string[], number>();
+
+function charsOf(buffer: readonly string[]): number {
+  let total = ptyBufferChars.get(buffer);
+  if (total === undefined) {
+    total = buffer.reduce((sum, chunk) => sum + chunk.length, 0);
+    ptyBufferChars.set(buffer, total);
+  }
+  return total;
+}
+
+/**
+ * Appends pty chunks in arrival order, then trims from the front until the
+ * total size is back under the cap (but never drops the newest chunk, even if
+ * that one chunk alone exceeds the cap). Trimming once after the whole batch
+ * keeps exactly what trimming after each chunk would: the longest suffix that
+ * fits.
+ *
+ * A non-zero seq on the FIRST chunk a job ever sees means output was produced
+ * before this client was listening — an attach partway through a run. Filing
+ * it at index 0 would misalign every later replay, so the buffer starts at the
+ * chunk's real absolute position and says it is incomplete.
+ */
+function appendPtyChunks(
+  job: JobState, chunks: readonly { data: string; seq?: number }[],
+): Pick<JobState, 'ptyDataBuffer' | 'ptyDataBaseIndex' | 'ptyDataTrimmed'> {
+  const first = chunks[0];
+  const joiningLate = job.ptyDataBuffer.length === 0 && typeof first?.seq === 'number' && first.seq > 0;
+  const startIndex = joiningLate ? first.seq! : job.ptyDataBaseIndex;
+  const buffer = job.ptyDataBuffer.concat(chunks.map(chunk => chunk.data));
+  let total = charsOf(job.ptyDataBuffer);
+  for (const chunk of chunks) total += chunk.data.length;
   let start = 0;
   while (total > PTY_DATA_BUFFER_CAP_CHARS && start < buffer.length - 1) {
     total -= buffer[start].length;
     start += 1;
   }
-  if (start === 0) return { buffer, baseIndex, trimmed: false };
-  return { buffer: buffer.slice(start), baseIndex: baseIndex + start, trimmed: true };
+  const kept = start === 0 ? buffer : buffer.slice(start);
+  ptyBufferChars.set(kept, total);
+  return {
+    ptyDataBuffer: kept,
+    ptyDataBaseIndex: startIndex + start,
+    ptyDataTrimmed: job.ptyDataTrimmed || start > 0 || joiningLate,
+  };
 }
 
+/** One notification the high-rate queue (agent-context.tsx) holds back and applies in a batch. */
+export type HighRateNotification =
+  | { method: 'stepLog'; params: StepLogParams }
+  | { method: 'ptyData'; params: PtyDataParams }
+  | { method: 'whiphandEvent'; params: WhiphandEventNotificationParams };
+
+/** A job mid-batch: its state so far, plus what the batch has yet to append to it. */
+interface PendingAppends {
+  job: JobState;
+  logTail: LogLine[];
+  logRows: LogRow[];
+  pty: { data: string; seq?: number }[];
+}
+
+function appendPending({ job, logTail, logRows, pty }: PendingAppends): JobState {
+  if (logTail.length === 0 && logRows.length === 0 && pty.length === 0) return job;
+  return {
+    ...job,
+    ...(logTail.length === 0 ? {} : { logTail: appendCapped(job.logTail, logTail, LOG_TAIL_CAP) }),
+    ...(logRows.length === 0 ? {} : { logRows: appendCapped(job.logRows, logRows, LOG_ROWS_CAP) }),
+    ...(pty.length === 0 ? {} : appendPtyChunks(job, pty)),
+  };
+}
+
+/** Appends to a capped tail in one copy, dropping the oldest entries past `cap`. */
+function appendCapped<T>(tail: readonly T[], added: readonly T[], cap: number): T[] {
+  const next = tail.concat(added);
+  return next.length > cap ? next.slice(next.length - cap) : next;
+}
 
 /**
  * Splices a server-side transcript snapshot together with whatever this client
@@ -506,12 +570,11 @@ function finalizeRunningSteps(job: JobState, ts: string, failedStepId?: string):
 }
 
 /**
- * Reduces one whiphandEvent notification into the next JobState. Pure and
- * exported so applyEventReplay (see applyScrollbackSnapshot) can fold a whole
- * buffered stream through it without going through zustand's `set` once per
- * event — `applyWhiphandEvent` below is a thin wrapper over the same function.
+ * The identity a whiphandEvent can teach a job: its run id, run name and
+ * workspace. Shared by reduceJobEvent and the high-rate batch, which handles
+ * `step:log` without going through it.
  */
-export function reduceJobEvent(job: JobState, params: WhiphandEventNotificationParams): JobState {
+function adoptEventIdentity(job: JobState, params: WhiphandEventNotificationParams): JobState {
   const { event } = params;
 
   // The real agent includes runId on every whiphandEvent notification once the
@@ -530,6 +593,23 @@ export function reduceJobEvent(job: JobState, params: WhiphandEventNotificationP
   }
   if (params.workdir && job.workdir !== params.workdir) job = { ...job, workdir: params.workdir };
   if (params.identityKey && job.identityKey !== params.identityKey) job = { ...job, identityKey: params.identityKey };
+  return job;
+}
+
+/** A `step:log` event as the Logs tab's output row. */
+function stepLogRow(params: WhiphandEventNotificationParams): LogRow {
+  return { seq: params.seq ?? 0, ts: params.ts, ...summarizeEvent(params.event) };
+}
+
+/**
+ * Reduces one whiphandEvent notification into the next JobState. Pure and
+ * exported so applyEventReplay (see applyScrollbackSnapshot) can fold a whole
+ * buffered stream through it without going through zustand's `set` once per
+ * event — `applyWhiphandEvent` below is a thin wrapper over the same function.
+ */
+export function reduceJobEvent(job: JobState, params: WhiphandEventNotificationParams): JobState {
+  const { event } = params;
+  job = adoptEventIdentity(job, params);
 
   switch (event.type) {
     case 'run:start':
@@ -698,14 +778,9 @@ export function reduceJobEvent(job: JobState, params: WhiphandEventNotificationP
       if (degradations !== job.degradations) job = { ...job, degradations };
       break;
     }
-    case 'step:log': {
-      const rows = [...job.logRows, {
-        seq: params.seq ?? 0, ts: params.ts, ...summarizeEvent(event),
-      }];
-      if (rows.length > LOG_ROWS_CAP) rows.splice(0, rows.length - LOG_ROWS_CAP);
-      job = { ...job, logRows: rows };
+    case 'step:log':
+      job = { ...job, logRows: appendCapped(job.logRows, [stepLogRow(params)], LOG_ROWS_CAP) };
       break;
-    }
     case 'step:artifact-missing':
     case 'step:timeout':
     case 'step:retry':
@@ -796,6 +871,11 @@ export interface AppState {
   applyWhiphandEvent: (params: WhiphandEventNotificationParams) => void;
   applyRunStateChanged: (params: RunStateChangedParams) => void;
   applyStepLog: (params: StepLogParams) => void;
+  /**
+   * Applies a window's worth of high-rate notifications (see HighRateNotification)
+   * with one store write. applyStepLog and applyPtyData are this with one item.
+   */
+  applyHighRateBatch: (items: readonly HighRateNotification[]) => void;
   applyPtyStarted: (params: PtyStartedParams) => void;
   applyPtyData: (params: PtyDataParams) => void;
   applyPtyExit: (params: PtyExitParams) => void;
@@ -818,6 +898,11 @@ export interface AppState {
    * own step:start — see patchCurrent's fallback for what happens then.
    */
   applyEventReplay: (jobId: string, events: WhiphandEventNotificationParams[]) => void;
+  /**
+   * applyScrollbackSnapshot then applyEventReplay for each attached job, in
+   * one store write — what a (re)connect does for every job it learns about.
+   */
+  applyJobSnapshots: (snapshots: readonly { jobId: string; snapshot: JobScrollbackResult }[]) => void;
   /** Seeds jobs a client could not otherwise know about (see listJobs). */
   applyJobSummaries: (summaries: JobSummary[]) => void;
 
@@ -862,7 +947,121 @@ export interface AppState {
   setFilesDirty: (value: boolean) => void;
 }
 
-export const useAppStore = create<AppState>((set) => ({
+/** applyScrollbackSnapshot's reduction, pure so a reconnect can seed every job in one write. */
+function withScrollbackSnapshot(job: JobState, snapshot: JobScrollbackResult): JobState {
+  const next: JobState = { ...job };
+
+  if (snapshot.pty) {
+    const merged = mergeScrollback(
+      { buffer: job.ptyDataBuffer, baseIndex: job.ptyDataBaseIndex },
+      { chunks: snapshot.pty.chunks, baseIndex: snapshot.pty.baseIndex },
+    );
+    next.ptyDataBuffer = merged.buffer;
+    next.ptyDataBaseIndex = merged.baseIndex;
+    next.ptyDataTrimmed = merged.trimmed;
+    next.ptyStepId = job.ptyStepId ?? snapshot.pty.stepId;
+    next.ptyCols = job.ptyCols ?? snapshot.pty.cols;
+    next.ptyRows = job.ptyRows ?? snapshot.pty.rows;
+    // Live notifications are always more current than a snapshot, so an
+    // exit already seen here is never un-set by one that predates it.
+    if (!job.ptyExited && snapshot.pty.exited) {
+      next.ptyExited = true;
+      next.ptyExitCode = snapshot.pty.exitCode;
+      next.ptyExitReason = snapshot.pty.exitReason;
+      next.ptyActive = false;
+    } else if (!snapshot.pty.exited && !job.ptyExited) {
+      next.ptyActive = true;
+      next.awaiting = job.awaiting ?? snapshot.pty.awaiting;
+    }
+  }
+
+  // Log lines carry no base index in this store, so there is nothing to
+  // splice them on; seeding only an empty tail keeps live output — which is
+  // strictly newer — from being duplicated or reordered.
+  if (job.logTail.length === 0 && snapshot.logs.lines.length > 0) {
+    next.logTail = snapshot.logs.lines.slice(-LOG_TAIL_CAP);
+  }
+
+  return next;
+}
+
+/** applyEventReplay's reduction, pure for the same reason as withScrollbackSnapshot. */
+function withEventReplay(current: JobState, events: WhiphandEventNotificationParams[]): JobState {
+  const jobId = current.jobId;
+
+  // Fold from a blank slate that keeps identity and every pty/log/events/
+  // logRows field as they are — reduceJobEvent reads some of these
+  // (activityTail, currentExecution) but the fold's own copies of
+  // `events`/`logRows` are discarded below (F8), never written back.
+  let fold: JobState = {
+    ...emptyJob(jobId),
+    workdir: current.workdir, identityKey: current.identityKey, runId: current.runId, runName: current.runName,
+    events: current.events, logTail: current.logTail, logRows: current.logRows,
+    ptyActive: current.ptyActive, ptyStepId: current.ptyStepId,
+    ptyCols: current.ptyCols, ptyRows: current.ptyRows,
+    ptyDataBuffer: current.ptyDataBuffer, ptyDataBaseIndex: current.ptyDataBaseIndex,
+    ptyDataTrimmed: current.ptyDataTrimmed, ptyExited: current.ptyExited,
+    ptyExitCode: current.ptyExitCode, ptyExitReason: current.ptyExitReason,
+    awaiting: current.awaiting,
+  };
+  for (const event of events) fold = reduceJobEvent(fold, event);
+
+  // Idempotent on repeated reconnects: a live event this job already
+  // processed with a seq past the end of what was just replayed (the same
+  // attempt raced ahead of the getJobScrollback round trip) would otherwise
+  // be lost — the fold above started from a blank slate and knows nothing
+  // about it. Re-running it on top of the fold brings the result current
+  // again without ever touching `current.events` itself.
+  //
+  // The bound must come from the last *seq'd* replayed event, not simply
+  // `events.at(-1)`: a handler-direct run:error (see scrollback.ts's
+  // mergeBySeq) has no seq and can legitimately be the last thing replayed
+  // (runJobInBackground's catch sends it after the journal's own, seq'd
+  // run:error/run:done). Using `events.at(-1)?.seq` there reads as
+  // "nothing was replayed" and re-applies every live event this job ever
+  // held — including the step:start the replay itself just finalized past —
+  // right back on top of the fold.
+  const lastReplayedSeq = events.findLast(e => e.seq !== undefined)?.seq;
+  // A seq-less live event (a handler-direct run:error or guard:warning) can
+  // never be proven to fall after lastReplayedSeq numerically, so it is
+  // kept unless the replay already contains an equivalent one (same event
+  // type and ts) — that would mean this exact event is what the replay
+  // itself just folded in, and re-applying it a second time is what caused
+  // the bug above for a run:error specifically.
+  const replayedSeqless = new Set(
+    events.filter(e => e.seq === undefined).map(e => `${e.event.type}:${e.ts}`),
+  );
+  const racedAhead = current.events.filter(e => (
+    e.seq !== undefined
+      ? lastReplayedSeq === undefined || e.seq > lastReplayedSeq
+      : !replayedSeqless.has(`${e.event.type}:${e.ts}`)
+  ));
+  for (const event of racedAhead) fold = reduceJobEvent(fold, event);
+
+  const next: JobState = {
+    ...current,
+    // listJobs leaves runId out until a run ends (the agent only records it
+    // then), so for a client attaching mid-run the replayed run:start is the
+    // only place it comes from. Without it RunDetailPage, which finds its
+    // job by run id, never binds to the live session.
+    runId: current.runId ?? fold.runId,
+    runName: current.runName ?? fold.runName,
+    steps: fold.steps,
+    stepOrder: fold.stepOrder,
+    currentExecution: fold.currentExecution,
+    finished: fold.finished,
+    errorMessage: fold.errorMessage,
+    activityTail: fold.activityTail,
+    hasNarrated: current.hasNarrated || fold.hasNarrated,
+    // Only cleared when the fold says the run actually ended — reduceJobEvent
+    // never sets pendingManual itself either way, so this is the one field
+    // the fold can only ever clear, never (re)populate.
+    pendingManual: fold.finished ? undefined : current.pendingManual,
+  };
+  return next;
+}
+
+export const useAppStore = create<AppState>((set, get) => ({
   workspacePath: null,
   workspaceIdentityKey: null,
   pendingWorkspaceSwitch: null,
@@ -986,11 +1185,49 @@ export const useAppStore = create<AppState>((set) => ({
     return { jobs: { ...state.jobs, [params.jobId]: { ...job, pendingManual: undefined } } };
   }),
 
-  applyStepLog: params => set(state => {
-    const job = state.jobs[params.jobId] ?? emptyJob(params.jobId);
-    const logTail = [...job.logTail, { stream: params.stream, line: params.line }];
-    if (logTail.length > LOG_TAIL_CAP) logTail.splice(0, logTail.length - LOG_TAIL_CAP);
-    return { jobs: { ...state.jobs, [params.jobId]: { ...job, logTail } } };
+  applyStepLog: params => get().applyHighRateBatch([{ method: 'stepLog', params }]),
+
+  applyHighRateBatch: items => set(state => {
+    if (items.length === 0) return {};
+    // Gathered per job in arrival order, then each job is written once: one
+    // copy of `jobs`, and one of each array a job grows, however many lines
+    // and chunks a 100ms window carried. The three kinds touch disjoint
+    // fields, so per-job order within each kind is all that has to survive.
+    const pending = new Map<string, PendingAppends>();
+    const entry = (jobId: string) => {
+      let found = pending.get(jobId);
+      if (!found) {
+        found = { job: state.jobs[jobId] ?? emptyJob(jobId), logTail: [], logRows: [], pty: [] };
+        pending.set(jobId, found);
+      }
+      return found;
+    };
+    for (const item of items) {
+      const target = entry(item.params.jobId);
+      switch (item.method) {
+        case 'stepLog':
+          target.logTail.push({ stream: item.params.stream, line: item.params.line });
+          break;
+        case 'ptyData':
+          target.pty.push({ data: item.params.data, seq: item.params.seq });
+          break;
+        case 'whiphandEvent':
+          if (item.params.event.type !== 'step:log') {
+            // Not a high-rate kind: keep reduceJobEvent's full handling, in order.
+            target.job = reduceJobEvent(appendPending(target), item.params);
+            target.logRows = [];
+            target.logTail = [];
+            target.pty = [];
+            break;
+          }
+          target.job = adoptEventIdentity(target.job, item.params);
+          target.logRows.push(stepLogRow(item.params));
+          break;
+      }
+    }
+    const jobs = { ...state.jobs };
+    for (const [jobId, target] of pending) jobs[jobId] = appendPending(target);
+    return { jobs };
   }),
 
   applyPtyStarted: params => set(state => {
@@ -1017,28 +1254,7 @@ export const useAppStore = create<AppState>((set) => ({
     };
   }),
 
-  applyPtyData: params => set(state => {
-    const job = state.jobs[params.jobId] ?? emptyJob(params.jobId);
-    // A non-zero seq on the FIRST chunk we ever see means output was produced
-    // before this client was listening — an attach partway through a run.
-    // Filing it at index 0 would misalign every later replay, so the buffer
-    // starts at the chunk's real absolute position and says it is incomplete.
-    const joiningLate = job.ptyDataBuffer.length === 0
-      && typeof params.seq === 'number' && params.seq > 0;
-    const startIndex = joiningLate ? params.seq! : job.ptyDataBaseIndex;
-    const { buffer, baseIndex, trimmed } = capPtyDataBuffer([...job.ptyDataBuffer, params.data], startIndex);
-    return {
-      jobs: {
-        ...state.jobs,
-        [params.jobId]: {
-          ...job,
-          ptyDataBuffer: buffer,
-          ptyDataBaseIndex: baseIndex,
-          ptyDataTrimmed: job.ptyDataTrimmed || trimmed || joiningLate,
-        },
-      },
-    };
-  }),
+  applyPtyData: params => get().applyHighRateBatch([{ method: 'ptyData', params }]),
 
   applyPtyAwait: params => set(state => {
     const job = state.jobs[params.jobId] ?? emptyJob(params.jobId);
@@ -1072,117 +1288,23 @@ export const useAppStore = create<AppState>((set) => ({
     };
   }),
 
-  applyScrollbackSnapshot: (jobId, snapshot) => set(state => {
-    const job = state.jobs[jobId] ?? emptyJob(jobId);
-    const next: JobState = { ...job };
+  applyScrollbackSnapshot: (jobId, snapshot) => set(state => ({
+    jobs: { ...state.jobs, [jobId]: withScrollbackSnapshot(state.jobs[jobId] ?? emptyJob(jobId), snapshot) },
+  })),
 
-    if (snapshot.pty) {
-      const merged = mergeScrollback(
-        { buffer: job.ptyDataBuffer, baseIndex: job.ptyDataBaseIndex },
-        { chunks: snapshot.pty.chunks, baseIndex: snapshot.pty.baseIndex },
-      );
-      next.ptyDataBuffer = merged.buffer;
-      next.ptyDataBaseIndex = merged.baseIndex;
-      next.ptyDataTrimmed = merged.trimmed;
-      next.ptyStepId = job.ptyStepId ?? snapshot.pty.stepId;
-      next.ptyCols = job.ptyCols ?? snapshot.pty.cols;
-      next.ptyRows = job.ptyRows ?? snapshot.pty.rows;
-      // Live notifications are always more current than a snapshot, so an
-      // exit already seen here is never un-set by one that predates it.
-      if (!job.ptyExited && snapshot.pty.exited) {
-        next.ptyExited = true;
-        next.ptyExitCode = snapshot.pty.exitCode;
-        next.ptyExitReason = snapshot.pty.exitReason;
-        next.ptyActive = false;
-      } else if (!snapshot.pty.exited && !job.ptyExited) {
-        next.ptyActive = true;
-        next.awaiting = job.awaiting ?? snapshot.pty.awaiting;
-      }
+  applyEventReplay: (jobId, events) => set(state => ({
+    jobs: { ...state.jobs, [jobId]: withEventReplay(state.jobs[jobId] ?? emptyJob(jobId), events) },
+  })),
+
+  applyJobSnapshots: snapshots => set(state => {
+    const jobs = { ...state.jobs };
+    for (const { jobId, snapshot } of snapshots) {
+      let job = withScrollbackSnapshot(jobs[jobId] ?? emptyJob(jobId), snapshot);
+      // Absent from an older agent's response — see jobScrollbackSchema.
+      if (snapshot.events) job = withEventReplay(job, snapshot.events);
+      jobs[jobId] = job;
     }
-
-    // Log lines carry no base index in this store, so there is nothing to
-    // splice them on; seeding only an empty tail keeps live output — which is
-    // strictly newer — from being duplicated or reordered.
-    if (job.logTail.length === 0 && snapshot.logs.lines.length > 0) {
-      next.logTail = snapshot.logs.lines.slice(-LOG_TAIL_CAP);
-    }
-
-    return { jobs: { ...state.jobs, [jobId]: next } };
-  }),
-
-  applyEventReplay: (jobId, events) => set(state => {
-    const current = state.jobs[jobId] ?? emptyJob(jobId);
-
-    // Fold from a blank slate that keeps identity and every pty/log/events/
-    // logRows field as they are — reduceJobEvent reads some of these
-    // (activityTail, currentExecution) but the fold's own copies of
-    // `events`/`logRows` are discarded below (F8), never written back.
-    let fold: JobState = {
-      ...emptyJob(jobId),
-      workdir: current.workdir, identityKey: current.identityKey, runId: current.runId, runName: current.runName,
-      events: current.events, logTail: current.logTail, logRows: current.logRows,
-      ptyActive: current.ptyActive, ptyStepId: current.ptyStepId,
-      ptyCols: current.ptyCols, ptyRows: current.ptyRows,
-      ptyDataBuffer: current.ptyDataBuffer, ptyDataBaseIndex: current.ptyDataBaseIndex,
-      ptyDataTrimmed: current.ptyDataTrimmed, ptyExited: current.ptyExited,
-      ptyExitCode: current.ptyExitCode, ptyExitReason: current.ptyExitReason,
-      awaiting: current.awaiting,
-    };
-    for (const event of events) fold = reduceJobEvent(fold, event);
-
-    // Idempotent on repeated reconnects: a live event this job already
-    // processed with a seq past the end of what was just replayed (the same
-    // attempt raced ahead of the getJobScrollback round trip) would otherwise
-    // be lost — the fold above started from a blank slate and knows nothing
-    // about it. Re-running it on top of the fold brings the result current
-    // again without ever touching `current.events` itself.
-    //
-    // The bound must come from the last *seq'd* replayed event, not simply
-    // `events.at(-1)`: a handler-direct run:error (see scrollback.ts's
-    // mergeBySeq) has no seq and can legitimately be the last thing replayed
-    // (runJobInBackground's catch sends it after the journal's own, seq'd
-    // run:error/run:done). Using `events.at(-1)?.seq` there reads as
-    // "nothing was replayed" and re-applies every live event this job ever
-    // held — including the step:start the replay itself just finalized past —
-    // right back on top of the fold.
-    const lastReplayedSeq = events.findLast(e => e.seq !== undefined)?.seq;
-    // A seq-less live event (a handler-direct run:error or guard:warning) can
-    // never be proven to fall after lastReplayedSeq numerically, so it is
-    // kept unless the replay already contains an equivalent one (same event
-    // type and ts) — that would mean this exact event is what the replay
-    // itself just folded in, and re-applying it a second time is what caused
-    // the bug above for a run:error specifically.
-    const replayedSeqless = new Set(
-      events.filter(e => e.seq === undefined).map(e => `${e.event.type}:${e.ts}`),
-    );
-    const racedAhead = current.events.filter(e => (
-      e.seq !== undefined
-        ? lastReplayedSeq === undefined || e.seq > lastReplayedSeq
-        : !replayedSeqless.has(`${e.event.type}:${e.ts}`)
-    ));
-    for (const event of racedAhead) fold = reduceJobEvent(fold, event);
-
-    const next: JobState = {
-      ...current,
-      // listJobs leaves runId out until a run ends (the agent only records it
-      // then), so for a client attaching mid-run the replayed run:start is the
-      // only place it comes from. Without it RunDetailPage, which finds its
-      // job by run id, never binds to the live session.
-      runId: current.runId ?? fold.runId,
-      runName: current.runName ?? fold.runName,
-      steps: fold.steps,
-      stepOrder: fold.stepOrder,
-      currentExecution: fold.currentExecution,
-      finished: fold.finished,
-      errorMessage: fold.errorMessage,
-      activityTail: fold.activityTail,
-      hasNarrated: current.hasNarrated || fold.hasNarrated,
-      // Only cleared when the fold says the run actually ended — reduceJobEvent
-      // never sets pendingManual itself either way, so this is the one field
-      // the fold can only ever clear, never (re)populate.
-      pendingManual: fold.finished ? undefined : current.pendingManual,
-    };
-    return { jobs: { ...state.jobs, [jobId]: next } };
+    return { jobs };
   }),
 
   applyJobSummaries: summaries => set(state => {

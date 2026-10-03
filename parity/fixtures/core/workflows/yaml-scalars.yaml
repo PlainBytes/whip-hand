@@ -1,0 +1,16 @@
+# Scalars the YAML 1.2 core schema resolves in ways YAML 1.1 parsers do not.
+name: yaml-scalars
+steps:
+  - id: a
+    kind: command
+    run: "true"
+    verdict: TRUE
+    enabled: True
+    timeout_ms: 0x10
+    expect_exit: [0o7, 017, +3, 1., 1e1]
+  - id: b
+    kind: command
+    run: yes
+    shell: ~
+    cwd: Null
+    env: { 1: one, b: two, 0: zero, ~: none, true: t, 1.5: f }

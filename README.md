@@ -320,9 +320,17 @@ npm run verify                 # local CI-equivalent gate — see below
 
 `npm run verify` runs the same checks as CI in one fail-fast chain: root
 typecheck/tests, the CLI/desktop parity suite (`npm run test:parity` — verifies the
-desktop app's surface and behavior match the CLI, see `parity/`), the desktop app's
-own tests and build, and finally `cargo check` against `apps/desktop/src-tauri`. If
-`cargo` isn't installed, that last step is skipped with a warning instead of failing.
+desktop app's surface and behavior match the CLI, and that the Rust core library
+agrees with `packages/core`, see `parity/`), the desktop app's own tests and build,
+and finally the Rust checks: fmt, clippy and tests for the Cargo workspace at the
+repo root (`crates/*`), and `cargo check` against `apps/desktop/src-tauri`. If
+`cargo` isn't installed, the Rust checks are skipped with a warning instead of failing.
+
+The core parity corpus (`parity/fixtures/core/`) is a set of JSON op lists and the
+results the TypeScript implementation gives for them; `cargo test` and
+`npm run test:parity` both compare against those results. After changing
+`packages/core`'s schema, config or workspace code, or adding a case to
+`schema.test.ts`, run `npm run parity:core-golden` and review the diff.
 
 **Wayland troubleshooting**: if the desktop window opens with a blank webview under
 Wayland/webkitgtk, set `WEBKIT_DISABLE_COMPOSITING_MODE=1` and

@@ -36,7 +36,7 @@ jobs:
       # no survivors, grandchildren included — it needs the real binary.
       - name: Build the process guard (Windows)
         if: runner.os == 'Windows'
-        run: cargo build --release --manifest-path crates/job-guard/Cargo.toml
+        run: cargo build --release -p whiphand-job
       - run: npm ci
       - run: npm run typecheck
       # Includes scripts/invariants.test.mjs — the platform-gate allowlist and the
@@ -67,7 +67,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y build-essential python3
       - name: Build the process guard (Windows)
         if: runner.os == 'Windows'
-        run: cargo build --release --manifest-path crates/job-guard/Cargo.toml
+        run: cargo build --release -p whiphand-job
       - run: npm ci
       - run: npm run test:parity
 
@@ -120,6 +120,27 @@ jobs:
         env:
           TAURI_CONFIG: '{"bundle":{"externalBin":null,"resources":null}}'
         run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+  # The root Cargo workspace (crates/*): the process guard now, whiphand-core
+  # from Phase 1 of docs/migration.md on. macOS is in the matrix here because
+  # the migration holds every Rust phase to all three platforms. The Tauri
+  # crate is not a member; the job above checks it.
+  rust:
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
 
   # The full `npm run package` pipeline — CLI SEA, agent sidecar, and the
   # Tauri bundle — on push to main only, not on PRs: ~4 minutes per platform

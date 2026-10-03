@@ -1,0 +1,72 @@
+# Every step kind and nearly every field, valid as a whole. The mutants suite
+# breaks it one field at a time (see parity/core-corpus.ts).
+name: kitchen-sink
+description: Every step kind
+on_findings: loop
+inputs:
+  goal: { required: true, prompt: "What's the goal?", multiline: true }
+  label: { required: false, default: x, remember: true }
+steps:
+  - id: plan
+    runner: claude
+    model: opus
+    mode: interactive
+    writes: false
+    effort: high
+    output: plan.md
+    prompt: "Plan {{ inputs.goal }} for {{ run.name }}"
+    allow_paths: ["docs/**"]
+    allow_commits: false
+    harvest_timeout_ms: 5000
+  - id: lint
+    kind: command
+    run: npm run lint -- "{{ inputs.label }}"
+    cwd: packages
+    env: { CI: "1", LABEL: "{{ inputs.label }}" }
+    timeout_ms: 60000
+    expect_exit: [0, 1]
+    output: lint.log
+    inputs: [plan]
+  - id: cycle
+    kind: loop
+    until: review
+    max_iterations: 2
+    on_exhausted: interactive
+    steps:
+      - id: execute
+        runner: copilot
+        mode: headless
+        writes: true
+        inputs: [plan, review]
+        output: report.md
+        prompt: "Iteration {{ loop.iteration }} of {{ loop.max_iterations }}"
+      - id: review
+        kind: command
+        verdict: true
+        run: test -f report.md
+        expect_exit: 0
+        output: review.log
+  - id: stages
+    kind: stages
+    items: "plans/*.md"
+    max_retries: 1
+    steps:
+      - id: implement
+        kind: command
+        run: echo "{{ stage.id }} {{ stage.index }}/{{ stage.total }}"
+        inputs: [stage]
+        output: impl.log
+        verdict: true
+      - id: gate
+        kind: approval
+        title: "Stage {{ stage.title }}"
+        instructions: Accept this stage?
+        default: continue
+  - id: sign-off
+    kind: manual
+    title: Sign off
+    instructions: Read the review notes.
+    capture: review
+    show_diff: true
+    output: notes.md
+    enabled: true

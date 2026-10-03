@@ -1,0 +1,12 @@
+name: misplaced
+title: on the root
+steps:
+  - id: a
+    run: npm test
+    items: x
+  - id: b
+    kind: command
+    run: x
+    prompt: y
+    steps:
+      - { id: c, kind: nope, runner: claude, until: z }

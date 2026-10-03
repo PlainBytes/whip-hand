@@ -1,0 +1,12 @@
+[package]
+name = "whiphand-core"
+version = "0.3.5"
+description = "Whiphand's workflow schema, validation, config and workspace lookup"
+edition = "2024"
+publish = false
+
+[dependencies]
+saphyr-parser = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+regex = "1"

@@ -1,0 +1,17 @@
+name: semantics
+inputs:
+  a-b: { required: true }
+  a_b: { required: false }
+  "bad name": { required: true }
+steps:
+  - { id: attachments, kind: command, run: x, output: "../x" }
+  - { id: con, kind: command, run: "{{ run.nope }} {{ stage.foo }}", shell: "C:\\Windows\\cmd.exe", inputs: [a-b, a_b, later] }
+  - { id: later, kind: command, run: x, output: o.log }
+  - id: loop
+    kind: loop
+    until: inner
+    on_exhausted: loop
+    steps:
+      - { id: inner, kind: loop, until: x, steps: [{ id: x, kind: command, run: x, verdict: true }] }
+      - { id: stages, kind: stages, items: x, steps: [{ id: s, kind: command, run: x }] }
+  - { id: m, kind: manual, title: t, instructions: i, capture: note }

@@ -1,0 +1,10 @@
+name: anchors
+x-defaults: &agent { runner: claude, mode: headless, writes: false }
+steps:
+  - <<: *agent
+    id: a
+    prompt: !!str 5
+    output: !custom a.md
+  - id: b
+    kind: command
+    run: !!int "5"

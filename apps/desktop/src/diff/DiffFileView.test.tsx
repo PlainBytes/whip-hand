@@ -156,15 +156,10 @@ describe('DiffFileView', () => {
     /** One wrapper per drawn row (see DiffFileView's subgrid rows). */
     const drawnRows = (container: HTMLElement) => container.querySelectorAll('[data-index]');
 
-    it('draws the whole file instead of cutting it off', () => {
-      render(<DiffFileView file={big()} />);
-      expect(screen.queryByText(/more lines/)).toBeNull();
-      expect(screen.getByText(`+line ${LINES}`)).toBeInTheDocument();
-    });
-
-    it('keeps only the rows near the viewport in the DOM, and scrolls to the rest', async () => {
+    it('draws the whole file, windowed: the rows near the viewport, and the rest on scroll', async () => {
       setVirtualViewportHeight(400);
       const { container } = render(<DiffFileView file={big()} />);
+      expect(screen.queryByText(/more lines/)).toBeNull();
       expect(screen.getByText('+line 1')).toBeInTheDocument();
       expect(screen.queryByText(`+line ${LINES}`)).toBeNull();
       expect(drawnRows(container).length).toBeLessThan(100);

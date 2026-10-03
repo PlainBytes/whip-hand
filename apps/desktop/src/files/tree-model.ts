@@ -159,3 +159,52 @@ export function validateName(name: string): string | null {
   if (!segment.ok) return `The name ${segment.reason}.`;
   return null;
 }
+
+/** One row of the tree as drawn: a node, or a directory's error/truncation note. */
+export type VisibleTreeRow =
+  | { kind: 'node'; node: TreeNode; level: number; parent?: string; setSize: number; posInSet: number }
+  | { kind: 'error'; parent: string; message: string; level: number; setSize: number; posInSet: number }
+  | { kind: 'truncated'; parent: string; count: number; level: number; setSize: number; posInSet: number };
+
+/** A row's tree value: its path, or its directory's path plus a suffix for the notes. */
+export function visibleRowValue(row: VisibleTreeRow): string {
+  switch (row.kind) {
+    case 'node': return row.node.path;
+    case 'error': return `${row.parent}::error`;
+    case 'truncated': return `${row.parent}::truncated`;
+  }
+}
+
+/**
+ * The rows a tree draws, in order: the root's children, and the children of
+ * every expanded directory under them, depth first — what a nested tree would
+ * show, as a flat list a windowed renderer can index. Levels start at 1 for
+ * the root's children (aria-level). A directory that could not be listed
+ * shows one error row instead of children; one cut by MAX_DIR_ENTRIES ends
+ * with a truncation row.
+ */
+export function flattenVisible(nodes: TreeNodes, root: string, expanded: readonly string[]): VisibleTreeRow[] {
+  const open = new Set(expanded);
+  const rows: VisibleTreeRow[] = [];
+  const walk = (dirPath: string, level: number, parent: string | undefined) => {
+    const dir = nodes[dirPath];
+    if (!dir) return;
+    if (dir.error !== undefined) {
+      if (parent !== undefined) rows.push({ kind: 'error', parent: dirPath, message: dir.error, level, setSize: 1, posInSet: 1 });
+      return;
+    }
+    const children = (dir.children ?? []).filter(path => nodes[path] !== undefined);
+    const setSize = children.length + (dir.truncated && parent !== undefined ? 1 : 0);
+    children.forEach((path, i) => {
+      const node = nodes[path];
+      rows.push({ kind: 'node', node, level, parent, setSize, posInSet: i + 1 });
+      if (node.kind === 'dir' && open.has(path)) walk(path, level + 1, path);
+    });
+    // As the nested tree drew it: the root's own truncation is not a row.
+    if (dir.truncated && parent !== undefined) {
+      rows.push({ kind: 'truncated', parent: dirPath, count: dir.truncated, level, setSize, posInSet: setSize });
+    }
+  };
+  walk(root, 1, undefined);
+  return rows;
+}

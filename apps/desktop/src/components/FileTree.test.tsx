@@ -6,6 +6,8 @@ import { FakeFileSystem } from '../files/fake-fs.ts';
 import { FileSystemProvider } from '../files/fs-context.tsx';
 import { useFileTree } from '../files/use-file-tree.ts';
 import { FileTree, type FileTreeActions } from './FileTree.tsx';
+import type { TreeNodes } from '../files/tree-model.ts';
+import { setVirtualViewportHeight, VIRTUAL_ROW_HEIGHT } from '../test/setup.ts';
 
 /**
  * The "Show hidden files" Switch now lives in FilesPage's PageHeader, not in
@@ -264,5 +266,65 @@ describe('FileTree row actions', () => {
       expect(screen.getByRole('treeitem', { name: /docs/ })).toHaveAttribute('aria-selected', 'true');
     });
     expect(screen.getByRole('treeitem', { name: /README\.md/ })).toHaveAttribute('aria-selected', 'false');
+  });
+});
+
+describe('FileTree: a long listing', () => {
+  const COUNT = 500;
+  const name = (i: number) => `file-${String(i).padStart(3, '0')}.txt`;
+  function bigNodes(): TreeNodes {
+    const nodes: TreeNodes = {
+      '/ws': { path: '/ws', name: 'ws', kind: 'dir', childrenLoaded: true, children: [] },
+    };
+    for (let i = 0; i < COUNT; i += 1) {
+      const path = `/ws/${name(i)}`;
+      nodes['/ws'].children!.push(path);
+      nodes[path] = { path, name: name(i), kind: 'file', childrenLoaded: false };
+    }
+    return nodes;
+  }
+  function renderBig() {
+    const utils = render(
+      <FileTree root="/ws" nodes={bigNodes()} expanded={[]} selectedPath={null} onToggle={vi.fn()} onSelect={vi.fn()} />,
+    );
+    const scroller = utils.container.querySelector('[data-virtual-scroller]') as HTMLElement;
+    // jsdom has no layout or scrolling: give the scroller its extent, and make
+    // scrollTo move scrollTop and say so, as a browser would.
+    Object.defineProperty(scroller, 'scrollHeight', {
+      configurable: true,
+      // What a browser would lay out: the spacers plus the rendered rows.
+      get: () => [...scroller.querySelector('[role=tree]')!.children].reduce((sum, child) => sum
+        + (child.hasAttribute('data-index') ? VIRTUAL_ROW_HEIGHT : parseFloat((child as HTMLElement).style.height) || 0), 0),
+    });
+    Object.defineProperty(scroller, 'clientHeight', { value: 300, configurable: true });
+    scroller.scrollTo = ((options: ScrollToOptions) => {
+      Object.defineProperty(scroller, 'scrollTop', { value: options.top ?? 0, configurable: true, writable: true });
+      fireEvent.scroll(scroller);
+    }) as typeof scroller.scrollTo;
+    return utils;
+  }
+
+  it('keeps only the rows near the viewport in the DOM', () => {
+    setVirtualViewportHeight(300);
+    renderBig();
+    const rows = screen.getAllByRole('treeitem');
+    expect(rows.length).toBeGreaterThan(300 / VIRTUAL_ROW_HEIGHT);
+    expect(rows.length).toBeLessThan(60);
+    expect(rows[0]).toHaveAttribute('aria-posinset', '1');
+    expect(rows[0]).toHaveAttribute('aria-setsize', String(COUNT));
+    expect(screen.queryByText(name(COUNT - 1))).toBeNull();
+  });
+
+  it('End and Home reach rows outside the window', async () => {
+    setVirtualViewportHeight(300);
+    renderBig();
+    const first = screen.getAllByRole('treeitem')[0];
+    first.focus();
+    fireEvent.keyDown(first, { key: 'End' });
+    await waitFor(() => expect(document.activeElement).toHaveTextContent(name(COUNT - 1)), { timeout: 3000 });
+    expect(screen.queryByText(name(0))).toBeNull();
+
+    fireEvent.keyDown(document.activeElement!, { key: 'Home' });
+    await waitFor(() => expect(document.activeElement).toHaveTextContent(name(0)), { timeout: 3000 });
   });
 });

@@ -699,12 +699,11 @@ describe('RunDetailPage', () => {
     // The folders are rows of their own, open from the start, and both
     // iterations hang inside 'do-review' rather than sitting at the top level
     // as two identical 'do-review/iter-N/review.md' labels.
+    // The tree is flat in the DOM, so nesting is what aria-level and row
+    // order say: each review.md sits one level under its own iteration.
     await screen.findByText('do-review');
-    const folder = screen.getAllByRole('treeitem').find(row => row.textContent?.startsWith('do-review'))!;
-    expect(within(folder).getByText('iter-1')).toBeInTheDocument();
-    expect(within(folder).getByText('iter-2')).toBeInTheDocument();
-    expect(within(folder).getAllByText('review.md')).toHaveLength(2);
-    expect(within(folder).queryByText('plan.md')).not.toBeInTheDocument();
+    const outline = screen.getAllByRole('treeitem').map(row => `${row.getAttribute('aria-level')} ${row.textContent}`);
+    expect(outline).toEqual(['1 do-review', '2 iter-1', '3 review.md', '2 iter-2', '3 review.md', '1 plan.md']);
 
     // Selecting the deeper one asks the agent for it by its full relative
     // name — the leaf row shows only the file name, but the RPC needs the path.

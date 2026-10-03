@@ -48,13 +48,18 @@ fn home() -> &'static str {
     }
 }
 
+/// `ws()`'s parent: a run directory outside the workspace sits beside it.
+fn ws_root() -> &'static str {
+    if cfg!(windows) { "C:\\ws" } else { "/ws" }
+}
+
 fn normalize(value: Value) -> Value {
     match value {
-        Value::String(s) => Value::String(normalize_text(&s, ws())),
+        Value::String(s) => Value::String(normalize_text(&s, ws_root())),
         Value::Array(a) => Value::Array(a.into_iter().map(normalize).collect()),
         Value::Object(o) => Value::Object(
             o.into_iter()
-                .map(|(k, v)| (normalize_text(&k, ws()), normalize(v)))
+                .map(|(k, v)| (normalize_text(&k, ws_root()), normalize(v)))
                 .collect(),
         ),
         other => other,

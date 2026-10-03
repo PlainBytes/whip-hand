@@ -201,7 +201,14 @@ fn attach_resolves_a_relative_path_against_the_shell_cwd_not_c() {
         .unwrap());
     assert_eq!(out.code(), 0, "{}", out.stderr());
     let manifest = std::fs::read_to_string(e.only_run().join("run.json")).unwrap();
-    let source = shell.path().join("bug.png").to_string_lossy().into_owned();
+    // The child's cwd is the directory's real path: macOS's temp dir is
+    // /var/…, a symlink to /private/var/….
+    let shell_dir = if cfg!(windows) {
+        shell.path().to_path_buf()
+    } else {
+        std::fs::canonicalize(shell.path()).unwrap()
+    };
+    let source = shell_dir.join("bug.png").to_string_lossy().into_owned();
     let expected = serde_json::json!([{
         "name": "bug.png", "path": "attachments/bug.png", "size": 3, "source": source,
     }]);

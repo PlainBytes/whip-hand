@@ -16,6 +16,7 @@ import { runWorkflow } from '../packages/core/src/engine/runner.ts';
 import { planResume } from '../packages/core/src/engine/resume.ts';
 import { pipeChild, routeHeadless, spawnRunner } from '../packages/core/src/exec.ts';
 import type { Frontend, ManualResponse, SpawnSpec, WhiphandEvent } from '../packages/core/src/types.ts';
+import { resolveShell } from '../packages/core/src/shell.ts';
 import { normalizeText } from './store-probe.ts';
 
 type Op = Record<string, unknown> & { op: string };
@@ -105,7 +106,15 @@ async function runWorkflowOp(op: Op, repo: string): Promise<unknown> {
       }
     }
     const runId = runDir === undefined ? '\u0000' : path.basename(runDir);
-    const norm = (t: string): string => normalizeText(t.split(runId).join('<RUN_ID>'), ws);
+    // Two host details, the same for both implementations on one machine: the
+    // resolved POSIX shell (Git's sh.exe on Windows), and whether the
+    // workspace path needs shell quoting (a Windows temp path does).
+    const shell = resolveShell();
+    const norm = (t: string): string => {
+      let out = normalizeText(t.split(runId).join('<RUN_ID>'), ws);
+      if (shell.ok) out = out.split(shell.path).join('<SHELL>');
+      return out.replace(/'(<WS>[^'\s]*)'/g, '$1');
+    };
     return {
       outcome: JSON.parse(norm(JSON.stringify(outcome))),
       resumed: JSON.parse(norm(JSON.stringify(resumed))),

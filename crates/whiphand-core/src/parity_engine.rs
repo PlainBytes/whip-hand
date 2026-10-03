@@ -285,7 +285,21 @@ fn run_workflow_op(op: &Value, repo: &Path) -> Value {
             .to_string_lossy()
             .into_owned()
     });
-    let norm = |t: &str| normalize_text(&t.replace(&run_id, "<RUN_ID>"), &wsp);
+    // Two host details, the same for both implementations on one machine: the
+    // resolved POSIX shell (Git's sh.exe on Windows), and whether the
+    // workspace path needs shell quoting (a Windows temp path does).
+    let shell = match crate::process::shell::resolve_shell() {
+        crate::process::shell::ShellResult::Ok(p) => Some(p),
+        _ => None,
+    };
+    let quoted_ws = regex::Regex::new(r"'(<WS>[^'\s]*)'").expect("a valid pattern");
+    let norm = |t: &str| {
+        let mut out = normalize_text(&t.replace(&run_id, "<RUN_ID>"), &wsp);
+        if let Some(sh) = &shell {
+            out = out.replace(sh.as_str(), "<SHELL>");
+        }
+        quoted_ws.replace_all(&out, "$1").into_owned()
+    };
     let files = run_dir.as_ref().map(|d| {
         let mut out = Vec::new();
         bundle(d, "", &mut out);

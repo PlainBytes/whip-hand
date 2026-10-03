@@ -56,7 +56,12 @@ type Op = Record<string, unknown> & { op: string };
 export const WS = process.platform === 'win32' ? 'C:\\ws\\proj' : '/ws/proj';
 const HOME = process.platform === 'win32' ? 'C:\\Users\\fake' : '/home/fake';
 
-function normalize(value: unknown, root = WS): unknown {
+/**
+ * Normalized against WS's parent, not WS: a run directory outside the
+ * workspace (`runDirOutside`) sits beside it, and on Windows that is a `C:`
+ * path no POSIX golden can spell.
+ */
+function normalize(value: unknown, root = path.dirname(WS)): unknown {
   if (typeof value === 'string') return normalizeText(value, root);
   if (Array.isArray(value)) return value.map(v => normalize(v, root));
   if (value !== null && typeof value === 'object') {

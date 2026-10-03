@@ -15,3 +15,6 @@ apps/*/src-tauri/resources/
 packages/core/src/.parity-capture*
 crates/*/target/
 /target/
+
+# The process corpus resolves npm .cmd shims to the script they point at.
+!parity/fixtures/core/trees/exec/**/node_modules/

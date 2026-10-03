@@ -238,12 +238,16 @@ export function FileTree(props: FileTreeProps) {
     focusRowWhenRendered(index);
   };
 
-  /** The row renders a frame or two after the scroll that brings it in; focus it once it has. */
-  function focusRowWhenRendered(index: number, framesLeft = 30): void {
+  /**
+   * The row renders a frame or more after the scroll that brings it in; focus
+   * it once it has. Bounded by time rather than frames, so a busy main thread
+   * delays the focus instead of dropping it.
+   */
+  function focusRowWhenRendered(index: number, deadline = performance.now() + 1000): void {
     requestAnimationFrame(() => {
       const row = scrollRef.current?.querySelector<HTMLElement>(`[data-index="${index}"]`);
       if (row) row.focus();
-      else if (framesLeft > 0) focusRowWhenRendered(index, framesLeft - 1);
+      else if (performance.now() < deadline) focusRowWhenRendered(index, deadline);
     });
   }
 

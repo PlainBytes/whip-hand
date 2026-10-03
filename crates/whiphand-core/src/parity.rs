@@ -63,7 +63,7 @@ fn u64_field(v: &Value, key: &str) -> u64 {
     v[key].as_u64().unwrap_or_default()
 }
 
-fn frame_from_json(v: &Value) -> Option<Frame> {
+pub(crate) fn frame_from_json(v: &Value) -> Option<Frame> {
     if v.is_null() {
         return None;
     }
@@ -244,6 +244,7 @@ pub fn run_op(op: &Value, repo: &Path) -> Value {
         }
         other => crate::parity_store::run_store_op(op, repo)
             .or_else(|| crate::parity_process::run_process_op(op, repo))
+            .or_else(|| crate::parity_adapters::run_adapter_op(op, repo))
             .unwrap_or_else(|| panic!("unknown parity op '{other}'")),
     }
 }

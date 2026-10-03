@@ -1,0 +1,11 @@
+tools:
+  - id: x
+    label: X
+    group: support
+    argv: [x]
+    url: "  https://spaced.example  "
+  - id: y
+    label: Y
+    group: support
+    argv: [y]
+    url: "mailto:a@b"

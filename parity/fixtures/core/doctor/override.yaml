@@ -1,0 +1,10 @@
+tools:
+  - id: git
+    label: Git (pinned)
+    group: support
+    argv: [git, version]
+  - id: claude
+    label: Claude!
+    group: harness
+    argv: [claude, -v]
+    optional: true

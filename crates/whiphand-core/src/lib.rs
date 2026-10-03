@@ -5,10 +5,14 @@
 //! `packages/core`; `parity/fixtures/core` holds the corpus both are checked
 //! against.
 
+pub mod adapters;
+pub mod canonicalize;
 pub mod config;
 pub mod config_home;
 pub mod degradations;
+pub mod doctor;
 pub mod durable_fs;
+pub mod engine;
 pub mod event_paths;
 pub mod execution_key;
 pub mod format;
@@ -22,6 +26,7 @@ pub mod process;
 pub mod process_id;
 pub mod random;
 pub mod raw;
+pub mod run_ctx;
 pub mod schema;
 pub mod segment;
 pub mod steps;
@@ -35,6 +40,8 @@ pub mod zod;
 
 #[doc(hidden)]
 pub mod parity;
+#[doc(hidden)]
+pub mod parity_adapters;
 #[doc(hidden)]
 pub mod parity_process;
 #[doc(hidden)]

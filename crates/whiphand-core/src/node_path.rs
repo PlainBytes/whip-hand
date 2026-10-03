@@ -190,6 +190,74 @@ pub fn win32_resolve(parts: &[&str]) -> String {
     }
 }
 
+/// `path.isAbsolute(p)` on this platform.
+pub fn is_absolute(p: &str) -> bool {
+    if cfg!(windows) {
+        win32_is_absolute(p)
+    } else {
+        p.starts_with('/')
+    }
+}
+
+/// `path.resolve(p)` on this platform: absolute against the current directory, normalized.
+pub fn resolve(p: &str) -> String {
+    let joined = if is_absolute(p) {
+        p.to_string()
+    } else {
+        let cwd = std::env::current_dir()
+            .map(|d| d.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        join(&[&cwd, p])
+    };
+    let out = normalize(&joined);
+    let sep = if cfg!(windows) { '\\' } else { '/' };
+    let root = if cfg!(windows) {
+        win32_root_len(&out)
+    } else {
+        1
+    };
+    let trimmed = out.trim_end_matches(sep);
+    if trimmed.len() < root {
+        out[..root.min(out.len())].to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// `path.relative(from, to)` on this platform.
+pub fn relative(from: &str, to: &str) -> String {
+    let (from, to) = (resolve(from), resolve(to));
+    let windows = cfg!(windows);
+    let sep = if windows { "\\" } else { "/" };
+    let eq = |a: &str, b: &str| {
+        if windows {
+            a.to_lowercase() == b.to_lowercase()
+        } else {
+            a == b
+        }
+    };
+    if eq(&from, &to) {
+        return String::new();
+    }
+    if windows {
+        let (rf, rt) = (win32_root_len(&from), win32_root_len(&to));
+        if !eq(&from[..rf], &to[..rt]) {
+            return to;
+        }
+    }
+    let split = |p: &str| -> Vec<String> {
+        p.split(['/', '\\'])
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let (f, t) = (split(&from), split(&to));
+    let common = f.iter().zip(&t).take_while(|(a, b)| eq(a, b)).count();
+    let mut parts: Vec<String> = vec!["..".to_string(); f.len() - common];
+    parts.extend(t[common..].iter().cloned());
+    parts.join(sep)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,6 +285,15 @@ mod tests {
             "\\\\srv\\share\\b"
         );
         assert_eq!(normalize_win32("C:"), "C:.");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relative_posix() {
+        assert_eq!(relative("/w", "/w/.whiphand/runs/r1"), ".whiphand/runs/r1");
+        assert_eq!(relative("/w/a", "/w/b/c"), "../b/c");
+        assert_eq!(relative("/w", "/w"), "");
+        assert_eq!(relative("/w/", "/x"), "../x");
     }
 
     #[test]

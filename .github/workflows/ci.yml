@@ -65,6 +65,10 @@ jobs:
       - name: Install build tools (node-pty source-build fallback)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y build-essential python3
+      # parity/store-cross.test.ts runs a Rust run-store process against a TS
+      # one (it builds crates/whiphand-core's store_probe example itself).
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Build the process guard (Windows)
         if: runner.os == 'Windows'
         run: cargo build --release -p whiphand-job

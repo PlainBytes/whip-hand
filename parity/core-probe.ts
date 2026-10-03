@@ -29,6 +29,7 @@ import { resolveWorkflowPath, listWorkflows, parseInputPairs } from '../packages
 import { validateSegment, validateRelativePath } from '../packages/core/src/segment.ts';
 import { workflowNameProblem } from '../packages/core/src/workflow-name.ts';
 import type { WorkspaceConfig } from '../packages/core/src/types.ts';
+import { runStoreOp } from './store-probe.ts';
 
 export const REPO = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, '');
 export const CORE_FIXTURES = path.join(REPO, 'parity', 'fixtures', 'core');
@@ -209,6 +210,9 @@ async function runRaw(op: Op): Promise<unknown> {
         error: e.error?.startsWith(YAML_ERROR_PREFIX) ? '<yaml error>' : e.error,
       }));
     }
+    case 'journal':
+    case 'runs':
+      return runStoreOp(op);
     default:
       throw new Error(`unknown parity op '${op.op}'`);
   }

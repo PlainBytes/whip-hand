@@ -1,0 +1,38 @@
+{
+  "version": 5,
+  "runId": "20240101-000006-stale-lease",
+  "workflow": "cycle",
+  "workdir": "/home/u/proj",
+  "dryRun": false,
+  "startedAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:05:00.000Z",
+  "status": "running",
+  "inputs": {},
+  "sessionIds": {},
+  "steps": [
+    {
+      "id": "a",
+      "kind": "command",
+      "status": "done",
+      "exitCode": 0
+    },
+    {
+      "id": "b",
+      "kind": "agent",
+      "runner": "claude",
+      "mode": "headless",
+      "status": "running",
+      "startedAt": "2024-01-01T00:00:00.000Z"
+    },
+    {
+      "id": "c",
+      "kind": "command",
+      "status": "pending"
+    }
+  ],
+  "pid": 99999,
+  "pidScope": "fixture:elsewhere",
+  "heartbeatAt": "2024-01-01T00:05:00.000Z",
+  "leaseId": "22222222-2222-4222-8222-222222222222",
+  "extraTopLevel": "dropped on repair"
+}

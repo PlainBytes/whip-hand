@@ -1,0 +1,79 @@
+{
+  "version": 4,
+  "runId": "20240101-000004-v4-nested",
+  "workflow": "cycle",
+  "workdir": "/home/u/proj",
+  "dryRun": false,
+  "startedAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:05:00.000Z",
+  "status": "cancelled",
+  "inputs": {},
+  "sessionIds": {},
+  "steps": [
+    {
+      "id": "outer",
+      "kind": "loop",
+      "status": "interrupted",
+      "iterations": 2,
+      "maxIterations": 2
+    },
+    {
+      "id": "inner",
+      "kind": "loop",
+      "loopId": "outer",
+      "iteration": 1,
+      "status": "done",
+      "iterations": 1
+    },
+    {
+      "id": "inner",
+      "kind": "loop",
+      "loopId": "outer",
+      "iteration": 2,
+      "status": "interrupted",
+      "iterations": 1
+    },
+    {
+      "id": "work",
+      "kind": "command",
+      "loopId": "inner",
+      "iteration": 1,
+      "outerLoops": [
+        {
+          "id": "outer",
+          "iteration": 1
+        }
+      ],
+      "status": "done",
+      "exitCode": 0
+    },
+    {
+      "id": "work",
+      "kind": "command",
+      "loopId": "inner",
+      "iteration": 1,
+      "outerLoops": [
+        {
+          "id": "outer",
+          "iteration": 2
+        }
+      ],
+      "status": "interrupted"
+    }
+  ],
+  "endedAt": "2024-01-01T00:05:00.000Z",
+  "heartbeatAt": "2024-01-01T00:05:00.000Z",
+  "degradations": [
+    {
+      "capability": "git-guard",
+      "reason": "not a git repository",
+      "at": "2024-01-01T00:00:00.000Z"
+    },
+    {
+      "capability": "future-thing",
+      "reason": "newer writer",
+      "stepId": "inner",
+      "at": "2024-01-01T00:00:00.000Z"
+    }
+  ]
+}

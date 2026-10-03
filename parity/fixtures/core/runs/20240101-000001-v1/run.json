@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "runId": "20240101-000001-v1",
+  "workflow": "cycle",
+  "workdir": "/home/u/proj",
+  "dryRun": false,
+  "startedAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:05:00.000Z",
+  "status": "failed",
+  "inputs": {},
+  "sessionIds": {},
+  "steps": [
+    {
+      "id": "plan",
+      "runner": "claude",
+      "mode": "headless",
+      "status": "done",
+      "exitCode": 0,
+      "artifact": "/old/abs/plan.md",
+      "startedAt": "2024-01-01T00:00:00.000Z",
+      "endedAt": "2024-01-01T00:05:00.000Z"
+    },
+    {
+      "id": "build",
+      "runner": "copilot",
+      "mode": "interactive",
+      "status": "failed",
+      "exitCode": 1,
+      "startedAt": "2024-01-01T00:00:00.000Z"
+    }
+  ],
+  "pid": 4242,
+  "ok": false,
+  "endedAt": "2024-01-01T00:05:00.000Z",
+  "error": {
+    "stepId": "build",
+    "message": "exit 1"
+  }
+}

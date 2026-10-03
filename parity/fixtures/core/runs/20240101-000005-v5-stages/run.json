@@ -1,0 +1,72 @@
+{
+  "version": 5,
+  "runId": "20240101-000005-v5-stages",
+  "workflow": "cycle",
+  "workdir": "/home/u/proj",
+  "dryRun": false,
+  "startedAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:05:00.000Z",
+  "status": "failed",
+  "inputs": {},
+  "sessionIds": {},
+  "steps": [
+    {
+      "id": "build",
+      "kind": "stages",
+      "status": "failed",
+      "total": 3,
+      "completed": 1,
+      "attempt": 2,
+      "maxAttempts": 3,
+      "exhausted": true,
+      "currentStage": {
+        "id": "10",
+        "title": "Ten",
+        "index": 2
+      },
+      "completedStages": [
+        "2"
+      ],
+      "startedStages": {
+        "10": {
+          "title": "Ten",
+          "index": 2,
+          "maxAttempts": 3
+        },
+        "2": {
+          "title": "Two",
+          "index": 1
+        }
+      },
+      "unknownRowKey": true
+    },
+    {
+      "id": "execute",
+      "kind": "command",
+      "loopId": "build",
+      "stagesId": "build",
+      "iteration": 1,
+      "stage": "2",
+      "status": "done",
+      "exitCode": 0,
+      "artifact": "build/2/attempt-1/execute.md"
+    },
+    {
+      "id": "execute",
+      "kind": "command",
+      "loopId": "build",
+      "stagesId": "build",
+      "iteration": 2,
+      "stage": "10",
+      "status": "failed",
+      "exitCode": 3
+    }
+  ],
+  "ok": false,
+  "endedAt": "2024-01-01T00:05:00.000Z",
+  "heartbeatAt": "2024-01-01T00:05:00.000Z",
+  "futureField": {
+    "x": 1
+  },
+  "stoppedTree": "abc123"
+}

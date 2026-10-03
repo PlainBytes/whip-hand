@@ -1,0 +1,199 @@
+{
+  "commands": [
+    {
+      "args": [],
+      "name": "doctor",
+      "options": [
+        {
+          "flags": "-C <dir>",
+          "hasDefault": true,
+          "required": true,
+          "short": "-C"
+        }
+      ]
+    },
+    {
+      "args": [
+        {
+          "name": "workflow",
+          "required": false
+        }
+      ],
+      "name": "run",
+      "options": [
+        {
+          "flags": "--resume <runId>",
+          "hasDefault": false,
+          "long": "--resume",
+          "required": true
+        },
+        {
+          "flags": "--fresh-session",
+          "hasDefault": true,
+          "long": "--fresh-session",
+          "required": false
+        },
+        {
+          "flags": "--dry-run",
+          "hasDefault": true,
+          "long": "--dry-run",
+          "required": false
+        },
+        {
+          "flags": "--input <pair...>",
+          "hasDefault": true,
+          "long": "--input",
+          "required": true
+        },
+        {
+          "flags": "--attach <path...>",
+          "hasDefault": true,
+          "long": "--attach",
+          "required": true
+        },
+        {
+          "flags": "-C <dir>",
+          "hasDefault": true,
+          "required": true,
+          "short": "-C"
+        },
+        {
+          "flags": "--json",
+          "hasDefault": true,
+          "long": "--json",
+          "required": false
+        },
+        {
+          "flags": "--yes",
+          "hasDefault": true,
+          "long": "--yes",
+          "required": false
+        },
+        {
+          "flags": "--name <name>",
+          "hasDefault": false,
+          "long": "--name",
+          "required": true
+        },
+        {
+          "flags": "--max-iterations <n>",
+          "hasDefault": false,
+          "long": "--max-iterations",
+          "required": true
+        },
+        {
+          "flags": "--extra-iterations <n>",
+          "hasDefault": false,
+          "long": "--extra-iterations",
+          "required": true
+        }
+      ]
+    },
+    {
+      "args": [
+        {
+          "name": "runId",
+          "required": true
+        },
+        {
+          "name": "name",
+          "required": true
+        }
+      ],
+      "name": "rename-run",
+      "options": [
+        {
+          "flags": "-C <dir>",
+          "hasDefault": true,
+          "required": true,
+          "short": "-C"
+        }
+      ]
+    },
+    {
+      "args": [],
+      "name": "init",
+      "options": [
+        {
+          "flags": "-C <dir>",
+          "hasDefault": true,
+          "required": true,
+          "short": "-C"
+        }
+      ]
+    },
+    {
+      "args": [
+        {
+          "name": "name",
+          "required": true
+        }
+      ],
+      "name": "new-workflow",
+      "options": [
+        {
+          "flags": "--global",
+          "hasDefault": true,
+          "long": "--global",
+          "required": false
+        },
+        {
+          "flags": "-C <dir>",
+          "hasDefault": true,
+          "required": true,
+          "short": "-C"
+        }
+      ]
+    },
+    {
+      "args": [
+        {
+          "name": "key",
+          "required": false
+        }
+      ],
+      "name": "config get",
+      "options": [
+        {
+          "flags": "--global",
+          "hasDefault": true,
+          "long": "--global",
+          "required": false
+        },
+        {
+          "flags": "-C <dir>",
+          "hasDefault": true,
+          "required": true,
+          "short": "-C"
+        }
+      ]
+    },
+    {
+      "args": [
+        {
+          "name": "key",
+          "required": true
+        },
+        {
+          "name": "value",
+          "required": true
+        }
+      ],
+      "name": "config set",
+      "options": [
+        {
+          "flags": "--global",
+          "hasDefault": true,
+          "long": "--global",
+          "required": false
+        },
+        {
+          "flags": "-C <dir>",
+          "hasDefault": true,
+          "required": true,
+          "short": "-C"
+        }
+      ]
+    }
+  ]
+}

@@ -72,6 +72,10 @@ jobs:
       - name: Build the process guard (Windows)
         if: runner.os == 'Windows'
         run: cargo build --release -p whiphand-job
+      # The CLI half of every CLI-vs-agent test, and the golden scenario, is
+      # the Rust binary (parity/cli-command.ts).
+      - name: Build the CLI
+        run: cargo build --release -p whiphand-cli
       - run: npm ci
       - run: npm run test:parity
 

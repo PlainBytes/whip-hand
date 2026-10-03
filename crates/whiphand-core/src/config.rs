@@ -341,3 +341,14 @@ pub fn load_workspace_config(
     let project = load_config_layer(&workdir.join(".whiphand").join("config.yaml"))?;
     Ok(merge_config(&default_config(), &[&global, &project]))
 }
+
+/// The config as the JS object `stringifyYaml` writes: keys in declaration
+/// order, `null` for an unset `runs.max_retained`.
+pub fn config_to_js(config: &WorkspaceConfig) -> crate::jsval::JsValue {
+    crate::jsval::from_json(&serde_json::to_value(config).expect("a config serializes"))
+}
+
+/// A layer as the JS object `configSet` writes: absent leaves left out.
+pub fn partial_config_to_js(layer: &PartialConfig) -> crate::jsval::JsValue {
+    crate::jsval::from_json(&serde_json::to_value(layer).expect("a layer serializes"))
+}

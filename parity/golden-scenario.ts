@@ -22,9 +22,9 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { captureBundle } from '@whiphand/test-support';
+import { CLI } from './cli-command.ts';
 import type { BundleFile } from '@whiphand/test-support';
 
-const CLI_MAIN = fileURLToPath(new URL('../packages/cli/src/main.ts', import.meta.url));
 const FIXTURE_WORKSPACE = fileURLToPath(new URL('./fixtures/workspace', import.meta.url));
 export const GOLDEN_DIR = fileURLToPath(new URL('./fixtures/golden/staged', import.meta.url));
 
@@ -46,7 +46,7 @@ export async function runScenario(): Promise<BundleFile[]> {
     ...isolated,
   };
   // `--yes` runs the stage gate unattended (it declares `default: continue`); the run ends DONE.
-  await promisify(execFile)(process.execPath, [CLI_MAIN, 'run', 'staged', '-C', workspace, '--yes'], { env });
+  await promisify(execFile)(CLI, ['run', 'staged', '-C', workspace, '--yes'], { env });
   const runs = (await readdir(join(workspace, '.whiphand', 'runs'), { withFileTypes: true }))
     .filter(entry => entry.isDirectory()).map(entry => entry.name).sort();
   const runId = runs.at(-1);

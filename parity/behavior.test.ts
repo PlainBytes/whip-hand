@@ -11,10 +11,10 @@ import { DEFAULT_CONFIG, TOOL_GROUP_LABELS } from '@whiphand/core';
 import type { ToolGroup } from '@whiphand/core';
 import type { DoctorRow } from '@whiphand/agent/src/protocol.ts';
 import { mintVersionStubs, pathWith, posix } from '@whiphand/test-support';
+import { CLI } from './cli-command.ts';
 
 const execFileAsync = promisify(execFile);
 
-const CLI_MAIN = fileURLToPath(new URL('../packages/cli/src/main.ts', import.meta.url));
 const AGENT_MAIN = fileURLToPath(new URL('../packages/agent/src/main.ts', import.meta.url));
 const FIXTURE_WORKSPACE = fileURLToPath(new URL('./fixtures/workspace', import.meta.url));
 // The doctor fixtures' stub runners, minted at start in the shape this platform
@@ -133,8 +133,7 @@ interface NormalizedSpawn {
 async function runCliDryRun(
   dir: string, attach: string[] = [],
 ): Promise<{ runId: string; spawns: NormalizedSpawn[] }> {
-  const { stdout } = await execFileAsync(process.execPath, [
-    CLI_MAIN, 'run', 'parity', '--dry-run', '--json', '--input', 'goal=G', '-C', dir,
+  const { stdout } = await execFileAsync(CLI, ['run', 'parity', '--dry-run', '--json', '--input', 'goal=G', '-C', dir,
     ...attach.flatMap(path => ['--attach', path]),
   ], { env: childEnv() });
   const events = stdout.split('\n').filter(l => l.length > 0).map(l => JSON.parse(l));
@@ -437,7 +436,7 @@ test('doctor parity: CLI human output and agent doctor() report the same tool fa
     ANTHROPIC_API_KEY: 'parity-stub', COPILOT_GITHUB_TOKEN: 'parity-stub', GH_TOKEN: 'parity-stub',
   };
 
-  const { stdout } = await execFileAsync(process.execPath, [CLI_MAIN, 'doctor'], { env: childEnv(stubEnv) });
+  const { stdout } = await execFileAsync(CLI, ['doctor'], { env: childEnv(stubEnv) });
   const cliFacts = normalize(parseCliDoctorOutput(stdout));
 
   const agent = startAgentProcess(stubEnv);
@@ -510,7 +509,7 @@ async function readManifest(dir: string, runId: string): Promise<unknown> {
 
 /** Runs `workflow` to completion (whatever its own exit code) and returns the minted runId. */
 async function runCliToCompletion(dir: string, workflow: string, args: string[] = []): Promise<string> {
-  await execFileAsync(process.execPath, [CLI_MAIN, 'run', workflow, '-C', dir, ...args], { env: childEnv() })
+  await execFileAsync(CLI, ['run', workflow, '-C', dir, ...args], { env: childEnv() })
     .catch(() => {});
   // An explicit lookup, not `readdir()[0]`: directory order is a filesystem detail (NTFS differs from ext4).
   const runId = (await readdir(join(dir, '.whiphand', 'runs'), { withFileTypes: true }))
@@ -530,7 +529,7 @@ async function runCliStaged(dir: string, args: string[] = []): Promise<string> {
 }
 
 async function resumeCliBudget(dir: string, runId: string, args: string[] = []): Promise<void> {
-  await execFileAsync(process.execPath, [CLI_MAIN, 'run', '--resume', runId, '-C', dir, ...args], { env: childEnv() })
+  await execFileAsync(CLI, ['run', '--resume', runId, '-C', dir, ...args], { env: childEnv() })
     .catch(() => {});
 }
 
@@ -617,8 +616,7 @@ test('--name parity: CLI --name and the agent startRun.name land in the same run
   const cliDir = await copyFixtureWorkspace();
   const agentDir = await copyFixtureWorkspace();
 
-  const { stdout } = await execFileAsync(process.execPath, [
-    CLI_MAIN, 'run', 'parity', '--dry-run', '--json', '--input', 'goal=G', '--name', 'Ship it', '-C', cliDir,
+  const { stdout } = await execFileAsync(CLI, ['run', 'parity', '--dry-run', '--json', '--input', 'goal=G', '--name', 'Ship it', '-C', cliDir,
   ], { env: childEnv() });
   const cliStart = stdout.split('\n').filter(Boolean).map(l => JSON.parse(l)).find(e => e.type === 'run:start');
   assert.equal(cliStart.name, 'Ship it');
@@ -685,9 +683,9 @@ test("rename-run parity: CLI's '' and the agent's null clear a run's name the sa
   const cli = await runCliDryRun(cliDir);
   const agent = await runAgentDryRun(agentDir);
 
-  await execFileAsync(process.execPath, [CLI_MAIN, 'rename-run', cli.runId, 'Before', '-C', cliDir], { env: childEnv() });
+  await execFileAsync(CLI, ['rename-run', cli.runId, 'Before', '-C', cliDir], { env: childEnv() });
   const { stdout } = await execFileAsync(
-    process.execPath, [CLI_MAIN, 'rename-run', cli.runId, '', '-C', cliDir], { env: childEnv() },
+    CLI, ['rename-run', cli.runId, '', '-C', cliDir], { env: childEnv() },
   );
   assert.match(stdout, /name cleared/);
 
@@ -731,7 +729,7 @@ test('init parity: CLI `whiphand init` and the agent initWorkspace scaffold the 
   const cliDir = await mkdtemp(join(tmpdir(), 'whiphand-parity-init-'));
   const agentDir = await mkdtemp(join(tmpdir(), 'whiphand-parity-init-'));
 
-  await execFileAsync(process.execPath, [CLI_MAIN, 'init', '-C', cliDir], { env: childEnv() });
+  await execFileAsync(CLI, ['init', '-C', cliDir], { env: childEnv() });
   const agent = startAgentProcess();
   try {
     agent.send({ id: 1, method: 'initWorkspace', params: { workdir: agentDir } });
@@ -747,7 +745,7 @@ test('new-workflow parity: CLI `whiphand new-workflow` and the agent createWorkf
   const cliDir = await mkdtemp(join(tmpdir(), 'whiphand-parity-neww-'));
   const agentDir = await mkdtemp(join(tmpdir(), 'whiphand-parity-neww-'));
 
-  await execFileAsync(process.execPath, [CLI_MAIN, 'new-workflow', 'triage', '-C', cliDir], { env: childEnv() });
+  await execFileAsync(CLI, ['new-workflow', 'triage', '-C', cliDir], { env: childEnv() });
   const agent = startAgentProcess();
   try {
     agent.send({ id: 1, method: 'createWorkflow', params: { workdir: agentDir, name: 'triage', scope: 'project' } });
@@ -769,7 +767,7 @@ test('config set parity: CLI dotted key/value and the agent configSet write the 
   const agentDir = await mkdtemp(join(tmpdir(), 'whiphand-parity-config-'));
 
   await execFileAsync(
-    process.execPath, [CLI_MAIN, 'config', 'set', 'defaults.runner', 'copilot', '-C', cliDir], { env: childEnv() },
+    CLI, ['config', 'set', 'defaults.runner', 'copilot', '-C', cliDir], { env: childEnv() },
   );
 
   const agent = startAgentProcess();

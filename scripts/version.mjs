@@ -10,6 +10,11 @@
  * location: not a place a human would edit, but one `cargo` will flag as
  * stale if it drifts.
  *
+ * The Rust core library (`crates/whiphand-core`, Phase 1 of docs/migration.md)
+ * carries the same version, in its own Cargo.toml and in the root workspace's
+ * Cargo.lock — the same two-place pattern as the Tauri crate, so both are
+ * handled by one table (`CARGO_CRATES`).
+ *
  * `packages/cli/package.json` also pins `"@whiphand/core": "0.1.0"` exactly rather
  * than a workspace range — left stale, `npm ci` resolves it against the
  * registry instead of the sibling package once core's real version moves
@@ -42,8 +47,11 @@ const PACKAGE_JSON_FILES = [
   'packages/cli/package.json',
   'packages/agent/package.json',
 ];
-const CARGO_TOML = 'apps/desktop/src-tauri/Cargo.toml';
-const CARGO_LOCK = 'apps/desktop/src-tauri/Cargo.lock';
+/** Every Rust crate that ships the app's version: its manifest, the lockfile recording it, and its package name there. */
+const CARGO_CRATES = [
+  { toml: 'apps/desktop/src-tauri/Cargo.toml', lock: 'apps/desktop/src-tauri/Cargo.lock', name: 'whiphand' },
+  { toml: 'crates/whiphand-core/Cargo.toml', lock: 'Cargo.lock', name: 'whiphand-core' },
+];
 const TAURI_CONF = 'apps/desktop/src-tauri/tauri.conf.json';
 const CORE_INDEX = 'packages/core/src/version.ts';
 const CLI_PACKAGE_JSON = 'packages/cli/package.json';
@@ -91,17 +99,22 @@ function readJsonVersion(content, relPath) {
   return match[1];
 }
 
+const CARGO_TOML_VERSION = /^version = "(\d+\.\d+\.\d+)"/m;
+
 /** Scoped to the `[package]` table's own `version` line — Cargo.toml has exactly one before its first `[dependencies...]` header. */
-function replaceCargoTomlVersion(content, version) {
-  const pattern = /^version = "(\d+\.\d+\.\d+)"/m;
-  if (!pattern.test(content)) throw new Error(`no [package] version found in ${CARGO_TOML}`);
-  return content.replace(pattern, `version = "${version}"`);
+function replaceCargoTomlVersion(content, version, relPath) {
+  if (!CARGO_TOML_VERSION.test(content)) throw new Error(`no [package] version found in ${relPath}`);
+  return content.replace(CARGO_TOML_VERSION, `version = "${version}"`);
 }
 
-/** Scoped to the `[[package]] name = "whiphand"` stanza, so no dependency's version is touched. */
-function replaceCargoLockVersion(content, version) {
-  const pattern = /(name = "whiphand"\nversion = )"(\d+\.\d+\.\d+)"/;
-  if (!pattern.test(content)) throw new Error(`no 'whiphand' package stanza found in ${CARGO_LOCK}`);
+/** The `[[package]] name = "<name>"` stanza's version, so no other package's version is touched. */
+function cargoLockPattern(name) {
+  return new RegExp(`(name = "${name}"\\nversion = )"(\\d+\\.\\d+\\.\\d+)"`);
+}
+
+function replaceCargoLockVersion(content, version, { lock, name }) {
+  const pattern = cargoLockPattern(name);
+  if (!pattern.test(content)) throw new Error(`no '${name}' package stanza found in ${lock}`);
   return content.replace(pattern, `$1"${version}"`);
 }
 
@@ -137,8 +150,10 @@ function writeVersion(version) {
     write(relPath, replaceJsonVersion(read(relPath), version, relPath));
   }
   write(CLI_PACKAGE_JSON, replaceCliCoreDependency(read(CLI_PACKAGE_JSON), version));
-  write(CARGO_TOML, replaceCargoTomlVersion(read(CARGO_TOML), version));
-  write(CARGO_LOCK, replaceCargoLockVersion(read(CARGO_LOCK), version));
+  for (const crate of CARGO_CRATES) {
+    write(crate.toml, replaceCargoTomlVersion(read(crate.toml), version, crate.toml));
+    write(crate.lock, replaceCargoLockVersion(read(crate.lock), version, crate));
+  }
   write(TAURI_CONF, replaceJsonVersion(read(TAURI_CONF), version, TAURI_CONF));
   write(CORE_INDEX, replaceCoreVersion(read(CORE_INDEX), version));
   write(PACKAGE_LOCK, replacePackageLockVersions(read(PACKAGE_LOCK), version));
@@ -153,11 +168,10 @@ function collectVersions() {
   const cliCoreDep = cliContent.match(/"@whiphand\/core":\s*"(\d+\.\d+\.\d+)"/);
   found.push([`${CLI_PACKAGE_JSON} (@whiphand/core dependency)`, cliCoreDep?.[1] ?? '(missing)']);
 
-  const cargoToml = read(CARGO_TOML);
-  found.push([CARGO_TOML, cargoToml.match(/^version = "(\d+\.\d+\.\d+)"/m)?.[1] ?? '(missing)']);
-
-  const cargoLock = read(CARGO_LOCK);
-  found.push([CARGO_LOCK, cargoLock.match(/name = "whiphand"\nversion = "(\d+\.\d+\.\d+)"/)?.[1] ?? '(missing)']);
+  for (const crate of CARGO_CRATES) {
+    found.push([crate.toml, read(crate.toml).match(CARGO_TOML_VERSION)?.[1] ?? '(missing)']);
+    found.push([`${crate.lock} (${crate.name})`, read(crate.lock).match(cargoLockPattern(crate.name))?.[2] ?? '(missing)']);
+  }
 
   found.push([TAURI_CONF, readJsonVersion(read(TAURI_CONF), TAURI_CONF)]);
 

@@ -18,6 +18,10 @@ const FILES = {
     '[package]\nname = "whiphand"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\nserde = "1"\n',
   'apps/desktop/src-tauri/Cargo.lock':
     '[[package]]\nname = "other"\nversion = "9.9.9"\n\n[[package]]\nname = "whiphand"\nversion = "0.1.0"\ndependencies = [\n "serde",\n]\n',
+  'crates/whiphand-core/Cargo.toml':
+    '[package]\nname = "whiphand-core"\nversion = "0.1.0"\nedition = "2024"\n\n[dependencies]\nregex = "1"\n',
+  'Cargo.lock':
+    '[[package]]\nname = "whiphand-core"\nversion = "0.1.0"\n\n[[package]]\nname = "whiphand-job"\nversion = "0.9.0"\n',
   'apps/desktop/src-tauri/tauri.conf.json':
     '{\n  "productName": "Whiphand",\n  "version": "0.1.0",' +
     '  "plugins": { "updater": {' +
@@ -82,7 +86,9 @@ test('--check exits non-zero and lists every mismatch', () => {
       assert.match(stderr, /version mismatch: expected 0\.2\.0/);
       assert.match(stderr, /apps\/desktop\/package\.json: 0\.1\.0/);
       assert.match(stderr, /Cargo\.toml: 0\.1\.0/);
-      assert.match(stderr, /Cargo\.lock: 0\.1\.0/);
+      assert.match(stderr, /src-tauri\/Cargo\.lock \(whiphand\): 0\.1\.0/);
+      assert.match(stderr, /crates\/whiphand-core\/Cargo\.toml: 0\.1\.0/);
+      assert.match(stderr, /^  Cargo\.lock \(whiphand-core\): 0\.1\.0/m);
       assert.match(stderr, /package-lock\.json \(packages\/core\): 0\.1\.0/);
       assert.match(stderr, /package-lock\.json \(packages\/cli\/package\.json @whiphand\/core dependency\): 0\.1\.0/);
       return true;
@@ -111,6 +117,12 @@ test('writing a version updates every location, including the CLI\'s pinned @whi
     const cargoLock = fs.readFileSync(path.join(root, 'apps/desktop/src-tauri/Cargo.lock'), 'utf8');
     assert.match(cargoLock, /name = "whiphand"\nversion = "0\.2\.0"/);
     assert.match(cargoLock, /name = "other"\nversion = "9\.9\.9"/);
+
+    const coreToml = fs.readFileSync(path.join(root, 'crates/whiphand-core/Cargo.toml'), 'utf8');
+    assert.match(coreToml, /version = "0\.2\.0"/);
+    const workspaceLock = fs.readFileSync(path.join(root, 'Cargo.lock'), 'utf8');
+    assert.match(workspaceLock, /name = "whiphand-core"\nversion = "0\.2\.0"/);
+    assert.match(workspaceLock, /name = "whiphand-job"\nversion = "0\.9\.0"/);
 
     const tauriConf = JSON.parse(fs.readFileSync(path.join(root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'));
     assert.equal(tauriConf.version, '0.2.0');

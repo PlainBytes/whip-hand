@@ -30,6 +30,7 @@ import { validateSegment, validateRelativePath } from '../packages/core/src/segm
 import { workflowNameProblem } from '../packages/core/src/workflow-name.ts';
 import type { WorkspaceConfig } from '../packages/core/src/types.ts';
 import { runStoreOp } from './store-probe.ts';
+import { runProcessOp } from './process-probe.ts';
 
 export const REPO = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, '');
 export const CORE_FIXTURES = path.join(REPO, 'parity', 'fixtures', 'core');
@@ -213,8 +214,11 @@ async function runRaw(op: Op): Promise<unknown> {
     case 'journal':
     case 'runs':
       return runStoreOp(op);
-    default:
-      throw new Error(`unknown parity op '${op.op}'`);
+    default: {
+      const result = runProcessOp(op);
+      if (result === undefined) throw new Error(`unknown parity op '${op.op}'`);
+      return result;
+    }
   }
 }
 

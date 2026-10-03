@@ -97,6 +97,99 @@ pub fn normalize_win32(p: &str) -> String {
     }
 }
 
+/// `path.win32.join(...parts)`.
+pub fn win32_join(parts: &[&str]) -> String {
+    let joined: Vec<&str> = parts.iter().copied().filter(|p| !p.is_empty()).collect();
+    if joined.is_empty() {
+        return ".".into();
+    }
+    normalize_win32(&joined.join("\\"))
+}
+
+/// The length of a win32 path's root: `\\server\share\`, `C:\`, `C:` or `\`.
+fn win32_root_len(p: &str) -> usize {
+    let b = p.as_bytes();
+    let sep = |c: u8| c == b'\\' || c == b'/';
+    if b.len() >= 2 && sep(b[0]) && sep(b[1]) {
+        // UNC: \\server\share, then its separator.
+        let rest = &b[2..];
+        if let Some(s1) = rest.iter().position(|c| sep(*c)).filter(|i| *i > 0) {
+            let after = &rest[s1 + 1..];
+            let s2 = after.iter().position(|c| sep(*c)).unwrap_or(after.len());
+            if s2 > 0 {
+                let end = 2 + s1 + 1 + s2;
+                return if end < b.len() { end + 1 } else { end };
+            }
+        }
+        return 1;
+    }
+    if b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic() {
+        return if b.len() >= 3 && sep(b[2]) { 3 } else { 2 };
+    }
+    usize::from(!b.is_empty() && sep(b[0]))
+}
+
+/// `path.win32.isAbsolute(p)`.
+pub fn win32_is_absolute(p: &str) -> bool {
+    let b = p.as_bytes();
+    let sep = |c: u8| c == b'\\' || c == b'/';
+    (!b.is_empty() && sep(b[0]))
+        || (b.len() >= 3 && b[1] == b':' && b[0].is_ascii_alphabetic() && sep(b[2]))
+}
+
+/// `path.win32.dirname(p)`.
+pub fn win32_dirname(p: &str) -> String {
+    if p.is_empty() {
+        return ".".into();
+    }
+    let root = win32_root_len(p);
+    let body = p[root..].trim_end_matches(['\\', '/']);
+    match body.rfind(['\\', '/']) {
+        Some(i) => {
+            let dir = body[..i].trim_end_matches(['\\', '/']);
+            format!("{}{dir}", &p[..root])
+        }
+        None if root > 0 => p[..root].to_string(),
+        None => ".".into(),
+    }
+}
+
+/// `path.win32.basename(p)`.
+pub fn win32_basename(p: &str) -> String {
+    let root = win32_root_len(p);
+    let body = p[root..].trim_end_matches(['\\', '/']);
+    body.rsplit(['\\', '/']).next().unwrap_or("").to_string()
+}
+
+/// `path.win32.extname(p)`.
+pub fn win32_extname(p: &str) -> String {
+    let base = win32_basename(p);
+    if base == ".." {
+        return String::new();
+    }
+    match base.rfind('.') {
+        Some(i) if i > 0 => base[i..].to_string(),
+        _ => String::new(),
+    }
+}
+
+/// `path.win32.resolve(abs, ...rest)` for an absolute first argument.
+pub fn win32_resolve(parts: &[&str]) -> String {
+    let mut start = 0;
+    for (i, part) in parts.iter().enumerate() {
+        if win32_is_absolute(part) {
+            start = i;
+        }
+    }
+    let out = win32_join(&parts[start..]);
+    let trimmed_len = out.trim_end_matches('\\').len();
+    if trimmed_len > win32_root_len(&out) {
+        out[..trimmed_len].to_string()
+    } else {
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +217,24 @@ mod tests {
             "\\\\srv\\share\\b"
         );
         assert_eq!(normalize_win32("C:"), "C:.");
+    }
+
+    #[test]
+    fn win32_parts() {
+        assert_eq!(
+            win32_join(&["/home/x/bin", "claude.cmd"]),
+            "\\home\\x\\bin\\claude.cmd"
+        );
+        assert_eq!(win32_dirname("C:\\foo"), "C:\\");
+        assert_eq!(win32_dirname("C:\\foo\\bar\\"), "C:\\foo");
+        assert_eq!(win32_dirname("\\foo"), "\\");
+        assert_eq!(win32_dirname("foo"), ".");
+        assert_eq!(win32_dirname("\\\\srv\\share\\x"), "\\\\srv\\share\\");
+        assert_eq!(win32_extname("a\\claude.CMD"), ".CMD");
+        assert_eq!(win32_extname(".cmd"), "");
+        assert_eq!(win32_resolve(&["C:\\Git\\cmd", ".."]), "C:\\Git");
+        assert_eq!(win32_resolve(&["C:\\Git\\cmd", "..", ".."]), "C:\\");
+        assert!(win32_is_absolute("/x"));
+        assert!(!win32_is_absolute("C:x"));
     }
 }

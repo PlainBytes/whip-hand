@@ -11,6 +11,7 @@
  *   way a hand-written YAML file can break it. Broad, cheap coverage of the
  *   exact order and wording of zod's issues.
  * - `store-runs` and `store-journal`: the run store (see store-corpus.ts).
+ * - `process` and `globs`: launching processes and the git guard (see process-corpus.ts).
  */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -20,6 +21,7 @@ import { parse as parseYaml } from 'yaml';
 import { CORE_FIXTURES, REPO, canonical } from './core-probe.ts';
 import type { Op } from './core-probe.ts';
 import { storeJournalOps, storeRunsOps } from './store-corpus.ts';
+import { PROCESS_SUITES } from './process-corpus.ts';
 
 const WORKFLOW_DIRS = [
   'parity/fixtures/core/workflows',
@@ -131,4 +133,5 @@ export const GENERATED_SUITES: Record<string, () => Op[]> = {
   mutants: mutantOps,
   'store-runs': storeRunsOps,
   'store-journal': storeJournalOps,
+  ...PROCESS_SUITES,
 };

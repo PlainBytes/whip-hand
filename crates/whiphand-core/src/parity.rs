@@ -243,6 +243,7 @@ pub fn run_op(op: &Value, repo: &Path) -> Value {
             )
         }
         other => crate::parity_store::run_store_op(op, repo)
+            .or_else(|| crate::parity_process::run_process_op(op, repo))
             .unwrap_or_else(|| panic!("unknown parity op '{other}'")),
     }
 }

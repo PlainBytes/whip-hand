@@ -103,6 +103,13 @@ Each phase ships on its own, and the TS and Rust implementations must produce id
 - Build out the Rust workspace at the repo root and move `job-guard` under it.
 - Port the workflow schema and validation (`packages/core/src/schema.ts`, `template.ts`, `config.ts`, `workspace.ts`) using serde, serde_yaml and hand-written validation. Error messages must match the zod ones wherever goldens assert them.
 - Extend `parity/` so a single fixture set runs against both implementations (`parity/golden-scenario.ts`, `extract-cli-surface.ts`).
+- **Done.** What landed, and where it differs from the plan above:
+  - The workspace is the root `Cargo.toml` (`crates/*`). The Tauri crate stays outside it until Phase 3 links `whiphand-core`, so `cargo test` needs no webkit. `job-guard` is a member and builds into the root `target/`.
+  - `crates/whiphand-core` ports `schema.ts` (shape, misplaced fields, semantics, warnings, `unattendedProblems`), `segment.ts`, `workflow-name.ts`, `config-home.ts`, `config.ts`, `workspace.ts`, and the pure half of `template.ts`. `buildPrompt` and `inputArtifacts` need a run context and move with the engine in Phase 2. So does `workspaceConfigSchema`, which only the agent's `configSet` uses.
+  - YAML is read with `saphyr-parser`, not `serde_yaml`, which is unmaintained. Validation needs the document as written, so the loader builds an untyped tree with the `yaml` package's YAML 1.2 core-schema rules: `TRUE` is a boolean but `yes` is a string, `017` is 17, integer-like keys sort first as in a JS object, and duplicate keys and multiple documents are refused.
+  - zod is not reimplemented generally. `zod.rs` reproduces the issue codes, paths, messages, order and union behavior the workflow and config schemas produce, down to quirks such as a length check that runs on a wrong-typed value (`steps: ""` gets two problems).
+  - The parity corpus is `parity/fixtures/core/`: JSON op suites, with golden results generated from the TS side by `npm run parity:core-golden`. `parity/core.test.ts` and `crates/whiphand-core/tests/parity.rs` check the same golden. The suites include every input `schema.test.ts` passes to the validator (captured by running that file), every shipped workflow, and about 1,150 mutants of a workflow that uses every step kind. A test fails if those generated suites drift from their sources.
+  - One thing is not compared: the wording of a YAML syntax error, which each parser words its own way. `localeCompare` (the workflow list order) is reproduced for ASCII names only; other characters sort by code point after ASCII.
 
 **Phase 2: Engine and CLI in Rust, `crates/whiphand-cli`**
 - Port:
@@ -131,7 +138,7 @@ Each phase ships on its own, and the TS and Rust implementations must produce id
 ## Verification
 
 - **Every phase:**
-  - The parity goldens (`npm run test:parity`, then a cargo equivalent) must be identical between the TS and Rust implementations.
+  - The parity goldens (`npm run test:parity` and `cargo test --workspace`) must be identical between the TS and Rust implementations.
   - Run the full test suites.
   - CI must pass on Windows, macOS and Linux. A Linux-only pass does not clear a branch, and hard-coded POSIX paths or `pid: 1` fixtures need special care.
 - **Performance:** the Phase 0 benchmark script is re-run and compared after each phase.

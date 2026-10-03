@@ -1,0 +1,5 @@
+defaults: { runner: "" }
+on_findings: sometimes
+loop: { max_iterations: 0 }
+artifacts_dir: ""
+runs: { max_retained: 1.5, auto_name: "yes", max_attachment_mb: 0 }

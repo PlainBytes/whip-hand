@@ -1,0 +1,3 @@
+name: hidden
+steps:
+  - { id: a, kind: command, run: x }

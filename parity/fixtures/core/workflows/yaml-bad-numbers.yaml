@@ -1,0 +1,18 @@
+name: yaml-bad-numbers
+steps:
+  - id: a
+    kind: command
+    run: "true"
+    timeout_ms: .inf
+    expect_exit: .nan
+  - id: b
+    kind: command
+    run: "true"
+    timeout_ms: 9007199254740993
+    expect_exit: -.Inf
+  - id: c
+    kind: stages
+    items: x
+    max_retries: -99999999999999999999
+    steps:
+      - { id: d, kind: manual, title: t, instructions: i, default: continue }

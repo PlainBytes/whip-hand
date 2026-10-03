@@ -1,0 +1,3 @@
+name: feature-global
+steps:
+  - { id: g, kind: command, run: x }

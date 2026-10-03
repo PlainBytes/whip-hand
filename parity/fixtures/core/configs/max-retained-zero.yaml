@@ -1,0 +1,3 @@
+runs:
+  max_retained: 0
+  auto_name: true

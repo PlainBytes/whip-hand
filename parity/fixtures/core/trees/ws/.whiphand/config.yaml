@@ -1,0 +1,4 @@
+defaults:
+  runner: copilot
+runs:
+  max_retained: 0

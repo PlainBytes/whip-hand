@@ -1,0 +1,3 @@
+name: custom
+steps:
+  - { id: a, kind: command, run: x }

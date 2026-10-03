@@ -1,0 +1,3 @@
+name: feature
+steps:
+  - { id: a, kind: command, run: "true" }

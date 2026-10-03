@@ -13,6 +13,7 @@
     "test": "node --test --test-timeout=30000 \"packages/*/src/**/*.test.ts\" \"scripts/*.test.mjs\"",
     "test:parity": "node --test --test-timeout=120000 \"parity/**/*.test.ts\"",
     "parity:golden": "node parity/regenerate-golden.mjs",
+    "parity:core-golden": "node parity/regenerate-core-golden.ts",
     "typecheck": "tsc --noEmit",
     "verify": "bash scripts/verify.sh",
     "package": "npm run package:cli && npm run package:desktop",

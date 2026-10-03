@@ -1,0 +1,23 @@
+# The same core-schema scalars, in a workflow that validates, so the typed
+# result (not just the problems) is compared.
+name: yaml-scalars-valid
+inputs:
+  1: { required: TRUE, default: 017 }
+  b: { required: False, prompt: yes }
+steps:
+  - id: a
+    kind: command
+    run: "true"
+    verdict: TRUE
+    enabled: True
+    timeout_ms: 0x10
+    expect_exit: [0o7, 017, +3, 1., 1e1, -0]
+    env: { 1: one, b: two, 0: zero, ~: none, true: t, 1.5: f }
+  - id: b
+    kind: command
+    run: |
+      echo one
+      echo two
+    output: >-
+      folded
+      name.log

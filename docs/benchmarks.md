@@ -7,6 +7,8 @@
 | `pre-phase0` | The TypeScript stack as it stood before Phase 0's UI work. Historic. |
 | `phase0` | After Phase 0's UI work. **This is the baseline Phases 1–4 are compared against.** |
 
+Phase 1 has no label: the Rust core library it adds is not on any user-facing path yet, so nothing here could move. The first Rust numbers are Phase 2's, when the CLI becomes a Rust binary.
+
 It is run by hand on a developer machine. Nothing in CI runs or gates on it, because shared runners are too noisy for a regression gate to mean anything.
 
 ## Running it

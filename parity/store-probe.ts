@@ -47,11 +47,16 @@ const WS_TOKEN = /<WS>[^"\s]*/g;
  */
 export function normalizeText(text: string, ws: string): string {
   const escaped = JSON.stringify(ws).slice(1, -1);
+  // JSON inside a JSON string (opencode's config, embedded in a spec) escapes twice.
+  const escapedTwice = JSON.stringify(escaped).slice(1, -1);
   return text
+    .split(escapedTwice).join('<WS>')
     .split(escaped).join('<WS>')
     .split(ws).join('<WS>')
     .split(ws.replace(/\\/g, '/')).join('<WS>')
-    .replace(WS_TOKEN, token => token.replace(/\\\\/g, '/').replace(/\\/g, '/'))
+    // A separator is one backslash per escape level; a run at the token's end
+    // only escapes the closing quote, so it stays.
+    .replace(WS_TOKEN, token => token.replace(/\\+(?!$)/g, '/'))
     .replace(TS, '<TS>')
     .replace(PID, '"pid": <PID>')
     .replace(SCOPE, '"pidScope": "<SCOPE>"')

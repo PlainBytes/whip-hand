@@ -30,17 +30,41 @@ static WS_TOKEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<WS>[^"\s]*"#)
 const HEARTBEAT_NEVER: Duration = Duration::from_secs(1_000_000);
 
 /// `normalizeText` in store-probe.ts.
+fn fold_separators(token: &str) -> String {
+    let trimmed = token.trim_end_matches('\\');
+    let tail = &token[trimmed.len()..];
+    let mut out = String::new();
+    let mut in_run = false;
+    for c in trimmed.chars() {
+        if c == '\\' {
+            if !in_run {
+                out.push('/');
+            }
+            in_run = true;
+        } else {
+            out.push(c);
+            in_run = false;
+        }
+    }
+    out + tail
+}
+
 pub fn normalize_text(text: &str, ws: &str) -> String {
     let mut escaped = String::new();
     jsval::write_string(&mut escaped, ws);
     let escaped = &escaped[1..escaped.len() - 1];
+    // JSON inside a JSON string (opencode's config, embedded in a spec) escapes twice.
+    let mut twice = String::new();
+    jsval::write_string(&mut twice, escaped);
+    let twice = &twice[1..twice.len() - 1];
     let out = text
+        .replace(twice, "<WS>")
         .replace(escaped, "<WS>")
         .replace(ws, "<WS>")
         .replace(&ws.replace('\\', "/"), "<WS>");
-    let out = WS_TOKEN.replace_all(&out, |c: &regex::Captures| {
-        c[0].replace("\\\\", "/").replace('\\', "/")
-    });
+    // A separator is one backslash per escape level; a run at the token's end
+    // only escapes the closing quote, so it stays.
+    let out = WS_TOKEN.replace_all(&out, |c: &regex::Captures| fold_separators(&c[0]));
     let out = TS.replace_all(&out, "<TS>");
     let out = PID.replace_all(&out, "\"pid\": <PID>");
     let out = SCOPE.replace_all(&out, "\"pidScope\": \"<SCOPE>\"");

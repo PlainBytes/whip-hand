@@ -11,8 +11,6 @@ const scriptPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'v
 const FILES = {
   'apps/desktop/package.json': '{\n  "name": "desktop",\n  "version": "0.1.0",\n  "type": "module"\n}\n',
   'packages/core/package.json': '{\n  "name": "@whiphand/core",\n  "version": "0.1.0"\n}\n',
-  'packages/cli/package.json':
-    '{\n  "name": "@whiphand/cli",\n  "version": "0.1.0",\n  "dependencies": { "@whiphand/core": "0.1.0", "commander": "^14.0.0" }\n}\n',
   'packages/agent/package.json': '{\n  "name": "@whiphand/agent",\n  "version": "0.1.0"\n}\n',
   'apps/desktop/src-tauri/Cargo.toml':
     '[package]\nname = "whiphand"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\nserde = "1"\n',
@@ -20,8 +18,11 @@ const FILES = {
     '[[package]]\nname = "other"\nversion = "9.9.9"\n\n[[package]]\nname = "whiphand"\nversion = "0.1.0"\ndependencies = [\n "serde",\n]\n',
   'crates/whiphand-core/Cargo.toml':
     '[package]\nname = "whiphand-core"\nversion = "0.1.0"\nedition = "2024"\n\n[dependencies]\nregex = "1"\n',
+  'crates/whiphand-cli/Cargo.toml':
+    '[package]\nname = "whiphand-cli"\nversion = "0.1.0"\nedition = "2024"\n\n[dependencies]\nclap = "4"\n',
   'Cargo.lock':
-    '[[package]]\nname = "whiphand-core"\nversion = "0.1.0"\n\n[[package]]\nname = "whiphand-job"\nversion = "0.9.0"\n',
+    '[[package]]\nname = "whiphand-cli"\nversion = "0.1.0"\n\n[[package]]\nname = "whiphand-core"\nversion = "0.1.0"\n\n'
+    + '[[package]]\nname = "whiphand-job"\nversion = "0.9.0"\n',
   'apps/desktop/src-tauri/tauri.conf.json':
     '{\n  "productName": "Whiphand",\n  "version": "0.1.0",' +
     '  "plugins": { "updater": {' +
@@ -41,7 +42,6 @@ const FILES = {
       'apps/desktop': { version: '0.1.0' },
       'node_modules/commander': { version: '14.0.0', license: 'MIT' },
       'packages/agent': { name: '@whiphand/agent', version: '0.1.0', dependencies: { '@whiphand/core': '*' } },
-      'packages/cli': { name: '@whiphand/cli', version: '0.1.0', dependencies: { '@whiphand/core': '0.1.0', commander: '^14.0.0' } },
       'packages/core': { name: '@whiphand/core', version: '0.1.0' },
     },
   }, null, 2)}\n`,
@@ -90,7 +90,7 @@ test('--check exits non-zero and lists every mismatch', () => {
       assert.match(stderr, /crates\/whiphand-core\/Cargo\.toml: 0\.1\.0/);
       assert.match(stderr, /^  Cargo\.lock \(whiphand-core\): 0\.1\.0/m);
       assert.match(stderr, /package-lock\.json \(packages\/core\): 0\.1\.0/);
-      assert.match(stderr, /package-lock\.json \(packages\/cli\/package\.json @whiphand\/core dependency\): 0\.1\.0/);
+      assert.match(stderr, /^  Cargo\.lock \(whiphand-cli\): 0\.1\.0/m);
       return true;
     });
   } finally {
@@ -98,18 +98,13 @@ test('--check exits non-zero and lists every mismatch', () => {
   }
 });
 
-test('writing a version updates every location, including the CLI\'s pinned @whiphand/core dependency, Cargo.lock and package-lock.json', () => {
+test('writing a version updates every location, including Cargo.lock and package-lock.json', () => {
   const root = makeFixtureRepo();
   try {
     run(root, ['0.2.0']);
 
     const desktopPkg = JSON.parse(fs.readFileSync(path.join(root, 'apps/desktop/package.json'), 'utf8'));
     assert.equal(desktopPkg.version, '0.2.0');
-
-    const cliPkg = JSON.parse(fs.readFileSync(path.join(root, 'packages/cli/package.json'), 'utf8'));
-    assert.equal(cliPkg.version, '0.2.0');
-    assert.equal(cliPkg.dependencies['@whiphand/core'], '0.2.0');
-    assert.equal(cliPkg.dependencies.commander, '^14.0.0');
 
     const cargoToml = fs.readFileSync(path.join(root, 'apps/desktop/src-tauri/Cargo.toml'), 'utf8');
     assert.match(cargoToml, /version = "0\.2\.0"/);
@@ -122,6 +117,9 @@ test('writing a version updates every location, including the CLI\'s pinned @whi
     assert.match(coreToml, /version = "0\.2\.0"/);
     const workspaceLock = fs.readFileSync(path.join(root, 'Cargo.lock'), 'utf8');
     assert.match(workspaceLock, /name = "whiphand-core"\nversion = "0\.2\.0"/);
+    assert.match(workspaceLock, /name = "whiphand-cli"\nversion = "0\.2\.0"/);
+    const cliToml = fs.readFileSync(path.join(root, 'crates/whiphand-cli/Cargo.toml'), 'utf8');
+    assert.match(cliToml, /version = "0\.2\.0"/);
     assert.match(workspaceLock, /name = "whiphand-job"\nversion = "0\.9\.0"/);
 
     const tauriConf = JSON.parse(fs.readFileSync(path.join(root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'));
@@ -132,10 +130,9 @@ test('writing a version updates every location, including the CLI\'s pinned @whi
 
     const lockText = fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8');
     const lock = JSON.parse(lockText);
-    for (const workspace of ['apps/desktop', 'packages/core', 'packages/cli', 'packages/agent']) {
+    for (const workspace of ['apps/desktop', 'packages/core', 'packages/agent']) {
       assert.equal(lock.packages[workspace].version, '0.2.0', workspace);
     }
-    assert.equal(lock.packages['packages/cli'].dependencies['@whiphand/core'], '0.2.0');
     assert.equal(lock.packages['node_modules/commander'].version, '14.0.0');
     assert.equal(lock.packages['packages/agent'].dependencies['@whiphand/core'], '*');
     assert.equal(lockText, `${JSON.stringify(lock, null, 2)}\n`);

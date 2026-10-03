@@ -350,7 +350,7 @@ const GROUP_BY_LABEL = new Map<string, ToolGroup>(
 );
 
 /**
- * packages/cli/src/commands/doctor.ts's line grammar:
+ * `whiphand doctor`'s line grammar (crates/whiphand-core/src/doctor/tools.rs, `doctor_report`):
  *   heading  a bare line matching no other rule
  *   tool     "✔|✘|○ <id> <rest>"
  *   note     "  · <text>", belonging to the tool above it

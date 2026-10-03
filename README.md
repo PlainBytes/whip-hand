@@ -10,12 +10,14 @@ reviews it in a loop until the review comes back clean.
 
 ## Install
 
-Requires Node ≥ 24 (runs TypeScript natively — no build step) and at least one of
+Requires a Rust toolchain for the `whiphand` CLI, Node ≥ 24 for the desktop app
+(it runs TypeScript natively — no build step), and at least one of
 `claude` / `copilot` / `opencode` on PATH.
 
 ```bash
 npm install
-node packages/cli/src/main.ts --help    # or: npm link --workspace packages/cli && whiphand --help
+cargo build --release -p whiphand-cli   # target/release/whiphand
+target/release/whiphand --help          # or: cargo install --path crates/whiphand-cli && whiphand --help
 ```
 
 ## Quickstart
@@ -406,8 +408,8 @@ whiphand treats Windows as one more platform with one way to do paths and proces
 - **One path style.** Everything whiphand shows a model or writes to a manifest is workspace-relative
   with forward slashes; `run.json` stores paths relative to the run directory, so a run directory that
   moves still resumes.
-- **Nothing outlives the run.** A Windows Job Object per run (via the small `whiphand-job.exe` guard,
-  embedded in the CLI and the desktop agent) ends the whole process tree on cancel, timeout or crash. Liveness
+- **Nothing outlives the run.** A Windows Job Object per run (held by the CLI itself, and by the small
+  `whiphand-job.exe` guard embedded in the desktop agent) ends the whole process tree on cancel, timeout or crash. Liveness
   is a heartbeat lease (renewed every 30 s, stale at 5 min), cut short when the owning process provably no
   longer exists on this machine, so a run whose process was killed is marked crashed **at next start**. A host suspended for more than five minutes loses its run on wake, and a step
   that deliberately left a process running does not keep it past the run.
@@ -424,19 +426,20 @@ Both artifacts can be built as self-contained executables that need no repo, no
 `npm install`, and no Node on the target machine.
 
 ```bash
-npm run package:cli       # dist/whiphand (dist/whiphand.exe on Windows) — the CLI as one file
+npm run package:cli       # dist/whiphand (dist/whiphand.exe on Windows) — the CLI, a native Rust binary
 npm run package:desktop   # dist/*.deb + dist/*.AppImage on Linux, an NSIS installer on Windows
 npm run package           # both
 npm run reinstall         # Ubuntu: build the .deb, then apt-remove and reinstall it
 ```
 
-`dist/whiphand` is an esbuild bundle injected into a copy of this machine's Node binary
-(a [single executable application](https://nodejs.org/api/single-executable-applications.html)),
-so it is ~120 MB — that is the Node runtime, not the app. Copy it anywhere on PATH and
-run `whiphand` as usual. `claude` / `copilot` / `opencode` are still runtime prerequisites;
+`dist/whiphand` is the Rust CLI (`crates/whiphand-cli`), about 3.5 MB with the starter
+workflows compiled in. Copy it anywhere on PATH and run `whiphand` as usual. `claude` / `copilot` / `opencode` are still runtime prerequisites;
 `whiphand doctor` reports them, along with everything else this machine needs.
 
-`npm run package:desktop` builds the `@whiphand/agent` sidecar the same way, hands it to
+`npm run package:desktop` builds the `@whiphand/agent` sidecar as an esbuild bundle injected
+into a copy of this machine's Node binary (a
+[single executable application](https://nodejs.org/api/single-executable-applications.html),
+~120 MB — that is the Node runtime, not the app), hands it to
 Tauri's bundler as an `externalBin`, and produces a `.deb` to install and an
 `.AppImage` to run from anywhere. Each packaging script finishes by smoke-testing what
 it built (`scripts/package/smoke.mjs`), so a broken binary is not produced silently.

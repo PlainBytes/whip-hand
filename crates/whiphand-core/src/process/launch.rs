@@ -328,6 +328,9 @@ pub struct PipeOptions<'a> {
     pub abort_exit_code: Option<i32>,
 }
 
+/// How long an aborted drain waits for the killed child to be reaped.
+const REAP_TIMEOUT: Duration = Duration::from_secs(1);
+
 /// Splits a byte stream into readline's lines.
 #[derive(Default)]
 struct Lines {
@@ -446,6 +449,9 @@ pub async fn pipe_child(mut child: Child, mut opts: PipeOptions<'_>) -> io::Resu
                 aborted = true;
                 let _ = child.start_kill();
                 if let Some(code) = opts.abort_exit_code {
+                    // Reaped, not left a zombie: a container counts an unreaped
+                    // group leader as alive and would sit out its whole grace.
+                    let _ = tokio::time::timeout(REAP_TIMEOUT, child.wait()).await;
                     break code;
                 }
             },

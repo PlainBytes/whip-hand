@@ -31,7 +31,7 @@ use whiphand_core::yaml_emit::stringify_yaml;
 use crate::io::{err_line, out_line, out_raw};
 use crate::prompt::Prompter;
 use crate::render::{RenderOptions, Renderer, Sinks};
-use crate::tty::{EventSink, Tty};
+use crate::tty::{Echo, EventSink, Tty};
 
 /// Usage errors exit 2, a failed run 1.
 pub const USAGE_ERROR: i32 = 2;
@@ -553,6 +553,7 @@ pub async fn run(a: RunArgs) -> CmdResult {
         container,
         events,
         prompter,
+        echo: Echo::default(),
     };
 
     let cancel = CancellationToken::new();

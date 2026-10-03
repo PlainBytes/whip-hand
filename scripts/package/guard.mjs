@@ -1,8 +1,8 @@
 /**
- * The process guard (`whiphand-job.exe`, crates/job-guard), built once for the
- * Windows packages that need it and embedded as a SEA asset — the CLI stays a
- * single file, and the agent sidecar (the desktop's process host) carries its
- * own copy, extracted on first use to a content-hashed path under
+ * The process guard (`whiphand-job.exe`, crates/job-guard), built for the
+ * Windows agent sidecar (the desktop's process host) and embedded as a SEA
+ * asset. The Rust CLI links the guard's library and needs no copy. The agent
+ * carries its own, extracted on first use to a content-hashed path under
  * `%LOCALAPPDATA%\whiphand\bin` (see packages/core/src/container.ts).
  *
  * Windows only: POSIX contains by process group inside Node itself. In a

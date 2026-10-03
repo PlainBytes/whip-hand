@@ -73,7 +73,7 @@ export function planExec(argv, deps = {}) {
  * injecting arbitrary commands, and a multi-word command line has nowhere to
  * be split back apart once it is treated as a single executable name.
  */
-function runSignCommand(binary) {
+export function runSignCommand(binary) {
   const command = process.env.WHIPHAND_SIGN_COMMAND;
   if (!command) return;
   runSync([command, binary], { check: true });

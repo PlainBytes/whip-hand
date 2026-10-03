@@ -1,8 +1,9 @@
 /**
  * The workflows `whiphand init` ships (packages/core/templates/*.yaml), embedded
  * as SEA assets under `templates/<name>.yaml` — the key
- * packages/core/src/templates.ts reads them back by. Both binaries scaffold:
- * the CLI through `init`/`new-workflow`, the agent sidecar through its RPCs.
+ * packages/core/src/templates.ts reads them back by. The agent sidecar
+ * scaffolds through its RPCs; the Rust CLI compiles the same files in
+ * (crates/whiphand-core/src/scaffold.rs).
  */
 import fs from 'node:fs';
 import path from 'node:path';

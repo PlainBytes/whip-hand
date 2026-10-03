@@ -601,5 +601,86 @@
         }
       }
     }
+  },
+  "phase2": {
+    "meta": {
+      "date": "2026-10-03T15:32:26.175Z",
+      "commit": "ed23d30+dirty",
+      "node": "v24.21.0",
+      "os": "Linux 7.0.0-34-generic",
+      "cpu": "AMD Ryzen 9 5900X 12-Core Processor",
+      "cpus": 24,
+      "memBytes": 32472301568
+    },
+    "notes": [],
+    "metrics": {
+      "cli": {
+        "dev": {
+          "help": {
+            "n": 20,
+            "median": 3.21,
+            "p95": 3.7,
+            "p99": 3.98,
+            "min": 2.87,
+            "max": 3.98
+          },
+          "version": {
+            "n": 20,
+            "median": 3.06,
+            "p95": 3.18,
+            "p99": 3.69,
+            "min": 2.89,
+            "max": 3.69
+          },
+          "dryRun": {
+            "n": 20,
+            "median": 5.97,
+            "p95": 6.36,
+            "p99": 6.9,
+            "min": 5.6,
+            "max": 6.9
+          }
+        },
+        "packaged": {
+          "help": {
+            "n": 20,
+            "median": 3.11,
+            "p95": 3.29,
+            "p99": 3.51,
+            "min": 2.87,
+            "max": 3.51
+          },
+          "version": {
+            "n": 20,
+            "median": 3.04,
+            "p95": 3.49,
+            "p99": 3.58,
+            "min": 2.92,
+            "max": 3.58
+          },
+          "dryRun": {
+            "n": 20,
+            "median": 5.93,
+            "p95": 7.53,
+            "p99": 8.43,
+            "min": 5.34,
+            "max": 8.43
+          }
+        }
+      },
+      "sizes": {
+        "cliBytes": 3415704,
+        "agentBytes": 131140736,
+        "installerBytes": {
+          "AppImage": 129006072,
+          "deb": 54632842
+        },
+        "webBundle": {
+          "totalBytes": 7222352,
+          "jsBytes": 5913936,
+          "jsGzipBytes": 1663570
+        }
+      }
+    }
   }
 }

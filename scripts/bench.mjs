@@ -28,7 +28,9 @@ import { AgentSession, isolatedEnv, tempDir } from './bench/agent-session.mjs';
 import { createWorkspace, LARGE_RUN_ID } from './bench/fixtures.mjs';
 
 const exeSuffix = process.platform === 'win32' ? '.exe' : '';
-const CLI_DEV = [process.execPath, path.join(repoRoot, 'packages/cli/src/main.ts')];
+// The CLI is a native binary since Phase 2: its dev build is cargo's release
+// build, and the packaged one is that binary copied into dist/.
+const CLI_DEV = [path.join(repoRoot, 'target/release', `whiphand${exeSuffix}`)];
 const CLI_PACKAGED = path.join(distDir, `whiphand${exeSuffix}`);
 const AGENT_DEV = [process.execPath, path.join(repoRoot, 'packages/agent/src/main.ts')];
 const AGENT_PACKAGED = path.join(distDir, `whiphand-agent${exeSuffix}`);

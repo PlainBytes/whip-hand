@@ -643,6 +643,7 @@ version = "0.3.5"
 dependencies = [
  "clap",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-util",
  "whiphand-core",

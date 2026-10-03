@@ -71,7 +71,9 @@ terminal rendering:
 packages/core     workflow schema + validation, run engine, adapter registry,
                   artifact store, JSON event stream. No terminal I/O, and it
                   never itself spawns an interactive step.
-packages/cli      the `whiphand` binary. Renders core's events to the terminal, and
+crates/whiphand-cli
+                  the `whiphand` binary (Rust, over crates/whiphand-core's port
+                  of the engine). Renders core's events to the terminal, and
                   is the thing that owns the TTY for interactive steps.
 apps/desktop      (future) Tauri. Consumes the same event stream as the CLI;
                   attaches the operator to interactive steps via its own PTY

@@ -281,19 +281,11 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use super::*;
-    use whiphand_core::adapters::common::strings;
-    use whiphand_core::obj;
+    use serde_json::json;
+    use whiphand_core::jsval::from_json;
+    use whiphand_core::schema::parse_workflow;
 
-    fn request() -> JsObject {
-        obj! {
-            "stepId" => "gate", "kind" => "approval", "title" => "Ship?", "instructions" => "Look.\n",
-            "choices" => strings(&["continue".into(), "retry".into(), "abort".into()]),
-            "capture" => obj! { "kind" => "review", "label" => "Feedback", "requiredFor" => strings(&["retry".into()]) },
-            "context" => obj! { "artifacts" => JsValue::Arr(vec![]) },
-            "defaultChoice" => "continue",
-        }
-    }
+    use super::*;
 
     type Sink = (Box<dyn Fn(&str)>, Rc<RefCell<String>>);
 
@@ -303,51 +295,243 @@ mod tests {
         (Box::new(move |t| b.borrow_mut().push_str(t)), buf)
     }
 
-    #[tokio::test]
-    async fn asks_until_answered_and_requires_a_note() {
+    fn request(extra: serde_json::Value) -> JsObject {
+        let mut base = json!({
+            "stepId": "sign", "kind": "approval", "title": "Ship it?",
+            "instructions": "Review the diff before pushing.",
+            "choices": ["continue", "abort"],
+            "context": { "artifacts": [{ "id": "review", "path": "/r/findings.md" }] },
+            "defaultChoice": "continue",
+        });
+        for (k, v) in extra.as_object().unwrap() {
+            base[k] = v.clone();
+        }
+        match from_json(&base) {
+            JsValue::Obj(o) => o,
+            _ => unreachable!(),
+        }
+    }
+
+    /// A terminal that types `answers` in turn; returns the answer and what was written.
+    async fn ask(answers: Vec<&str>, req: JsObject) -> (Result<ManualResponse, String>, String) {
         let (out, buf) = sink();
-        let p = Prompter::scripted(false, true, vec!["x", "R", "", "redo"], out);
-        let got = p
-            .run_manual(&request(), &CancellationToken::new())
-            .await
-            .unwrap();
-        assert_eq!(got.choice, "retry");
-        assert_eq!(got.note.as_deref(), Some("redo"));
-        let text = buf.borrow();
-        assert!(text.contains("── Decision: Ship?\n\nLook.\n"), "{text}");
-        assert!(text.contains("[c]ontinue / [r]etry / [a]bort (default: continue) > "));
-        assert!(text.contains("  not one of: continue, retry, abort\n"));
-        assert!(text.contains("  a note is required for this step\n"));
+        let p = Prompter::scripted(false, true, answers, out);
+        let got = p.run_manual(&req, &CancellationToken::new()).await;
+        let text = buf.borrow().clone();
+        (got, text)
+    }
+
+    fn choice(c: &str) -> ManualResponse {
+        ManualResponse {
+            choice: c.into(),
+            ..ManualResponse::default()
+        }
+    }
+
+    fn noted(c: &str, note: &str) -> ManualResponse {
+        ManualResponse {
+            choice: c.into(),
+            note: Some(note.into()),
+            ..ManualResponse::default()
+        }
+    }
+
+    const NOTE: &str = r#"{ "kind": "note", "label": "Release note", "requiredFor": ["continue"], "perFile": false }"#;
+    const REVIEW: &str =
+        r#"{ "kind": "review", "label": "Feedback", "requiredFor": ["retry"], "perFile": true }"#;
+
+    fn cap(spec: &str) -> serde_json::Value {
+        serde_json::from_str(spec).unwrap()
     }
 
     #[tokio::test]
-    async fn unattended() {
-        let (out, buf) = sink();
+    async fn without_a_terminal_a_gate_needs_yes() {
+        let (out, _) = sink();
         let p = Prompter::scripted(false, false, vec![], out);
         let err = p
-            .run_manual(&request(), &CancellationToken::new())
+            .run_manual(&request(json!({})), &CancellationToken::new())
             .await
             .unwrap_err();
-        assert!(err.contains("needs a human"), "{err}");
-        let (out, _) = sink();
-        let p = Prompter::scripted(true, false, vec![], out);
-        let got = p
-            .run_manual(&request(), &CancellationToken::new())
-            .await
-            .unwrap();
-        assert_eq!(got.choice, "continue");
-        assert_eq!(got.note, None);
-        assert!(buf.borrow().is_empty());
+        assert!(err.contains("'sign'") && err.contains("--yes"), "{err}");
     }
 
     #[tokio::test]
-    async fn eof_is_reported() {
-        let (out, _) = sink();
-        let p = Prompter::scripted(false, true, vec![], out);
-        let err = p
-            .run_manual(&request(), &CancellationToken::new())
+    async fn yes_takes_the_default_and_says_so() {
+        let (out, buf) = sink();
+        let p = Prompter::scripted(true, false, vec![], out);
+        let never = CancellationToken::new();
+        assert_eq!(
+            p.run_manual(&request(json!({})), &never).await.unwrap(),
+            choice("continue")
+        );
+        assert!(buf.borrow().contains("auto-resolving") && buf.borrow().contains("'sign'"));
+        let abort = request(json!({ "defaultChoice": "abort" }));
+        assert_eq!(p.run_manual(&abort, &never).await.unwrap(), choice("abort"));
+        // A placeholder note where the default needs one, and none where it does not.
+        let note = p
+            .run_manual(&request(json!({ "capture": cap(NOTE) })), &never)
             .await
-            .unwrap_err();
-        assert_eq!(err, "input ended while waiting for an answer");
+            .unwrap();
+        assert!(note.note.unwrap().contains("--yes"));
+        let review = p
+            .run_manual(&request(json!({ "capture": cap(REVIEW) })), &never)
+            .await
+            .unwrap();
+        assert_eq!(review.note, None);
+    }
+
+    #[tokio::test]
+    async fn on_a_terminal_it_renders_the_question_and_reads_a_choice() {
+        let (got, text) = ask(vec!["a"], request(json!({}))).await;
+        assert_eq!(got.unwrap(), choice("abort"));
+        assert!(text.contains("── Decision: Ship it?\n"));
+        assert!(text.contains("Review the diff before pushing."));
+        assert!(
+            text.contains("  - review: /r/findings.md\n"),
+            "artifact paths are shown"
+        );
+        assert!(text.contains("\n[c]ontinue / [a]bort (default: continue) > "));
+    }
+
+    #[tokio::test]
+    async fn an_empty_answer_takes_the_default_and_a_wrong_one_is_re_asked() {
+        assert_eq!(
+            ask(vec![""], request(json!({}))).await.0.unwrap(),
+            choice("continue")
+        );
+        let (got, text) = ask(vec!["zzz", "C"], request(json!({}))).await;
+        assert_eq!(got.unwrap(), choice("continue"));
+        assert!(text.contains("  not one of: continue, abort\n"));
+    }
+
+    #[tokio::test]
+    async fn a_stage_gate_names_the_stage_not_the_loop() {
+        let stage = json!({ "stagesId": "build", "id": "03-api", "title": "Add API routes", "index": 3, "total": 7, "attempt": 1 });
+        let (_, text) = ask(
+            vec!["c"],
+            request(json!({ "loop": { "id": "fix", "iteration": 2, "maxIterations": 3 }, "stage": stage })),
+        )
+        .await;
+        assert!(
+            text.contains("   stage 3/7 'Add API routes' of 'build'\n"),
+            "{text}"
+        );
+        assert!(!text.contains("iteration 2/3"));
+        let mut retried = stage;
+        retried["attempt"] = 2.into();
+        let (_, text) = ask(vec!["c"], request(json!({ "stage": retried }))).await;
+        assert!(text.contains("of 'build' (attempt 2)\n"));
+        let (_, text) = ask(
+            vec!["c"],
+            request(json!({ "loop": { "id": "fix", "iteration": 2, "maxIterations": 3 } })),
+        )
+        .await;
+        assert!(text.contains("   iteration 2/3 of 'fix'\n"));
+    }
+
+    #[tokio::test]
+    async fn captures() {
+        let three = json!(["continue", "retry", "abort"]);
+        // A required note will not take an empty answer.
+        let (got, text) = ask(
+            vec!["c", "", "shipped it"],
+            request(json!({ "capture": cap(NOTE) })),
+        )
+        .await;
+        assert_eq!(got.unwrap(), noted("continue", "shipped it"));
+        assert!(text.contains("Release note: "));
+        assert!(text.contains("  a note is required for this step\n"));
+        // Asked on retry too, not only continue.
+        let (got, _) = ask(
+            vec!["r", "send it back"],
+            request(json!({ "choices": three, "capture": cap(REVIEW) })),
+        )
+        .await;
+        assert_eq!(got.unwrap(), noted("retry", "send it back"));
+        // An optional note may be left empty.
+        let (got, _) = ask(
+            vec!["c", ""],
+            request(json!({ "choices": three, "capture": cap(REVIEW) })),
+        )
+        .await;
+        assert_eq!(got.unwrap(), noted("continue", ""));
+        // Never on abort.
+        let (got, _) = ask(
+            vec!["a"],
+            request(json!({ "choices": three, "capture": cap(REVIEW) })),
+        )
+        .await;
+        assert_eq!(got.unwrap(), choice("abort"));
+    }
+
+    #[tokio::test]
+    async fn the_diff_is_shown_when_asked_for() {
+        let (_, text) = ask(
+            vec!["c"],
+            request(json!({ "context": { "artifacts": [], "diff": "+++ b/src/x.ts\n\n" } })),
+        )
+        .await;
+        assert!(text.contains("\nWorking tree diff:\n+++ b/src/x.ts\n"));
+    }
+
+    #[tokio::test]
+    async fn eof_and_cancel_end_the_question() {
+        let (got, _) = ask(vec![], request(json!({}))).await;
+        assert_eq!(got.unwrap_err(), "input ended while waiting for an answer");
+        let (out, _) = sink();
+        let p = Prompter {
+            yes: false,
+            is_tty: true,
+            write: out,
+            read: Box::new(|| Box::pin(std::future::pending())),
+        };
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        assert_eq!(
+            p.run_manual(&request(json!({})), &cancel)
+                .await
+                .unwrap_err(),
+            "cancelled"
+        );
+    }
+
+    fn workflow() -> Workflow {
+        parse_workflow(
+            "name: r\ninputs:\n  feature: { required: true, prompt: What are we building? }\n  branch: { required: false }\n  env: { required: true, default: dev }\nsteps:\n  - id: a\n    kind: command\n    run: \"true\"\n",
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn missing_required_inputs_are_prompted_for() {
+        let (out, buf) = sink();
+        let p = Prompter::scripted(false, true, vec!["", "oauth"], out);
+        let got = p.missing_inputs(&workflow(), Record::new()).await.unwrap();
+        assert_eq!(got.get("feature").map(String::as_str), Some("oauth"));
+        assert_eq!(got.len(), 1);
+        assert_eq!(
+            buf.borrow().as_str(),
+            "What are we building? >   'feature' is required\nWhat are we building? > "
+        );
+    }
+
+    #[tokio::test]
+    async fn given_defaulted_or_optional_inputs_are_never_asked() {
+        let (out, buf) = sink();
+        let p = Prompter::scripted(false, true, vec![], out);
+        let mut given = Record::new();
+        given.insert("feature".to_string(), "given".to_string());
+        let got = p.missing_inputs(&workflow(), given).await.unwrap();
+        assert_eq!(got.len(), 1);
+        assert!(buf.borrow().is_empty());
+        // Without a terminal nothing is asked: the engine reports the miss.
+        let (out, _) = sink();
+        let p = Prompter::scripted(false, false, vec![], out);
+        assert!(
+            p.missing_inputs(&workflow(), Record::new())
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }

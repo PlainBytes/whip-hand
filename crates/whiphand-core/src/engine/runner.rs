@@ -72,7 +72,8 @@ use crate::types::{
 };
 use crate::yaml_emit::stringify_yaml;
 
-pub const CORE_VERSION: &str = "0.3.5";
+/// The crate version, which `scripts/version.mjs` keeps equal to the TS `CORE_VERSION`.
+pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// What `run:env` says for `nodeVersion`: the Rust engine runs no Node.
 pub const NODE_VERSION: &str = "n/a";
 

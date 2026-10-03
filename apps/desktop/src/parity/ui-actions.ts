@@ -1,5 +1,5 @@
 /**
- * Maps every entry in the CLI surface (see parity/extract-cli-surface.ts) to
+ * Maps every entry in the CLI surface (parity/fixtures/cli-surface.json) to
  * the UI element that exercises it, so parity/surface.test.ts fails the build
  * when the CLI and desktop UI drift apart. Pure data — no React/Tauri imports.
  */

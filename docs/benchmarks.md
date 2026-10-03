@@ -6,8 +6,9 @@
 |---|---|
 | `pre-phase0` | The TypeScript stack as it stood before Phase 0's UI work. Historic. |
 | `phase0` | After Phase 0's UI work. **This is the baseline Phases 1–4 are compared against.** |
+| `phase2` | The CLI as a Rust binary (`crates/whiphand-cli`). `cli` and `sizes` only: nothing else changed. |
 
-Phase 1 has no label: the Rust core library it adds is not on any user-facing path yet, so nothing here could move. The first Rust numbers are Phase 2's, when the CLI becomes a Rust binary.
+Phase 1 has no label: the Rust core library it adds is not on any user-facing path yet, so nothing here could move.
 
 It is run by hand on a developer machine. Nothing in CI runs or gates on it, because shared runners are too noisy for a regression gate to mean anything.
 
@@ -43,7 +44,7 @@ The agent always runs with its app state, config and remote-access config in a t
 
 | Section | Metric |
 |---|---|
-| `cli` | Wall time of `--help`, `--version` and `run smoke.yaml --dry-run`, for `node packages/cli/src/main.ts` (dev) and `dist/whiphand` (packaged). 2 warmups, then `--runs` samples. |
+| `cli` | Wall time of `--help`, `--version` and `run smoke.yaml --dry-run`, for the dev build and `dist/whiphand` (packaged). 2 warmups, then `--runs` samples. Through `phase0` the dev build was `node packages/cli/src/main.ts`; from `phase2` it is `target/release/whiphand`, the same binary the package copies. |
 | `agent` | Spawn→`hello` startup time, and RSS when idle, after loading the large run (getRun plus paging through its whole log), and after `listRuns` on 500 runs. Dev and packaged. |
 | `rpc` | Stdio round trips against a warm dev agent: `hello` ×1000, `listRuns` (500 runs), `getRun`, a 2,000-line `readRunLog` tail, and a full backward page-through of the 50k-line log (`replayFullLog`, i.e. "Load earlier" until the start). |
 | `sizes` | The packaged CLI and agent, this version's installers in `dist/`, and the web bundle: its total size, its JS size, and its gzipped JS size. |
@@ -110,4 +111,19 @@ Notes on reading the table:
 - Reattach replay is dominated by xterm parsing 2 MB. Slicing the decode keeps it from being one long task but does not shorten it.
 
 The CLI, agent, RPC and size rows did not move: Phase 0 changed only the UI. They are the starting point Phases 1–3 are measured against.
+
+### Phase 2: the Rust CLI
+
+`node scripts/bench.mjs --only cli,sizes --compare phase0`, same machine, medians (p95 within 10% of each):
+
+| Metric | phase0 | phase2 | Change |
+|---|---:|---:|---:|
+| Packaged `--version` | 51.1 ms | 3.0 ms | −94% |
+| Packaged `--help` | 53.6 ms | 3.1 ms | −94% |
+| Packaged `run smoke.yaml --dry-run` | 74.1 ms | 6.1 ms | −92% |
+| Dev `--version` (`node main.ts` → `target/release`) | 177.9 ms | 3.1 ms | −98% |
+| Dev `run smoke.yaml --dry-run` | 202.8 ms | 6.0 ms | −97% |
+| CLI binary | 128.6 MB | 3.4 MB | −97% |
+
+The agent and the installers are unchanged by Phase 2: the desktop still runs the TS agent until Phase 3.
 <!-- results:end -->

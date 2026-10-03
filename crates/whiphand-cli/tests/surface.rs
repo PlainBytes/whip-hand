@@ -1,8 +1,12 @@
 //! The clap surface against `parity/fixtures/cli-surface.json`, the
-//! commander surface it replaced (`extract-cli-surface.ts`'s shape): the same
+//! commander surface it replaced, generated from that build before it was
+//! removed (commander's `Command` walked into this shape): the same
 //! commands, arguments and options, each with the same value shape and
 //! default. The desktop's `ui-actions.ts` mapping is checked against the
 //! same file by `parity/surface.test.ts`.
+//!
+//! A deliberate change to the surface: rerun with `WHIPHAND_UPDATE_SURFACE=1`
+//! to rewrite the JSON, then map the new entries in `ui-actions.ts`.
 
 use clap::Command;
 use serde_json::{Value, json};
@@ -52,6 +56,13 @@ fn matches_the_commander_surface() {
         env!("CARGO_MANIFEST_DIR"),
         "/../../parity/fixtures/cli-surface.json"
     );
+    if std::env::var_os("WHIPHAND_UPDATE_SURFACE").is_some() {
+        std::fs::write(
+            path,
+            format!("{}\n", serde_json::to_string_pretty(&got).unwrap()),
+        )
+        .unwrap();
+    }
     let want: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     assert_eq!(got, want, "{}", serde_json::to_string_pretty(&got).unwrap());
 }

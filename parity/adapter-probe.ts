@@ -19,6 +19,7 @@ import { headlessPrompt } from '../packages/core/src/engine/headless-guidance.ts
 import { parseAwaitState } from '../packages/core/src/engine/await-state.ts';
 import { buildPrompt, inputArtifacts } from '../packages/core/src/template.ts';
 import { isOlderVersion, parseToolVersion, resolveToolTable } from '../packages/core/src/tools.ts';
+import { TOOL_GROUPS, TOOL_GROUP_LABELS } from '../packages/core/src/tool-groups.ts';
 import type { ToolStatus } from '../packages/core/src/tools.ts';
 import { loadDoctorConfig } from '../packages/core/src/doctor-config.ts';
 import { defaultRegistry, validateWorkflowFrontend, validateWorkflowRunners, validateWorkflowShell } from '../packages/core/src/registry.ts';
@@ -26,7 +27,28 @@ import { parseWorkflow, WorkflowError } from '../packages/core/src/schema.ts';
 import { assertNotUnc, headroomWarning } from '../packages/core/src/canonicalize.ts';
 import type { AgentStep, Frame, ProgressFormat, RunCtx, RunnerAdapter } from '../packages/core/src/types.ts';
 import { normalizeText } from './store-probe.ts';
-import { doctorReport } from '../packages/cli/src/commands/doctor.ts';
+
+/**
+ * `whiphand doctor`'s text, as the TS CLI rendered it before Phase 2 removed
+ * it (packages/cli/src/commands/doctor.ts). Kept here as the reference the
+ * Rust `doctor_report` is checked against.
+ */
+function doctorReport(statuses: readonly ToolStatus[]): string {
+  const sections: string[] = [];
+  for (const group of TOOL_GROUPS) {
+    const rows = statuses.filter(status => status.group === group);
+    if (rows.length === 0) continue;
+    const lines = [TOOL_GROUP_LABELS[group]];
+    for (const status of rows) {
+      const mark = status.installed ? '✔' : status.optional ? '○' : '✘';
+      const rest = status.installed ? (status.version ?? '(version unknown)') : 'not installed';
+      lines.push(`${mark} ${status.id} ${rest}`);
+      for (const note of status.notes ?? []) lines.push(`  · ${note}`);
+    }
+    sections.push(lines.join('\n'));
+  }
+  return sections.join('\n\n');
+}
 
 type Op = Record<string, unknown> & { op: string };
 

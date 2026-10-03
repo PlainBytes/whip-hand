@@ -1,7 +1,8 @@
 /**
  * Presentational tree for the Files page: renders the flat node map from
- * use-file-tree as a Fluent v9 Tree (which brings keyboard navigation and
- * the treeitem/aria wiring with it). Owns no data — the page passes state
+ * use-file-tree as a Fluent v9 FlatTree (which brings keyboard navigation and
+ * the treeitem/aria wiring with it), windowed so only the rows near the
+ * viewport are rendered. Owns no data — the page passes state
  * down so the same nodes drive the preview pane.
  *
  * Operations live on the rows rather than in a page toolbar. A toolbar has
@@ -10,8 +11,10 @@
  * labelled with its own target ("New file in docs"), so the label is the
  * answer even for a screen reader.
  */
-import { Fragment, useState } from 'react';
-import { Button, Text, Tree, TreeItem, TreeItemLayout } from '@fluentui/react-components';
+import { useMemo, useRef, useState } from 'react';
+import {
+  Button, FlatTree, FlatTreeItem, Text, TreeItemLayout, treeItemLayoutClassNames, type FlatTreeProps,
+} from '@fluentui/react-components';
 import {
   Delete20Regular,
   Document20Regular,
@@ -20,7 +23,8 @@ import {
   FolderAdd20Regular,
   Rename20Regular,
 } from '@fluentui/react-icons';
-import type { TreeNode, TreeNodes } from '../files/tree-model.ts';
+import { flattenVisible, visibleRowValue, type TreeNode, type TreeNodes, type VisibleTreeRow } from '../files/tree-model.ts';
+import { spacerHeights, useVirtualRows, VIRTUAL_SCROLLER_PROPS } from '../lib/use-virtual-rows.ts';
 
 /** Callbacks the row actions fire, each with the path of its own row. */
 export interface FileTreeActions {
@@ -108,96 +112,86 @@ function RowActions({
   );
 }
 
-function NodeRows({
-  paths, nodes, selectedPath, revealedPath, onReveal, onToggle, onSelect, actions,
-}: {
-  paths: string[];
-  nodes: TreeNodes;
+interface RowProps {
+  row: VisibleTreeRow;
   selectedPath: string | null;
   /** The row Fluent has asked to reveal (hover or focus), if any. */
   revealedPath: string | null;
   onReveal: (path: string | null) => void;
-  onToggle: (path: string) => void;
   onSelect: (path: string) => void;
   actions: Partial<FileTreeActions>;
-}) {
-  return (
-    <>
-      {paths.map(path => {
-        const node = nodes[path];
-        if (!node) return null;
-        const selected = selectedPath === path;
-        // Both kinds get the highlight: a directory is the target of its own
-        // create/rename/delete actions, so an unhighlighted one left the user
-        // guessing what was selected.
-        const layout = {
-          iconBefore: node.kind === 'dir' ? <Folder20Regular /> : <Document20Regular />,
-          onClick: () => onSelect(path),
-          onContextMenu: (event: React.MouseEvent) => {
-            event.preventDefault();
-            onSelect(path);
-          },
-          style: { background: selected ? 'var(--colorNeutralBackground1Selected)' : undefined },
-          // Names never wrap: a deep name that outgrows the panel scrolls
-          // the tree sideways instead of hiding behind a wrapped line.
-          main: { style: { whiteSpace: 'nowrap' as const, overflow: 'visible' } },
-          // Controlled for every row, always: letting `visible` appear only
-          // on the selected row flips the slot between uncontrolled and
-          // controlled, which Fluent warns about. Fluent still decides when
-          // hover/focus *wants* the actions open (onVisibilityChange); we
-          // simply also hold them open for the selected row, so the current
-          // target stays on screen without the pointer.
-          actions: {
-            visible: selected || revealedPath === path,
-            onVisibilityChange: (_event: unknown, data: { visible: boolean }) =>
-              onReveal(data.visible ? path : null),
-            children: <RowActions node={node} actions={actions} />,
-          },
-        };
+  /** For the virtualizer: the row's index, and the ref it measures through. */
+  index: number;
+  measure: (element: HTMLElement | null) => void;
+}
 
-        if (node.kind === 'file') {
-          return (
-            <TreeItem key={path} itemType="leaf" value={path} aria-selected={selected}>
-              <TreeItemLayout {...layout}>{node.name}</TreeItemLayout>
-            </TreeItem>
-          );
-        }
-        return (
-          <TreeItem key={path} itemType="branch" value={path} aria-selected={selected}>
-            <TreeItemLayout {...layout}>{node.name}</TreeItemLayout>
-            <Tree>
-              {node.error ? (
-                <TreeItem itemType="leaf" value={`${path}::error`}>
-                  <TreeItemLayout>
-                    <Text size={200}>Could not open this folder: {node.error}</Text>
-                  </TreeItemLayout>
-                </TreeItem>
-              ) : (
-                <Fragment>
-                  <NodeRows
-                    paths={node.children ?? []}
-                    nodes={nodes}
-                    selectedPath={selectedPath}
-                    revealedPath={revealedPath}
-                    onReveal={onReveal}
-                    onToggle={onToggle}
-                    onSelect={onSelect}
-                    actions={actions}
-                  />
-                  {node.truncated ? (
-                    <TreeItem itemType="leaf" value={`${path}::truncated`}>
-                      <TreeItemLayout>
-                        <Text size={200}>…and {node.truncated} more</Text>
-                      </TreeItemLayout>
-                    </TreeItem>
-                  ) : null}
-                </Fragment>
-              )}
-            </Tree>
-          </TreeItem>
-        );
-      })}
-    </>
+function TreeRow({ row, selectedPath, revealedPath, onReveal, onSelect, actions, index, measure }: RowProps) {
+  const aria = {
+    value: visibleRowValue(row),
+    'aria-level': row.level,
+    'aria-setsize': row.setSize,
+    'aria-posinset': row.posInSet,
+    'data-index': index,
+    ref: measure,
+  };
+  if (row.kind === 'error') {
+    return (
+      <FlatTreeItem {...aria} parentValue={row.parent} itemType="leaf">
+        <TreeItemLayout>
+          <Text size={200}>Could not open this folder: {row.message}</Text>
+        </TreeItemLayout>
+      </FlatTreeItem>
+    );
+  }
+  if (row.kind === 'truncated') {
+    return (
+      <FlatTreeItem {...aria} parentValue={row.parent} itemType="leaf">
+        <TreeItemLayout>
+          <Text size={200}>…and {row.count} more</Text>
+        </TreeItemLayout>
+      </FlatTreeItem>
+    );
+  }
+
+  const { node } = row;
+  const path = node.path;
+  const selected = selectedPath === path;
+  // Both kinds get the highlight: a directory is the target of its own
+  // create/rename/delete actions, so an unhighlighted one left the user
+  // guessing what was selected.
+  const layout = {
+    iconBefore: node.kind === 'dir' ? <Folder20Regular /> : <Document20Regular />,
+    onClick: () => onSelect(path),
+    onContextMenu: (event: React.MouseEvent) => {
+      event.preventDefault();
+      onSelect(path);
+    },
+    style: { background: selected ? 'var(--colorNeutralBackground1Selected)' : undefined },
+    // Names never wrap: a deep name that outgrows the panel scrolls
+    // the tree sideways instead of hiding behind a wrapped line.
+    main: { style: { whiteSpace: 'nowrap' as const, overflow: 'visible' } },
+    // Controlled for every row, always: letting `visible` appear only
+    // on the selected row flips the slot between uncontrolled and
+    // controlled, which Fluent warns about. Fluent still decides when
+    // hover/focus *wants* the actions open (onVisibilityChange); we
+    // simply also hold them open for the selected row, so the current
+    // target stays on screen without the pointer.
+    actions: {
+      visible: selected || revealedPath === path,
+      onVisibilityChange: (_event: unknown, data: { visible: boolean }) =>
+        onReveal(data.visible ? path : null),
+      children: <RowActions node={node} actions={actions} />,
+    },
+  };
+  return (
+    <FlatTreeItem
+      {...aria}
+      parentValue={row.parent}
+      itemType={node.kind === 'file' ? 'leaf' : 'branch'}
+      aria-selected={selected}
+    >
+      <TreeItemLayout {...layout}>{node.name}</TreeItemLayout>
+    </FlatTreeItem>
   );
 }
 
@@ -207,33 +201,89 @@ export function FileTree(props: FileTreeProps) {
   /** Which row's actions Fluent currently wants shown (hover or focus). */
   const [revealedPath, setRevealedPath] = useState<string | null>(null);
 
+  // Flat and windowed: an expanded run's artifacts are thousands of rows,
+  // and only the ones near the viewport are in the DOM.
+  const rows = useMemo(() => flattenVisible(nodes, root, expanded), [nodes, root, expanded]);
+  const indexByValue = useMemo(() => new Map(rows.map((row, i) => [visibleRowValue(row), i])), [rows]);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const virtual = useVirtualRows({
+    count: rows.length,
+    scrollRef,
+    estimateSize: 32,
+    getItemKey: index => visibleRowValue(rows[index]),
+  });
+  const { before, after } = spacerHeights(virtual);
+
+  /**
+   * Fluent moves focus by walking the rows in the DOM, which with a window is
+   * not all of them: Home, End and ArrowLeft to a parent scrolled out of the
+   * window would stop at its edge. Those three bring the target in first.
+   * ArrowUp/ArrowDown need nothing: the next row is in the overscan, and
+   * focusing it scrolls the window along.
+   */
+  const handleNavigation: FlatTreeProps['onNavigation'] = (event, data) => {
+    let index = -1;
+    if (data.type === 'Home') index = 0;
+    else if (data.type === 'End') index = rows.length - 1;
+    else if (data.type === 'ArrowLeft' && data.parentValue !== undefined) {
+      const target = indexByValue.get(String(data.parentValue)) ?? -1;
+      // From inside a row's actions, ArrowLeft goes back to the row itself.
+      const inActions = data.target.querySelector(`.${treeItemLayoutClassNames.actions}`)?.contains(document.activeElement);
+      const rendered = scrollRef.current?.querySelector(`[data-index="${target}"]`);
+      if (!inActions && !rendered) index = target;
+    }
+    if (index < 0) return;
+    event.preventDefault();
+    virtual.scrollToIndex(index, { align: 'auto' });
+    focusRowWhenRendered(index);
+  };
+
+  /**
+   * The row renders a frame or more after the scroll that brings it in; focus
+   * it once it has. Bounded by time rather than frames, so a busy main thread
+   * delays the focus instead of dropping it.
+   */
+  function focusRowWhenRendered(index: number, deadline = performance.now() + 1000): void {
+    requestAnimationFrame(() => {
+      const row = scrollRef.current?.querySelector<HTMLElement>(`[data-index="${index}"]`);
+      if (row) row.focus();
+      else if (performance.now() < deadline) focusRowWhenRendered(index, deadline);
+    });
+  }
+
   return (
-    <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
-      <Tree
-        aria-label="Workspace files"
-        // Grow with the widest row so the wrapper below scrolls horizontally.
-        style={{ minWidth: 'max-content' }}
-        // treegrid: the right arrow key walks from a row into its actions,
-        // so the row operations are reachable without a mouse.
-        navigationMode="treegrid"
-        openItems={expanded}
-        onOpenChange={(_event, data) => onToggle(data.value as string)}
-      >
-        {rootNode?.error ? (
-          <Text size={200}>Could not open this folder: {rootNode.error}</Text>
-        ) : (
-          <NodeRows
-            paths={rootNode?.children ?? []}
-            nodes={nodes}
-            selectedPath={selectedPath}
-            revealedPath={revealedPath}
-            onReveal={setRevealedPath}
-            onToggle={onToggle}
-            onSelect={onSelect}
-            actions={actions}
-          />
-        )}
-      </Tree>
+    <div ref={scrollRef} {...VIRTUAL_SCROLLER_PROPS} style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+      {rootNode?.error ? (
+        <Text size={200}>Could not open this folder: {rootNode.error}</Text>
+      ) : (
+        <FlatTree
+          aria-label="Workspace files"
+          // Grow with the widest row so the wrapper below scrolls horizontally.
+          style={{ minWidth: 'max-content' }}
+          // treegrid: the right arrow key walks from a row into its actions,
+          // so the row operations are reachable without a mouse.
+          navigationMode="treegrid"
+          openItems={expanded}
+          onOpenChange={(_event, data) => onToggle(data.value as string)}
+          onNavigation={handleNavigation}
+        >
+          <div role="none" aria-hidden="true" style={{ height: before }} />
+          {virtual.getVirtualItems().map(item => (
+            <TreeRow
+              key={item.key}
+              row={rows[item.index]}
+              index={item.index}
+              measure={virtual.measureElement}
+              selectedPath={selectedPath}
+              revealedPath={revealedPath}
+              onReveal={setRevealedPath}
+              onSelect={onSelect}
+              actions={actions}
+            />
+          ))}
+          <div role="none" aria-hidden="true" style={{ height: after }} />
+        </FlatTree>
+      )}
     </div>
   );
 }

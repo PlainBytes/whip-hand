@@ -29,6 +29,27 @@ function stateLabel(job: JobState): string {
   return stage === undefined ? base : `${base} · stage ${stage.index}/${stage.total}`;
 }
 
+/**
+ * Whether two `ongoingJobs` lists draw the same rows: same jobs, same order,
+ * and the same values for every field a row reads. Lets the Sidebar keep its
+ * previous list across the pty chunks and log lines that give every job a new
+ * identity without changing anything shown here.
+ */
+export function sameOngoingRows(a: readonly JobState[], b: readonly JobState[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((job, i) => {
+    const other = b[i];
+    return job.jobId === other.jobId
+      && job.runName === other.runName
+      && job.runId === other.runId
+      && job.workdir === other.workdir
+      && job.identityKey === other.identityKey
+      && job.awaiting === other.awaiting
+      && job.pendingManual === other.pendingManual
+      && job.stageProgress === other.stageProgress;
+  });
+}
+
 export type RunStatus = 'running' | 'waiting' | 'failed';
 
 /**

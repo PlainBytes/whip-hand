@@ -18,8 +18,7 @@ import { useAppStore } from '../state/store.ts';
 export function useJobAttach(client: AgentClient): void {
   const agentStatus = useAppStore(state => state.agentStatus);
   const applyJobSummaries = useAppStore(state => state.applyJobSummaries);
-  const applyScrollbackSnapshot = useAppStore(state => state.applyScrollbackSnapshot);
-  const applyEventReplay = useAppStore(state => state.applyEventReplay);
+  const applyJobSnapshots = useAppStore(state => state.applyJobSnapshots);
   // Seed on each TRANSITION into 'connected' — so a reconnect re-seeds, but a
   // re-render while already connected does not re-fetch.
   const previousStatus = useRef<string | null>(null);
@@ -44,12 +43,8 @@ export function useJobAttach(client: AgentClient): void {
           return [summary.jobId, snapshot] as const;
         }));
         if (cancelled) return;
-        for (const [jobId, snapshot] of snapshots) {
-          if (!snapshot) continue;
-          applyScrollbackSnapshot(jobId, snapshot);
-          // Absent from an older agent's response — see jobScrollbackSchema.
-          if (snapshot.events) applyEventReplay(jobId, snapshot.events);
-        }
+        // One store write for every job, not two per job.
+        applyJobSnapshots(snapshots.flatMap(([jobId, snapshot]) => (snapshot ? [{ jobId, snapshot }] : [])));
       } catch {
         // An older agent has neither method. Attaching is an enhancement, so
         // failing it must leave the client exactly as capable as before.

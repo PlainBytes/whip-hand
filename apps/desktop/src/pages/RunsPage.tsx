@@ -17,6 +17,7 @@ import {
 import { Add20Regular, Delete16Regular, LockClosed16Regular, LockOpen16Regular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { liveStageProgress, useAppStore, waitingRunIds } from '../state/store.ts';
+import { sameSet, sameStageProgress, useAppStoreStable } from '../state/use-stable-selector.ts';
 import type { RunSummary } from '../agent/client.ts';
 import { POLL_INTERVAL_MS, runColumns, runLabel } from './run-columns.tsx';
 import { NewRunDialog } from '../components/NewRunDialog.tsx';
@@ -35,23 +36,15 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
   const runs = useAppStore(state => state.runs);
   const setRuns = useAppStore(state => state.setRuns);
   const pendingRunAgain = useAppStore(state => state.pendingRunAgain);
-  const jobs = useAppStore(state => state.jobs);
   const identityKey = useAppStore(state => state.workspaceIdentityKey);
   const workspace = useMemo(
     () => (workspacePath === null ? undefined : { path: workspacePath, identityKey: identityKey ?? undefined }),
     [workspacePath, identityKey],
   );
-  // useMemo rather than a Set-returning selector: zustand compares with
-  // Object.is, so a fresh Set per call would re-render this grid on every
-  // unrelated store write.
-  const waiting = useMemo(
-    () => waitingRunIds(jobs, workspace),
-    [jobs, workspace],
-  );
-  const stages = useMemo(
-    () => liveStageProgress(jobs, workspace),
-    [jobs, workspace],
-  );
+  // Compared by content, not identity: `jobs` changes on every pty chunk and
+  // log line, and a new Set here rebuilds the columns and the whole grid.
+  const waiting = useAppStoreStable(state => waitingRunIds(state.jobs, workspace), sameSet);
+  const stages = useAppStoreStable(state => liveStageProgress(state.jobs, workspace), sameStageProgress);
   const [error, setError] = useState<string | null>(null);
   const [showDryRuns, setShowDryRuns] = useState(false);
   const [showInterrupted, setShowInterrupted] = useState(true);

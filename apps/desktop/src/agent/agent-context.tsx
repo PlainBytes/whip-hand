@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import type { AgentClient } from './client.ts';
-import { useAppStore } from '../state/store.ts';
+import { useAppStore, type HighRateNotification } from '../state/store.ts';
 
 const AgentClientContext = createContext<AgentClient | null>(null);
 
@@ -15,17 +15,19 @@ const HIGH_RATE_WINDOW_MS = 100;
 /**
  * Leading-edge throttle for the notifications a running command floods us with
  * (stepLog, step:log events, ptyData). The first one after a quiet spell is
- * applied at once; the rest queue in arrival order and are applied together, in
- * one task so React commits once, when the window closes. flush() drains the
- * queue early so nothing else can be applied ahead of an older queued item.
+ * applied at once; the rest queue in arrival order and are applied together
+ * when the window closes, as ONE store write (applyHighRateBatch) rather than
+ * one per notification. flush() drains the queue early so nothing else can be
+ * applied ahead of an older queued item.
  */
-function createHighRateQueue() {
-  let queue: Array<() => void> = [];
+export function createHighRateQueue(apply: (items: HighRateNotification[]) => void) {
+  let queue: HighRateNotification[] = [];
   let timer: ReturnType<typeof setTimeout> | null = null;
   const flush = () => {
+    if (queue.length === 0) return;
     const batch = queue;
     queue = [];
-    for (const apply of batch) apply();
+    apply(batch);
   };
   const onWindowClosed = () => {
     timer = null;
@@ -35,12 +37,12 @@ function createHighRateQueue() {
   };
   return {
     flush,
-    push(apply: () => void) {
+    push(item: HighRateNotification) {
       if (timer === null) {
-        apply();
+        apply([item]);
         timer = setTimeout(onWindowClosed, HIGH_RATE_WINDOW_MS);
       } else {
-        queue.push(apply);
+        queue.push(item);
       }
     },
     dispose() {
@@ -65,10 +67,9 @@ function createHighRateQueue() {
 export function AgentClientProvider({ client, children }: { client: AgentClient; children: ReactNode }) {
   const setAgentStatus = useAppStore(state => state.setAgentStatus);
   const applyWhiphandEvent = useAppStore(state => state.applyWhiphandEvent);
+  const applyHighRateBatch = useAppStore(state => state.applyHighRateBatch);
   const applyRunStateChanged = useAppStore(state => state.applyRunStateChanged);
-  const applyStepLog = useAppStore(state => state.applyStepLog);
   const applyPtyStarted = useAppStore(state => state.applyPtyStarted);
-  const applyPtyData = useAppStore(state => state.applyPtyData);
   const applyPtyExit = useAppStore(state => state.applyPtyExit);
   const applyPtyAwait = useAppStore(state => state.applyPtyAwait);
   const applyManualRequest = useAppStore(state => state.applyManualRequest);
@@ -78,7 +79,7 @@ export function AgentClientProvider({ client, children }: { client: AgentClient;
 
   useEffect(() => {
     setAgentStatus(client.status);
-    const highRate = createHighRateQueue();
+    const highRate = createHighRateQueue(applyHighRateBatch);
     // Anything not queued first drains the queue, so store writes keep the
     // order the notifications arrived in.
     const ordered = <P,>(apply: (params: P) => void) => (params: P) => {
@@ -88,13 +89,13 @@ export function AgentClientProvider({ client, children }: { client: AgentClient;
     const unsubscribers = [
       client.onStatusChange(setAgentStatus),
       client.onNotification('whiphandEvent', params => {
-        if (params.event.type === 'step:log') highRate.push(() => applyWhiphandEvent(params));
+        if (params.event.type === 'step:log') highRate.push({ method: 'whiphandEvent', params });
         else ordered(applyWhiphandEvent)(params);
       }),
       client.onNotification('runStateChanged', ordered(applyRunStateChanged)),
-      client.onNotification('stepLog', params => highRate.push(() => applyStepLog(params))),
+      client.onNotification('stepLog', params => highRate.push({ method: 'stepLog', params })),
       client.onNotification('ptyStarted', ordered(applyPtyStarted)),
-      client.onNotification('ptyData', params => highRate.push(() => applyPtyData(params))),
+      client.onNotification('ptyData', params => highRate.push({ method: 'ptyData', params })),
       client.onNotification('ptyExit', ordered(applyPtyExit)),
       client.onNotification('ptyAwait', ordered(applyPtyAwait)),
       client.onNotification('manualRequest', ordered(applyManualRequest)),

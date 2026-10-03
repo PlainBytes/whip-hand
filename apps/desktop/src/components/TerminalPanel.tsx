@@ -3,6 +3,7 @@ import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
 import { decodeBase64ToBytes, encodeToBase64 } from '../lib/base64.ts';
 import { createTerminal, TERMINAL_BACKGROUND, type TerminalHandle } from './xterm-runtime.ts';
+import { perfEnabled, perfMark } from '../lib/perf-probe.ts';
 
 export interface TerminalPanelProps {
   /** The job whose interactive PTY this panel mounts for. */
@@ -16,6 +17,8 @@ export interface TerminalPanelProps {
 
 const RESIZE_DEBOUNCE_MS = 100;
 const EMPTY_BUFFER: string[] = [];
+/** Base64 chars of pty output written per replay slice — about 190 KB of terminal bytes. */
+const REPLAY_SLICE_CHARS = 256_000;
 
 /**
  * What a "newline, don't submit" key sends to the CLI: ESC CR, which is what
@@ -64,6 +67,10 @@ export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProp
   // render/effect pass, so a trim can jump past chunks this panel never wrote
   // individually — not only chunks trimmed before mount.
   const writtenAbsoluteRef = useRef(0);
+  /** What the replay pump reads; see the replay effect. */
+  const latestBufferRef = useRef<{ buffer: readonly string[]; baseIndex: number }>({ buffer: EMPTY_BUFFER, baseIndex: 0 });
+  /** True while a backlog slice is in xterm's queue and the next one waits on its callback. */
+  const pumpingRef = useRef(false);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const ptyDataBuffer = useAppStore(state => state.jobs[jobId]?.ptyDataBuffer ?? EMPTY_BUFFER);
@@ -84,6 +91,7 @@ export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProp
     handle.fitAddon.fit();
     handleRef.current = handle;
     writtenAbsoluteRef.current = 0;
+    pumpingRef.current = false;
 
     const dataSub = handle.term.onData(data => {
       void client.request('ptyInput', { jobId, data: encodeToBase64(data) });
@@ -137,26 +145,54 @@ export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProp
   }, [jobId]);
 
   // Replay whatever the store already buffered, then keep writing new chunks
-  // as they arrive via the same loop. Converts the absolute "chunks written"
+  // as they arrive via the same pump. Converts the absolute "chunks written"
   // count to a local buffer index via ptyDataBaseIndex, so this stays correct
   // across trims (including several batched into one render pass).
   //
   // ptyDataBaseIndex > writtenAbsoluteRef.current means the buffer's front was
   // trimmed past chunks this panel never wrote — before mount, or via a
   // batched update this effect hasn't run for yet. Show the marker once; the
-  // condition self-disarms once the loop below catches writtenAbsoluteRef.current
+  // condition self-disarms once the pump catches writtenAbsoluteRef.current
   // up to ptyDataBaseIndex + buffer.length.
+  //
+  // A backlog (a mount or reattach onto ~2MB of scrollback) goes over in
+  // REPLAY_SLICE_CHARS slices, each started from the previous one's write
+  // callback, so decoding never holds the main thread for the whole buffer in
+  // one task. Live output is a slice's worth at most and goes in one pass.
+  // The pump always reads the latest buffer (latestBufferRef), not the one
+  // the slice was started with: a trim can land between two slices.
   useEffect(() => {
+    latestBufferRef.current = { buffer: ptyDataBuffer, baseIndex: ptyDataBaseIndex };
     const handle = handleRef.current;
-    if (!handle) return;
-    if (ptyDataBaseIndex > writtenAbsoluteRef.current) {
-      handle.term.write('\x1b[2m[earlier output truncated]\x1b[0m\r\n');
-    }
-    const localStart = Math.max(writtenAbsoluteRef.current, ptyDataBaseIndex) - ptyDataBaseIndex;
-    for (let i = localStart; i < ptyDataBuffer.length; i += 1) {
-      handle.term.write(decodeBase64ToBytes(ptyDataBuffer[i]));
-    }
-    writtenAbsoluteRef.current = ptyDataBaseIndex + ptyDataBuffer.length;
+    if (!handle || pumpingRef.current) return;
+    const pump = () => {
+      const { buffer, baseIndex } = latestBufferRef.current;
+      if (baseIndex > writtenAbsoluteRef.current) {
+        handle.term.write('\x1b[2m[earlier output truncated]\x1b[0m\r\n');
+        writtenAbsoluteRef.current = baseIndex;
+      }
+      let i = writtenAbsoluteRef.current - baseIndex;
+      let budget = REPLAY_SLICE_CHARS;
+      while (i < buffer.length && budget > 0) {
+        handle.term.write(decodeBase64ToBytes(buffer[i]));
+        budget -= buffer[i].length;
+        i += 1;
+      }
+      writtenAbsoluteRef.current = baseIndex + i;
+      if (i < buffer.length) {
+        pumpingRef.current = true;
+        handle.term.write('', () => {
+          // Unmounted, or remounted on another session, since this slice.
+          if (handleRef.current !== handle) return;
+          pumpingRef.current = false;
+          pump();
+        });
+        return;
+      }
+      // The callback runs once xterm has parsed everything queued before it.
+      if (perfEnabled()) handle.term.write('', () => perfMark('terminal:flushed'));
+    };
+    pump();
   }, [ptyDataBuffer, ptyDataBaseIndex]);
 
   // Go read-only once the store reports the PTY exited.

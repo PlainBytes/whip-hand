@@ -6,16 +6,20 @@
  * workspace's title claim a run it isn't hosting.
  */
 import { useEffect } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { jobInWorkspace, useAppStore } from '../state/store.ts';
 import { applyWindowTitle, formatWindowTitle } from './window-state.ts';
 
 export function useWindowTitle(): void {
-  const jobs = useAppStore(state => state.jobs);
-  const workspacePath = useAppStore(state => state.workspacePath);
-  const identityKey = useAppStore(state => state.workspaceIdentityKey);
+  // Two counts, not `jobs`: selecting jobs re-ran this on every pty chunk.
+  const [active, awaiting] = useAppStore(useShallow(state => {
+    const workspace = state.workspacePath === null
+      ? null
+      : { path: state.workspacePath, identityKey: state.workspaceIdentityKey ?? undefined };
+    const live = Object.values(state.jobs).filter(j => !j.finished && workspace !== null && jobInWorkspace(j, workspace));
+    return [live.length, live.filter(j => j.awaiting).length];
+  }));
   useEffect(() => {
-    const workspace = workspacePath === null ? null : { path: workspacePath, identityKey: identityKey ?? undefined };
-    const active = Object.values(jobs).filter(j => !j.finished && workspace !== null && jobInWorkspace(j, workspace));
-    applyWindowTitle(formatWindowTitle(active.length, active.filter(j => j.awaiting).length));
-  }, [jobs, workspacePath, identityKey]);
+    applyWindowTitle(formatWindowTitle(active, awaiting));
+  }, [active, awaiting]);
 }

@@ -64,6 +64,7 @@ import { parsePositiveInt } from '../lib/parse-number.ts';
 import { useOpenExternal } from '../lib/open-external.tsx';
 import type { FileComment, ManualChoice, Scope } from '../../../../packages/core/src/types.ts';
 import { errorMessage } from '../lib/error-message.ts';
+import { spacerHeights, useVirtualRows, VIRTUAL_SCROLLER_PROPS } from '../lib/use-virtual-rows.ts';
 
 export interface RunDetailPageProps {
   /** The job whose live event stream to follow, when opened from a just-started run. */
@@ -712,11 +713,41 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
   const lastFilteredLogRowKey = filteredLogRows.length === 0
     ? null : logRowKey(filteredLogRows[filteredLogRows.length - 1]);
 
+  /**
+   * Row identities for the virtualizer's size cache, which must follow a row
+   * when "Load earlier" shifts every index. logRowKey alone can repeat (see
+   * the row's React key below), so a repeat gets its occurrence appended.
+   */
+  const filteredLogRowKeys = useMemo(() => {
+    const seen = new Map<string, number>();
+    return filteredLogRows.map(row => {
+      const key = logRowKey(row);
+      const n = seen.get(key) ?? 0;
+      seen.set(key, n + 1);
+      return n === 0 ? key : `${key}#${n}`;
+    });
+  }, [filteredLogRows]);
+  /** "Load earlier" rides at the top of the list as its first virtual row. */
+  const showLoadEarlier = finishedLogRows !== null && !finishedAtStart;
+  const logHeaderRows = showLoadEarlier && filteredLogRows.length > 0 ? 1 : 0;
+  const logVirtual = useVirtualRows({
+    count: filteredLogRows.length === 0 ? 0 : logHeaderRows + filteredLogRows.length,
+    scrollRef: logRef,
+    estimateSize: 18,
+    getItemKey: index => (index < logHeaderRows ? 'load-earlier' : filteredLogRowKeys[index - logHeaderRows]),
+  });
+
+  function scrollLogsToEnd(): void {
+    const count = logVirtual.options.count;
+    if (count > 0) logVirtual.scrollToIndex(count - 1, { align: 'end' });
+  }
+
   useEffect(() => {
     if (!followLogs) return;
     const el = logRef.current;
     if (!el || typeof el.scrollTo !== 'function') return;
-    el.scrollTo({ top: el.scrollHeight });
+    scrollLogsToEnd();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the last row's identity, see above
   }, [lastFilteredLogRowKey, followLogs]);
 
   /** Releases "follow" the moment a human scrolls away from the bottom, so a live feed doesn't fight an investigation mid-scroll. */
@@ -724,6 +755,22 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
     const el = logRef.current;
     if (!el) return;
     setFollowLogs(el.scrollHeight - el.scrollTop - el.clientHeight < 40);
+  }
+
+  function loadEarlierRow() {
+    return (
+      <div style={{ textAlign: 'center', padding: '4px 0' }}>
+        <Button
+          size="small"
+          appearance="subtle"
+          disabled={loadingEarlierLogs}
+          onClick={() => void handleLoadEarlier()}
+          data-testid="log-load-earlier"
+        >
+          {loadingEarlierLogs ? 'Loading…' : 'Load earlier'}
+        </Button>
+      </div>
+    );
   }
 
   async function handleCopyLog(): Promise<void> {
@@ -1693,6 +1740,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
             <div
               ref={logRef}
               data-testid="log-tail"
+              {...VIRTUAL_SCROLLER_PROPS}
               onScroll={handleLogScroll}
               style={{
                 ...RECESSED_SURFACE,
@@ -1704,19 +1752,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
                 ...(logRows.length === 0 ? { display: 'flex' } : {}),
               }}
             >
-              {finishedLogRows !== null && !finishedAtStart && (
-                <div style={{ textAlign: 'center', padding: '4px 0' }}>
-                  <Button
-                    size="small"
-                    appearance="subtle"
-                    disabled={loadingEarlierLogs}
-                    onClick={() => void handleLoadEarlier()}
-                    data-testid="log-load-earlier"
-                  >
-                    {loadingEarlierLogs ? 'Loading…' : 'Load earlier'}
-                  </Button>
-                </div>
-              )}
+              {showLoadEarlier && logHeaderRows === 0 && loadEarlierRow()}
               {logRows.length === 0 ? (
                 // logRunPredatesRunLog is checked here, not before the
                 // logRows.length check, because a merged live row can arrive
@@ -1734,34 +1770,50 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
               ) : filteredLogRows.length === 0 ? (
                 <EmptyState>No entries match the current filters.</EmptyState>
               ) : (
-                filteredLogRows.map((row, index) => (
-                  <div
-                    // Not unique on its own: a resumed run's journal restarts `seq`
-                    // at 1 in the new RunJournal instance while appending to the
-                    // same run.log, and `log:truncated` reuses its terminal
-                    // event's seq — so a file can hold duplicate seqs. Rows render
-                    // in file/arrival order regardless, so the index disambiguates
-                    // without affecting what's shown.
-                    key={`${row.seq}-${index}`}
-                    data-testid="log-row"
-                    data-kind={row.kind}
-                    style={{
-                      display: 'flex', gap: 8,
-                      color: row.stream === 'stderr'
-                        ? 'var(--colorPaletteRedForeground1)'
-                        : row.stream !== undefined ? 'var(--colorNeutralForeground3)' : undefined,
-                      fontWeight: row.stream !== undefined ? undefined : 600,
-                    }}
-                  >
-                    <span style={{ color: 'var(--colorNeutralForeground3)', fontWeight: 400, flexShrink: 0 }}>
-                      {row.ts.slice(11, 23)}
-                    </span>
-                    <span style={{ color: 'var(--colorNeutralForeground3)', fontWeight: 400, flexShrink: 0, width: 90 }}>
-                      {row.stepId ?? ''}
-                    </span>
-                    <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{row.text}</span>
-                  </div>
-                ))
+                <>
+                  <div style={{ height: spacerHeights(logVirtual).before }} />
+                  {logVirtual.getVirtualItems().map(item => {
+                    if (item.index < logHeaderRows) {
+                      return (
+                        <div key={item.key} data-index={item.index} ref={logVirtual.measureElement}>
+                          {loadEarlierRow()}
+                        </div>
+                      );
+                    }
+                    const index = item.index - logHeaderRows;
+                    const row = filteredLogRows[index];
+                    return (
+                      <div
+                        // Not unique on its own: a resumed run's journal restarts `seq`
+                        // at 1 in the new RunJournal instance while appending to the
+                        // same run.log, and `log:truncated` reuses its terminal
+                        // event's seq — so a file can hold duplicate seqs. The key
+                        // carries an occurrence count for that (filteredLogRowKeys).
+                        key={item.key}
+                        data-index={item.index}
+                        ref={logVirtual.measureElement}
+                        data-testid="log-row"
+                        data-kind={row.kind}
+                        style={{
+                          display: 'flex', gap: 8,
+                          color: row.stream === 'stderr'
+                            ? 'var(--colorPaletteRedForeground1)'
+                            : row.stream !== undefined ? 'var(--colorNeutralForeground3)' : undefined,
+                          fontWeight: row.stream !== undefined ? undefined : 600,
+                        }}
+                      >
+                        <span style={{ color: 'var(--colorNeutralForeground3)', fontWeight: 400, flexShrink: 0 }}>
+                          {row.ts.slice(11, 23)}
+                        </span>
+                        <span style={{ color: 'var(--colorNeutralForeground3)', fontWeight: 400, flexShrink: 0, width: 90 }}>
+                          {row.stepId ?? ''}
+                        </span>
+                        <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{row.text}</span>
+                      </div>
+                    );
+                  })}
+                  <div style={{ height: spacerHeights(logVirtual).after }} />
+                </>
               )}
             </div>
             {!followLogs && (
@@ -1770,7 +1822,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
                 shape="circular"
                 icon={<ArrowDown20Regular />}
                 data-testid="log-jump-to-latest"
-                onClick={() => { setFollowLogs(true); logRef.current?.scrollTo({ top: logRef.current.scrollHeight }); }}
+                onClick={() => { setFollowLogs(true); scrollLogsToEnd(); }}
                 style={{ position: 'absolute', bottom: 12, right: 12 }}
               >
                 Jump to latest

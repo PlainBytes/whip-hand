@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   applyDirError,
   applyDirListing,
+  flattenVisible,
+  visibleRowValue,
+  type TreeNode,
   isHidden,
   joinPath,
   makeRootNode,
@@ -117,5 +120,44 @@ describe('validateName', () => {
     expect(validateName('a/b')).toMatch(/cannot contain/i);
     expect(validateName('a\\b')).toMatch(/cannot contain/i);
     expect(validateName('a\0b')).toMatch(/cannot contain/i);
+  });
+});
+
+describe('flattenVisible', () => {
+  const node = (path: string, kind: 'dir' | 'file', extra: Partial<TreeNode> = {}): TreeNode => ({
+    path, name: path.split('/').pop()!, kind, childrenLoaded: kind === 'dir', ...extra,
+  });
+  const nodes: TreeNodes = {
+    '/ws': node('/ws', 'dir', { children: ['/ws/a', '/ws/b', '/ws/z.md'], truncated: 7 }),
+    '/ws/a': node('/ws/a', 'dir', { children: ['/ws/a/1.md', '/ws/a/2.md'], truncated: 3 }),
+    '/ws/a/1.md': node('/ws/a/1.md', 'file'),
+    '/ws/a/2.md': node('/ws/a/2.md', 'file'),
+    '/ws/b': node('/ws/b', 'dir', { error: 'EACCES' }),
+    '/ws/z.md': node('/ws/z.md', 'file'),
+  };
+  const outline = (expanded: string[]) => flattenVisible(nodes, '/ws', expanded)
+    .map(row => `${row.level} ${visibleRowValue(row)} ${row.posInSet}/${row.setSize}`);
+
+  it('lists only the root\'s children while nothing is expanded', () => {
+    expect(outline([])).toEqual(['1 /ws/a 1/3', '1 /ws/b 2/3', '1 /ws/z.md 3/3']);
+  });
+
+  it('puts an expanded folder\'s children under it, one level deeper, with its truncation note last', () => {
+    expect(outline(['/ws/a'])).toEqual([
+      '1 /ws/a 1/3', '2 /ws/a/1.md 1/3', '2 /ws/a/2.md 2/3', '2 /ws/a::truncated 3/3',
+      '1 /ws/b 2/3', '1 /ws/z.md 3/3',
+    ]);
+  });
+
+  it('shows an unreadable expanded folder as one error row', () => {
+    expect(outline(['/ws/b'])).toEqual(['1 /ws/a 1/3', '1 /ws/b 2/3', '2 /ws/b::error 1/1', '1 /ws/z.md 3/3']);
+    const error = flattenVisible(nodes, '/ws', ['/ws/b'])[2];
+    expect(error).toMatchObject({ kind: 'error', parent: '/ws/b', message: 'EACCES' });
+  });
+
+  it('gives children their parent, and the root\'s children none', () => {
+    const rows = flattenVisible(nodes, '/ws', ['/ws/a']);
+    expect(rows[0]).toMatchObject({ kind: 'node', parent: undefined });
+    expect(rows[1]).toMatchObject({ kind: 'node', parent: '/ws/a' });
   });
 });

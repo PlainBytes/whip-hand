@@ -1,0 +1,9 @@
+# scripts/bench's diff scenario: parks on a manual step that shows the
+# working-tree diff, which the fixture workspace has one large file's worth of.
+name: review
+steps:
+  - id: look
+    kind: manual
+    title: Review the change
+    instructions: Bench — scroll the diff.
+    show_diff: true

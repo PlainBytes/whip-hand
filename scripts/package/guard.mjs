@@ -13,14 +13,13 @@ import path from 'node:path';
 import { runSync } from '../../packages/core/src/exec.ts';
 import { repoRoot } from './sea.mjs';
 
-const manifest = path.join(repoRoot, 'crates/job-guard/Cargo.toml');
 export const GUARD_ASSET_NAME = 'whiphand-job.exe';
 
 /** Builds the guard (release) and returns its path, or undefined off Windows. */
 export function buildGuard() {
   if (process.platform !== 'win32') return undefined;
-  runSync(['cargo', 'build', '--release', '--manifest-path', manifest], { check: true });
-  return path.join(repoRoot, 'crates/job-guard/target/release', GUARD_ASSET_NAME);
+  runSync(['cargo', 'build', '--release', '-p', 'whiphand-job'], { check: true, cwd: repoRoot });
+  return path.join(repoRoot, 'target/release', GUARD_ASSET_NAME);
 }
 
 /** The `assets` entry for buildSingleExecutable: `{}` off Windows. */

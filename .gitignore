@@ -10,3 +10,4 @@ apps/*/src-tauri/resources/
 .worktrees/
 .whiphand/
 crates/*/target/
+/target/

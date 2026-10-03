@@ -1,0 +1,14 @@
+# The Rust workspace (docs/migration.md, Phase 1). The Tauri shell stays out
+# until Phase 3 links whiphand-core into it: it keeps its own lockfile, and
+# pulling it in now would put the webkit system deps into every `cargo test`.
+[workspace]
+members = ["crates/*"]
+exclude = ["apps/desktop/src-tauri"]
+resolver = "2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

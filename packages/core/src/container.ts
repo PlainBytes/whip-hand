@@ -331,7 +331,8 @@ export function locateGuard(opts: {
     const extracted = extractAsset(asset, env);
     if (extracted !== null) return { path: extracted, source: 'sea-asset' };
   }
-  const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'crates', 'job-guard', 'target');
+  // The repo's Cargo workspace builds into one target dir at the root.
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'target');
   for (const profile of ['release', 'debug']) {
     const candidate = join(root, profile, GUARD_FILE_NAME);
     if (exists(candidate)) return { path: candidate, source: 'dev-build' };

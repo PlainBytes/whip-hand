@@ -49,7 +49,7 @@ mod imp {
     };
     use windows_sys::Win32::System::Threading::{
         ExitProcess, OpenProcess, WaitForSingleObject, INFINITE, PROCESS_SET_QUOTA,
-        PROCESS_TERMINATE, PROCESS_SYNCHRONIZE,
+        PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
     };
 
     /// A raw handle that may cross to the watcher thread: it is only ever waited on.
@@ -108,7 +108,10 @@ mod imp {
             // Parent death ends the job (and us) whatever else is happening.
             let parent = OpenProcess(PROCESS_SYNCHRONIZE, 0, parent_pid);
             if parent.is_null() {
-                eprintln!("OpenProcess(parent {parent_pid}) failed: {}", GetLastError());
+                eprintln!(
+                    "OpenProcess(parent {parent_pid}) failed: {}",
+                    GetLastError()
+                );
                 return 1;
             }
             // The job handle is not handed over: `kill` replaces it, and exiting
@@ -129,7 +132,8 @@ mod imp {
                 if let Some(pid) = line.strip_prefix("assign ") {
                     match pid.trim().parse::<u32>() {
                         Ok(pid) => {
-                            let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
+                            let process =
+                                OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
                             if process.is_null() {
                                 say(&format!("err {pid} {}", GetLastError()));
                                 continue;

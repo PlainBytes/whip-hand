@@ -1,7 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractCliSurface, type CliCommandSurface } from './extract-cli-surface.ts';
+import { readFileSync } from 'node:fs';
 import { uiActions } from '../apps/desktop/src/parity/ui-actions.ts';
+
+/**
+ * The CLI's declared surface: commands, arguments, options. Checked in so
+ * both sides can read it: crates/whiphand-cli/tests/surface.rs holds the clap
+ * build to it, and this test holds the desktop's ui-actions mapping to it.
+ */
+interface CliCommandSurface {
+  name: string;
+  args: Array<{ name: string; required: boolean }>;
+  options: Array<{ flags: string; short?: string; long?: string; required: boolean; hasDefault: boolean }>;
+}
 
 const UI_ACTIONS_PATH = 'apps/desktop/src/parity/ui-actions.ts';
 
@@ -11,8 +22,9 @@ function optionKey(opt: { long?: string; short?: string }): string {
   return key;
 }
 
-const surface = extractCliSurface();
-
+const surface = JSON.parse(readFileSync(new URL('./fixtures/cli-surface.json', import.meta.url), 'utf8')) as {
+  commands: CliCommandSurface[];
+};
 test('every CLI command has a uiActions entry with a _command mapping', () => {
   for (const cmd of surface.commands) {
     const entry = uiActions[cmd.name];

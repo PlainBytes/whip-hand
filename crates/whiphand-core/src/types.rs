@@ -28,6 +28,27 @@ pub enum EffortLevel {
     Max,
 }
 
+impl EffortLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EffortLevel::Low => "low",
+            EffortLevel::Medium => "medium",
+            EffortLevel::High => "high",
+            EffortLevel::Xhigh => "xhigh",
+            EffortLevel::Max => "max",
+        }
+    }
+}
+
+impl StepMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StepMode::Interactive => "interactive",
+            StepMode::Headless => "headless",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OnFindings {

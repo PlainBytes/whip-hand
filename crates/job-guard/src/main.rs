@@ -39,46 +39,16 @@
 #[cfg(windows)]
 mod imp {
     use std::io::{BufRead, Write};
-    use std::mem::{size_of, zeroed};
-    use std::ptr::null;
-    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE};
-    use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    };
+    use whiphand_job::Job;
+    use windows_sys::Win32::Foundation::{GetLastError, HANDLE};
     use windows_sys::Win32::System::Threading::{
-        ExitProcess, OpenProcess, WaitForSingleObject, INFINITE, PROCESS_SET_QUOTA,
-        PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+        ExitProcess, OpenProcess, WaitForSingleObject, INFINITE, PROCESS_SYNCHRONIZE,
     };
 
     /// A raw handle that may cross to the watcher thread: it is only ever waited on.
     #[derive(Clone, Copy)]
     struct SendHandle(HANDLE);
     unsafe impl Send for SendHandle {}
-
-    /// A job with KILL_ON_JOB_CLOSE only. Breakaway is off (no BREAKAWAY_OK, no
-    /// SILENT_BREAKAWAY_OK): that is the whole mechanism.
-    unsafe fn create_job() -> Result<HANDLE, String> {
-        let job = CreateJobObjectW(null(), null());
-        if job.is_null() {
-            return Err(format!("CreateJobObjectW failed: {}", GetLastError()));
-        }
-        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        let ok = SetInformationJobObject(
-            job,
-            JobObjectExtendedLimitInformation,
-            &info as *const _ as *const _,
-            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-        );
-        if ok == 0 {
-            let error = GetLastError();
-            CloseHandle(job);
-            return Err(format!("SetInformationJobObject failed: {error}"));
-        }
-        Ok(job)
-    }
 
     fn say(line: &str) {
         let stdout = std::io::stdout();
@@ -96,76 +66,66 @@ mod imp {
             }
         };
 
-        unsafe {
-            let mut job = match create_job() {
-                Ok(job) => job,
-                Err(message) => {
-                    eprintln!("{message}");
-                    return 1;
-                }
-            };
-
-            // Parent death ends the job (and us) whatever else is happening.
-            let parent = OpenProcess(PROCESS_SYNCHRONIZE, 0, parent_pid);
-            if parent.is_null() {
-                eprintln!(
-                    "OpenProcess(parent {parent_pid}) failed: {}",
-                    GetLastError()
-                );
+        let mut job = match Job::create() {
+            Ok(job) => job,
+            Err(message) => {
+                eprintln!("{message}");
                 return 1;
             }
-            // The job handle is not handed over: `kill` replaces it, and exiting
-            // closes whichever one is current — kill-on-close ends every member.
-            let watch_parent = SendHandle(parent);
-            std::thread::spawn(move || {
-                let parent = watch_parent;
+        };
+
+        // Parent death ends the job (and us) whatever else is happening.
+        // SAFETY: plain Win32 calls on a handle this process owns.
+        let parent = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, parent_pid) };
+        if parent.is_null() {
+            eprintln!("OpenProcess(parent {parent_pid}) failed: {}", unsafe {
+                GetLastError()
+            });
+            return 1;
+        }
+        // The job is not handed over: `kill` replaces it, and exiting closes
+        // whichever one is current — kill-on-close ends every member.
+        let watch_parent = SendHandle(parent);
+        std::thread::spawn(move || {
+            let parent = watch_parent;
+            // SAFETY: waiting on a process handle, then exiting the process.
+            unsafe {
                 WaitForSingleObject(parent.0, INFINITE);
                 ExitProcess(0);
-            });
+            }
+        });
 
-            say("ready");
+        say("ready");
 
-            let stdin = std::io::stdin();
-            for line in stdin.lock().lines() {
-                let Ok(line) = line else { break };
-                let line = line.trim();
-                if let Some(pid) = line.strip_prefix("assign ") {
-                    match pid.trim().parse::<u32>() {
-                        Ok(pid) => {
-                            let process =
-                                OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
-                            if process.is_null() {
-                                say(&format!("err {pid} {}", GetLastError()));
-                                continue;
-                            }
-                            if AssignProcessToJobObject(job, process) == 0 {
-                                say(&format!("err {pid} {}", GetLastError()));
-                            } else {
-                                say(&format!("ok {pid}"));
-                            }
-                            CloseHandle(process);
-                        }
-                        Err(_) => say(&format!("err {pid} invalid")),
+        let stdin = std::io::stdin();
+        for line in stdin.lock().lines() {
+            let Ok(line) = line else { break };
+            let line = line.trim();
+            if let Some(pid) = line.strip_prefix("assign ") {
+                match pid.trim().parse::<u32>() {
+                    Ok(pid) => match job.assign_pid(pid) {
+                        Ok(()) => say(&format!("ok {pid}")),
+                        Err(code) => say(&format!("err {pid} {code}")),
+                    },
+                    Err(_) => say(&format!("err {pid} invalid")),
+                }
+            } else if line == "kill" {
+                if let Err(code) = job.terminate() {
+                    say(&format!("err kill {code}"));
+                    continue;
+                }
+                // A terminated job refuses new members, so the next step gets a fresh one.
+                match Job::create() {
+                    Ok(fresh) => {
+                        job = fresh;
+                        say("killed");
                     }
-                } else if line == "kill" {
-                    if TerminateJobObject(job, 1) == 0 {
-                        say(&format!("err kill {}", GetLastError()));
-                        continue;
-                    }
-                    // A terminated job refuses new members, so the next step gets a fresh one.
-                    match create_job() {
-                        Ok(fresh) => {
-                            CloseHandle(job);
-                            job = fresh;
-                            say("killed");
-                        }
-                        Err(message) => say(&format!("err kill {message}")),
-                    }
+                    Err(message) => say(&format!("err kill {message}")),
                 }
             }
-            // EOF: the parent closed our stdin — close the job, which ends its members.
-            CloseHandle(job);
         }
+        // EOF: the parent closed our stdin — dropping the job closes it, which ends its members.
+        drop(job);
         0
     }
 }

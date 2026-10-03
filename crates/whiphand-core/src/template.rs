@@ -1,7 +1,6 @@
 //! Placeholders (`template.ts`): what a `{{ … }}` may name, the environment
 //! variable each one becomes in a command step, and the two renderers.
-//! `buildPrompt` and `inputArtifacts` need a run context and arrive with the
-//! engine.
+//! `build_prompt` and `input_artifacts` read a run context (`run_ctx`).
 
 use std::sync::LazyLock;
 
@@ -305,4 +304,68 @@ pub fn render_references(
         Ok(reference)
     })?;
     Ok((text, used))
+}
+
+/// One `(id, path)` per file a step's `inputs:` names, in order. A step id
+/// names its artifact (None when none is recorded); the reserved
+/// `attachments` names every attached file, labelled `attachments/<name>`.
+pub fn input_artifacts(
+    refs: &[String],
+    ctx: &crate::run_ctx::RunCtx,
+) -> Vec<(String, Option<String>)> {
+    let mut out = Vec::new();
+    for id in refs {
+        if id == crate::types::ATTACHMENTS_REF {
+            for path in ctx.attachments.iter().flatten() {
+                let name = path.rsplit(['\\', '/']).next().unwrap_or(path);
+                out.push((
+                    format!("{}/{name}", crate::types::ATTACHMENTS_REF),
+                    Some(path.clone()),
+                ));
+            }
+        } else {
+            out.push((id.clone(), ctx.artifacts.get(id).cloned()));
+        }
+    }
+    out
+}
+
+/// An agent prompt (or manual instructions): the rendered text, then the
+/// input artifacts it reads, workspace-relative and labelled with a verdict
+/// where the step that wrote them gave one.
+pub fn build_prompt(
+    prompt: &str,
+    inputs: &[String],
+    ctx: &crate::run_ctx::RunCtx,
+) -> Result<String, TemplateError> {
+    let rendered = render_template(prompt, &ctx.scope())?;
+    let body = rendered.trim_end_matches(crate::js::is_js_whitespace);
+    let artifacts = input_artifacts(inputs, ctx);
+    if artifacts.is_empty() {
+        return Ok(body.to_string());
+    }
+    let mut lines = Vec::new();
+    for (id, path) in artifacts {
+        let Some(path) = path else {
+            return Err(TemplateError(format!(
+                "no artifact recorded for step '{id}'"
+            )));
+        };
+        let verdict = if id.starts_with(&format!("{}/", crate::types::ATTACHMENTS_REF)) {
+            None
+        } else {
+            ctx.verdicts.get(&id)
+        };
+        let label = verdict.map_or(String::new(), |v| {
+            format!(" (VERDICT: {})", v.to_uppercase())
+        });
+        lines.push(format!(
+            "- {id}: {}{label}",
+            crate::path_form::to_workspace(&path, &ctx.workdir)
+        ));
+    }
+    Ok(format!(
+        "{body}\n\n## Input artifacts (read these files first)\n{}",
+        lines.join("\n")
+    ))
 }

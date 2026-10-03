@@ -1,0 +1,5 @@
+tools:
+  - id: rogue
+    label: Rogue
+    group: harness
+    argv: [rogue]

@@ -1,0 +1,15 @@
+{
+  "version": 5,
+  "runId": "20240101-000014-locked",
+  "workflow": "cycle",
+  "workdir": "/home/u/proj",
+  "dryRun": false,
+  "startedAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:05:00.000Z",
+  "status": "succeeded",
+  "inputs": {},
+  "sessionIds": {},
+  "steps": [],
+  "ok": true,
+  "endedAt": "2024-01-01T00:05:00.000Z"
+}

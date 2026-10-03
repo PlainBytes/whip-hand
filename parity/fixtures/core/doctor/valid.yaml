@@ -1,0 +1,10 @@
+tools:
+  - id: mytool
+    label: My Tool
+    group: support
+    argv: [mytool, --version]
+    aliases: [mt]
+    version_pattern: "v(\\d+)"
+    optional: false
+    url: https://example.com/x
+hide: [jq, uv]

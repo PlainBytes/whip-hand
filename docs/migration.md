@@ -119,6 +119,17 @@ Each phase ships on its own, and the TS and Rust implementations must produce id
   - `exec.ts` and `shell.ts`, on tokio
 - Build the CLI with clap, mirroring the commander surface exactly. The `parity` CLI-surface extraction verifies the match.
 - Ship the Rust `whiphand` binary in place of the Node SEA CLI (`scripts/package/cli.mjs` → cargo build). Old run directories must still resume.
+- **Done.** What landed, and where it differs from the plan above:
+  - Everything the CLI reaches is ported into `whiphand-core` (`store/`, `process/`, `adapters/`, `doctor/`, `engine/`), so Phase 3 can link the same engine into Tauri. `crates/whiphand-cli` is only the clap surface, the renderer, the prompts and the terminal `Frontend`. The engine talks to its host through a `Frontend` trait (events, headless and interactive spawns, manual steps) on a single-threaded tokio runtime, with cancellation through a `CancellationToken`.
+  - During Phase 2 the desktop's TS agent and the Rust CLI share `.whiphand/runs/`, so the Rust side writes what the TS side writes, byte for byte, not just something TS can read. JS object key order is modelled (`jsval.rs`), and so are zod's output order, the `yaml` package's stringify (every run's `workflow.yaml` snapshot), Node's `path` semantics, `matchesGlob`, `execFile`'s error shape and readline's line splitting. `run:env` reports `nodeVersion: "n/a"`.
+  - The parity corpus gained store, process, adapter and engine suites: about 2,450 golden results, including 25 full engine runs (events, `run.json` and artifacts) with resume scenarios, and a corpus of old run directories for every manifest version. `parity/store-cross.test.ts` runs a TS and a Rust process against one run directory, in both directions, for the lock, the fence and retention.
+  - The process guard is in-process: `crates/job-guard` is now a library plus the `whiphand-job` binary. The CLI holds the Windows Job Object itself and ships no `whiphand-job.exe`; on POSIX it uses process groups. The agent keeps the binary until Phase 3.
+  - Usage errors carry commander's wording, its "Did you mean" suggestions and its exit code 1, checked case by case against the TS CLI before it was deleted. Two things differ: help text is clap's layout, and an unexpected error prints `<Name>: <message>` without Node's stack trace.
+  - The surface is pinned by `parity/fixtures/cli-surface.json`, generated from the commander build before `packages/cli` and `extract-cli-surface.ts` were deleted. A Rust test walks the clap command into the same shape (`WHIPHAND_UPDATE_SURFACE=1` rewrites it), and `surface.test.ts` holds `ui-actions.ts` to the same file.
+  - `behavior.test.ts` and the golden scenario drive the Rust binary (`parity/cli-command.ts`, overridable with `WHIPHAND_PARITY_CLI`), so every CLI-vs-agent test is now a Rust-vs-TS test, and the staged golden is produced by the Rust CLI. The planned TS-CLI-vs-Rust-CLI comparison was done by hand before the deletion rather than as a test that would have been deleted with it: dry runs of every shipped workflow, human and `--json`, `doctor`, `init`, `new-workflow` and `config`.
+  - The starter workflows are compiled in from `packages/core/templates/`, which move when `packages/core` goes in Phase 3. `--version` is `whiphand-core`'s crate version, which `scripts/version.mjs` keeps in step along with `crates/whiphand-cli`.
+  - Agent-only code stays in TS until Phase 3: the diff view, `mergeWorkflow` and the model-listing paths.
+  - Cold start fell from 51–74 ms to 3–6 ms, and the binary from 128.6 MB to 3.4 MB (see [benchmarks.md](benchmarks.md)).
 
 **Phase 3: Agent in-process in Tauri (removes the sidecar)**
 - Implement the `protocol.ts` RPC as Tauri commands and channels backed by `whiphand-core`.
@@ -126,10 +137,10 @@ Each phase ships on its own, and the TS and Rust implementations must produce id
 - Replacements:
   - node-pty → `portable-pty`
   - `scrollback.ts`, `await-state.ts` and `session-end.ts` → ported
-  - job-guard → linked in-process as a library
+  - job-guard → linked in-process as a library (the CLI already does)
 - Remote web mode (`packages/agent/src/remote`, ws) → axum plus tokio-tungstenite in the same process, with the `ws-transport.ts` wire format unchanged. Port `auth.ts` along with its table tests, and keep `static.ts`'s no-auth-for-static-files rule.
 - Extract a `whiphand-protocol` crate holding the serde types for `protocol.ts`. It is what a later Leptos client would share.
-- Delete `packages/agent`, `packages/core` and `packages/cli`, along with postject, node-pty packaging and the SEA scripts. The only Node left is the frontend build (Vite).
+- Delete `packages/agent` and `packages/core`, along with postject, node-pty packaging and the SEA scripts. The only Node left is the frontend build (Vite).
 
 **Phase 4: UI checkpoint**
 - Re-measure against the Phase 0 baselines.

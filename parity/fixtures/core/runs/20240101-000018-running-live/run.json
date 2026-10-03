@@ -1,0 +1,24 @@
+{
+  "version": 5,
+  "runId": "20240101-000018-running-live",
+  "workflow": "cycle",
+  "workdir": "/home/u/proj",
+  "dryRun": false,
+  "startedAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:05:00.000Z",
+  "status": "running",
+  "inputs": {},
+  "sessionIds": {},
+  "steps": [
+    {
+      "id": "a",
+      "kind": "command",
+      "status": "running",
+      "startedAt": "2024-01-01T00:00:00.000Z"
+    }
+  ],
+  "pid": 99998,
+  "pidScope": "fixture:elsewhere",
+  "heartbeatAt": "2999-01-01T00:00:00.000Z",
+  "leaseId": "77777777-7777-4777-8777-777777777777"
+}

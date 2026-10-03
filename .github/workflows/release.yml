@@ -117,9 +117,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: apps/desktop/src-tauri
+          workspaces: |
+            . -> target
+            apps/desktop/src-tauri -> target
       - run: npm ci
 
+      # A native Rust binary (crates/whiphand-cli): cargo build, then the smoke test.
       - name: Build the CLI
         run: npm run package:cli
       - name: Upload the CLI binary

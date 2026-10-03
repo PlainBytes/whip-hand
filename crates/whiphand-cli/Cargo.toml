@@ -1,0 +1,20 @@
+[package]
+name = "whiphand-cli"
+version = "0.3.5"
+description = "The whiphand command line: a clap front end on whiphand-core's engine"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "whiphand"
+path = "src/main.rs"
+
+[dependencies]
+whiphand-core = { path = "../whiphand-core" }
+clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "signal", "sync", "time"] }
+tokio-util = "0.7"
+
+[dev-dependencies]
+tempfile = "3"

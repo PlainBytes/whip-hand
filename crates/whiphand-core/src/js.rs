@@ -162,6 +162,23 @@ impl<V> Record<V> {
         self.entries.iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
 
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut V> {
+        self.entries
+            .iter_mut()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v)
+    }
+
+    /// `delete obj[key]`: the key gives up its position, so a later insert appends.
+    pub fn remove(&mut self, key: &str) -> Option<V> {
+        let at = self.entries.iter().position(|(k, _)| k == key)?;
+        Some(self.entries.remove(at).1)
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&str, &mut V)> {
+        self.entries.iter_mut().map(|(k, v)| (k.as_str(), v))
+    }
+
     pub fn contains_key(&self, key: &str) -> bool {
         self.get(key).is_some()
     }
@@ -312,5 +329,60 @@ mod tests {
         got.reverse();
         got.sort_by(|a, b| locale_compare(a, b));
         assert_eq!(got, want);
+    }
+}
+
+/// `x.toFixed(digits)` for finite `|x| < 1e21`: rounds the *exact* binary
+/// value, ties away from zero, which is not what Rust's `{:.N}` does on a tie
+/// (`(0.25).toFixed(1)` is `0.3`, `format!("{:.1}", 0.25)` is `0.2`).
+pub fn to_fixed(x: f64, digits: usize) -> String {
+    if !x.is_finite() || x.abs() >= 1e21 {
+        return number_to_string(x);
+    }
+    // 1100 places is past the longest exact decimal expansion an f64 has.
+    let exact = format!("{:.1100}", x.abs());
+    let (int_part, frac) = exact.split_once('.').expect("a fixed-point rendering");
+    let mut kept: Vec<u8> = int_part.bytes().chain(frac.bytes().take(digits)).collect();
+    let round_up = frac.as_bytes().get(digits).is_some_and(|d| *d >= b'5');
+    if round_up {
+        let mut i = kept.len();
+        loop {
+            if i == 0 {
+                kept.insert(0, b'1');
+                break;
+            }
+            i -= 1;
+            if kept[i] == b'9' {
+                kept[i] = b'0';
+            } else {
+                kept[i] += 1;
+                break;
+            }
+        }
+    }
+    let split = kept.len() - digits;
+    let int_digits = String::from_utf8_lossy(&kept[..split]).into_owned();
+    let frac_digits = String::from_utf8_lossy(&kept[split..]).into_owned();
+    let sign = if x < 0.0 { "-" } else { "" };
+    if digits == 0 {
+        format!("{sign}{int_digits}")
+    } else {
+        format!("{sign}{int_digits}.{frac_digits}")
+    }
+}
+
+#[cfg(test)]
+mod to_fixed_tests {
+    use super::to_fixed;
+
+    #[test]
+    fn ties_round_away_from_zero_on_the_exact_value() {
+        assert_eq!(to_fixed(0.25, 1), "0.3");
+        assert_eq!(to_fixed(1.25, 1), "1.3");
+        assert_eq!(to_fixed(1.05, 1), "1.1");
+        assert_eq!(to_fixed(9.96, 1), "10.0");
+        assert_eq!(to_fixed(2.0, 1), "2.0");
+        assert_eq!(to_fixed(-0.04, 1), "-0.0");
+        assert_eq!(to_fixed(0.5, 0), "1");
     }
 }

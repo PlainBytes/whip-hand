@@ -1,0 +1,59 @@
+{
+  "version": 2,
+  "runId": "20240101-000002-v2-loop",
+  "workflow": "cycle",
+  "workdir": "/home/u/proj",
+  "dryRun": false,
+  "startedAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:05:00.000Z",
+  "status": "succeeded",
+  "inputs": {
+    "topic": "auth"
+  },
+  "sessionIds": {},
+  "steps": [
+    {
+      "id": "fix",
+      "kind": "loop",
+      "status": "done",
+      "iterations": 2,
+      "maxIterations": 3,
+      "verdict": "pass",
+      "startedAt": "2024-01-01T00:00:00.000Z",
+      "endedAt": "2024-01-01T00:05:00.000Z"
+    },
+    {
+      "id": "review",
+      "kind": "agent",
+      "runner": "claude",
+      "mode": "headless",
+      "loopId": "fix",
+      "iteration": 1,
+      "status": "done",
+      "verdict": "fail",
+      "artifact": "fix/iter-1/report.md",
+      "exitCode": 0,
+      "progress": {
+        "turns": 3,
+        "costUsd": 0.0358,
+        "lastAction": "Read src/a.ts"
+      }
+    },
+    {
+      "id": "review",
+      "kind": "agent",
+      "runner": "claude",
+      "mode": "headless",
+      "loopId": "fix",
+      "iteration": 2,
+      "status": "done",
+      "verdict": "pass",
+      "artifact": "fix/iter-2/report.md",
+      "exitCode": 0
+    }
+  ],
+  "ok": true,
+  "endedAt": "2024-01-01T00:05:00.000Z",
+  "heartbeatAt": "2024-01-01T00:05:00.000Z",
+  "workflowSource": "project"
+}

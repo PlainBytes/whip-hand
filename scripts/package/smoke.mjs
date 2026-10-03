@@ -83,8 +83,8 @@ export function smokeCli() {
   });
 
   check('init scaffolds the shipped workflows from the embedded templates', () => {
-    // The templates are SEA assets, not files beside the binary: a build that
-    // left one out fails here, not on a user's first `init`.
+    // The templates are compiled into the binary, not files beside it: a
+    // build that left one out fails here, not on a user's first `init`.
     const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'whiphand-smoke-init-'));
     try {
       runSync([whiphand, 'init'], { stdio: ['ignore', 'pipe', 'inherit'], cwd: workdir, check: true });
@@ -100,9 +100,9 @@ export function smokeCli() {
   });
 
   // Windows only: the packaged build must be able to contain a real run. Without
-  // its embedded guard (or a POSIX shell to run the command in) this exits 1.
+  // its Job Object (or a POSIX shell to run the command in) this exits 1.
   if (process.platform === 'win32') {
-    check('a real command run starts under the embedded process guard', () => {
+    check('a real command run starts under the process guard', () => {
       const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'whiphand-smoke-run-'));
       try {
         const workflow = path.join(workdir, 'smoke-command.yaml');

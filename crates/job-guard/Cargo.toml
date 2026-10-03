@@ -5,6 +5,10 @@ description = "Process guard: one Windows Job Object per whiphand run, with kill
 edition = "2021"
 publish = false
 
+[lib]
+name = "whiphand_job"
+path = "src/lib.rs"
+
 [[bin]]
 name = "whiphand-job"
 path = "src/main.rs"

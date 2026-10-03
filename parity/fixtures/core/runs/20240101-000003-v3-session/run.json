@@ -1,0 +1,44 @@
+{
+  "version": 3,
+  "runId": "20240101-000003-v3-session",
+  "workflow": "cycle",
+  "workdir": "/home/u/proj",
+  "dryRun": false,
+  "startedAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:05:00.000Z",
+  "status": "interrupted",
+  "inputs": {},
+  "sessionIds": {
+    "chat": "5f0c-session"
+  },
+  "steps": [
+    {
+      "id": "chat",
+      "kind": "agent",
+      "runner": "claude",
+      "mode": "interactive",
+      "status": "interrupted",
+      "sessionStarted": true,
+      "attempted": true,
+      "startedAt": "2024-01-01T00:00:00.000Z",
+      "endedAt": "2024-01-01T00:05:00.000Z"
+    },
+    {
+      "id": "after",
+      "kind": "command",
+      "status": "pending"
+    }
+  ],
+  "ok": false,
+  "endedAt": "2024-01-01T00:05:00.000Z",
+  "heartbeatAt": "2024-01-01T00:05:00.000Z",
+  "leaseId": "11111111-1111-4111-8111-111111111111",
+  "interruptedReason": "lease-expired",
+  "resumedAt": [
+    "2024-01-01T00:00:00.000Z"
+  ],
+  "error": {
+    "stepId": "chat",
+    "message": "Run was interrupted — the process that owned it exited without finishing."
+  }
+}

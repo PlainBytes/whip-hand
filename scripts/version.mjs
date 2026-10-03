@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * `0.1.0` lives in six places that nothing keeps in sync automatically:
- * `apps/desktop/package.json`, the three `packages/{core,cli,agent}/package.json` files,
+ * `0.1.0` lives in places that nothing keeps in sync automatically:
+ * `apps/desktop/package.json`, the two `packages/{core,agent}/package.json` files,
  * `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, and the literal
  * `CORE_VERSION` in `packages/core/src/version.ts`. The Tauri updater compares
  * `tauri.conf.json`'s version against `latest.json`, and `whiphand --version`
@@ -10,16 +10,11 @@
  * location: not a place a human would edit, but one `cargo` will flag as
  * stale if it drifts.
  *
- * The Rust core library (`crates/whiphand-core`, Phase 1 of docs/migration.md)
- * carries the same version, in its own Cargo.toml and in the root workspace's
- * Cargo.lock — the same two-place pattern as the Tauri crate, so both are
- * handled by one table (`CARGO_CRATES`).
- *
- * `packages/cli/package.json` also pins `"@whiphand/core": "0.1.0"` exactly rather
- * than a workspace range — left stale, `npm ci` resolves it against the
- * registry instead of the sibling package once core's real version moves
- * past it. Not one of the plan's six, but the same bug class, so it is kept
- * in sync here too.
+ * The Rust crates (`crates/whiphand-core` and the `whiphand` CLI in
+ * `crates/whiphand-cli`, docs/migration.md) carry the same version, in their
+ * own Cargo.toml and in the root workspace's Cargo.lock — the same two-place
+ * pattern as the Tauri crate, so all are handled by one table
+ * (`CARGO_CRATES`). The Rust CLI's `--version` is whiphand-core's crate version.
  *
  * `package-lock.json` records each workspace's version and that same pin
  * again. `npm ci` tolerates it lagging, but the next `npm install` rewrites
@@ -44,19 +39,18 @@ const SEMVER = /^\d+\.\d+\.\d+$/;
 const PACKAGE_JSON_FILES = [
   'apps/desktop/package.json',
   'packages/core/package.json',
-  'packages/cli/package.json',
   'packages/agent/package.json',
 ];
 /** Every Rust crate that ships the app's version: its manifest, the lockfile recording it, and its package name there. */
 const CARGO_CRATES = [
   { toml: 'apps/desktop/src-tauri/Cargo.toml', lock: 'apps/desktop/src-tauri/Cargo.lock', name: 'whiphand' },
   { toml: 'crates/whiphand-core/Cargo.toml', lock: 'Cargo.lock', name: 'whiphand-core' },
+  { toml: 'crates/whiphand-cli/Cargo.toml', lock: 'Cargo.lock', name: 'whiphand-cli' },
 ];
 const TAURI_CONF = 'apps/desktop/src-tauri/tauri.conf.json';
 const CORE_INDEX = 'packages/core/src/version.ts';
-const CLI_PACKAGE_JSON = 'packages/cli/package.json';
 const PACKAGE_LOCK = 'package-lock.json';
-/** The `packages` keys under which package-lock.json records a workspace — the same four as PACKAGE_JSON_FILES. */
+/** The `packages` keys under which package-lock.json records a workspace — the same ones as PACKAGE_JSON_FILES. */
 const LOCK_WORKSPACES = PACKAGE_JSON_FILES.map(file => path.posix.dirname(file));
 
 /**
@@ -124,13 +118,6 @@ function replaceCoreVersion(content, version) {
   return content.replace(pattern, `export const CORE_VERSION = '${version}';`);
 }
 
-/** The one dependency pin, distinct from the package's own `"version"` field above it. */
-function replaceCliCoreDependency(content, version) {
-  const pattern = /"@whiphand\/core":\s*"(\d+\.\d+\.\d+)"/;
-  if (!pattern.test(content)) throw new Error(`"@whiphand/core" dependency not found in ${CLI_PACKAGE_JSON}`);
-  return content.replace(pattern, `"@whiphand/core": "${version}"`);
-}
-
 /** npm writes the lockfile as two-space JSON with a trailing newline, and so does this. */
 function replacePackageLockVersions(content, version) {
   const lock = JSON.parse(content);
@@ -139,9 +126,6 @@ function replacePackageLockVersions(content, version) {
     if (!entry) throw new Error(`no "${workspace}" workspace entry found in ${PACKAGE_LOCK}`);
     entry.version = version;
   }
-  const cliDeps = lock.packages[path.posix.dirname(CLI_PACKAGE_JSON)].dependencies;
-  if (!cliDeps?.['@whiphand/core']) throw new Error(`"@whiphand/core" dependency not found in ${PACKAGE_LOCK}`);
-  cliDeps['@whiphand/core'] = version;
   return `${JSON.stringify(lock, null, 2)}\n`;
 }
 
@@ -149,7 +133,6 @@ function writeVersion(version) {
   for (const relPath of PACKAGE_JSON_FILES) {
     write(relPath, replaceJsonVersion(read(relPath), version, relPath));
   }
-  write(CLI_PACKAGE_JSON, replaceCliCoreDependency(read(CLI_PACKAGE_JSON), version));
   for (const crate of CARGO_CRATES) {
     write(crate.toml, replaceCargoTomlVersion(read(crate.toml), version, crate.toml));
     write(crate.lock, replaceCargoLockVersion(read(crate.lock), version, crate));
@@ -164,10 +147,6 @@ function collectVersions() {
   for (const relPath of PACKAGE_JSON_FILES) {
     found.push([relPath, readJsonVersion(read(relPath), relPath)]);
   }
-  const cliContent = read(CLI_PACKAGE_JSON);
-  const cliCoreDep = cliContent.match(/"@whiphand\/core":\s*"(\d+\.\d+\.\d+)"/);
-  found.push([`${CLI_PACKAGE_JSON} (@whiphand/core dependency)`, cliCoreDep?.[1] ?? '(missing)']);
-
   for (const crate of CARGO_CRATES) {
     found.push([crate.toml, read(crate.toml).match(CARGO_TOML_VERSION)?.[1] ?? '(missing)']);
     found.push([`${crate.lock} (${crate.name})`, read(crate.lock).match(cargoLockPattern(crate.name))?.[2] ?? '(missing)']);
@@ -182,8 +161,6 @@ function collectVersions() {
   for (const workspace of LOCK_WORKSPACES) {
     found.push([`${PACKAGE_LOCK} (${workspace})`, lock.packages?.[workspace]?.version ?? '(missing)']);
   }
-  const lockCliDep = lock.packages?.[path.posix.dirname(CLI_PACKAGE_JSON)]?.dependencies?.['@whiphand/core'];
-  found.push([`${PACKAGE_LOCK} (${CLI_PACKAGE_JSON} @whiphand/core dependency)`, lockCliDep ?? '(missing)']);
 
   return found;
 }

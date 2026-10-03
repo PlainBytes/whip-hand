@@ -1,0 +1,16 @@
+tools:
+  - id: "bad id"
+    label: ""
+    group: nope
+    argv: []
+    argvs: [x]
+    url: "not a url"
+    optional: "yes"
+  - id: ok
+    label: OK
+    group: support
+    argv: ["", x]
+    aliases: ok
+    version_pattern: ""
+extra: 1
+other: 2

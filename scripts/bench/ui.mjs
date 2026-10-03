@@ -180,8 +180,14 @@ async function scenarioLogs(context, url) {
 
     const loadEarlier = [];
     for (let i = 0; i < 5; i += 1) {
+      // The button sits above the first row: scroll up to it, as a reader would.
+      await page.getByTestId('log-tail').evaluate(el => { el.scrollTop = 0; });
       const button = page.getByTestId('log-load-earlier');
-      if (!(await button.isVisible())) break;
+      try {
+        await button.waitFor({ timeout: 5_000 });
+      } catch {
+        break; // at the start of the log
+      }
       const before = await page.evaluate(() => performance.now());
       await button.click();
       // Done when the button is gone (start of log) or reads "Load earlier" again.
@@ -193,7 +199,10 @@ async function scenarioLogs(context, url) {
       loadEarlier.push((await page.evaluate(() => performance.now())) - before);
     }
     const scroll = await scrollAndMeasure(page, '[data-testid=log-tail]', { direction: 'up' });
+    // A sanity check, not a cost: both builds must have loaded the same pages.
+    const loadedRows = Number((await page.getByTestId('log-filter-count').textContent())?.match(/of ([\d,]+)/)?.[1].replace(/,/g, ''));
     return {
+      loadedRows,
       firstRowMs: Math.round(firstRowMs),
       loadEarlierMs: Math.round(median(loadEarlier) ?? 0),
       scroll: frameMetrics(scroll),

@@ -84,5 +84,28 @@ The desktop app renders in WebKitGTK on Linux and WebView2 on Windows. Only WebV
 ## Results
 
 <!-- results:start -->
-_Filled in from `node scripts/bench.mjs --compare pre-phase0` once Phase 0 lands._
+linux-x64: Ryzen 9 5900X, 24 threads, 32 GB, Node 24.21, Chromium 153 (Playwright 1.63). The full table is `node scripts/bench.mjs --compare pre-phase0` run against `phase0`. The headline rows:
+
+| Metric | pre-phase0 | phase0 | Change |
+|---|---:|---:|---:|
+| Logs: first row | 1,821 ms | 109 ms | −94% |
+| Logs: "Load earlier" (2,000 rows) | 1,621 ms | 75 ms | −95% |
+| Logs: DOM nodes after 5 pages (12,000 rows) | 84,381 | 411 | −99.5% |
+| Logs: JS heap | 624 MB | 60 MB | −90% |
+| Logs: long tasks while scrolling | 1,027 ms | 0 | |
+| File tree: settle (6,000 artifacts) | 2,454 ms | 530 ms | −78% |
+| File tree: DOM nodes | 44,376 | 457 | −99% |
+| Diff: DOM nodes (6,000-line file; before: first 2,000 rows only) | 8,279 | 489 | −94% |
+| Runs page while a run floods: p50 frame | 167 ms | 16.7 ms | 6 → 60 fps |
+| Runs page while a run floods: long tasks / 4 s | 3,724 ms | 0 | |
+| Logs tab while a run floods: p95 frame | 117 ms | 16.8 ms | |
+| Terminal while the pty writes 2 MB: frames > 33 ms | 6 | 0 | |
+| Terminal reattach replay (2 MB) | 226 ms | 235 ms | unchanged |
+| `readRunLog` as the page sees it: median | 551 ms | 26 ms | −95% |
+
+Notes on reading the table:
+- `readRunLog`'s server time did not change (`rpc.replayFullLog` is level). The page-side drop is the main thread no longer being blocked when the response arrives.
+- Reattach replay is dominated by xterm parsing 2 MB. Slicing the decode keeps it from being one long task but does not shorten it.
+
+The CLI, agent, RPC and size rows did not move: Phase 0 changed only the UI. They are the starting point Phases 1–3 are measured against.
 <!-- results:end -->

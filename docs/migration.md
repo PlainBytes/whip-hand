@@ -91,6 +91,13 @@ Each phase ships on its own, and the TS and Rust implementations must produce id
   - RPC round-trip latency
 - Store these as a benchmark script under `scripts/` so every later phase has to beat them.
 - Quick UI wins that survive every later option: list/log virtualization, and debounced event fan-out in `apps/desktop/src/agent/client.ts`.
+- **Done.** See [benchmarks.md](benchmarks.md) for the method and results.
+  - The fan-out turned out to be throttled already: a 100 ms window in `agent-context.tsx`. What Phase 0 changed instead:
+    - one store write per window;
+    - pages that subscribe only to what they show;
+    - an O(1) pty buffer cap;
+    - sliced terminal replay.
+  - The Logs tab, the diff view and the file tree are windowed with `@tanstack/react-virtual`.
 
 **Phase 1: Rust core library, `crates/whiphand-core`**
 - Build out the Rust workspace at the repo root and move `job-guard` under it.

@@ -107,6 +107,9 @@ function workflowOf(op: Op): ReturnType<typeof parseWorkflow> {
   return parseWorkflow(op.yaml as string);
 }
 
+/** The ops runAdapterOp answers. */
+export const ADAPTER_OPS: ReadonlySet<string> = new Set(['adapterSpec', 'progress', 'authNote', 'parseToolVersion', 'isOlderVersion', 'resolveToolTable', 'loadDoctorConfig', 'doctorReport', 'validateWorkflowRunners', 'validateWorkflowShell', 'validateWorkflowFrontend', 'buildPrompt', 'guidance', 'parseAwaitState', 'headroomWarning', 'assertNotUnc']);
+
 export async function runAdapterOp(op: Op, repo: string): Promise<unknown> {
   switch (op.op) {
     case 'adapterSpec': {

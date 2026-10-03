@@ -13,6 +13,7 @@
  * - `store-runs` and `store-journal`: the run store (see store-corpus.ts).
  * - `process` and `globs`: launching processes and the git guard (see process-corpus.ts).
  * - `adapters`, `progress` and `doctor`: the runner adapters and doctor (see adapter-corpus.ts).
+ * - `yaml` and `engine`: the run engine (see engine-corpus.ts).
  */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -24,6 +25,7 @@ import type { Op } from './core-probe.ts';
 import { storeJournalOps, storeRunsOps } from './store-corpus.ts';
 import { PROCESS_SUITES } from './process-corpus.ts';
 import { ADAPTER_SUITES } from './adapter-corpus.ts';
+import { ENGINE_SUITES } from './engine-corpus.ts';
 
 const WORKFLOW_DIRS = [
   'parity/fixtures/core/workflows',
@@ -137,4 +139,5 @@ export const GENERATED_SUITES: Record<string, () => Op[]> = {
   'store-journal': storeJournalOps,
   ...PROCESS_SUITES,
   ...ADAPTER_SUITES,
+  ...ENGINE_SUITES,
 };

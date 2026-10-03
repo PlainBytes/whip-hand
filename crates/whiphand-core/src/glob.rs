@@ -878,6 +878,134 @@ fn match_one(file: &[String], pattern: &[Seg], nocase: bool) -> bool {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Walking the filesystem (Node's `fs.promises.glob`)
+// ---------------------------------------------------------------------------
+
+/// `fs.promises.glob(pattern, { cwd })`: the matching paths, relative to `cwd`
+/// (absolute for an absolute pattern), `/`-separated, in no promised order.
+/// Dotfiles match only a segment that starts with a dot; `**` never descends
+/// into a dot directory and does not follow symlinks.
+pub fn glob_fs(pattern: &str, cwd: &str) -> Vec<String> {
+    let windows = cfg!(windows);
+    let nocase = cfg!(windows) || cfg!(target_os = "macos");
+    let pattern = pattern.replace('\\', "/");
+    let mut out: Vec<String> = Vec::new();
+    let mut parts: Vec<Vec<String>> = brace_expand(&pattern)
+        .iter()
+        .map(|p| slash_split(p, windows))
+        .collect();
+    parts = first_phase_preprocess(parts);
+    for segments in parts {
+        let (root, rest): (String, &[String]) = if segments.first().is_some_and(String::is_empty) {
+            ("/".to_string(), &segments[1..])
+        } else if windows
+            && segments.first().is_some_and(|s| {
+                s.len() == 2 && s.ends_with(':') && s.as_bytes()[0].is_ascii_alphabetic()
+            })
+        {
+            (format!("{}/", segments[0]), &segments[1..])
+        } else {
+            (String::new(), &segments[..])
+        };
+        let compiled: Vec<Seg> = rest.iter().map(|s| Seg::parse(s)).collect();
+        let base = if root.is_empty() {
+            cwd.to_string()
+        } else {
+            root.clone()
+        };
+        walk(&base, &root, &compiled, nocase, &mut out);
+    }
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|p| seen.insert(p.clone()));
+    out
+}
+
+fn fs_join(dir: &str, name: &str) -> String {
+    if dir.ends_with('/') || dir.ends_with('\\') {
+        format!("{dir}{name}")
+    } else {
+        format!("{dir}/{name}")
+    }
+}
+
+fn rel_join(rel: &str, name: &str) -> String {
+    if rel.is_empty() {
+        name.to_string()
+    } else if rel.ends_with('/') {
+        format!("{rel}{name}")
+    } else {
+        format!("{rel}/{name}")
+    }
+}
+
+fn entries(dir: &str) -> Vec<(String, bool)> {
+    std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| {
+                    let is_dir = e.file_type().is_ok_and(|t| t.is_dir());
+                    (e.file_name().to_string_lossy().into_owned(), is_dir)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn walk(dir: &str, rel: &str, segs: &[Seg], nocase: bool, out: &mut Vec<String>) {
+    let Some((seg, rest)) = segs.split_first() else {
+        if !rel.is_empty() {
+            out.push(rel.trim_end_matches('/').to_string());
+        }
+        return;
+    };
+    match seg {
+        Seg::Literal(name) => {
+            if name.is_empty() {
+                // A trailing slash: only a directory matches.
+                if rest.is_empty()
+                    && std::fs::metadata(dir).is_ok_and(|m| m.is_dir())
+                    && !rel.is_empty()
+                {
+                    out.push(rel.trim_end_matches('/').to_string());
+                }
+                return;
+            }
+            let path = fs_join(dir, name);
+            if std::fs::symlink_metadata(&path).is_ok() {
+                walk(&path, &rel_join(rel, name), rest, nocase, out);
+            }
+        }
+        Seg::Globstar => {
+            walk(dir, rel, rest, nocase, out);
+            for (name, is_dir) in entries(dir) {
+                if is_dir && swallowable(&name) {
+                    walk(
+                        &fs_join(dir, &name),
+                        &rel_join(rel, &name),
+                        segs,
+                        nocase,
+                        out,
+                    );
+                }
+            }
+        }
+        Seg::Magic { .. } => {
+            for (name, _) in entries(dir) {
+                if seg_match(seg, &name, nocase) {
+                    walk(
+                        &fs_join(dir, &name),
+                        &rel_join(rel, &name),
+                        rest,
+                        nocase,
+                        out,
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::matches_glob_as;

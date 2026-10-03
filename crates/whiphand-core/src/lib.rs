@@ -36,12 +36,15 @@ pub mod time;
 pub mod types;
 pub mod workflow_name;
 pub mod workspace;
+pub mod yaml_emit;
 pub mod zod;
 
 #[doc(hidden)]
 pub mod parity;
 #[doc(hidden)]
 pub mod parity_adapters;
+#[doc(hidden)]
+pub mod parity_engine;
 #[doc(hidden)]
 pub mod parity_process;
 #[doc(hidden)]

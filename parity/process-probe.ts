@@ -43,6 +43,9 @@ function attempt(fn: () => unknown): unknown {
   }
 }
 
+/** The ops runProcessOp answers. */
+export const PROCESS_OPS: ReadonlySet<string> = new Set(['msvcrtQuote', 'cmdInvocation', 'planLaunch', 'resolveShell', 'isWslLauncher', 'crlfToLf', 'routeHeadless', 'classifyGitFailure', 'diffSnapshots', 'pathsFromStatusLines', 'matchesGlob']);
+
 export function runProcessOp(op: Op): unknown {
   switch (op.op) {
     case 'msvcrtQuote':

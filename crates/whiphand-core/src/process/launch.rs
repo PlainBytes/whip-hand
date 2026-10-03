@@ -150,10 +150,26 @@ pub struct ExecOptions {
     /// Extra variables, laid over this process's own environment.
     pub env: BTreeMap<String, String>,
     pub timeout: Option<Duration>,
+    /// Node's `maxBuffer`; 1 MiB when unset, as for `execFile`.
+    pub max_buffer: Option<usize>,
 }
 
 /// Node's `execFile` default `maxBuffer`.
 const MAX_BUFFER: usize = 1024 * 1024;
+
+/// The message Node gives a failed `fs` call on `path`, as near as Rust can say it.
+pub fn node_error_message(e: &io::Error, path: &str) -> String {
+    match e.kind() {
+        io::ErrorKind::NotFound => format!("ENOENT: no such file or directory, open '{path}'"),
+        io::ErrorKind::PermissionDenied => format!("EACCES: permission denied, open '{path}'"),
+        _ => e.to_string(),
+    }
+}
+
+/// Node's `code` for an OS error (`ENOENT`, `EACCES`, …).
+pub fn errno_name_of(e: &io::Error) -> String {
+    errno_name(e)
+}
 
 /// Node's name for an OS error that stopped a spawn.
 fn errno_name(e: &io::Error) -> String {
@@ -169,7 +185,7 @@ fn errno_name(e: &io::Error) -> String {
     }
 }
 
-async fn read_capped<R: AsyncRead + Unpin>(mut r: R) -> (Vec<u8>, bool) {
+async fn read_capped<R: AsyncRead + Unpin>(mut r: R, cap: usize) -> (Vec<u8>, bool) {
     let mut out = Vec::new();
     let mut buf = [0u8; 8192];
     loop {
@@ -177,7 +193,7 @@ async fn read_capped<R: AsyncRead + Unpin>(mut r: R) -> (Vec<u8>, bool) {
             Ok(0) | Err(_) => return (out, false),
             Ok(n) => {
                 out.extend_from_slice(&buf[..n]);
-                if out.len() > MAX_BUFFER {
+                if out.len() > cap {
                     return (out, true);
                 }
             }
@@ -230,7 +246,8 @@ pub async fn exec_runner(
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
     let run = async {
-        let (out, err) = tokio::join!(read_capped(stdout), read_capped(stderr));
+        let cap = opts.max_buffer.unwrap_or(MAX_BUFFER);
+        let (out, err) = tokio::join!(read_capped(stdout, cap), read_capped(stderr, cap));
         (out, err)
     };
     let timed = async {
@@ -290,9 +307,9 @@ pub enum ChildStream {
 }
 
 /// A callback for each raw chunk of a child's output.
-pub type ChunkSink<'a> = Box<dyn FnMut(&[u8], ChildStream) + Send + 'a>;
+pub type ChunkSink<'a> = Box<dyn FnMut(&[u8], ChildStream) + 'a>;
 /// A callback for each line of a child's output.
-pub type LineSink<'a> = Box<dyn FnMut(&str, ChildStream) + Send + 'a>;
+pub type LineSink<'a> = Box<dyn FnMut(&str, ChildStream) + 'a>;
 
 /// What `pipe_child` does with a child's output.
 #[derive(Default)]

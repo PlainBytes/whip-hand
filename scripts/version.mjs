@@ -11,7 +11,8 @@
  * stale if it drifts.
  *
  * The Rust crates (`crates/whiphand-core`, the `whiphand` CLI in
- * `crates/whiphand-cli` and `crates/whiphand-protocol`, docs/migration.md)
+ * `crates/whiphand-cli`, `crates/whiphand-protocol` and `crates/whiphand-agent`,
+ * docs/migration.md)
  * carry the same version, in their
  * own Cargo.toml and in the root workspace's Cargo.lock — the same two-place
  * pattern as the Tauri crate, so all are handled by one table
@@ -48,6 +49,7 @@ const CARGO_CRATES = [
   { toml: 'crates/whiphand-core/Cargo.toml', lock: 'Cargo.lock', name: 'whiphand-core' },
   { toml: 'crates/whiphand-cli/Cargo.toml', lock: 'Cargo.lock', name: 'whiphand-cli' },
   { toml: 'crates/whiphand-protocol/Cargo.toml', lock: 'Cargo.lock', name: 'whiphand-protocol' },
+  { toml: 'crates/whiphand-agent/Cargo.toml', lock: 'Cargo.lock', name: 'whiphand-agent' },
 ];
 const TAURI_CONF = 'apps/desktop/src-tauri/tauri.conf.json';
 const CORE_INDEX = 'packages/core/src/version.ts';

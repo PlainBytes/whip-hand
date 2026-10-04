@@ -1,0 +1,18 @@
+[package]
+name = "whiphand-agent"
+version = "0.3.5"
+edition = "2024"
+description = "The desktop's agent: the RPC the webview speaks, served in-process over whiphand-core"
+publish = false
+
+[dependencies]
+whiphand-core = { path = "../whiphand-core" }
+whiphand-protocol = { path = "../whiphand-protocol" }
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "process", "rt", "signal", "sync", "time"] }
+tokio-util = "0.7"
+
+[dev-dependencies]
+tempfile = "3"

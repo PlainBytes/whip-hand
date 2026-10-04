@@ -71,6 +71,15 @@ const METHODS: &[&str] = &[
     "setWorkspacePinned",
     "setUiState",
     "listRecentRuns",
+    "startRun",
+    "resumeRun",
+    "cancelRun",
+    "endSession",
+    "resolveManual",
+    "ptyInput",
+    "ptyResize",
+    "listJobs",
+    "getJobScrollback",
 ];
 
 /// Whether this agent implements `method`.
@@ -78,7 +87,10 @@ pub fn exists(method: &str) -> bool {
     METHODS.contains(&method)
 }
 
-pub async fn call(agent: &Rc<Agent>, _ctx: RequestCtx, method: &str, p: Value) -> R {
+pub async fn call(agent: &Rc<Agent>, ctx: RequestCtx, method: &str, p: Value) -> R {
+    if let Some(result) = crate::job_handlers::call(agent, ctx, method, &p).await {
+        return result;
+    }
     match method {
         "hello" => Ok(json!({ "version": CORE_VERSION, "protocolVersion": 1 })),
         "listWorkflows" => list_workflows_h(&p),

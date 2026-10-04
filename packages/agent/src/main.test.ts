@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { agentCommand } from '../../../parity/agent-command.ts';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createServer } from 'node:net';
@@ -50,7 +51,7 @@ function startAgent(envOverride: Record<string, string> = {}): AgentHandle {
     ...(envOverride.WHIPHAND_REMOTE_CONFIG_FILE ? {} : { WHIPHAND_REMOTE_CONFIG_FILE: join(isolatedRoot, 'remote-access.json') }),
     ...envOverride,
   };
-  const child = spawn(process.execPath, [AGENT_MAIN], {
+  const child = spawn(...agentCommand(), {
     stdio: ['pipe', 'pipe', 'pipe'],
     env,
   });

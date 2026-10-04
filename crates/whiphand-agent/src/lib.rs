@@ -9,9 +9,17 @@
 //! notifications go to every client.
 
 pub mod app_state;
+pub mod bel;
+pub mod frontend;
 pub mod handlers;
 pub mod host;
+pub mod job_handlers;
+pub mod jobs;
+pub mod pty;
+pub mod pty_sizes;
 pub mod rpc;
+pub mod runs;
 pub mod schema;
+pub mod scrollback;
 
 pub use host::{Client, ClientKind, Host, HostConfig, Sink};

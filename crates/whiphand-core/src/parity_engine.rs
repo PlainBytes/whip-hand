@@ -82,6 +82,7 @@ impl Frontend for Scripted {
         &'a self,
         _spec: &'a JsObject,
         _cancel: CancellationToken,
+        _emit: crate::engine::frontend::EventSink<'a>,
     ) -> LocalFuture<'a, Result<i32, String>> {
         Box::pin(async { Ok(0) })
     }

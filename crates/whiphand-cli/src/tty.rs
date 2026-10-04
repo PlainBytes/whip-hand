@@ -4,7 +4,7 @@
 
 use tokio::process::Child;
 use tokio_util::sync::CancellationToken;
-use whiphand_core::engine::frontend::{Frontend, LocalFuture};
+use whiphand_core::engine::frontend::{self, Frontend, LocalFuture};
 use whiphand_core::engine::manual::ManualResponse;
 use whiphand_core::engine::spec;
 use whiphand_core::jsval::{self, JsObject};
@@ -161,10 +161,12 @@ impl Frontend for Tty {
         })
     }
 
+    /// The child owns the real terminal; there is no session state to report.
     fn run_interactive<'a>(
         &'a self,
         spec_obj: &'a JsObject,
         cancel: CancellationToken,
+        _emit: frontend::EventSink<'a>,
     ) -> LocalFuture<'a, Result<i32, String>> {
         // The child inherits the terminal, so it stays in the foreground
         // process group: its own group would cut it off from the tty.
@@ -288,7 +290,9 @@ mod tests {
         let cancel = CancellationToken::new();
         cancel.cancel();
         assert_eq!(
-            t.run_interactive(&s, cancel).await.unwrap(),
+            t.run_interactive(&s, cancel, Box::new(|_| {}))
+                .await
+                .unwrap(),
             ABORTED_EXIT_CODE
         );
     }

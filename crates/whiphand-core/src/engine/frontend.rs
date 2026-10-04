@@ -14,6 +14,10 @@ use crate::process::launch::LineSink;
 
 pub type LocalFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
+/// Hands an event to the engine, which journals it and passes it back to
+/// `on_event` (TS's `emit`, the third argument of `runInteractive`).
+pub type EventSink<'a> = Box<dyn FnMut(JsObject) + 'a>;
+
 pub trait Frontend {
     /// Every event, with the ordinal and timestamp the journal stamped it with.
     fn on_event(&self, event: &JsObject, seq: u64, ts: &str);
@@ -28,11 +32,14 @@ pub trait Frontend {
         on_line: Option<LineSink<'a>>,
     ) -> LocalFuture<'a, Result<i32, String>>;
 
-    /// Runs an interactive session to its end.
+    /// Runs an interactive session to its end. `emit` records what the
+    /// session itself reports (`session:await`, `step:pty-exit`,
+    /// `session:ended`); a frontend with nothing to report ignores it.
     fn run_interactive<'a>(
         &'a self,
         spec: &'a JsObject,
         cancel: CancellationToken,
+        emit: EventSink<'a>,
     ) -> LocalFuture<'a, Result<i32, String>>;
 
     /// Whether this frontend can ask a human (`runManual` is optional in TS).

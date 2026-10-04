@@ -40,6 +40,7 @@ pub enum ClientKind {
 #[derive(Clone, Debug)]
 pub struct HostConfig {
     pub app_state_path: PathBuf,
+    pub timings: crate::frontend::SessionTimings,
 }
 
 impl HostConfig {
@@ -47,6 +48,7 @@ impl HostConfig {
     pub fn from_env() -> Self {
         Self {
             app_state_path: crate::app_state::resolve_app_state_path(),
+            timings: crate::frontend::SessionTimings::default(),
         }
     }
 }
@@ -157,6 +159,10 @@ pub struct Agent {
     clients: RefCell<BTreeMap<u64, ClientEntry>>,
     pub app_state: AppStateStore,
     pub models: ModelCatalog,
+    pub jobs: crate::jobs::Jobs,
+    pub scrollback: RefCell<crate::scrollback::Scrollback>,
+    pub pty_sizes: RefCell<crate::pty_sizes::PtySizes>,
+    pub timings: crate::frontend::SessionTimings,
 }
 
 /// The request's origin, as a handler sees it.
@@ -167,7 +173,7 @@ pub struct RequestCtx {
 }
 
 impl Agent {
-    fn new(config: HostConfig) -> Rc<Agent> {
+    pub(crate) fn new(config: HostConfig) -> Rc<Agent> {
         Rc::new_cyclic(|weak: &std::rc::Weak<Agent>| {
             let weak = weak.clone();
             Agent {
@@ -181,12 +187,18 @@ impl Agent {
                     }),
                 ),
                 models: ModelCatalog::default(),
+                jobs: crate::jobs::Jobs::default(),
+                scrollback: RefCell::new(crate::scrollback::Scrollback::default()),
+                pty_sizes: RefCell::new(crate::pty_sizes::PtySizes::default()),
+                timings: config.timings,
             }
         })
     }
 
-    /// Sends a notification to every client.
-    pub fn notify(&self, method: &str, params: Value) {
+    /// Sends a notification to every client, through the scrollback first,
+    /// which records it and stamps `seq` where one belongs.
+    pub fn notify(&self, method: &str, mut params: Value) {
+        self.scrollback.borrow_mut().record(method, &mut params);
         let mut msg = serde_json::Map::new();
         msg.insert("method".into(), Value::String(method.into()));
         msg.insert("params".into(), params);
@@ -194,6 +206,14 @@ impl Agent {
         for client in self.clients.borrow().values() {
             (client.sink)(line.clone());
         }
+    }
+
+    /// A client added on the engine thread itself (the session tests).
+    #[cfg(all(test, unix))]
+    pub(crate) fn add_client(&self, id: u64, kind: ClientKind, sink: Sink) {
+        self.clients
+            .borrow_mut()
+            .insert(id, ClientEntry { kind, sink });
     }
 
     fn send_to(&self, id: u64, line: String) {
@@ -232,6 +252,8 @@ fn run(config: HostConfig, mut rx: mpsc::UnboundedReceiver<Msg>) {
                 }
                 Msg::Disconnect { id } => {
                     agent.clients.borrow_mut().remove(&id);
+                    // A closed window must not keep constraining a terminal.
+                    agent.pty_sizes.borrow_mut().forget(id);
                 }
                 Msg::Line { id, line } => {
                     let Some(kind) = agent.kind_of(id) else {
@@ -255,8 +277,25 @@ fn run(config: HostConfig, mut rx: mpsc::UnboundedReceiver<Msg>) {
                     });
                 }
                 Msg::Shutdown(done) => {
-                    // Requests already received still get their answers.
-                    let drain = async { while requests.join_next().await.is_some() {} };
+                    // Running jobs are cancelled and get a moment to write
+                    // their final state, so their run.json does not stay
+                    // 'running'; requests already received still get answers.
+                    let live: Vec<_> = agent
+                        .jobs
+                        .list()
+                        .into_iter()
+                        .filter(|j| j.status.get() == whiphand_protocol::JobStatus::Running)
+                        .collect();
+                    for job in &live {
+                        job.cancel.cancel();
+                        crate::jobs::abandon_manual(job, "run cancelled");
+                    }
+                    let drain = async {
+                        while requests.join_next().await.is_some() {}
+                        for job in &live {
+                            job.done.cancelled().await;
+                        }
+                    };
                     let _ = tokio::time::timeout(SHUTDOWN_GRACE, drain).await;
                     let _ = done.send(());
                     break;

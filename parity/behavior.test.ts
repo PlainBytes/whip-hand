@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { agentCommand } from './agent-command.ts';
 import assert from 'node:assert/strict';
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -161,7 +162,7 @@ function startAgentProcess(env: Record<string, string> = {}): {
   waitFor(pred: (m: AgentMessage) => boolean, timeoutMs?: number): Promise<AgentMessage>;
   stop(): void;
 } {
-  const child = spawn(process.execPath, [AGENT_MAIN], {
+  const child = spawn(...agentCommand(), {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: childEnv(env),
   });

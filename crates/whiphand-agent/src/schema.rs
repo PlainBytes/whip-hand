@@ -382,6 +382,25 @@ fn empty_default() -> S {
     Default(b(object! {}), empty)
 }
 
+/// A method's params schema as a browser on the LAN may call it. `startRun`
+/// takes attachments only as uploaded bytes, never a path on this machine:
+/// that would make "copy any readable file into a run, then read it back"
+/// a single call.
+pub fn remote_params(method: &str) -> Option<S> {
+    if method != "startRun" {
+        return params(method);
+    }
+    Some(object! {
+        "workdir" => StrMin1,
+        "workflow" => StrMin1,
+        "inputs" => o(Rec(b(Str))),
+        "dryRun" => o(Bool),
+        "maxIterations" => o(Num(Num::POSITIVE_INT)),
+        "name" => o(Str),
+        "attachments" => o(Arr(b(object!(Strictness::Strict; "name" => StrMin1, "base64" => Str)))),
+    })
+}
+
 /// Every method's params schema, by name.
 pub fn params(method: &str) -> Option<S> {
     Some(match method {

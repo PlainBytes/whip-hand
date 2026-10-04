@@ -80,6 +80,9 @@ const METHODS: &[&str] = &[
     "ptyResize",
     "listJobs",
     "getJobScrollback",
+    "remoteAccessGet",
+    "remoteAccessSet",
+    "remoteAccessRotateToken",
 ];
 
 /// Whether this agent implements `method`.

@@ -8,10 +8,13 @@ publish = false
 [dependencies]
 whiphand-core = { path = "../whiphand-core" }
 whiphand-protocol = { path = "../whiphand-protocol" }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws"] }
 base64 = "0.22"
+getrandom = "0.3"
+if-addrs = "0.13"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-tokio = { version = "1", features = ["io-std", "io-util", "macros", "process", "rt", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt", "signal", "sync", "time"] }
 tokio-util = "0.7"
 
 [target.'cfg(unix)'.dependencies]
@@ -31,3 +34,5 @@ windows-sys = { version = "0.59", features = [
 
 [dev-dependencies]
 tempfile = "3"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+tokio-tungstenite = "0.29"

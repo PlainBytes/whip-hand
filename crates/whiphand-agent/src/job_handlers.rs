@@ -135,9 +135,44 @@ pub async fn call(agent: &Rc<Agent>, ctx: RequestCtx, method: &str, p: &Value) -
                 })
                 .collect(),
         )),
+        "remoteAccessGet" => Ok(agent.remote.state().await),
+        "remoteAccessSet" => remote_access_set(agent, p).await,
+        "remoteAccessRotateToken" => {
+            let rotated = agent.remote.store.mutate(|c| c.token = crate::remote::auth::generate_token());
+            if let Err(e) = rotated {
+                return Some(Err(e));
+            }
+            agent.remote.server.lock().await.drop_clients("token rotated");
+            let state = agent.remote.sync().await;
+            agent.notify("remoteAccessChanged", agent.remote.public_state().await);
+            Ok(state)
+        }
         "getJobScrollback" => Ok(agent.scrollback.borrow().snapshot(s(p, "jobId")).unwrap_or(Value::Null)),
         _ => return None,
     })
+}
+
+async fn remote_access_set(agent: &Rc<Agent>, p: &Value) -> R {
+    let enabled = p["enabled"].as_bool();
+    let port = p["port"].as_f64().map(|n| n as u16);
+    agent.remote.store.mutate(|c| {
+        if let Some(e) = enabled {
+            c.enabled = e;
+        }
+        if let Some(port) = port {
+            c.port = port;
+        }
+    })?;
+    // A new port means a rebind.
+    if port.is_some() {
+        let mut server = agent.remote.server.lock().await;
+        if server.status().listening {
+            server.stop().await;
+        }
+    }
+    let state = agent.remote.sync().await;
+    agent.notify("remoteAccessChanged", agent.remote.public_state().await);
+    Ok(state)
 }
 
 fn inputs_of(p: &Value) -> Record<String> {

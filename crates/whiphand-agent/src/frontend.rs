@@ -532,14 +532,22 @@ mod tests {
     type Lines = Arc<Mutex<Vec<Value>>>;
 
     fn setup(dir: &std::path::Path) -> (Rc<Agent>, Rc<Job>, Lines) {
-        let agent = Agent::new(HostConfig {
-            app_state_path: dir.join("app-state.json"),
-            timings: SessionTimings {
-                poll: Duration::from_millis(20),
-                quit_grace: Duration::from_millis(200),
-                term_grace: Duration::from_millis(200),
+        // Nothing reads the inbox here; the remote server's sends just fail.
+        let (inbox, _) = tokio::sync::mpsc::unbounded_channel();
+        let agent = Agent::new(
+            HostConfig {
+                app_state_path: dir.join("app-state.json"),
+                remote_config_path: dir.join("remote-access.json"),
+                web_root: None,
+                timings: SessionTimings {
+                    poll: Duration::from_millis(20),
+                    quit_grace: Duration::from_millis(200),
+                    term_grace: Duration::from_millis(200),
+                },
             },
-        });
+            inbox,
+            Default::default(),
+        );
         let lines: Lines = Arc::default();
         let sink = lines.clone();
         agent.add_client(

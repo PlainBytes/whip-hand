@@ -9,6 +9,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::JoinHandle;
 
@@ -40,6 +41,9 @@ pub enum ClientKind {
 #[derive(Clone, Debug)]
 pub struct HostConfig {
     pub app_state_path: PathBuf,
+    pub remote_config_path: PathBuf,
+    /// Where the host keeps the built web UI (the Tauri resources), if anywhere.
+    pub web_root: Option<PathBuf>,
     pub timings: crate::frontend::SessionTimings,
 }
 
@@ -48,12 +52,14 @@ impl HostConfig {
     pub fn from_env() -> Self {
         Self {
             app_state_path: crate::app_state::resolve_app_state_path(),
+            remote_config_path: crate::remote::config::resolve_remote_config_path(),
+            web_root: None,
             timings: crate::frontend::SessionTimings::default(),
         }
     }
 }
 
-enum Msg {
+pub(crate) enum Msg {
     Connect {
         id: u64,
         kind: ClientKind,
@@ -67,12 +73,15 @@ enum Msg {
         id: u64,
     },
     Shutdown(oneshot::Sender<()>),
+    /// The remote server's listening state or client count changed.
+    RemoteStatusChanged,
 }
 
 /// The agent, running on its own thread.
 pub struct Host {
     tx: mpsc::UnboundedSender<Msg>,
-    next_id: AtomicU64,
+    /// Shared with the remote server, which numbers its own clients.
+    next_id: Arc<AtomicU64>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -104,13 +113,15 @@ impl Drop for Client {
 impl Host {
     pub fn start(config: HostConfig) -> std::io::Result<Host> {
         let (tx, rx) = mpsc::unbounded_channel();
+        let next_id = Arc::new(AtomicU64::new(1));
+        let (inbox, ids) = (tx.clone(), next_id.clone());
         let thread = std::thread::Builder::new()
             .name("whiphand-agent".into())
             .stack_size(STACK)
-            .spawn(move || run(config, rx))?;
+            .spawn(move || run(config, rx, inbox, ids))?;
         Ok(Host {
             tx,
-            next_id: AtomicU64::new(1),
+            next_id,
             thread: Some(thread),
         })
     }
@@ -163,6 +174,7 @@ pub struct Agent {
     pub scrollback: RefCell<crate::scrollback::Scrollback>,
     pub pty_sizes: RefCell<crate::pty_sizes::PtySizes>,
     pub timings: crate::frontend::SessionTimings,
+    pub remote: crate::remote::RemoteController,
 }
 
 /// The request's origin, as a handler sees it.
@@ -173,7 +185,11 @@ pub struct RequestCtx {
 }
 
 impl Agent {
-    pub(crate) fn new(config: HostConfig) -> Rc<Agent> {
+    pub(crate) fn new(
+        config: HostConfig,
+        inbox: mpsc::UnboundedSender<Msg>,
+        next_id: Arc<AtomicU64>,
+    ) -> Rc<Agent> {
         Rc::new_cyclic(|weak: &std::rc::Weak<Agent>| {
             let weak = weak.clone();
             Agent {
@@ -191,6 +207,11 @@ impl Agent {
                 scrollback: RefCell::new(crate::scrollback::Scrollback::default()),
                 pty_sizes: RefCell::new(crate::pty_sizes::PtySizes::default()),
                 timings: config.timings,
+                remote: crate::remote::RemoteController::new(
+                    crate::remote::config::RemoteAccessStore::new(config.remote_config_path),
+                    crate::remote::server::RemoteServer::new(inbox, next_id),
+                    config.web_root,
+                ),
             }
         })
     }
@@ -227,14 +248,23 @@ impl Agent {
     }
 }
 
-fn run(config: HostConfig, mut rx: mpsc::UnboundedReceiver<Msg>) {
+fn run(
+    config: HostConfig,
+    mut rx: mpsc::UnboundedReceiver<Msg>,
+    inbox: mpsc::UnboundedSender<Msg>,
+    next_id: Arc<AtomicU64>,
+) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("the agent's runtime");
     let local = tokio::task::LocalSet::new();
     local.block_on(&rt, async move {
-        let agent = Agent::new(config);
+        let agent = Agent::new(config, inbox, next_id);
+        // Off unless enabled in an earlier session; a failure is reported
+        // through remoteAccessGet, never fatal.
+        let starting = agent.clone();
+        tokio::task::spawn_local(async move { starting.remote.apply_config().await });
         let mut requests = tokio::task::JoinSet::new();
         loop {
             let msg = tokio::select! {
@@ -276,6 +306,15 @@ fn run(config: HostConfig, mut rx: mpsc::UnboundedReceiver<Msg>) {
                         agent.send_to(id, response);
                     });
                 }
+                Msg::RemoteStatusChanged => {
+                    if agent.remote.should_publish() {
+                        let agent = agent.clone();
+                        tokio::task::spawn_local(async move {
+                            let state = agent.remote.public_state().await;
+                            agent.notify("remoteAccessChanged", state);
+                        });
+                    }
+                }
                 Msg::Shutdown(done) => {
                     // Running jobs are cancelled and get a moment to write
                     // their final state, so their run.json does not stay
@@ -297,6 +336,7 @@ fn run(config: HostConfig, mut rx: mpsc::UnboundedReceiver<Msg>) {
                         }
                     };
                     let _ = tokio::time::timeout(SHUTDOWN_GRACE, drain).await;
+                    agent.remote.stop().await;
                     let _ = done.send(());
                     break;
                 }

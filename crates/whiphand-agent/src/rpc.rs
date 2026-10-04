@@ -105,7 +105,10 @@ pub async fn handle_line(agent: &Rc<Agent>, ctx: RequestCtx, text: &str) -> Stri
     };
 
     let allowed = ctx.kind == ClientKind::Desktop || REMOTE_METHODS.contains(&method);
-    let schema = crate::schema::params(method).filter(|_| allowed);
+    let schema = match ctx.kind {
+        ClientKind::Desktop => crate::schema::params(method),
+        ClientKind::Remote => crate::schema::remote_params(method).filter(|_| allowed),
+    };
     let Some(schema) = schema.filter(|_| crate::handlers::exists(method)) else {
         return error(
             id,

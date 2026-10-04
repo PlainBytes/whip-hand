@@ -17,7 +17,7 @@ import { Save20Regular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
 import { spinInteger } from '../lib/spin-value.ts';
-import type { WorkspaceConfig, OnFindings } from '../../../../packages/core/src/types.ts';
+import type { WorkspaceConfig, OnFindings } from '../shared/types.ts';
 import { errorMessage } from '../lib/error-message.ts';
 
 /** Seeded when the override checkbox is first turned on from "inherit". */
@@ -25,9 +25,8 @@ const DEFAULT_OVERRIDE_MAX_RETAINED = 10;
 
 /**
  * What each leaf falls back to when nothing in this workspace's own
- * `.whiphand/config.yaml` sets it — DEFAULT_CONFIG's own values, duplicated here
- * rather than imported from @whiphand/core's config.ts: that module pulls in
- * `node:fs`, which has no place in a browser bundle. This page only ever
+ * `.whiphand/config.yaml` sets it — whiphand-core's `default_config()`
+ * (config.rs), duplicated here. This page only ever
  * needs it to preview what "inherited" resolves to, never to actually merge
  * a config — the server is the one source of truth for that.
  */

@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 import { Badge, Button, Text } from '@fluentui/react-components';
-import type { Step } from '../../../../packages/core/src/types.ts';
-import { isCommandStep, isContainerStep, isLoopStep, isStagesStep } from '../../../../packages/core/src/steps.ts';
-import { ATTACHMENTS_REF } from '../../../../packages/core/src/attachments.ts';
+import type { Step } from '../shared/types.ts';
+import { isCommandStep, isContainerStep, isLoopStep, isStagesStep } from '../shared/steps.ts';
+import { ATTACHMENTS_REF } from '../shared/attachments.ts';
 
 const KIND_COLOR = {
   agent: 'informative', command: 'severe', manual: 'important',

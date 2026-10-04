@@ -6,7 +6,7 @@ import { useAgentClient } from '../agent/agent-context.tsx';
 import { RemoteAccessCard } from '../components/RemoteAccessCard.tsx';
 import { useAppStore } from '../state/store.ts';
 import { spinInteger } from '../lib/spin-value.ts';
-import type { ConfigGetResult } from '../../../../packages/agent/src/protocol.ts';
+import type { ConfigGetResult } from '../shared/protocol.gen.ts';
 import { errorMessage } from '../lib/error-message.ts';
 
 const THEME_OPTIONS = [

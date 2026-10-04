@@ -5,7 +5,7 @@ import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
 import { AgentClientProvider } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
-import type { WorkspaceConfig } from '../../../../packages/core/src/types.ts';
+import type { WorkspaceConfig } from '../shared/types.ts';
 
 const RESOLVED: WorkspaceConfig = {
   defaults: { runner: 'claude' },

@@ -5,8 +5,8 @@ import {
   ArrowDown20Regular, ArrowUp20Regular, ChevronDown20Regular, ChevronRight20Regular,
   Delete20Regular, FolderArrowRight20Regular, Pause20Regular, Play20Regular,
 } from '@fluentui/react-icons';
-import type { LoopStep, StagesStep, Step, StepKind } from '../../../../packages/core/src/types.ts';
-import { isContainerStep, isLoopStep, isStagesStep } from '../../../../packages/core/src/steps.ts';
+import type { LoopStep, StagesStep, Step, StepKind } from '../shared/types.ts';
+import { isContainerStep, isLoopStep, isStagesStep } from '../shared/steps.ts';
 import { StepSummary } from '../components/StepSummary.tsx';
 import { StepIdField } from './StepIdField.tsx';
 import { convertStep, StepRail } from './StepRail.tsx';

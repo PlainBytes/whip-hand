@@ -2,7 +2,7 @@ import { useCallback, useEffect } from 'react';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import type { AgentClient } from '../agent/client.ts';
 import { useAppStore } from '../state/store.ts';
-import type { ListModelsResult } from '../../../../packages/agent/src/protocol.ts';
+import type { ListModelsResult } from '../shared/protocol.gen.ts';
 
 /**
  * The one place that knows "refresh" means `listModels({ refresh: true })`.

@@ -5,8 +5,8 @@ import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
 import { AgentClientProvider } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
-import { EMPTY_APP_STATE } from '../../../../packages/agent/src/app-state.ts';
-import type { WorkspaceConfig } from '../../../../packages/core/src/types.ts';
+import { EMPTY_APP_STATE } from '../test/app-state.ts';
+import type { WorkspaceConfig } from '../shared/types.ts';
 
 const DEFAULT_CONFIG: WorkspaceConfig = {
   defaults: { runner: 'claude' }, on_findings: 'report',

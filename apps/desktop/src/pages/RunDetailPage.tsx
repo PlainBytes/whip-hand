@@ -36,7 +36,7 @@ import {
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore, executionKey, type JobState, type StepState } from '../state/store.ts';
 import type { RunDetail as RunDetailResult } from '../agent/client.ts';
-import { summarizeEvent, parseLogLine, type LogRow } from '../../../../packages/core/src/log-rows.ts';
+import { summarizeEvent, parseLogLine, type LogRow } from '../shared/log-rows.ts';
 import { StatusBadge } from '../components/StatusBadge.tsx';
 import { AttentionBadge } from '../components/AttentionBadge.tsx';
 import { PageHeader } from '../components/PageHeader.tsx';
@@ -57,12 +57,12 @@ import { ResizablePane } from '../components/ResizablePane.tsx';
 import { FilePreview } from '../components/FilePreview.tsx';
 import { RECESSED_SURFACE } from '../components/recessed-surface.ts';
 import { resolveInArtifacts } from '../markdown/resolve.ts';
-import { elapsedMs, formatElapsed, stageLabel } from '../../../../packages/core/src/format.ts';
-import { degradationLine } from '../../../../packages/core/src/degradations.ts';
+import { elapsedMs, formatElapsed, stageLabel } from '../shared/format.ts';
+import { degradationLine } from '../shared/degradations.ts';
 import { mergeDegradations } from '../lib/run-degradations.ts';
 import { parsePositiveInt } from '../lib/parse-number.ts';
 import { useOpenExternal } from '../lib/open-external.tsx';
-import type { FileComment, ManualChoice, Scope } from '../../../../packages/core/src/types.ts';
+import type { FileComment, ManualChoice, Scope } from '../shared/types.ts';
 import { errorMessage } from '../lib/error-message.ts';
 import { spacerHeights, useVirtualRows, VIRTUAL_SCROLLER_PROPS } from '../lib/use-virtual-rows.ts';
 

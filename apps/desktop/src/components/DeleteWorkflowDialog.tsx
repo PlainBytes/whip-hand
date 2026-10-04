@@ -4,7 +4,7 @@ import {
   MessageBar, MessageBarBody, Spinner, Text,
 } from '@fluentui/react-components';
 import { useAgentClient } from '../agent/agent-context.tsx';
-import type { Scope } from '../../../../packages/core/src/types.ts';
+import type { Scope } from '../shared/types.ts';
 import { errorMessage } from '../lib/error-message.ts';
 
 export interface DeleteWorkflowDialogProps {

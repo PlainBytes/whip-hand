@@ -1,5 +1,5 @@
 /**
- * Base64 <-> bytes helpers for the wire fields protocol.ts documents as
+ * Base64 <-> bytes helpers for the wire fields the protocol carries as
  * base64 strings. Goes through TextEncoder/Uint8Array because `btoa`/`atob`
  * alone assume UTF-16/Latin1 and mangle arbitrary bytes or non-Latin1 text.
  */

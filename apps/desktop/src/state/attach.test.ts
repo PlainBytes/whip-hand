@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useAppStore } from './store.ts';
-import type { JobScrollbackResult, JobSummary } from '../../../../packages/agent/src/protocol.ts';
+import type { JobScrollback, JobSummary } from '../shared/protocol.gen.ts';
 
 const store = () => useAppStore.getState();
 
-function ptySnapshot(over: Partial<NonNullable<JobScrollbackResult['pty']>> = {}): JobScrollbackResult {
+function ptySnapshot(over: Partial<NonNullable<JobScrollback['pty']>> = {}): JobScrollback {
   return {
     pty: {
       stepId: 's1', cols: 80, rows: 24,
@@ -232,11 +232,11 @@ describe('applyEventReplay', () => {
   });
 
   it('does not re-open a finalized step when the replay itself ends with a seq-less event (regression)', () => {
-    // A real failure path: runWorkflow's catch (packages/core/src/engine/
-    // runner.ts) sends a seq'd run:error and run:done through the journal and
-    // rethrows; runJobInBackground's own catch then sends a *second*,
-    // handler-direct run:error with no seq at all (packages/agent/src/
-    // handlers.ts) — for a runner binary that isn't there, or a pty that
+    // A real failure path: the engine's run (whiphand-core's
+    // engine/runner.rs) sends a seq'd run:error and run:done through the journal and
+    // fails; the agent's job then sends a *second*,
+    // handler-direct run:error with no seq at all (whiphand-agent's
+    // runs.rs) — for a runner binary that isn't there, or a pty that
     // won't start. The replay's own last entry can legitimately have no seq,
     // even though real seq'd events came before it.
     store().applyWhiphandEvent(start('execute', 0));

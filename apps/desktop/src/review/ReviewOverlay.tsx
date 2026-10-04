@@ -43,7 +43,7 @@ import { DiffFileView } from '../diff/DiffFileView.tsx';
 import type { WorkingDiff } from '../diff/types.ts';
 import { DIFF_SOURCE_ID, type ReviewRequest } from './model.ts';
 import { RECESSED_SURFACE } from '../components/recessed-surface.ts';
-import type { FileComment, ManualChoice } from '../../../../packages/core/src/types.ts';
+import type { FileComment, ManualChoice } from '../shared/types.ts';
 import { errorMessage } from '../lib/error-message.ts';
 
 /** The rail width the Files browser and the Artifacts tab both use. */

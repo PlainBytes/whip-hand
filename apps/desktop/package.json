@@ -50,7 +50,6 @@
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^6.1.1",
-    "@whiphand/core": "*",
     "jsdom": "^30.0.1",
     "rehype-parse": "^9.0.1",
     "rehype-stringify": "^10.0.1",

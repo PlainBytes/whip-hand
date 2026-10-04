@@ -8,7 +8,7 @@ import { useAgentClient } from '../agent/agent-context.tsx';
 import { openWorkspace } from '../lib/workspace-switch.ts';
 import { basename, filterWorkspaces, sortWorkspaces } from '../lib/workspace-identity.ts';
 import { WorkspaceDot } from './WorkspaceDot.tsx';
-import type { RecentWorkspace } from '../../../../packages/agent/src/app-state.ts';
+import type { RecentWorkspace } from '../shared/protocol.gen.ts';
 import { errorMessage } from '../lib/error-message.ts';
 
 const EMPTY_RECENTS: RecentWorkspace[] = [];

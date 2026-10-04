@@ -1,6 +1,6 @@
 import { Text } from '@fluentui/react-components';
-import type { LoopStep, Step } from '../../../../../packages/core/src/types.ts';
-import { isLoopStep, isStagesStep } from '../../../../../packages/core/src/steps.ts';
+import type { LoopStep, Step } from '../../shared/types.ts';
+import { isLoopStep, isStagesStep } from '../../shared/steps.ts';
 import { endsLoop, type DataFlowEntry } from '../../lib/step-describe.ts';
 import { StepTile } from './StepTile.tsx';
 import { LoopGroup } from './LoopGroup.tsx';

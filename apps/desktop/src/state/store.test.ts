@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   findWorkspaceMemory, jobInWorkspace, liveStageProgress, ongoingJobs, useAppStore, waitingRunIds, type JobState,
 } from './store.ts';
-import type { WhiphandEvent } from '../../../../packages/core/src/types.ts';
-import { EMPTY_APP_STATE } from '../../../../packages/agent/src/app-state.ts';
+import type { WhiphandEvent } from '../shared/types.ts';
+import { EMPTY_APP_STATE } from '../test/app-state.ts';
 import { fromPosix } from '../../../../packages/test-support/src/paths.ts';
 
 /** A JobState with the fields these selector tests do not care about filled in. */

@@ -10,11 +10,11 @@ Working plan for Phase 3 of [migration.md](migration.md). Branch:
 | 3. `whiphand-agent` crate | Done | `c331589` (3a), `46cd66b` (3b), `cbcceb2` (3c) |
 | 4. The TS-vs-Rust agent gate | Done | `9ea4b13` |
 | 5. Wire up the webview | Done | `93234c8` |
-| 6. Move the webview's TS out of `packages/` | Next | |
-| 7. Delete and repackage | To do | |
+| 6. Move the webview's TS out of `packages/` | Done | (this commit) |
+| 7. Delete and repackage | Next | |
 | 8. CI and docs | To do (CI partly done) | |
 
-Steps 1 to 5 have been verified on Linux only. Windows and macOS CI have not
+Steps 1 to 6 have been verified on Linux only. Windows and macOS CI have not
 run them yet.
 
 ## Context
@@ -190,7 +190,35 @@ Planned:
 - Remove `externalBin` and the `resources/node-pty` resource from
   `tauri.conf.json`.
 
-### 6. Move the webview's TS out of `packages/`
+### 6. Move the webview's TS out of `packages/` (done)
+
+As planned, with these details:
+- The modules are copied, not moved: `packages/core` still serves the TS
+  agent and the parity probes until step 7 deletes it. `degradations.ts`
+  came along, since `types.ts` and `log-rows.ts` import it. Their headers
+  now name the Rust module each mirrors. The webview imports nothing from
+  `packages/core` or `packages/agent`, and `@whiphand/core` is gone from its
+  dependencies.
+- `core-types.ts` defines the webview's own `RunSummary`/`RunDetail` (loose,
+  as `client.ts` had them), `ConfigKey` and `PartialConfig`, and re-exports
+  the rest from `types.ts`. `client.ts` takes `MethodMap` and
+  `NotificationMap` from `protocol.gen.ts`. `parity/protocol-types.ts` now
+  checks that core's run shapes fill the loose ones. `EMPTY_APP_STATE` moved
+  to `src/test/app-state.ts`, since only tests used it.
+- `WorkflowEditor` validates through `validateWorkflow` at Save, then again
+  250 ms after each edit, but only while problems are on screen. Its tests
+  answer the RPC with `src/test/validation.ts`; the tests about problems use
+  answers recorded from the Rust validator.
+- `step-tree.test.ts` no longer runs core's TS validator. The "Reads from"
+  offers are pinned in `parity/fixtures/desktop/reads-from.json`: the
+  desktop test asserts `referenceableIds` produces them, and
+  `whiphand-core/tests/reads_from.rs` asserts the validator accepts each one.
+- `src/shared/core-goldens.test.ts` checks `segment` and `workflow-name`
+  against the `segment` suite, and `log-rows` (and through it `format`)
+  against `store-journal`'s run.log lines.
+- `vite.config.ts` no longer widens `server.fs.allow` to the repo.
+
+Planned:
 
 - Move the pure modules the webview imports into `apps/desktop/src/shared/`:
   `steps`, `format`, `enabled`, `attachments`, `path-form` (`sameWorkspace`),

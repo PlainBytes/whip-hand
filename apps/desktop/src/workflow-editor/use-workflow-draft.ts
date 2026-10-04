@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
-import type { Step, Workflow } from '../../../../packages/core/src/types.ts';
-import { flattenSteps } from '../../../../packages/core/src/steps.ts';
+import type { Step, Workflow } from '../shared/types.ts';
+import { flattenSteps } from '../shared/steps.ts';
 import {
   appendAt, insertAfter, moveAt, removeStep as removeStepById, renameStep as renameStepById, stepAt, updateAt,
   type StepPath,

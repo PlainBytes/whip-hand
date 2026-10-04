@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { WorkflowSettingsCard } from './WorkflowSettingsCard.tsx';
-import type { Workflow } from '../../../../packages/core/src/types.ts';
+import type { Workflow } from '../shared/types.ts';
 
 function renderCard(workflow: Workflow) {
   const onUpdate = vi.fn();

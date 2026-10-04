@@ -22,9 +22,9 @@ import { useAppStore } from '../state/store.ts';
 import { errorMessage } from '../lib/error-message.ts';
 // tool-groups.ts, not tools.ts: the latter reaches for node:child_process to
 // run a probe and cannot be bundled for the browser.
-import { TOOL_GROUPS, TOOL_GROUP_LABELS } from '../../../../packages/core/src/tool-groups.ts';
-import type { ToolGroup } from '../../../../packages/core/src/tool-groups.ts';
-import type { DoctorRow } from '../../../../packages/agent/src/protocol.ts';
+import { TOOL_GROUPS, TOOL_GROUP_LABELS } from '../shared/tool-groups.ts';
+import type { ToolGroup } from '../shared/tool-groups.ts';
+import type { DoctorRow } from '../shared/protocol.gen.ts';
 
 /** Why each group is here, in the one line the heading doesn't have room for. */
 const GROUP_BLURB: Record<ToolGroup, string> = {

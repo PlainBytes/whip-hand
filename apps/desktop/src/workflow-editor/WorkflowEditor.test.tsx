@@ -6,8 +6,9 @@ import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
 import { AgentClientProvider } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
-import type { AgentStep, Step, Workflow } from '../../../../packages/core/src/types.ts';
-import type { DoctorResult, ListModelsResult } from '../../../../packages/agent/src/protocol.ts';
+import type { AgentStep, Step, Workflow } from '../shared/types.ts';
+import type { DoctorResult, ListModelsResult, ValidateWorkflowResult } from '../shared/protocol.gen.ts';
+import { answerValidation, type Validator } from '../test/validation.ts';
 
 function flattenSteps(steps: Step[]): Step[] {
   return steps.flatMap(s => ('steps' in s ? [s, ...flattenSteps(s.steps)] : [s]));
@@ -39,8 +40,12 @@ const NESTED_WORKFLOW: Workflow = {
   ],
 };
 
-function renderEditor(workflow: Workflow, overrides: Partial<{ name: string; source: 'project' | 'global' }> = {}) {
+function renderEditor(
+  workflow: Workflow,
+  overrides: Partial<{ name: string; source: 'project' | 'global'; validator: Validator }> = {},
+) {
   const transport = new MockTransport();
+  answerValidation(transport, overrides.validator);
   const client = new AgentClient(transport);
   const onSaved = vi.fn();
   const onCancel = vi.fn();
@@ -473,6 +478,33 @@ describe('WorkflowEditor: delete', () => {
   });
 });
 
+// --- what the agent's validator answers, recorded from whiphand-agent -------
+
+type FieldProblem = ValidateWorkflowResult['fieldProblems'][number];
+
+/** One field problem, worded as the Rust validator words it. */
+function fieldProblem(stepId: string, field: string, phrase: string, message: string): FieldProblem {
+  return { stepId, field, phrase, message };
+}
+
+/** A validator that reports whichever of `checks` apply to the draft. */
+function reporting(...checks: Array<(steps: Step[]) => FieldProblem | null>): Validator {
+  return draft => {
+    const fieldProblems = checks.flatMap(check => check(flattenSteps(draft.steps)) ?? []);
+    return { workflow: draft, problems: fieldProblems.map(p => p.message), fieldProblems };
+  };
+}
+
+const field = (steps: Step[], id: string, key: string): unknown =>
+  (steps.find(s => s.id === id) as unknown as Record<string, unknown> | undefined)?.[key];
+const blank = (v: unknown): boolean => v === undefined || v === '';
+
+const NEW_STEP_PROBLEMS = reporting(
+  steps => (blank(field(steps, 'step-12', 'prompt')) ? fieldProblem('step-12', 'prompt', 'is required', "step 'step-12': Prompt is required") : null),
+  steps => (blank(field(steps, 'step-12', 'output'))
+    ? fieldProblem('step-12', 'output', 'is required', "step 'step-12': Output filename is required") : null),
+);
+
 describe('WorkflowEditor: save-time validation', () => {
   it('Add step, Kind command, type Command, Save: updateWorkflow is called and the payload has no output key', async () => {
     const { transport } = renderEditor(NESTED_WORKFLOW);
@@ -490,7 +522,7 @@ describe('WorkflowEditor: save-time validation', () => {
   });
 
   it('Save with a blank Prompt: no request is sent, the card expands, the field itself is flagged, and the footer lists the problem', async () => {
-    const { transport } = renderEditor(NESTED_WORKFLOW);
+    const { transport } = renderEditor(NESTED_WORKFLOW, { validator: NEW_STEP_PROBLEMS });
     fireEvent.click(screen.getByRole('button', { name: /add step/i }));
 
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
@@ -511,11 +543,12 @@ describe('WorkflowEditor: save-time validation', () => {
     await lastRequest(transport, 'updateWorkflow');
   });
 
-  it('a blank Runner and Output filename on the same step both show up as separate footer lines', async () => {
-    renderEditor(NESTED_WORKFLOW);
+  it('a blank Prompt and Output filename on the same step both show up as separate footer lines', async () => {
+    renderEditor(NESTED_WORKFLOW, { validator: NEW_STEP_PROBLEMS });
     fireEvent.click(screen.getByRole('button', { name: /add step/i }));
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
     expect(await screen.findByText(/step 'step-12': Output filename is required/)).toBeInTheDocument();
+    expect(screen.getByText(/step 'step-12': Prompt is required/)).toBeInTheDocument();
   });
 
   it('convertStep: an agent with output: \'\' converted to command has no output key', () => {
@@ -580,7 +613,13 @@ describe('WorkflowEditor: save-time validation', () => {
         },
       ],
     };
-    const { transport } = renderEditor(refWorkflow);
+    const { transport } = renderEditor(refWorkflow, {
+      validator: reporting(steps => (blank(field(steps, 'a', 'output'))
+        ? fieldProblem(
+          'b', 'inputs', "references step 'a', which produces no artifact",
+          "step 'b' references step 'a', which produces no artifact",
+        ) : null)),
+    });
     fireEvent.click(screen.getByTestId('step-collapse-a'));
     fireEvent.change(screen.getByLabelText(/^Output filename/), { target: { value: '' } });
     fireEvent.click(screen.getByTestId('step-collapse-a'));
@@ -607,7 +646,13 @@ describe('WorkflowEditor: save-time validation', () => {
         { id: 'm', kind: 'manual', title: 't', instructions: 'i', capture: 'note', output: 'm.md' },
       ],
     };
-    const { transport } = renderEditor(captureWorkflow);
+    const { transport } = renderEditor(captureWorkflow, {
+      validator: reporting(steps => (blank(field(steps, 'm', 'output'))
+        ? fieldProblem(
+          'm', 'output', "capture 'note' needs an 'output' to write it to",
+          "step 'm': capture 'note' needs an 'output' to write it to",
+        ) : null)),
+    });
     fireEvent.click(screen.getByTestId('step-collapse-m'));
     fireEvent.change(screen.getByLabelText(/^Output filename/), { target: { value: '' } });
     fireEvent.click(screen.getByTestId('step-collapse-m'));
@@ -866,7 +911,10 @@ describe('WorkflowEditor: a stages step', () => {
   });
 
   it('a blank Stage files is flagged on the field at Save', async () => {
-    const { transport } = renderEditor(STAGED_WORKFLOW);
+    const { transport } = renderEditor(STAGED_WORKFLOW, {
+      validator: reporting(steps => (blank(field(steps, 'build', 'items'))
+        ? fieldProblem('build', 'items', 'is required', "step 'build': Stage files is required") : null)),
+    });
     fireEvent.click(screen.getByTestId('step-collapse-build'));
     fireEvent.change(screen.getByLabelText(/^Stage files/), { target: { value: '' } });
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));

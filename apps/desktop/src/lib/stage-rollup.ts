@@ -11,8 +11,8 @@
  * handed.
  */
 import type { StepState } from '../state/store.ts';
-import { elapsedMs, formatElapsed } from '../../../../packages/core/src/format.ts';
-import { usageParts, type UsageCounters } from '../../../../packages/core/src/log-rows.ts';
+import { elapsedMs, formatElapsed } from '../shared/format.ts';
+import { usageParts, type UsageCounters } from '../shared/log-rows.ts';
 import { flattenNodes, type StageGroup, type StepNode } from './run-tree.ts';
 
 export interface StageRollup {

@@ -4,10 +4,10 @@ import {
 } from '@fluentui/react-components';
 import type {
   AgentStep, CommandStep, EffortLevel, ManualStep, StagesStep, Step, StepKind, StepMode,
-} from '../../../../packages/core/src/types.ts';
-import { childSteps, isAgentStep, isManualStep } from '../../../../packages/core/src/steps.ts';
-import { ATTACHMENTS_REF } from '../../../../packages/core/src/attachments.ts';
-import { STAGE_REF } from '../../../../packages/core/src/types.ts';
+} from '../shared/types.ts';
+import { childSteps, isAgentStep, isManualStep } from '../shared/steps.ts';
+import { ATTACHMENTS_REF } from '../shared/attachments.ts';
+import { STAGE_REF } from '../shared/types.ts';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
 import { useStepLayoutStyles } from './step-layout.ts';

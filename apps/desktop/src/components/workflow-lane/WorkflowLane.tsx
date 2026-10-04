@@ -5,10 +5,10 @@ import {
 import {
   Copy20Regular, Delete20Regular, Edit20Regular, Play20Regular,
 } from '@fluentui/react-icons';
-import type { ListWorkflowsResult } from '../../../../../packages/agent/src/protocol.ts';
-import type { Workflow } from '../../../../../packages/core/src/types.ts';
-import { flattenSteps, isLoopStep, isStagesStep } from '../../../../../packages/core/src/steps.ts';
-import { disabledRoots } from '../../../../../packages/core/src/enabled.ts';
+import type { ListWorkflowsResult } from '../../shared/protocol.gen.ts';
+import type { Workflow } from '../../shared/types.ts';
+import { flattenSteps, isLoopStep, isStagesStep } from '../../shared/steps.ts';
+import { disabledRoots } from '../../shared/enabled.ts';
 import { dataFlow, ordinals as ordinalsOf, type DataFlowEntry } from '../../lib/step-describe.ts';
 import { StepTrack } from './StepTrack.tsx';
 

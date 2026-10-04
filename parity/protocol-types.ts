@@ -19,6 +19,10 @@ type Same<A, B> = Mutual<A, B> extends true ? Mutual<Deep<A>, Deep<B>> : false;
 type Params<M extends keyof typeof P.methods> = z.output<(typeof P.methods)[M]['params']>;
 type Result<M extends keyof typeof P.methods> = z.output<(typeof P.methods)[M]['result']>;
 type Note<N extends keyof typeof P.notifications> = z.output<(typeof P.notifications)[N]>;
+/** T without its index signature: the fields it names. */
+type Named<T> = { [K in keyof T as string extends K ? never : K]: T[K] };
+/** Core's real shape fills every field the webview's loose one names. */
+type Fills<Core, Web> = [Core] extends [Named<Web>] ? true : false;
 
 /** Every protocol.ts method is in the generated map, and vice versa. */
 type _Methods = Both<Gen.MethodName, P.MethodName>;
@@ -69,11 +73,10 @@ type _endSessionResult = Check<Same<Gen.MethodMap['endSession']['result'], Resul
 type _resolveManualParams = Check<Same<Gen.MethodMap['resolveManual']['params'], Params<'resolveManual'>>>;
 type _resolveManualResult = Check<Same<Gen.MethodMap['resolveManual']['result'], Result<'resolveManual'>>>;
 type _listRunsParams = Check<Same<Gen.MethodMap['listRuns']['params'], Params<'listRuns'>>>;
-// zod's catchall adds an index signature core's type lacks; the client has always typed this with core's.
-type _listRunsResult = Check<Same<Gen.MethodMap['listRuns']['result'], RunSummary[]>>;
+// The webview types runs loosely (core-types.ts); core's own shape must fill it.
+type _listRunsResult = Check<Fills<RunSummary, Gen.MethodMap['listRuns']['result'][number]>>;
 type _getRunParams = Check<Same<Gen.MethodMap['getRun']['params'], Params<'getRun'>>>;
-// zod's catchall adds an index signature core's type lacks; the client has always typed this with core's.
-type _getRunResult = Check<Same<Gen.MethodMap['getRun']['result'], RunDetail | null>>;
+type _getRunResult = Check<Fills<RunDetail, NonNullable<Gen.MethodMap['getRun']['result']>>>;
 type _readRunLogParams = Check<Same<Gen.MethodMap['readRunLog']['params'], Params<'readRunLog'>>>;
 type _readRunLogResult = Check<Same<Gen.MethodMap['readRunLog']['result'], Result<'readRunLog'>>>;
 type _getWorkingDiffParams = Check<Same<Gen.MethodMap['getWorkingDiff']['params'], Params<'getWorkingDiff'>>>;
@@ -97,8 +100,10 @@ type _setWorkspacePinnedResult = Check<Same<Gen.MethodMap['setWorkspacePinned'][
 type _setUiStateParams = Check<Same<Gen.MethodMap['setUiState']['params'], Params<'setUiState'>>>;
 type _setUiStateResult = Check<Same<Gen.MethodMap['setUiState']['result'], Result<'setUiState'>>>;
 type _listRecentRunsParams = Check<Same<Gen.MethodMap['listRecentRuns']['params'], Params<'listRecentRuns'>>>;
-// zod's catchall adds an index signature core's type lacks; the client has always typed this with core's.
-type _listRecentRunsResult = Check<Same<Gen.MethodMap['listRecentRuns']['result'], Array<RunSummary & { workspace: string; identityKey?: string }>>>;
+type _listRecentRunsResult = Check<Fills<
+  RunSummary & { workspace: string; identityKey?: string },
+  Gen.MethodMap['listRecentRuns']['result'][number]
+>>;
 type _listJobsParams = Check<Same<Gen.MethodMap['listJobs']['params'], Params<'listJobs'>>>;
 type _listJobsResult = Check<Same<Gen.MethodMap['listJobs']['result'], Result<'listJobs'>>>;
 type _getJobScrollbackParams = Check<Same<Gen.MethodMap['getJobScrollback']['params'], Params<'getJobScrollback'>>>;

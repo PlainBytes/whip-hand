@@ -8,10 +8,10 @@ import { useAgentClient } from '../agent/agent-context.tsx';
 import { DeleteWorkflowDialog } from '../components/DeleteWorkflowDialog.tsx';
 import { PageHeader } from '../components/PageHeader.tsx';
 import { PageFooter } from '../components/PageFooter.tsx';
-import type { Scope, Workflow } from '../../../../packages/core/src/types.ts';
-import { isContainerStep } from '../../../../packages/core/src/steps.ts';
-import { untilTargetOf } from '../../../../packages/core/src/enabled.ts';
-import { validateWorkflowDraft } from '../../../../packages/core/src/schema.ts';
+import type { Scope, Workflow } from '../shared/types.ts';
+import { isContainerStep } from '../shared/steps.ts';
+import { untilTargetOf } from '../shared/enabled.ts';
+import type { ValidateWorkflowResult } from '../shared/protocol.gen.ts';
 import { readerNotes } from '../lib/disabled-copy.ts';
 import { referenceableIds } from '../lib/step-tree.ts';
 import { normalizeDraft } from '../lib/draft-normalize.ts';
@@ -58,6 +58,13 @@ function computeVisible(rows: EditorRow[], isBodyFolded: (id: string) => boolean
  * child of WorkflowsPage, which keeps the `{ name, source }` editing identity
  * and passes it down; the app has no router for this to be a destination of.
  */
+type DraftValidation = Pick<ValidateWorkflowResult, 'problems' | 'fieldProblems'>;
+
+const NO_PROBLEMS: DraftValidation = { problems: [], fieldProblems: [] };
+
+/** How long the editor waits after an edit before checking the draft again. */
+const REVALIDATE_MS = 250;
+
 export function WorkflowEditor({
   workflow, name, source, workdir, revealsGlobal, onSaved, onCancel, onDeleted,
 }: WorkflowEditorProps) {
@@ -90,24 +97,57 @@ export function WorkflowEditor({
   const [revealId, setRevealId] = useState<string | null>(null);
 
   const normalized = useMemo(() => normalizeDraft(draft), [draft]);
-  const { problems: draftProblems, fieldProblems: draftFieldProblems } = useMemo(
-    () => validateWorkflowDraft(normalized), [normalized],
-  );
+  // The agent's validator (validateWorkflow) is the only one. It runs at
+  // Save, and again after each edit once problems are on screen, so they
+  // clear as they get fixed. `validated` is the draft the result describes;
+  // an answer for an older draft is dropped.
+  const [validation, setValidation] = useState<DraftValidation>(NO_PROBLEMS);
+  const validated = useRef<unknown>(undefined);
+  const current = useRef(normalized);
+  current.current = normalized;
+
+  async function validate(candidate: typeof normalized): Promise<DraftValidation> {
+    validated.current = candidate;
+    const { problems, fieldProblems } = await client.request('validateWorkflow', { draft: candidate });
+    const found = { problems, fieldProblems };
+    if (current.current === candidate) setValidation(found);
+    return found;
+  }
+
+  useEffect(() => {
+    if (!showProblems || validated.current === normalized) return;
+    const timer = setTimeout(() => {
+      // A failure leaves the last answer up; Save reports it.
+      validate(normalized).catch(() => {});
+    }, REVALIDATE_MS);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- validate reads refs and the stable client
+  }, [showProblems, normalized]);
+
   // Keyed by the card's own committed id, so this reads as a problem on that
   // card, and its message matches the `step '<id>': ...` shape the footer's
   // other lines use.
   const idProblems = Object.entries(idFieldErrors)
     .filter((entry): entry is [string, string] => entry[1] !== null)
     .map(([stepId, message]) => ({ stepId, message: `step '${stepId}': Step ID ${message}` }));
-  const allProblems = [
-    ...draftProblems, ...idProblems.map(p => p.message), ...(settingsProblem ? [settingsProblem] : []),
+  const problemsOf = (v: DraftValidation): string[] => [
+    ...v.problems, ...idProblems.map(p => p.message), ...(settingsProblem ? [settingsProblem] : []),
   ];
+  // Every stepId-bearing problem, in the same order as `problemsOf` — built
+  // from the structured `fieldProblems` rather than re-parsing `problems`
+  // strings, since a "references" semantic problem (`step 'b' references
+  // unknown step 'a'`) has no colon right after the id for a regex to find.
+  const stepProblemsOf = (v: DraftValidation): { stepId: string }[] => [
+    ...v.fieldProblems.flatMap(fp => (fp.stepId !== undefined ? [{ stepId: fp.stepId }] : [])),
+    ...idProblems,
+  ];
+  const allProblems = problemsOf(validation);
 
   // Field-level errors for the step cards — populated only from the schema's
   // own field problems (id problems are already visible at their source, the
   // Step ID field itself). First problem per (step, field) wins.
   const fieldErrorsByStepId = new Map<string, Record<string, string>>();
-  for (const fp of draftFieldProblems) {
+  for (const fp of validation.fieldProblems) {
     if (fp.stepId === undefined || fp.field === undefined) continue;
     const bucket = fieldErrorsByStepId.get(fp.stepId) ?? {};
     if (!(fp.field in bucket)) bucket[fp.field] = fp.phrase;
@@ -121,16 +161,8 @@ export function WorkflowEditor({
   // expanded once, depth-first) — stable regardless of which bodies are
   // folded, so folding a loop never renumbers anything outside it.
   const ordinalByStepId = new Map(rows.map((row, i) => [row.step.id, i + 1]));
-  // Every stepId-bearing problem, in the same order as `allProblems` — built
-  // from the structured `fieldProblems` rather than re-parsing `problems`
-  // strings, since a "references" semantic problem (`step 'b' references
-  // unknown step 'a'`) has no colon right after the id for a regex to find.
-  const stepProblems = [
-    ...draftFieldProblems.flatMap(fp => (fp.stepId !== undefined ? [{ stepId: fp.stepId }] : [])),
-    ...idProblems,
-  ];
   const problemCountByStepId = new Map<string, number>();
-  for (const { stepId } of stepProblems) {
+  for (const { stepId } of stepProblemsOf(validation)) {
     problemCountByStepId.set(stepId, (problemCountByStepId.get(stepId) ?? 0) + 1);
   }
 
@@ -161,18 +193,28 @@ export function WorkflowEditor({
   }, [revealId, visibleRows]);
 
   async function save(): Promise<void> {
-    if (allProblems.length > 0) {
+    setSaving(true);
+    setSaveError(null);
+    let found: DraftValidation;
+    try {
+      found = await validate(normalized);
+    } catch (err) {
+      setSaveError(errorMessage(err));
+      setSaving(false);
+      return;
+    }
+    if (problemsOf(found).length > 0) {
+      setSaving(false);
       setShowProblems(true);
-      const firstStepId = stepProblems[0]?.stepId;
+      const firstStepId = stepProblemsOf(found)[0]?.stepId;
       if (firstStepId !== undefined) revealStep(firstStepId);
       return;
     }
     if (source === 'global' && !confirmingGlobalSave) {
+      setSaving(false);
       setConfirmingGlobalSave(true);
       return;
     }
-    setSaving(true);
-    setSaveError(null);
     try {
       await client.request('updateWorkflow', {
         workdir, name, workflow: normalized,

@@ -4,7 +4,7 @@
  * The engine runs an interactive step in two phases: the session the human
  * talks to (`main`), and then a headless pass that reads that conversation
  * back and writes the step's artifact (`harvest`, emitted as a `step:spawn`
- * in packages/core/src/engine/runner.ts). Between the two the pty is gone but
+ * in whiphand-core's engine/runner.rs). Between the two the pty is gone but
  * the step is still very much working.
  *
  * Deliberately narrow: `harvest` is the engine's *only* artifact-generating

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readerNotes } from './disabled-copy.ts';
-import type { AgentStep, Workflow } from '../../../../packages/core/src/types.ts';
+import type { AgentStep, Workflow } from '../shared/types.ts';
 
 const agent = (over: Partial<AgentStep> & { id: string }): AgentStep => ({
   kind: 'agent', runner: 'claude', mode: 'headless', writes: false,

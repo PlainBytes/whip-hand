@@ -4,7 +4,7 @@ import {
   MessageBar, MessageBarBody, Spinner, Text,
 } from '@fluentui/react-components';
 import { useAgentClient } from '../agent/agent-context.tsx';
-import type { DeleteRunResult } from '../../../../packages/agent/src/protocol.ts';
+import type { DeleteRunResult } from '../shared/protocol.gen.ts';
 import { errorMessage } from '../lib/error-message.ts';
 
 export interface DeleteRunDialogProps {

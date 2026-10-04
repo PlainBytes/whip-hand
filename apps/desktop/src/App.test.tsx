@@ -7,7 +7,7 @@ import { AgentClientProvider } from './agent/agent-context.tsx';
 import { useAppStore } from './state/store.ts';
 import { FakeFileSystem } from './files/fake-fs.ts';
 import { FileSystemProvider } from './files/fs-context.tsx';
-import { EMPTY_APP_STATE } from '../../../packages/agent/src/app-state.ts';
+import { EMPTY_APP_STATE } from './test/app-state.ts';
 
 // The real banner renders nothing under vitest (it only runs in production
 // builds), so this marker stands in to make its position in the layout

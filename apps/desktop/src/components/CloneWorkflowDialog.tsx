@@ -5,7 +5,7 @@ import {
 } from '@fluentui/react-components';
 import { Copy20Regular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
-import type { Scope } from '../../../../packages/core/src/types.ts';
+import type { Scope } from '../shared/types.ts';
 import type { WorkflowEntry } from './workflow-lane/WorkflowLane.tsx';
 import { isWorkflowNameTaken, workflowNameProblem } from './workflow-name-problem.ts';
 import { errorMessage } from '../lib/error-message.ts';

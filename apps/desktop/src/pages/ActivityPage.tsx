@@ -6,7 +6,7 @@ import {
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { liveStageProgress, useAppStore, waitingRunIds } from '../state/store.ts';
 import { sameSet, sameStageProgress, useAppStoreStable } from '../state/use-stable-selector.ts';
-import { sameWorkspace } from '../../../../packages/core/src/path-form.ts';
+import { sameWorkspace } from '../shared/path-form.ts';
 import { openWorkspace } from '../lib/workspace-switch.ts';
 import { basename } from '../lib/workspace-identity.ts';
 import { WorkspaceDot } from '../components/WorkspaceDot.tsx';

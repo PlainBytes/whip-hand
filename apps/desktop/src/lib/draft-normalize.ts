@@ -1,13 +1,13 @@
 /**
  * A pure second line of defence against blank optional fields, ahead of
- * `validateWorkflowDraft` (see @whiphand/core's schema.ts): the editor's own
+ * the agent's validateWorkflow (whiphand-core's schema/shape.rs): the editor's own
  * controls already write `undefined` for a field the user blanked out, but a
  * step built by `convertStep` or loaded from an older draft can still carry
- * `''` or `'   '`. Mirrors core's `optionalText` field list exactly, so a
+ * `''` or `'   '`. Mirrors core's `optional_text` field list exactly, so a
  * field core treats as absent is never the one thing the editor still flags.
  */
-import type { Step, Workflow, WorkflowInput } from '../../../../packages/core/src/types.ts';
-import { isContainerStep } from '../../../../packages/core/src/steps.ts';
+import type { Step, Workflow, WorkflowInput } from '../shared/types.ts';
+import { isContainerStep } from '../shared/steps.ts';
 
 function blank(v: string | undefined): boolean {
   return v === undefined || v.trim() === '';

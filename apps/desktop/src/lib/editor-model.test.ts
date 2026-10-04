@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { editorRows, wiring } from './editor-model.ts';
-import type { AgentStep, LoopStep, StagesStep, Workflow } from '../../../../packages/core/src/types.ts';
+import type { AgentStep, LoopStep, StagesStep, Workflow } from '../shared/types.ts';
 
 const agent = (over: Partial<AgentStep> & { id: string }): AgentStep => ({
   kind: 'agent', runner: 'claude', mode: 'headless', writes: false,

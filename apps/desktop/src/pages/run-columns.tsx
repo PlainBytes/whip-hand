@@ -8,7 +8,7 @@ import { createTableColumn, tokens, type TableColumnDefinition } from '@fluentui
 import { LockClosed16Regular } from '@fluentui/react-icons';
 import type { RunSummary } from '../agent/client.ts';
 import { StatusBadge } from '../components/StatusBadge.tsx';
-import { elapsedMs, formatElapsed } from '../../../../packages/core/src/format.ts';
+import { elapsedMs, formatElapsed } from '../shared/format.ts';
 
 export type RecentRun = RunSummary & { workspace: string; identityKey?: string };
 

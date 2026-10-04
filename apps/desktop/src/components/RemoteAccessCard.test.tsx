@@ -5,7 +5,7 @@ import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
 import { AgentClientProvider } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
-import type { RemoteAccessGetResult } from '../../../../packages/agent/src/protocol.ts';
+import type { RemoteAccessGetResult } from '../shared/protocol.gen.ts';
 
 const OFF: RemoteAccessGetResult = {
   enabled: false, port: 61338, token: 'tok-'.padEnd(43, 'x'),

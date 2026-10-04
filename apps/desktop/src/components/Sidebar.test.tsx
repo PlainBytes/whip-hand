@@ -10,7 +10,7 @@ import { AgentClientProvider } from '../agent/agent-context.tsx';
 import { useAppStore, type JobState } from '../state/store.ts';
 import { pagesInGroup, type PageId } from '../nav.ts';
 import { CapabilitiesProvider, type AppCapabilities } from '../capabilities.tsx';
-import { EMPTY_APP_STATE } from '../../../../packages/agent/src/app-state.ts';
+import { EMPTY_APP_STATE } from '../test/app-state.ts';
 import { workspaceColorVar } from '../lib/workspace-identity.ts';
 
 const BROWSER_CAPS: AppCapabilities = { host: 'browser', localFiles: false };

@@ -7,7 +7,7 @@ import {
 } from '@fluentui/react-icons';
 import type { LeafStep } from '../../lib/step-describe.ts';
 import { actorOf, purposeOf, type Actor, type DataFlowEntry } from '../../lib/step-describe.ts';
-import { isAgentStep, isManualStep } from '../../../../../packages/core/src/steps.ts';
+import { isAgentStep, isManualStep } from '../../shared/steps.ts';
 
 const ACTOR_ICON: Record<Actor, ReactNode> = {
   chat: <ChatRegular />,

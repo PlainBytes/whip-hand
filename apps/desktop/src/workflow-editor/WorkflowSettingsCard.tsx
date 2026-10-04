@@ -3,7 +3,7 @@ import {
   Button, Dropdown, Field, Input, Option, Switch, Text,
 } from '@fluentui/react-components';
 import { ChevronDown20Regular, ChevronRight20Regular } from '@fluentui/react-icons';
-import type { OnFindings, Workflow, WorkflowInput } from '../../../../packages/core/src/types.ts';
+import type { OnFindings, Workflow, WorkflowInput } from '../shared/types.ts';
 
 const ON_FINDINGS_OPTIONS: OnFindings[] = ['report', 'loop', 'interactive'];
 

@@ -5,10 +5,10 @@
  * manual steps — the choice vocabulary, the loop frame, the note field — stops
  * here; the panel downstream only ever sees a ReviewRequest.
  */
-import type { CaptureSpec, ManualChoice, ManualRequest } from '../../../../packages/core/src/types.ts';
-import { ancestorLoops, executionKey } from '../../../../packages/core/src/execution-key.ts';
-import { stageLabel } from '../../../../packages/core/src/format.ts';
-import { toNative } from '../../../../packages/core/src/path-form.ts';
+import type { CaptureSpec, ManualChoice, ManualRequest } from '../shared/types.ts';
+import { ancestorLoops, executionKey } from '../shared/execution-key.ts';
+import { stageLabel } from '../shared/format.ts';
+import { toNative } from '../shared/path-form.ts';
 import { manualLabel } from '../lib/await-copy.ts';
 import { DIFF_SOURCE_ID, type ReviewChoice, type ReviewRequest, type ReviewSource } from './model.ts';
 

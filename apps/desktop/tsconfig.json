@@ -14,11 +14,8 @@
     "strict": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    // "node" is required here even though app code never imports node builtins
-    // itself: protocol.ts's type-only re-exports transitively reach into
-    // @whiphand/core's runtime modules (fs, path, child_process, ...) for tsc to
-    // resolve their declared types — verbatimModuleSyntax still guarantees
-    // none of that code is actually emitted/bundled.
+    // "node" for the tests, which read fixtures with node:fs. App code must
+    // not import a node builtin: it runs in a webview and a browser.
     "types": ["vite/client", "node"]
   },
   "include": ["src"]

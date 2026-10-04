@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeDraft } from './draft-normalize.ts';
-import type { Workflow } from '../../../../packages/core/src/types.ts';
+import type { Workflow } from '../shared/types.ts';
 
 describe('normalizeDraft', () => {
   it('strips a blank command output, cwd and shell', () => {

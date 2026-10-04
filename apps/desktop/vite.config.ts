@@ -1,10 +1,5 @@
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-
-const appDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(appDir, '../..');
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -65,11 +60,5 @@ export default defineConfig({
   server: {
     port: 61337,
     strictPort: true,
-    fs: {
-      // The webview does type-only imports from packages outside apps/desktop
-      // (packages/agent/src/protocol.ts, @whiphand/core) — allow vite dev-server
-      // file access to the whole repo, not just apps/desktop.
-      allow: [repoRoot],
-    },
   },
 });

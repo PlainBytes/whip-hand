@@ -1,7 +1,7 @@
 import { Text } from '@fluentui/react-components';
 import { DocumentMultipleRegular } from '@fluentui/react-icons';
-import type { StagesStep, Step } from '../../../../../packages/core/src/types.ts';
-import { flattenSteps } from '../../../../../packages/core/src/steps.ts';
+import type { StagesStep, Step } from '../../shared/types.ts';
+import { flattenSteps } from '../../shared/steps.ts';
 import { stagesRule, type DataFlowEntry } from '../../lib/step-describe.ts';
 import { StepTrack } from './StepTrack.tsx';
 

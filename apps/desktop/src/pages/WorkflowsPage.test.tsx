@@ -7,6 +7,7 @@ import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
 import { AgentClientProvider } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
+import { answerValidation } from '../test/validation.ts';
 
 const FEATURE_WORKFLOW = {
   name: 'feature',
@@ -50,6 +51,7 @@ function respondFactory() {
 
 function renderWorkflowsPage() {
   const transport = new MockTransport();
+  answerValidation(transport);
   const client = new AgentClient(transport);
   const onRunWorkflow = vi.fn();
   render(

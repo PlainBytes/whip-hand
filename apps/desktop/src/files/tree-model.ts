@@ -8,7 +8,7 @@
  * that survived — which is what keeps expansion state and selection alive
  * across a refresh.
  */
-import { validateSegment } from '../../../../packages/core/src/segment.ts';
+import { validateSegment } from '../shared/segment.ts';
 
 export interface DirEntry {
   name: string;

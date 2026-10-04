@@ -5,10 +5,9 @@ import {
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
 import { spinInteger } from '../lib/spin-value.ts';
-import type { RemoteAccessGetResult } from '../../../../packages/agent/src/protocol.ts';
+import type { RemoteAccessGetResult } from '../shared/protocol.gen.ts';
 import { errorMessage } from '../lib/error-message.ts';
-// Value import from wire.ts, not protocol.ts: see wire.ts for why.
-import { remoteUrl } from '../../../../packages/agent/src/remote/wire.ts';
+import { remoteUrl } from '../shared/wire.ts';
 
 // Only pulled in once the user actually turns remote access on, so the QR
 // renderer stays out of the initial bundle for everyone who never does.

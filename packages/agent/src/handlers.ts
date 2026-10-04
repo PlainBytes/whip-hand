@@ -16,13 +16,14 @@ import {
   mergeConfig, DEFAULT_CONFIG, parseWorkflow, planResume, sameWorkspace,
   pruneRuns as corePruneRuns, renameRun as coreRenameRun, resolveWorkflowPath, runWorkflow,
   setRunLocked as coreSetRunLocked, updateWorkflow as coreUpdateWorkflow, validateAttachments,
+  validateWorkflowDraft,
 } from '@whiphand/core';
 import type { AttachmentSource, Container, OpenedWorkspace, RunDetail, RunOptions, WorkspaceConfig } from '@whiphand/core';
 import type {
   CancelRunParams, CancelRunResult, CloneWorkflowParams, CloneWorkflowResult,
   ConfigGetParams, ConfigGetResult, ConfigSetParams,
   ConfigSetResult, CreateWorkflowParams, CreateWorkflowResult, DeleteRunParams, DeleteRunResult,
-  DeleteWorkflowParams, DeleteWorkflowResult,
+  DeleteWorkflowParams, DeleteWorkflowResult, ValidateWorkflowParams, ValidateWorkflowResult,
   DoctorParams, DoctorResult,
   EndSessionParams, EndSessionResult, GetWorkflowParams,
   ListModelsParams, ListModelsResult,
@@ -336,6 +337,11 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
   const cloneWorkflow: Handler = async (params): Promise<CloneWorkflowResult> => {
     const { workdir, name, newName, scope } = params as CloneWorkflowParams;
     return coreCloneWorkflow(resolve(workdir), name, newName, scope);
+  };
+
+  const validateWorkflow: Handler = async (params): Promise<ValidateWorkflowResult> => {
+    const { draft } = params as ValidateWorkflowParams;
+    return validateWorkflowDraft(draft);
   };
 
   const initWorkspace: Handler = async (params): Promise<InitWorkspaceResult> => {
@@ -766,7 +772,7 @@ export function createHandlers(deps: HandlersDeps): Record<string, Handler> {
   const remoteAccessRotateToken: Handler = async () => requireRemote().rotateToken();
 
   return {
-    hello, listWorkflows, getWorkflow, createWorkflow, updateWorkflow, deleteWorkflow, cloneWorkflow, initWorkspace, doctor,
+    hello, listWorkflows, getWorkflow, createWorkflow, updateWorkflow, deleteWorkflow, cloneWorkflow, validateWorkflow, initWorkspace, doctor,
     listModels,
     configGet, configSet,
     startRun, resumeRun, cancelRun, deleteRun, setRunLocked, renameRun, pruneRuns, endSession, resolveManual,

@@ -475,6 +475,23 @@ test('cloneWorkflow copies a workflow under a new name, end to end', async () =>
   assert.equal(cloned.name, 'original-copy');
 });
 
+test('validateWorkflow returns per-field problems for a draft, and the workflow once it is valid', async () => {
+  const appState = await tempAppState();
+  const handlers = createHandlers({ jobs: new JobManager(), notify: () => {}, appState });
+  const bad = await handlers.validateWorkflow(
+    { draft: { name: 'w', steps: [{ id: 'a', kind: 'command', output: 'a.log' }] } }, { notify: () => {} },
+  ) as { workflow?: unknown; problems: string[]; fieldProblems: Array<{ stepId?: string; field?: string }> };
+  assert.equal(bad.workflow, undefined);
+  assert.ok(bad.problems.length > 0);
+  assert.ok(bad.fieldProblems.some(p => p.stepId === 'a' && p.field === 'run'), JSON.stringify(bad.fieldProblems));
+
+  const good = await handlers.validateWorkflow(
+    { draft: { name: 'w', steps: [{ id: 'a', kind: 'command', run: 'echo', output: 'a.log' }] } }, { notify: () => {} },
+  ) as { workflow?: { name: string }; problems: string[] };
+  assert.deepEqual(good.problems, []);
+  assert.equal(good.workflow?.name, 'w');
+});
+
 test('createWorkflow/updateWorkflow/getWorkflow honor an explicit global scope', async () => {
   const appState = await tempAppState();
   const handlers = createHandlers({ jobs: new JobManager(), notify: () => {}, appState });

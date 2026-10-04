@@ -20,9 +20,12 @@ const FILES = {
     '[package]\nname = "whiphand-core"\nversion = "0.1.0"\nedition = "2024"\n\n[dependencies]\nregex = "1"\n',
   'crates/whiphand-cli/Cargo.toml':
     '[package]\nname = "whiphand-cli"\nversion = "0.1.0"\nedition = "2024"\n\n[dependencies]\nclap = "4"\n',
+  'crates/whiphand-protocol/Cargo.toml':
+    '[package]\nname = "whiphand-protocol"\nversion = "0.1.0"\nedition = "2024"\n\n[dependencies]\nserde = "1"\n',
   'Cargo.lock':
     '[[package]]\nname = "whiphand-cli"\nversion = "0.1.0"\n\n[[package]]\nname = "whiphand-core"\nversion = "0.1.0"\n\n'
-    + '[[package]]\nname = "whiphand-job"\nversion = "0.9.0"\n',
+    + '[[package]]\nname = "whiphand-job"\nversion = "0.9.0"\n\n'
+    + '[[package]]\nname = "whiphand-protocol"\nversion = "0.1.0"\n',
   'apps/desktop/src-tauri/tauri.conf.json':
     '{\n  "productName": "Whiphand",\n  "version": "0.1.0",' +
     '  "plugins": { "updater": {' +
@@ -91,6 +94,7 @@ test('--check exits non-zero and lists every mismatch', () => {
       assert.match(stderr, /^  Cargo\.lock \(whiphand-core\): 0\.1\.0/m);
       assert.match(stderr, /package-lock\.json \(packages\/core\): 0\.1\.0/);
       assert.match(stderr, /^  Cargo\.lock \(whiphand-cli\): 0\.1\.0/m);
+      assert.match(stderr, /^  Cargo\.lock \(whiphand-protocol\): 0\.1\.0/m);
       return true;
     });
   } finally {
@@ -120,6 +124,7 @@ test('writing a version updates every location, including Cargo.lock and package
     assert.match(workspaceLock, /name = "whiphand-cli"\nversion = "0\.2\.0"/);
     const cliToml = fs.readFileSync(path.join(root, 'crates/whiphand-cli/Cargo.toml'), 'utf8');
     assert.match(cliToml, /version = "0\.2\.0"/);
+    assert.match(workspaceLock, /name = "whiphand-protocol"\nversion = "0\.2\.0"/);
     assert.match(workspaceLock, /name = "whiphand-job"\nversion = "0\.9\.0"/);
 
     const tauriConf = JSON.parse(fs.readFileSync(path.join(root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'));

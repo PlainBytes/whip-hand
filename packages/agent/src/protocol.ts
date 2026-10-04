@@ -137,6 +137,25 @@ export const cloneWorkflowParams = z.object({
 });
 export const cloneWorkflowResult = z.object({ path: z.string() });
 
+/**
+ * Validates a workflow draft the editor holds, exactly as a save would: the
+ * same problems, per field, and the parsed workflow whenever the shape
+ * passed. The editor asks the agent rather than running core's validator in
+ * the webview, so there is one validator, wherever the agent runs.
+ */
+export const validateWorkflowParams = z.object({ draft: z.unknown() });
+const workflowFieldProblemSchema = z.object({
+  stepId: z.string().optional(),
+  field: z.string().optional(),
+  phrase: z.string(),
+  message: z.string(),
+});
+export const validateWorkflowResult = z.object({
+  workflow: workflowSchema.optional(),
+  problems: z.array(z.string()),
+  fieldProblems: z.array(workflowFieldProblemSchema),
+});
+
 export const initWorkspaceParams = z.object({ workdir: z.string().min(1) });
 export const initWorkspaceResult = z.object({ created: z.array(z.string()) });
 
@@ -684,6 +703,7 @@ export const methods = {
   updateWorkflow: { params: updateWorkflowParams, result: updateWorkflowResult },
   deleteWorkflow: { params: deleteWorkflowParams, result: deleteWorkflowResult },
   cloneWorkflow: { params: cloneWorkflowParams, result: cloneWorkflowResult },
+  validateWorkflow: { params: validateWorkflowParams, result: validateWorkflowResult },
   initWorkspace: { params: initWorkspaceParams, result: initWorkspaceResult },
   doctor: { params: doctorParams, result: doctorResult },
   listModels: { params: listModelsParams, result: listModelsResult },
@@ -734,6 +754,8 @@ export type DeleteWorkflowParams = z.infer<typeof deleteWorkflowParams>;
 export type DeleteWorkflowResult = z.infer<typeof deleteWorkflowResult>;
 export type CloneWorkflowParams = z.infer<typeof cloneWorkflowParams>;
 export type CloneWorkflowResult = z.infer<typeof cloneWorkflowResult>;
+export type ValidateWorkflowParams = z.infer<typeof validateWorkflowParams>;
+export type ValidateWorkflowResult = z.infer<typeof validateWorkflowResult>;
 export type InitWorkspaceParams = z.infer<typeof initWorkspaceParams>;
 export type InitWorkspaceResult = z.infer<typeof initWorkspaceResult>;
 export type DoctorParams = z.infer<typeof doctorParams>;

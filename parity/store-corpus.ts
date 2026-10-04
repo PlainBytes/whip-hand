@@ -47,6 +47,35 @@ export function storeRunsOps(): Op[] {
   return ops;
 }
 
+/** `readRunLog` over small files, so the tail window's expansion and partial-line edges are all hit. */
+export function storeRunLogOps(): Op[] {
+  const numbered = (n: number, width = 0) =>
+    Array.from({ length: n }, (_, i) => `line ${i + 1}${'x'.repeat(width)}\n`).join('');
+  const big = numbered(600, 40);
+  const ops: Op[] = [];
+  const add = (file: Record<string, unknown>, ...reads: Array<Record<string, unknown>>) => {
+    for (const r of reads) ops.push({ op: 'runLog', ...file, ...r });
+  };
+  add({},
+    { limit: 10 }, { limit: 10, fromEnd: true }, { limit: 10, beforeByte: 0 }, { limit: 10, beforeByte: 50 });
+  add({ content: '' }, { limit: 10 }, { limit: 10, fromEnd: true });
+  add({ content: numbered(10) },
+    { limit: 4 }, { limit: 4, offset: 8 }, { limit: 4, offset: 10 }, { limit: 4, offset: 99 },
+    { limit: 3, fromEnd: true }, { limit: 50, fromEnd: true }, { limit: 3, beforeByte: 21 },
+    { limit: 3, beforeByte: 23 }, { limit: 3, beforeByte: 500 }, { limit: 0 }, { limit: 0, fromEnd: true });
+  add({ content: 'a\n\n\nb\nlast without newline' },
+    { limit: 10 }, { limit: 2, fromEnd: true }, { limit: 10, fromEnd: true });
+  add({ content: big },
+    { limit: 1, fromEnd: true }, { limit: 10, fromEnd: true }, { limit: 200, fromEnd: true },
+    { limit: 5000, fromEnd: true }, { limit: 10, beforeByte: 12_345 }, { limit: 7, offset: 590 });
+  add({ content: 'héllo — wörld 😀\nζ\n'.repeat(300) },
+    { limit: 3, fromEnd: true }, { limit: 3, beforeByte: 1001 }, { limit: 2, offset: 5 });
+  add({ contentBase64: Buffer.from([0x61, 0xff, 0x0a, 0xe2, 0x82, 0x0a, 0xf0, 0x9f, 0x98, 0x0a, 0x62]).toString('base64') },
+    { limit: 10 }, { limit: 10, fromEnd: true });
+  add({ content: 'a\r\nb\r\n' }, { limit: 10 }, { limit: 10, fromEnd: true });
+  return ops;
+}
+
 const WS_RUNS = '.whiphand/runs';
 
 function journal(name: string, opts: {

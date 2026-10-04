@@ -5,6 +5,7 @@ pub mod artifacts;
 pub mod attachments;
 pub mod auto_name;
 pub mod command;
+pub mod diff;
 pub mod enabled;
 pub mod frames;
 pub mod frontend;

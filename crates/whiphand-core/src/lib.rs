@@ -36,6 +36,7 @@ pub mod template;
 pub mod time;
 pub mod types;
 pub mod workflow_name;
+pub mod workflow_write;
 pub mod workspace;
 pub mod yaml_emit;
 pub mod zod;
@@ -44,6 +45,8 @@ pub mod zod;
 pub mod parity;
 #[doc(hidden)]
 pub mod parity_adapters;
+#[doc(hidden)]
+pub mod parity_agent_core;
 #[doc(hidden)]
 pub mod parity_engine;
 #[doc(hidden)]

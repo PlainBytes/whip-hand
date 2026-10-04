@@ -33,6 +33,7 @@ import { runStoreOp } from './store-probe.ts';
 import { PROCESS_OPS, runProcessOp } from './process-probe.ts';
 import { ADAPTER_OPS, runAdapterOp } from './adapter-probe.ts';
 import { ENGINE_OPS, runEngineOp } from './engine-probe.ts';
+import { AGENT_CORE_OPS, runAgentCoreOp } from './agent-core-probe.ts';
 
 export const REPO = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, '');
 export const CORE_FIXTURES = path.join(REPO, 'parity', 'fixtures', 'core');
@@ -215,11 +216,13 @@ async function runRaw(op: Op): Promise<unknown> {
     }
     case 'journal':
     case 'runs':
+    case 'runLog':
       return runStoreOp(op);
     default:
       if (PROCESS_OPS.has(op.op)) return runProcessOp(op);
       if (ADAPTER_OPS.has(op.op)) return runAdapterOp(op, REPO);
       if (ENGINE_OPS.has(op.op)) return runEngineOp(op, REPO);
+      if (AGENT_CORE_OPS.has(op.op)) return runAgentCoreOp(op);
       throw new Error(`unknown parity op '${op.op}'`);
   }
 }

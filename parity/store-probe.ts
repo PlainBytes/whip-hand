@@ -7,6 +7,8 @@
  *   reopens, renames, locks, listings) through it, then returns the bytes of
  *   `run.json`, `events.ndjson` and `run.log`. Key order is part of what is
  *   compared, because it is part of what the TS journal writes.
+ * - `runLog`: writes a `run.log` (UTF-8 `content`, raw `contentBase64`, or
+ *   none) and pages it with `readRunLog`.
  * - `runs`: copies fixture run directories (`parity/fixtures/core/runs/`)
  *   into a workspace and calls one reader on them — list, get, rename,
  *   delete, prune — returning its result and every run dir's files after.
@@ -24,6 +26,7 @@ import { RunJournal, getRun, listRuns, renameRun } from '../packages/core/src/en
 import type { RunJournalInit } from '../packages/core/src/engine/manifest.ts';
 import { deleteRun, pruneRuns } from '../packages/core/src/engine/retention.ts';
 import { setRunLocked } from '../packages/core/src/engine/run-lock.ts';
+import { readRunLog, RUN_LOG_NAME } from '../packages/core/src/engine/run-log.ts';
 import type { WhiphandEvent } from '../packages/core/src/types.ts';
 
 type Op = Record<string, unknown> & { op: string };
@@ -188,11 +191,28 @@ async function runsOp(op: Op): Promise<unknown> {
   }
 }
 
+async function runLogOp(op: Op): Promise<unknown> {
+  const runDir = workspace();
+  try {
+    if (typeof op.content === 'string') writeFileSync(path.join(runDir, RUN_LOG_NAME), op.content, 'utf8');
+    if (typeof op.contentBase64 === 'string') writeFileSync(path.join(runDir, RUN_LOG_NAME), Buffer.from(op.contentBase64, 'base64'));
+    return await readRunLog(runDir, {
+      limit: op.limit as number,
+      ...(op.offset === undefined ? {} : { offset: op.offset as number }),
+      ...(op.fromEnd === undefined ? {} : { fromEnd: op.fromEnd as boolean }),
+      ...(op.beforeByte === undefined ? {} : { beforeByte: op.beforeByte as number }),
+    });
+  } finally {
+    rmSync(runDir, { recursive: true, force: true });
+  }
+}
+
 /** The store ops, or undefined for an op this module does not own. */
 export async function runStoreOp(op: Op): Promise<unknown> {
   switch (op.op) {
     case 'journal': return journalOp(op);
     case 'runs': return runsOp(op);
+    case 'runLog': return runLogOp(op);
     default: return undefined;
   }
 }

@@ -16,6 +16,7 @@ use crate::node_path;
 use crate::store::journal::{JournalInit, JournalOptions, RunJournal, SeedStep};
 use crate::store::markers::set_run_locked;
 use crate::store::retention::{DeleteRun, delete_run, prune_runs};
+use crate::store::run_log::{ReadRunLogParams, read_run_log};
 use crate::store::runs::{get_run, list_runs, rename_run};
 
 static TS: LazyLock<Regex> =
@@ -319,10 +320,62 @@ fn runs_op(op: &Value, repo: &Path) -> Value {
 }
 
 /// The store ops, or None for an op this module does not own.
+/// Standard-alphabet base64, enough for corpus bytes; no crate needed for a probe.
+pub(crate) fn base64_decode(text: &str) -> Vec<u8> {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::new();
+    let (mut acc, mut bits) = (0u32, 0);
+    for c in text.bytes().filter(|&c| c != b'=') {
+        let v = ALPHABET.iter().position(|&a| a == c).expect("base64") as u32;
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    out
+}
+
+fn run_log_op(op: &Value) -> Value {
+    let dir = Workspace::new();
+    let file = dir.0.join(crate::store::markers::RUN_LOG_NAME);
+    if let Some(text) = op["content"].as_str() {
+        fs::write(&file, text).expect("run.log");
+    }
+    if let Some(b64) = op["contentBase64"].as_str() {
+        fs::write(&file, base64_decode(b64)).expect("run.log");
+    }
+    let num = |key: &str| op[key].as_u64();
+    let params = ReadRunLogParams {
+        offset: num("offset").map(|n| n as usize),
+        limit: num("limit").expect("limit") as usize,
+        from_end: op["fromEnd"].as_bool().unwrap_or(false),
+        before_byte: num("beforeByte"),
+    };
+    let r = read_run_log(&dir.0, &params);
+    let mut out = serde_json::Map::new();
+    out.insert("lines".into(), json!(r.lines));
+    if let Some(v) = r.total {
+        out.insert("total".into(), json!(v));
+    }
+    if let Some(v) = r.truncated {
+        out.insert("truncated".into(), json!(v));
+    }
+    if let Some(v) = r.start_byte {
+        out.insert("startByte".into(), json!(v));
+    }
+    if let Some(v) = r.at_start {
+        out.insert("atStart".into(), json!(v));
+    }
+    Value::Object(out)
+}
+
 pub fn run_store_op(op: &Value, repo: &Path) -> Option<Value> {
     match op["op"].as_str()? {
         "journal" => Some(journal_op(op)),
         "runs" => Some(runs_op(op, repo)),
+        "runLog" => Some(run_log_op(op)),
         _ => None,
     }
 }

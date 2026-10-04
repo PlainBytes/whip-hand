@@ -6,6 +6,7 @@ pub mod auth;
 pub mod claude;
 pub mod common;
 pub mod copilot;
+pub mod models;
 pub mod opencode;
 
 use crate::doctor::probe::{DetectResult, RunnerDoctor, probe_runner};

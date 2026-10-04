@@ -1,0 +1,18 @@
+# steps written without indenting the sequence
+name: indentless
+steps:
+- id: a # first
+  kind: command
+  run: echo a
+  output: a.log
+# the loop
+- id: l
+  kind: loop
+  until: v
+  max_iterations: 2
+  steps:
+  - id: v
+    kind: command
+    run: echo v
+    verdict: true
+    output: v.log

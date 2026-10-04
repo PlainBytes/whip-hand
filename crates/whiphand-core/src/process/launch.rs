@@ -27,6 +27,8 @@ pub enum StdinFrom {
     Inherit,
     /// A file handed over as fd 0 (a headless runner that reads a piped prompt).
     File(PathBuf),
+    /// A pipe the caller writes (claude's model probe sends one request).
+    Piped,
 }
 
 /// Where a child's stdout or stderr goes.
@@ -94,6 +96,7 @@ pub fn spawn_runner(
         StdinFrom::Null => cmd.stdin(Stdio::null()),
         StdinFrom::Inherit => cmd.stdin(Stdio::inherit()),
         StdinFrom::File(p) => cmd.stdin(Stdio::from(std::fs::File::open(p)?)),
+        StdinFrom::Piped => cmd.stdin(Stdio::piped()),
     };
     cmd.stdout(out_stdio(opts.stdout));
     cmd.stderr(out_stdio(opts.stderr));

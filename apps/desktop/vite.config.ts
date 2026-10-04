@@ -6,28 +6,6 @@ import react from '@vitejs/plugin-react';
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(appDir, '../..');
 
-/**
- * Absolute path (dev machine, computed at config time) to the @whiphand/agent
- * sidecar entry point. Injected as a global constant so TauriTransport can
- * spawn `node <AGENT_ENTRY_PATH>` without hardcoding a path.
- */
-const agentEntryPath = path.resolve(repoRoot, 'packages/agent/src/main.ts');
-
-/**
- * How TauriTransport should start the sidecar. A packaged bundle has no repo to
- * point `node` at, so `npm run package:desktop` sets WHIPHAND_PACKAGE=1 and the app
- * spawns the bundled `whiphand-agent` binary instead. `tauri dev` leaves it unset and
- * keeps the fast path: edit the agent's TypeScript, restart, no rebuild.
- */
-const agentSpawnMode = process.env.WHIPHAND_PACKAGE === '1' ? 'sidecar' : 'node';
-
-/**
- * Where `npm run build:web -w desktop` puts the browser bundle. Passed to the
- * sidecar as WHIPHAND_WEB_ROOT in dev mode so remote access serves a real page from
- * a repo checkout; a packaged build reads the bundled resource instead.
- */
-const webDistPath = path.resolve(appDir, 'dist-web');
-
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
@@ -51,7 +29,7 @@ export default defineConfig({
        *
        * Rolldown is right that it cannot move those modules into their own
        * chunk — the desktop shell also imports them statically (api/core from
-       * files/tauri-fs.ts, plugin-shell from agent/tauri-transport.ts and
+       * files/tauri-fs.ts and agent/inprocess-transport.ts, plugin-shell from
        * main.tsx). That costs nothing, since a desktop build needs them eagerly
        * regardless. But it is a warning no one can ever act on, and a build that
        * always prints un-actionable warnings trains people to skim past the
@@ -93,10 +71,5 @@ export default defineConfig({
       // file access to the whole repo, not just apps/desktop.
       allow: [repoRoot],
     },
-  },
-  define: {
-    __AGENT_ENTRY_PATH__: JSON.stringify(agentEntryPath),
-    __AGENT_SPAWN_MODE__: JSON.stringify(agentSpawnMode),
-    __WEB_DIST_PATH__: JSON.stringify(webDistPath),
   },
 });

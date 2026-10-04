@@ -76,6 +76,16 @@ fn number_id(v: Option<&Value>) -> Option<Value> {
         .cloned()
 }
 
+/// The answer to a request whose handler panicked: the engine thread
+/// survives, and the caller gets an error instead of a timeout.
+pub fn panicked(text: &str) -> String {
+    let id = serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|raw| number_id(raw.get("id")))
+        .unwrap_or(Value::Null);
+    error(id, error_code::SERVER_ERROR, "internal error".into())
+}
+
 pub async fn handle_line(agent: &Rc<Agent>, ctx: RequestCtx, text: &str) -> String {
     let raw: Value = match serde_json::from_str(text) {
         Ok(v) => v,
@@ -132,5 +142,22 @@ pub async fn handle_line(agent: &Rc<Agent>, ctx: RequestCtx, text: &str) -> Stri
     match crate::handlers::call(agent, ctx, method, parsed).await {
         Ok(result) => line(id, ("result", result)),
         Err(message) => error(id, error_code::SERVER_ERROR, message),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_panicked_request_is_answered_with_its_own_id() {
+        assert_eq!(
+            panicked(r#"{"id":7,"method":"hello"}"#),
+            r#"{"id":7,"error":{"code":-32000,"message":"internal error"}}"#
+        );
+        assert_eq!(
+            panicked("not json"),
+            r#"{"id":null,"error":{"code":-32000,"message":"internal error"}}"#
+        );
     }
 }

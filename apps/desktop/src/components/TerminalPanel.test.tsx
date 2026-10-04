@@ -353,8 +353,8 @@ describe('TerminalPanel', () => {
   });
 
   it('shows the truncated marker (and continues correctly) when a batched update trims chunks this panel never got a turn to write', () => {
-    // Regression for: TauriTransport can dispatch many NDJSON lines
-    // synchronously within one stdout 'data' event, and React batches them
+    // Regression for: the transport can dispatch many lines
+    // synchronously within one task, and React batches them
     // into a single render/effect pass — so a trim can jump straight past
     // chunks the panel never individually caught up on, not just chunks
     // trimmed before it ever mounted.

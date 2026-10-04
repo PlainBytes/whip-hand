@@ -60,7 +60,7 @@ export function createHighRateQueue(apply: (items: HighRateNotification[]) => vo
  * remoteAccessChanged) so
  * pages never each set up their own listener, and kicks off connect() once
  * on mount. This is the testability seam pages rely on — production
- * (main.tsx) provides a client built on TauriTransport, tests provide one
+ * (main.tsx) provides a client built on InProcessTransport, tests provide one
  * built on MockTransport, and page components never construct a client
  * themselves.
  */

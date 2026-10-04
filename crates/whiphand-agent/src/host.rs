@@ -135,6 +135,12 @@ impl Host {
         }
     }
 
+    /// False once the engine thread has exited, by shutdown or by a panic
+    /// outside any one request. Every client's sink has been dropped by then.
+    pub fn is_running(&self) -> bool {
+        !self.tx.is_closed()
+    }
+
     /// Stops the agent: in-flight runs are cancelled and given a moment to
     /// write their final state, then the thread exits.
     pub fn shutdown(mut self) {
@@ -302,7 +308,17 @@ fn run(
                             client_id: id,
                             kind,
                         };
-                        let response = crate::rpc::handle_line(&agent, ctx, &line).await;
+                        // Its own task, so a handler that panics fails only
+                        // its request; the caller still gets an answer.
+                        let handler = {
+                            let (agent, line) = (agent.clone(), line.clone());
+                            tokio::task::spawn_local(async move {
+                                crate::rpc::handle_line(&agent, ctx, &line).await
+                            })
+                        };
+                        let response = handler
+                            .await
+                            .unwrap_or_else(|_| crate::rpc::panicked(&line));
                         agent.send_to(id, response);
                     });
                 }
@@ -343,4 +359,52 @@ fn run(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc as std_mpsc;
+
+    struct Flag(Arc<AtomicBool>);
+
+    impl Drop for Flag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn config(dir: &std::path::Path) -> HostConfig {
+        HostConfig {
+            app_state_path: dir.join("app-state.json"),
+            remote_config_path: dir.join("remote-access.json"),
+            web_root: None,
+            timings: crate::frontend::SessionTimings::default(),
+        }
+    }
+
+    // The desktop learns the agent is gone from its sink being dropped.
+    #[test]
+    fn answers_and_drops_every_sink_when_the_engine_thread_exits() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = Host::start(config(dir.path())).unwrap();
+        assert!(host.is_running());
+        let dropped = Arc::new(AtomicBool::new(false));
+        let flag = Flag(dropped.clone());
+        let (tx, rx) = std_mpsc::channel();
+        let client = host.connect(
+            ClientKind::Desktop,
+            Box::new(move |line| {
+                let _ = &flag;
+                let _ = tx.send(line);
+            }),
+        );
+        client.send(r#"{"id":1,"method":"hello","params":{}}"#.into());
+        let answer = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        assert!(answer.starts_with(r#"{"id":1,"result":"#), "{answer}");
+        assert!(!dropped.load(Ordering::SeqCst));
+        host.shutdown();
+        assert!(dropped.load(Ordering::SeqCst));
+    }
 }

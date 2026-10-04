@@ -5,10 +5,10 @@
  * `start()` is "open the socket", `kill()` is "close it", and `onExit` fires
  * when it closes however it closes — which is exactly the shape AgentClient
  * already handles, including its reconnect-with-backoff. A dropped Wi-Fi
- * connection therefore behaves like a crashed sidecar, and needs no new code.
+ * connection therefore behaves like a crashed agent, and needs no new code.
  *
  * Deliberately free of any @tauri-apps import (like MockTransport, unlike
- * TauriTransport) so it stays in the vitest graph and can be exercised against
+ * InProcessTransport) so it stays in the vitest graph and can be exercised against
  * a fake global WebSocket.
  *
  * The close code the agent uses for a rotated token is 4001; it is surfaced to

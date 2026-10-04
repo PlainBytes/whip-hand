@@ -27,11 +27,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": [
-      "binaries/whiphand-agent"
-    ],
     "resources": [
-      "resources/node-pty/**/*",
       "resources/web/**/*"
     ],
     "icon": [

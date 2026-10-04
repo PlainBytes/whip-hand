@@ -18,7 +18,7 @@ import { clearStoredToken, consumeTokenFromUrl, readStoredToken, verifyToken } f
  * place production implementations are chosen.
  *
  * What differs from the desktop, and nothing else does:
- *   - WebSocketTransport instead of TauriTransport.
+ *   - WebSocketTransport instead of InProcessTransport.
  *   - No pickDirectory (no native folder picker) and no local filesystem, so
  *     the Files page is filtered out of nav; run artifacts still work, because
  *     RunDetailPage provides its own RPC-backed ArtifactFileSystem.

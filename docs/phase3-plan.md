@@ -9,12 +9,12 @@ Working plan for Phase 3 of [migration.md](migration.md). Branch:
 | 2. `whiphand-protocol` crate and TS codegen | Done | `39c6f21` |
 | 3. `whiphand-agent` crate | Done | `c331589` (3a), `46cd66b` (3b), `cbcceb2` (3c) |
 | 4. The TS-vs-Rust agent gate | Done | `9ea4b13` |
-| 5. Wire up the webview | Next | |
-| 6. Move the webview's TS out of `packages/` | To do | |
+| 5. Wire up the webview | Done | (this commit) |
+| 6. Move the webview's TS out of `packages/` | Next | |
 | 7. Delete and repackage | To do | |
 | 8. CI and docs | To do (CI partly done) | |
 
-Steps 1 to 4 have been verified on Linux only. Windows and macOS CI have not
+Steps 1 to 5 have been verified on Linux only. Windows and macOS CI have not
 run them yet.
 
 ## Context
@@ -153,7 +153,29 @@ the Rust binary through `WHIPHAND_PARITY_AGENT`. Against it they pass 24 of
 - CI's parity job builds `whiphand-agent`.
 - Recorded goldens are deferred to step 7 (see below).
 
-### 5. Wire up the webview (next)
+### 5. Wire up the webview (done)
+
+As planned, with these details:
+- `src-tauri/src/agent.rs` starts the `Host` in `setup`, so remote access is
+  up before a window attaches, and shuts it down on `RunEvent::Exit` so runs
+  write their final state. `agent_attach` takes two channels, `on_line` and
+  `on_exit`. `on_exit` fires when the host drops the webview's sink, which
+  happens when the engine thread exits. A reattach restarts a host whose
+  thread has died (`Host::is_running`).
+- `agent_send` takes a batch of lines. `InProcessTransport` keeps one invoke
+  in flight and queues the rest, so `ptyInput` keystrokes cannot overtake
+  each other. Lines sent during an attach wait for it.
+- A handler panic now fails only its request, answered with -32000
+  (`rpc::panicked`). src-tauri builds with the default `panic=unwind`.
+- `capability-contract.test.ts` now pins the invoked commands against
+  `generate_handler!`, the absence of shell spawn grants, and the bundle.
+- `scripts/package/desktop.mjs` still builds the sidecar and the node-pty
+  tree, which Tauri now ignores; step 7 deletes them.
+- Checked on Linux: `tauri dev` starts, the engine thread runs, remote access
+  listens and answers `hello`, and the webview's `setUiState` reached
+  `app-state.json`. The full manual end-to-end list is still to do.
+
+Planned:
 
 - Link `whiphand-agent` into `apps/desktop/src-tauri`: managed `Host`,
   `agent_attach`, `agent_send`, `agent_detach`.
@@ -227,17 +249,22 @@ the Rust binary through `WHIPHAND_PARITY_AGENT`. Against it they pass 24 of
 
 ## Risks to watch
 
+- **Flaky remote tests.** `tests/remote.rs`'s `free_port()` binds port 0,
+  drops the listener, then the agent binds that port, so concurrent runs can
+  collide. `rotating_the_token_closes_every_socket_with_4001` failed once in
+  a full workspace run and did not reproduce in 100 isolated runs. Fix by
+  binding port 0 in the agent and reading the bound port back.
+
 - **Windows terminals.** The direct ConPTY code has only been compile-checked.
   Watch `.cmd` shims, which go through `plan_launch`'s cmd.exe command line,
   and kills: the first ends the process, later ones are ignored.
 - **Hard-coded paths.** Fixtures with POSIX paths or `pid: 1` pass on Linux
   for the wrong reason. The agent gate runs on Windows CI.
-- **Lost exit signal.** An engine-thread panic must surface as `onExit` on the
-  transport so `AgentClient`'s respawn and backoff still works. Make
-  `agent_attach` restart the `Host`.
-- **Panics in handlers.** The root release profile has `panic=abort`, and
-  src-tauri has its own profile. Check that a handler panic is caught per
-  request and maps to -32000.
+- **Lost exit signal.** Handled in step 5 (`on_exit`, restart on reattach),
+  covered by a host test for a clean exit. A real engine-thread panic has
+  not been exercised.
+- **Panics in handlers.** Handled in step 5: each request runs in its own
+  task and a panic maps to -32000.
 - **Blocking file I/O on the engine thread.** The handlers use synchronous
   fs calls; a heavy one (`listRecentRuns` over many workspaces) could delay
   terminal output. Measure in step 8's benchmarks.

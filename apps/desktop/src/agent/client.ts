@@ -211,11 +211,11 @@ const DEFAULT_MAX_RETRIES = 5;
 const DEFAULT_BASE_DELAY_MS = 500;
 
 /**
- * Correlation + supervision layer over a Transport (the @whiphand/agent sidecar
- * child process, or a MockTransport in tests). Owns request ids,
+ * Correlation + supervision layer over a Transport (the in-process agent, a
+ * WebSocket, or a MockTransport in tests). Owns request ids,
  * response/notification routing, per-request timeouts, and reconnect-with-
- * backoff when the underlying process exits. Never touches `@tauri-apps/*`
- * directly — that's TauriTransport's job — so this file is safe to import
+ * backoff when the connection ends. Never touches `@tauri-apps/*`
+ * directly — that's InProcessTransport's job — so this file is safe to import
  * from vitest.
  */
 export class AgentClient {
@@ -335,7 +335,7 @@ export class AgentClient {
     try {
       value = JSON.parse(line);
     } catch {
-      return; // malformed line from the sidecar; nothing sane to correlate it to
+      return; // malformed line from the agent; nothing sane to correlate it to
     }
     if (!value || typeof value !== 'object') return;
 

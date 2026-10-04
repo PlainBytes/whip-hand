@@ -116,7 +116,10 @@ pub async fn call(agent: &Rc<Agent>, ctx: RequestCtx, method: &str, p: &Value) -
                     let mut m = Map::new();
                     m.insert("jobId".into(), json!(job.job_id));
                     job.tag(&mut m);
-                    job.tag_run(&mut m);
+                    // As TS: a job names its run once it has settled.
+                    if job.status.get() != whiphand_protocol::JobStatus::Running {
+                        job.tag_run(&mut m);
+                    }
                     if let Some(name) = job.run_name.borrow().as_ref() {
                         m.insert("name".into(), json!(name));
                     }

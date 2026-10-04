@@ -76,6 +76,10 @@ jobs:
       # the Rust binary (parity/cli-command.ts).
       - name: Build the CLI
         run: cargo build --release -p whiphand-cli
+      # parity/agent.test.ts plays every agent scenario against the TS agent
+      # and this one, and they must answer alike (docs/migration.md, Phase 3).
+      - name: Build the Rust agent
+        run: cargo build --release -p whiphand-agent
       - run: npm ci
       - run: npm run test:parity
 

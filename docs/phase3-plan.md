@@ -10,7 +10,7 @@ Working plan for Phase 3 of [migration.md](migration.md). Branch:
 | 3. `whiphand-agent` crate | Done | `c331589` (3a), `46cd66b` (3b), `cbcceb2` (3c) |
 | 4. The TS-vs-Rust agent gate | Done | `9ea4b13` |
 | 5. Wire up the webview | Done | `93234c8` |
-| 6. Move the webview's TS out of `packages/` | Done | (this commit) |
+| 6. Move the webview's TS out of `packages/` | Done | `9eba24e` |
 | 7. Delete and repackage | Next | |
 | 8. CI and docs | To do (CI partly done) | |
 

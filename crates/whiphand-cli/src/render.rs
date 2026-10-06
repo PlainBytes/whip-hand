@@ -703,7 +703,7 @@ mod tests {
         let c = capture();
         c.render(json!({ "type": "run:start", "runId": "r1", "workflow": "w" }));
         c.render(json!({ "type": "run:degraded", "capability": "git-guard", "stepId": "look", "reason": "not a git repository: read-only tree assertion disabled" }));
-        c.render(json!({ "type": "run:degraded", "capability": "process-containment", "reason": "the process guard (whiphand-job.exe) was not found" }));
+        c.render(json!({ "type": "run:degraded", "capability": "process-containment", "reason": "the job object could not be created" }));
         assert!(c.err().is_empty(), "nothing between steps");
         c.render(json!({ "type": "run:done", "runId": "r1", "ok": true }));
         assert_eq!(c.last(), "✔ run complete");
@@ -711,7 +711,7 @@ mod tests {
             c.err(),
             [
                 "  ⚠ degraded: Read-only tree guard off (not a git repository) [look] — not a git repository: read-only tree assertion disabled",
-                "  ⚠ degraded: Process containment unavailable — the process guard (whiphand-job.exe) was not found",
+                "  ⚠ degraded: Process containment unavailable — the job object could not be created",
             ]
         );
         // One that arrives after the end (teardown) is printed as it comes.

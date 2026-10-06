@@ -7,6 +7,7 @@
 | `pre-phase0` | The TypeScript stack as it stood before Phase 0's UI work. Historic. |
 | `phase0` | After Phase 0's UI work. **This is the baseline Phases 1–4 are compared against.** |
 | `phase2` | The CLI as a Rust binary (`crates/whiphand-cli`). `cli` and `sizes` only: nothing else changed. |
+| `phase3` | The agent in Rust (`crates/whiphand-agent`), in-process in the desktop app; no sidecar. Every section. |
 
 Phase 1 has no label: the Rust core library it adds is not on any user-facing path yet, so nothing here could move.
 
@@ -15,7 +16,8 @@ It is run by hand on a developer machine. Nothing in CI runs or gates on it, bec
 ## Running it
 
 ```sh
-npm run package                                  # packaged CLI, agent and installers (the packaged rows need them)
+cargo build --release -p whiphand-cli -p whiphand-agent   # the binaries the dev rows drive
+npm run package                                  # packaged CLI and installers (the packaged rows need them)
 npx playwright install chromium                  # once, for the UI scenarios
 node scripts/bench.mjs                           # everything: cli agent rpc sizes ui
 node scripts/bench.mjs --only cli,rpc --runs 30  # a subset
@@ -45,9 +47,9 @@ The agent always runs with its app state, config and remote-access config in a t
 | Section | Metric |
 |---|---|
 | `cli` | Wall time of `--help`, `--version` and `run smoke.yaml --dry-run`, for the dev build and `dist/whiphand` (packaged). 2 warmups, then `--runs` samples. Through `phase0` the dev build was `node packages/cli/src/main.ts`; from `phase2` it is `target/release/whiphand`, the same binary the package copies. |
-| `agent` | Spawn→`hello` startup time, and RSS when idle, after loading the large run (getRun plus paging through its whole log), and after `listRuns` on 500 runs. Dev and packaged. |
+| `agent` | Spawn→`hello` startup time, and RSS when idle, after loading the large run (getRun plus paging through its whole log), and after `listRuns` on 500 runs. Through `phase0` this was the TS agent, dev (`node main.ts`) and packaged (the SEA sidecar); from `phase3` it is `target/release/whiphand-agent`, the stdio build of the agent the desktop app links in. There is no packaged agent to measure any more. |
 | `rpc` | Stdio round trips against a warm dev agent: `hello` ×1000, `listRuns` (500 runs), `getRun`, a 2,000-line `readRunLog` tail, and a full backward page-through of the 50k-line log (`replayFullLog`, i.e. "Load earlier" until the start). |
-| `sizes` | The packaged CLI and agent, this version's installers in `dist/`, and the web bundle: its total size, its JS size, and its gzipped JS size. |
+| `sizes` | The packaged CLI (and, through `phase2`, the agent sidecar), this version's installers in `dist/`, and the web bundle: its total size, its JS size, and its gzipped JS size. |
 | `ui` | Playwright and Chromium against the web build, served by a real agent's remote-access server. Each scenario runs 3 times and the median is recorded. |
 
 ### UI scenarios
@@ -82,7 +84,7 @@ The desktop app renders in WebKitGTK on Linux and WebView2 on Windows. Only WebV
 4. For each of logs, file tree and live from the list above:
    - Before the interaction, run `__whiphandPerf.startFrames()`.
    - After it, run `__whiphandPerf.stopFrames()`. WebKitGTK has no Long Tasks API, so `longTaskMs` reads 0 there.
-5. Run `__whiphandPerf.rpc()` for the full webview→Tauri→sidecar round trips. These include the shell-plugin hop that Phase 3 removes.
+5. Run `__whiphandPerf.rpc()` for the full webview→Tauri→agent round trips. Since Phase 3 these are an `invoke` and a `Channel` into the in-process agent; before it they went through the shell plugin to the sidecar.
 
 ## Results
 
@@ -126,4 +128,43 @@ The CLI, agent, RPC and size rows did not move: Phase 0 changed only the UI. The
 | CLI binary | 128.6 MB | 3.4 MB | −97% |
 
 The agent and the installers are unchanged by Phase 2: the desktop still runs the TS agent until Phase 3.
+
+### Phase 3: the agent in Rust, in-process
+
+`node scripts/bench.mjs --compare phase0`, same machine, Node 24.21, medians. The phase0 agent rows are the packaged SEA sidecar, which is what the app shipped:
+
+| Metric | phase0 | phase3 | Change |
+|---|---:|---:|---:|
+| Agent startup (spawn → `hello`) | 60.3 ms | 3.0 ms | −95% |
+| Agent RSS, idle | 88.8 MB | 5.6 MB | −94% |
+| Agent RSS, after the large run | 175.7 MB | 12.1 MB | −93% |
+| Agent RSS, after `listRuns` (500 runs) | 180.1 MB | 12.1 MB | −93% |
+| `listRuns` (500 runs) | 75.3 ms | 10.0 ms | −87% |
+| `getRun` (large run) | 22.5 ms | 15.7 ms | −30% |
+| `readRunLog` tail (2,000 lines) | 18.0 ms | 6.9 ms | −61% |
+| Full backward page-through of the 50k-line log | 470 ms | 176 ms | −63% |
+| `.deb` | 56.2 MB | 13.3 MB | −76% |
+| `.AppImage` | 130.6 MB | 92.4 MB | −29% |
+| Logs: first row | 109 ms | 100 ms | −8% |
+| Logs: JS heap | 60 MB | 45 MB | −26% |
+| `listRuns` as the page sees it | 115 ms | 13 ms | −89% |
+| `getWorkingDiff` as the page sees it | 38 ms | 17 ms | −55% |
+
+The RPC rows are stdio round trips, so they measure the agent itself. The desktop app no longer pays the agent's startup at all, since the agent starts with the app. Its RSS is now part of the app's own.
+
+Four UI rows got worse:
+
+| Metric | phase0 | `main` before Phase 3 | phase3 |
+|---|---:|---:|---:|
+| Terminal reattach replay (2 MB) | 235 ms | 237 ms | 401 ms |
+| `getJobScrollback` as the page sees it | 124 ms | 129 ms | 484 ms |
+| Diff: render (6,000-line file) | 713 ms | 737 ms | 1,196 ms |
+| Runs page while a run floods: long tasks / 4 s | 0 | 0 | 318 ms |
+
+The `main` column is a run of the UI section on the last commit before Phase 3, with the TS agent. It matches phase0, so these rows moved with Phase 3. What was checked:
+- The agent is not slower at any of these. Over stdio, over the WebSocket from Node, and over a WebSocket opened inside Chromium on its own, `getJobScrollback` takes the same time from both agents (about 12 ms from Node and 74 ms from Chromium, for 2.2 MB), and `getWorkingDiff` is faster in Rust. Both agents send the same notifications, and neither sends anything while idle.
+- The first three rows are an ordering effect at page start. A page that opens while a job exists asks for `listRuns` and that job's scrollback together. The TS agent answered the scrollback first; the Rust agent answers `listRuns` first, because it is now 10 ms, so the page renders 500 runs before it gets to the 2 MB scrollback. That work then lands inside the measured windows instead of before them. The diff scenario runs right after the live one, whose job is still listed: run on its own, its render takes 660 ms against the TS agent's 737 ms.
+- The long tasks while a run floods are not explained yet. Frame times are unchanged (p50 16.7 ms, p95 16.8 ms, one frame over 33 ms).
+
+These are Chromium against the web build. The desktop webview gets the same messages through a `Channel` rather than a WebSocket; the manual check above has not been redone for Phase 3.
 <!-- results:end -->

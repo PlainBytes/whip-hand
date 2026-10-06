@@ -5,6 +5,10 @@ set -euo pipefail
 
 npm run typecheck
 npm test
+# The parity suite drives the release CLI and agent binaries, as CI's parity job does.
+if command -v cargo >/dev/null 2>&1; then
+  cargo build --release -p whiphand-cli -p whiphand-agent
+fi
 npm run test:parity
 npm run test -w desktop
 npm run build -w desktop

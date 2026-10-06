@@ -136,7 +136,7 @@ const TERMINAL_STEP_STATUSES: ReadonlySet<StepState['status']> = new Set([
 
 /**
  * The manifest is seeded with the workflow's complete step list when the run
- * starts (packages/core/src/engine/manifest.ts), so it — not the live job,
+ * starts (crates/whiphand-core/src/store/journal.rs), so it — not the live job,
  * which only knows the steps it has seen events for — is the authoritative
  * ordering and the full picture of what is still to come. Overlay the live
  * job's fresher per-step state on top of it, then append anything the job
@@ -272,7 +272,7 @@ function plainLogLine(row: LogRow): string {
 /**
  * Identity for de-duplicating a fetched row against a live one. Not `seq`
  * alone: `seq` is monotonic per `RunJournal` instance
- * (`packages/core/src/engine/manifest.ts`), not per run, so a resumed attempt
+ * (`crates/whiphand-core/src/store/journal.rs`), not per run, so a resumed attempt
  * restarts it at 1 while `run.log` keeps appending to the same file. A
  * fetched row from the attempt before the resume and a live row from the
  * attempt after it can share a `seq` while being different rows entirely —
@@ -973,7 +973,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
    * Reads and writes go through the agent's artifact RPCs — never straight off
    * disk from the webview — so the viewer can't reach arbitrary files: the
    * server only serves a name that getRun's own directory listing for this run
-   * already vouches for (see packages/agent/src/handlers.ts).
+   * already vouches for (see crates/whiphand-agent/src/handlers.rs).
    */
   const artifactFs = useMemo(
     () => new ArtifactFileSystem(client, workspacePath ?? '', effectiveRunId ?? '', artifacts),
@@ -1647,7 +1647,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
           {/*
             The run audit: every important action, plus the merged output feed,
             in one chronological view — always backed by run.log on disk (see
-            packages/core/src/engine/manifest.ts), live or read back afterwards.
+            crates/whiphand-core/src/store/journal.rs), live or read back afterwards.
           */}
           <div
             role="group"

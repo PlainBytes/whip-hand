@@ -11,10 +11,10 @@ Working plan for Phase 3 of [migration.md](migration.md). Branch:
 | 4. The TS-vs-Rust agent gate | Done | `9ea4b13` |
 | 5. Wire up the webview | Done | `93234c8` |
 | 6. Move the webview's TS out of `packages/` | Done | `9eba24e` |
-| 7. Delete and repackage | Next | |
-| 8. CI and docs | To do (CI partly done) | |
+| 7. Delete and repackage | Done | `6aec366` |
+| 8. CI and docs | Done | |
 
-Steps 1 to 6 have been verified on Linux only. Windows and macOS CI have not
+Steps 1 to 7 have been verified on Linux only. Windows and macOS CI have not
 run them yet.
 
 ## Context
@@ -284,7 +284,31 @@ As planned, with these details:
 - `test-support` lost what only the TS packages used: `withStubBin`,
   `withUnreadableStubBin`, `withEnv` and the Windows pty-exit helper.
 
-### 8. CI and docs
+### 8. CI and docs (done)
+
+As planned, with these details:
+- `ci.yml`: the parity job passes `PARITY_DUMP` and, on failure, uploads the
+  transcripts as `agent-transcripts-<os>`; `agent.test.ts` now writes the
+  dump before it checks for a recording, so a platform without one still
+  produces its first set. The `test` and `parity` jobs lost the
+  `whiphand-job` builds, the parity job the node-pty build tools, and the
+  `tauri` job's merge patch now drops only `resources`.
+- `release.yml`: `WHIPHAND_PACKAGE` is gone and the step is "Build the web
+  resource".
+- `scripts/verify.sh` builds the release CLI and agent before
+  `test:parity`, which drives them.
+- README, `design.md` (the layer diagram and its file pointers) and
+  `review-backlog.md` (a note that its TS file names predate the port) no
+  longer point at `packages/`. `RunDetailPage.tsx`'s comments point at
+  `journal.rs` and `handlers.rs`. The `.gitignore` lines for the sidecar
+  binaries and the core corpus capture are gone.
+- `npm run package` on Linux: the `.deb` holds the app binary, icons and the
+  web resource only, with no `whiphand-agent` or node-pty. 13.3 MB against
+  56.2 MB at phase0; the AppImage is 92.4 MB against 130.6 MB.
+- Bench saved as `phase3`; results and the four UI rows that got worse are
+  in `benchmarks.md`.
+
+Planned:
 
 - `ci.yml`: the parity job already builds `whiphand-agent`; it no longer
   needs node-pty build tools. The `test` job drops the Windows `whiphand-job`
@@ -321,7 +345,14 @@ As planned, with these details:
   task and a panic maps to -32000.
 - **Blocking file I/O on the engine thread.** The handlers use synchronous
   fs calls; a heavy one (`listRecentRuns` over many workspaces) could delay
-  terminal output. Measure in step 8's benchmarks.
+  terminal output. The bench found no case: every RPC row is faster than the
+  TS agent's.
+- **UI rows that got worse in the bench.** Reattach replay, `getJobScrollback`
+  as the page sees it, and the diff render (see `benchmarks.md`): an ordering
+  effect at page start, since the faster `listRuns` reply now arrives before
+  the scrollback. The long tasks on the Runs page while a run floods are not
+  explained yet. Check both in the desktop webview, which the bench does not
+  drive.
 
 ## Verification
 

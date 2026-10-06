@@ -64,21 +64,26 @@ interface" below) rather than assuming every runner can be pinned up front.
 
 ## Architecture
 
-Three layers, split specifically so a future Tauri app can reuse everything except
+Three layers, split specifically so the Tauri app reuses everything except
 terminal rendering:
 
 ```
-packages/core     workflow schema + validation, run engine, adapter registry,
+crates/whiphand-core
+                  workflow schema + validation, run engine, adapter registry,
                   artifact store, JSON event stream. No terminal I/O, and it
                   never itself spawns an interactive step.
 crates/whiphand-cli
-                  the `whiphand` binary (Rust, over crates/whiphand-core's port
-                  of the engine). Renders core's events to the terminal, and
-                  is the thing that owns the TTY for interactive steps.
-apps/desktop      (future) Tauri. Consumes the same event stream as the CLI;
-                  attaches the operator to interactive steps via its own PTY
-                  widget instead of inherited stdio.
+                  the `whiphand` binary. Renders core's events to the terminal,
+                  and is the thing that owns the TTY for interactive steps.
+apps/desktop      Tauri. Runs the agent (crates/whiphand-agent: the JSON-RPC
+                  surface over core) in-process, consumes the same event stream
+                  as the CLI, and attaches the operator to interactive steps
+                  via its own PTY widget instead of inherited stdio.
 ```
+
+The engine was first written in TypeScript and ported to Rust (docs/migration.md).
+Module names in this document that end in `.ts` name the TS original; each Rust
+module's header names the TS file it ports.
 
 ### The TTY seam
 
@@ -89,7 +94,7 @@ interactive processes directly with `stdio: 'inherit'`, every future frontend wo
 stuck re-implementing or fighting that assumption.
 
 So `core` never spawns an interactive step itself. It resolves the step into a
-`SpawnSpec` (`packages/core/src/types.ts` — argv/cwd/env, an `interactive` flag, and the
+`SpawnSpec` (built by `crates/whiphand-core/src/adapters/` — argv/cwd/env, an `interactive` flag, and the
 optional `endSession`/`awaitState`/`capture`/`progress` extras the sections below explain)
 and hands it to whichever frontend is running.
 
@@ -101,7 +106,7 @@ until the Tauri app exists would mean rewriting the run engine's control flow la
 
 ### Adapter interface
 
-`RunnerAdapter` (`packages/core/src/types.ts`) is `id`, a `capabilities` map
+`RunnerAdapter` (`crates/whiphand-core/src/adapters/mod.rs`) is `id`, a `capabilities` map
 (`sessionIdInjection`, `sessionIdCapture`, `sessionResume`, `toolDenial`, `shareTranscript`),
 `detect()`, and three `Step → SpawnSpec` builders (`interactive`, `headless`, `harvest`),
 plus two optional methods: `suggestName?` (run auto-naming) and `listModels?` (feeds the
@@ -130,8 +135,8 @@ doesn't have (e.g. `mode: interactive` on an adapter without `sessionResume`) mu
 A headless step's stdout is a pure side-channel — the model writes its artifact through
 its own Write tool, and the verdict is read back out of that *file* — so `headless()`
 switches both runners to structured output and sets `SpawnSpec.progress.format`. Whoever
-spawns the process (the CLI, or the agent sidecar) hands raw lines back through
-`spawnHeadless`'s optional `onLine`; only `packages/core/src/engine/progress.ts` parses
+spawns the process (the CLI, or the desktop's agent) hands raw lines back through
+`spawnHeadless`'s optional `onLine`; only `crates/whiphand-core/src/engine/progress.rs` parses
 them, so neither frontend knows a runner's schema.
 
 `parseProgressLine` is total: an unrecognized, malformed or empty line yields `null`.
@@ -1271,11 +1276,12 @@ Three principles hold the desktop shell to the same guarantees as the CLI:
    the workspace (`.whiphand/config.yaml`, `.whiphand/workflows/`, `.whiphand/runs/<id>/run.json` +
    `events.ndjson`). The desktop's own app-state store holds only *convenience* data —
    pointers, preferences, history. Deleting it must lose zero work and break nothing.
-2. **The agent owns all disk I/O.** App-state persistence goes through `@whiphand/agent` RPCs,
+2. **The agent owns all disk I/O.** App-state persistence goes through the agent's RPCs
+   (`crates/whiphand-agent`),
    same as `readArtifact`. The webview gets no fs capability of its own beyond the Files
    tab's explicitly-granted scope (see the desktop webview security notes in
    `docs/review-backlog.md` if present, or `apps/desktop/src-tauri/src/lib.rs`).
-3. **CLI/UI parity holds.** `@whiphand/core` is never given a UI-only code path, and no
+3. **CLI/UI parity holds.** `whiphand-core` is never given a UI-only code path, and no
    desktop feature does something the CLI cannot — see `parity/`.
 
 **Workspace-scoped navigation.** The sidebar is organized by scope, since mixing the two

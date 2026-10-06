@@ -4,6 +4,11 @@ Findings from the 2026-09 codebase review that were not fixed in that pass, beca
 is a real refactor (not a cheap/low-risk change) or would change documented behavior. Each
 line: `severity · file:line · problem · proposed fix · effort (S/M/L)`.
 
+Phase 3 of docs/migration.md (2026-10) removed `packages/core` and `packages/agent`; their
+engine is now `crates/whiphand-core` and their agent `crates/whiphand-agent`, and each Rust
+module's header names the TS file it ports. The findings below that name those TS files
+have not been re-checked against the Rust code.
+
 ## Security leftovers from section 1
 
 - **RESOLVED by the Windows plan (invariant 8) — `{{ }}` in `run:` now expands to a shell variable reference (`${WHIPHAND_X}`), never the value; see `docs/design.md` "Command steps and shell injection". The original finding follows.**
@@ -146,9 +151,9 @@ line: `severity · file:line · problem · proposed fix · effort (S/M/L)`.
 
 ## CLI, scripts, CI, dependencies
 
-- **info · `scripts/package/*.mjs`** (`agent.mjs`, `cli.mjs`, `desktop.mjs`,
-  `node-pty-resource.mjs`, `prepare-release.mjs`, `reinstall.mjs`, `sea.mjs`, `smoke.mjs`,
-  `web-resource.mjs`) · a dead-script sweep was not completed this pass; a quick read
+- **info · `scripts/package/*.mjs`** (`cli.mjs`, `common.mjs`, `desktop.mjs`,
+  `prepare-release.mjs`, `reinstall.mjs`, `smoke.mjs`, `web-resource.mjs`; the sidecar's
+  `agent.mjs`, `sea.mjs`, `guard.mjs` and `node-pty-resource.mjs` went in Phase 3) · a dead-script sweep was not completed this pass; a quick read
   suggests every script is wired into an npm script or another script's import, but this
   wasn't verified exhaustively · effort: S (to verify).
 - **low · CI/`verify.sh` duplication · `.github/workflows/ci.yml`'s four jobs

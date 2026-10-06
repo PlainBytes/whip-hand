@@ -10,8 +10,8 @@ reviews it in a loop until the review comes back clean.
 
 ## Install
 
-Requires a Rust toolchain for the `whiphand` CLI, Node ≥ 24 for the desktop app
-(it runs TypeScript natively — no build step), and at least one of
+Requires a Rust toolchain for the `whiphand` CLI, Node ≥ 24 to build the desktop
+app's UI and run the test scripts, and at least one of
 `claude` / `copilot` / `opencode` on PATH.
 
 ```bash
@@ -120,7 +120,7 @@ headroom under the 260-character limit (open it through `subst` instead).
 
 ### Adding your own tools
 
-Doctor's built-in table lives in `packages/core/src/tools.ts`. To extend it on your own
+Doctor's built-in table lives in `crates/whiphand-core/src/doctor/tools.rs`. To extend it on your own
 machine, hand-write `doctor.yaml` beside your global `config.yaml`:
 
 | Platform | Path |
@@ -290,8 +290,8 @@ and every rule above in detail.
 
 ## Desktop app
 
-`apps/desktop` is a Tauri + Fluent UI shell over the same `@whiphand/core` engine the CLI
-uses — workflows, runs, and cancellation behave identically in both; the desktop app
+`apps/desktop` is a Tauri + Fluent UI shell over the same Rust engine
+(`crates/whiphand-core`) the CLI uses — workflows, runs, and cancellation behave identically in both; the desktop app
 just adds a GUI (workflow picker, live run view, xterm-backed interactive handoff, and a
 Files tab: a tree of the opened workspace with rendered-markdown preview and in-place
 editing).
@@ -322,17 +322,23 @@ npm run verify                 # local CI-equivalent gate — see below
 
 `npm run verify` runs the same checks as CI in one fail-fast chain: root
 typecheck/tests, the CLI/desktop parity suite (`npm run test:parity` — verifies the
-desktop app's surface and behavior match the CLI, and that the Rust core library
-agrees with `packages/core`, see `parity/`), the desktop app's own tests and build,
+desktop app's surface and behavior match the CLI, and that the agent still answers
+as recorded, see `parity/`), the desktop app's own tests and build,
 and finally the Rust checks: fmt, clippy and tests for the Cargo workspace at the
 repo root (`crates/*`), and `cargo check` against `apps/desktop/src-tauri`. If
 `cargo` isn't installed, the Rust checks are skipped with a warning instead of failing.
 
 The core parity corpus (`parity/fixtures/core/`) is a set of JSON op lists and the
-results the TypeScript implementation gives for them; `cargo test` and
-`npm run test:parity` both compare against those results. After changing
-`packages/core`'s schema, config or workspace code, or adding a case to
-`schema.test.ts`, run `npm run parity:core-golden` and review the diff.
+results the TypeScript implementation gave for them before it was removed; `cargo test`
+compares against them. After an intended change in behavior (a template edit, say), run
+`WHIPHAND_UPDATE_GOLDEN=1 cargo test -p whiphand-core --test parity`, which rewrites only
+the results that changed, and review the diff.
+
+The agent's regression check (`parity/agent.test.ts`) plays a scenario corpus that
+calls every protocol method against `target/release/whiphand-agent` and compares the
+normalized transcripts with the ones recorded for the platform in
+`parity/fixtures/agent/{posix,win32}/`. `PARITY_RECORD=1` re-records them; review the
+diff, since a recorded change is a change in behavior.
 
 **Wayland troubleshooting**: if the desktop window opens with a blank webview under
 Wayland/webkitgtk, set `WEBKIT_DISABLE_COMPOSITING_MODE=1` and
@@ -359,7 +365,7 @@ start and cancel work from a laptop in another room. Turn it on in
 > Use it on a network you control. It is off by default and stays off until you
 > explicitly enable it.
 
-How it works: the agent sidecar the desktop app already runs also listens on a TCP
+How it works: the agent built into the desktop app also listens on a TCP
 port (61338 by default), serving the browser bundle over HTTP and the same NDJSON
 JSON-RPC protocol over a WebSocket. Access is gated on a 256-bit token carried in the
 URL fragment — never sent to the server, so it stays out of access logs — and stored
@@ -408,8 +414,8 @@ whiphand treats Windows as one more platform with one way to do paths and proces
 - **One path style.** Everything whiphand shows a model or writes to a manifest is workspace-relative
   with forward slashes; `run.json` stores paths relative to the run directory, so a run directory that
   moves still resumes.
-- **Nothing outlives the run.** A Windows Job Object per run (held by the CLI itself, and by the small
-  `whiphand-job.exe` guard embedded in the desktop agent) ends the whole process tree on cancel, timeout or crash. Liveness
+- **Nothing outlives the run.** A Windows Job Object per run (held by the CLI itself, and
+  by the desktop app) ends the whole process tree on cancel, timeout or crash. Liveness
   is a heartbeat lease (renewed every 30 s, stale at 5 min), cut short when the owning process provably no
   longer exists on this machine, so a run whose process was killed is marked crashed **at next start**. A host suspended for more than five minutes loses its run on wake, and a step
   that deliberately left a process running does not keep it past the run.
@@ -417,7 +423,7 @@ whiphand treats Windows as one more platform with one way to do paths and proces
   clear message — map the share to a drive letter instead. Paths over 260 characters are not guaranteed, but a
   workspace deep enough to hit the limit warns when it is opened (`subst X: <folder>` is the escape hatch).
   App state and run directories on redirected or network paths are best-effort and not tested in CI. The
-  remote-access token file is `0666` on Windows (`fs.chmod` only toggles read-only); `doctor` says so. WSL is
+  remote-access token file is `0666` on Windows (file permissions there only toggle read-only); `doctor` says so. WSL is
   neither supported nor blocked — it is Linux as far as whiphand is concerned.
 
 ## Standalone binaries
@@ -436,13 +442,11 @@ npm run reinstall         # Ubuntu: build the .deb, then apt-remove and reinstal
 workflows compiled in. Copy it anywhere on PATH and run `whiphand` as usual. `claude` / `copilot` / `opencode` are still runtime prerequisites;
 `whiphand doctor` reports them, along with everything else this machine needs.
 
-`npm run package:desktop` builds the `@whiphand/agent` sidecar as an esbuild bundle injected
-into a copy of this machine's Node binary (a
-[single executable application](https://nodejs.org/api/single-executable-applications.html),
-~120 MB — that is the Node runtime, not the app), hands it to
-Tauri's bundler as an `externalBin`, and produces a `.deb` to install and an
-`.AppImage` to run from anywhere. Each packaging script finishes by smoke-testing what
-it built (`scripts/package/smoke.mjs`), so a broken binary is not produced silently.
+`npm run package:desktop` builds the browser UI that remote access serves as a Tauri
+resource, then has Tauri's bundler produce a `.deb` to install and an `.AppImage` to run
+from anywhere (an NSIS installer on Windows). The agent is compiled into the app, so
+there is no Node runtime or sidecar to ship. `npm run package:cli` finishes by smoke-testing
+the binary it built (`scripts/package/smoke.mjs`), so a broken CLI is not produced silently.
 
 `npm run reinstall` is the Ubuntu edit/install/verify loop in one command: it builds the
 `.deb`, removes the installed package, then installs what it just built (`sudo` is used

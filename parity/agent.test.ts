@@ -73,14 +73,15 @@ for (const scenario of SCENARIOS) {
         writeFileSync(file, `${JSON.stringify(got, null, 2)}\n`);
         return;
       }
-      assert.ok(existsSync(file), `no recorded transcript; record one with PARITY_RECORD=1 (${file})`);
-      const want = JSON.parse(readFileSync(file, 'utf8')) as typeof got;
-      // PARITY_DUMP=<dir> keeps what this run produced, for a diff tool.
+      // PARITY_DUMP=<dir> keeps what this run produced, for a diff tool or,
+      // on a platform without recordings, as the first set to review.
       const dump = process.env.PARITY_DUMP;
       if (dump) {
         mkdirSync(dump, { recursive: true });
         writeFileSync(path.join(dump, path.basename(file)), `${JSON.stringify(got, null, 2)}\n`);
       }
+      assert.ok(existsSync(file), `no recorded transcript; record one with PARITY_RECORD=1 (${file})`);
+      const want = JSON.parse(readFileSync(file, 'utf8')) as typeof got;
       assert.deepEqual(got.responses, want.responses, 'responses');
       assert.deepEqual(got.notifications, want.notifications, 'notifications');
       assert.deepEqual(got.terminals, want.terminals, 'terminal output');

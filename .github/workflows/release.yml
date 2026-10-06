@@ -103,8 +103,6 @@ jobs:
       TAG: ${{ needs.prepare.outputs.tag }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
-      # Makes the desktop build spawn the bundled sidecar instead of repo-relative node.
-      WHIPHAND_PACKAGE: '1'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -136,7 +134,7 @@ jobs:
           cp "$src" "$CLI_NAME"
           gh release upload "$TAG" "$CLI_NAME" --clobber
 
-      - name: Prepare the desktop sidecar
+      - name: Build the web resource
         id: prepare
         shell: bash
         run: node scripts/package/prepare-release.mjs | tee /tmp/prepare.out && grep '^bundles=' /tmp/prepare.out >> "$GITHUB_OUTPUT"

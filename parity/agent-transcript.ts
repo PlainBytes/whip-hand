@@ -69,6 +69,11 @@ function baseEnv(ctx: Ctx): Record<string, string> {
   }
   const home = path.join(ctx.root, 'user-home');
   mkdirSync(home, { recursive: true });
+  // A web root of its own: without one the agent falls back to the repo's
+  // apps/desktop/dist-web, which exists only where the UI has been built.
+  const webRoot = path.join(ctx.root, 'web');
+  mkdirSync(webRoot, { recursive: true });
+  writeFileSync(path.join(webRoot, 'index.html'), '<!doctype html>\n');
   // The node running this suite first on PATH, for command steps that run
   // `node` (agent-corpus.ts). Windows spells the key `Path`; reuse whichever.
   const pathKey = Object.keys(env).find(k => k.toUpperCase() === 'PATH') ?? 'PATH';
@@ -80,7 +85,7 @@ function baseEnv(ctx: Ctx): Record<string, string> {
     WHIPHAND_CONFIG_HOME: path.join(ctx.root, 'home'),
     WHIPHAND_APP_STATE_FILE: path.join(ctx.root, 'app-state.json'),
     WHIPHAND_REMOTE_CONFIG_FILE: path.join(ctx.root, 'remote-access.json'),
-    WHIPHAND_WEB_ROOT: path.join(ctx.root, 'no-web-root'),
+    WHIPHAND_WEB_ROOT: webRoot,
   };
 }
 
@@ -249,7 +254,11 @@ function normalize(t: Transcript, root: string): Transcript {
     if (key === 'whiphandVersion' || (key === 'version' && 'protocolVersion' in this)) return '<VERSION>';
     return value;
   };
-  let text = normalizeText(replaceAll(JSON.stringify(t, replacer), process.execPath, '<NODE_BIN>'), root)
+  let text = JSON.stringify(t, replacer);
+  text = replaceAll(text, process.execPath, '<NODE_BIN>');
+  // A workspace's identity key spells the root case-folded with `/` on Windows.
+  text = replaceAll(text, root.replace(/\\/g, '/').toLowerCase(), '<WS>');
+  text = normalizeText(text, root)
     .replace(RUN_ID, '<RUN>')
     .replace(TOKEN, '"token":"<TOKEN>"')
     .replace(BASE64_TOKEN_PROTOCOL, 'whiphand.token.<TOKEN>')

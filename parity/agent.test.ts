@@ -69,6 +69,10 @@ function visibleLines(terminals: Record<string, string>): Record<string, string[
   return out;
 }
 
+/** Terminal output as compared: byte for byte on POSIX, by visible lines on Windows. */
+const comparable = (terminals: Record<string, string>): unknown =>
+  process.platform === 'win32' ? visibleLines(terminals) : terminals;
+
 const fixtureFile = (name: string): string => path.join(FIXTURES, `${name.replace(/[^a-z0-9]+/gi, '-')}.json`);
 
 test('agent regression: the scenarios call every method', () => {
@@ -102,11 +106,7 @@ for (const scenario of SCENARIOS) {
       const want = JSON.parse(readFileSync(file, 'utf8')) as typeof got;
       assert.deepEqual(got.responses, want.responses, 'responses');
       assert.deepEqual(got.notifications, want.notifications, 'notifications');
-      if (process.platform === 'win32') {
-        assert.deepEqual(visibleLines(got.terminals), visibleLines(want.terminals), 'terminal output');
-      } else {
-        assert.deepEqual(got.terminals, want.terminals, 'terminal output');
-      }
+      assert.deepEqual(comparable(got.terminals), comparable(want.terminals), 'terminal output');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -12,9 +12,9 @@ Working plan for Phase 3 of [migration.md](migration.md). Branch:
 | 5. Wire up the webview | Done | `93234c8` |
 | 6. Move the webview's TS out of `packages/` | Done | `9eba24e` |
 | 7. Delete and repackage | Done | `6aec366` |
-| 8. CI and docs | Done | |
+| 8. CI and docs | Done | `b2b07bf` |
 
-Steps 1 to 7 have been verified on Linux only. Windows and macOS CI have not
+Steps 1 to 8 have been verified on Linux only. Windows and macOS CI have not
 run them yet.
 
 ## Context

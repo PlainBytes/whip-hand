@@ -1,6 +1,6 @@
 [package]
 name = "whiphand-agent"
-version = "0.3.5"
+version = "0.4.0"
 edition = "2024"
 description = "The desktop's agent: the RPC the webview speaks, served in-process over whiphand-core"
 publish = false

@@ -1,6 +1,6 @@
 [package]
 name = "whiphand-protocol"
-version = "0.3.5"
+version = "0.4.0"
 edition = "2024"
 description = "The agent RPC's wire types, shared by the desktop host and (as generated TS) the webview"
 publish = false

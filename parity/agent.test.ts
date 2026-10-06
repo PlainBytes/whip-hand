@@ -10,7 +10,7 @@
  * (`cargo build --release -p whiphand-agent`), or `WHIPHAND_PARITY_AGENT`.
  * `PARITY_RECORD=1` rewrites the transcripts instead of comparing; review the
  * diff, since a recorded change is a change in behavior. CI uploads what a
- * failing run produced (`PARITY_DUMP`), which is how the Windows set is kept.
+ * failing run produced (`PARITY_DUMP`), which is how the Windows set was recorded.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -51,6 +51,24 @@ function protocolMethods(): string[] {
   return [...body.matchAll(/^\s*(\w+): \{/gm)].map(m => m[1]!);
 }
 
+/**
+ * What a terminal shows, for Windows: ConPTY renders the session itself and
+ * repaints on its own schedule (escape sequences, erased lines, the screen
+ * redrawn after a resize), so its bytes vary run to run. Compared there: each
+ * distinct non-empty line, once, in order of first appearance.
+ */
+function visibleLines(terminals: Record<string, string>): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const [job, text] of Object.entries(terminals)) {
+    const plain = text
+      .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+      .replace(/\r/g, '');
+    out[job] = [...new Set(plain.split('\n').map(l => l.trimEnd()).filter(Boolean))];
+  }
+  return out;
+}
+
 const fixtureFile = (name: string): string => path.join(FIXTURES, `${name.replace(/[^a-z0-9]+/gi, '-')}.json`);
 
 test('agent regression: the scenarios call every method', () => {
@@ -84,7 +102,11 @@ for (const scenario of SCENARIOS) {
       const want = JSON.parse(readFileSync(file, 'utf8')) as typeof got;
       assert.deepEqual(got.responses, want.responses, 'responses');
       assert.deepEqual(got.notifications, want.notifications, 'notifications');
-      assert.deepEqual(got.terminals, want.terminals, 'terminal output');
+      if (process.platform === 'win32') {
+        assert.deepEqual(visibleLines(got.terminals), visibleLines(want.terminals), 'terminal output');
+      } else {
+        assert.deepEqual(got.terminals, want.terminals, 'terminal output');
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -1,0 +1,386 @@
+{
+  "responses": [
+    {
+      "step": "endSession unknown",
+      "response": {
+        "result": {
+          "ok": false
+        }
+      }
+    },
+    {
+      "step": "ptyInput unknown",
+      "response": {
+        "error": {
+          "code": -32000,
+          "message": "no live PTY for job 'nope'"
+        }
+      }
+    },
+    {
+      "step": "ptyResize unknown",
+      "response": {
+        "error": {
+          "code": -32000,
+          "message": "unknown job 'nope'"
+        }
+      }
+    },
+    {
+      "step": "startRun",
+      "response": {
+        "result": {
+          "jobId": "<UUID>"
+        }
+      }
+    },
+    {
+      "step": "ptyResize",
+      "response": {
+        "result": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "step": "listJobs live",
+      "response": {
+        "result": [
+          {
+            "jobId": "<UUID>",
+            "workdir": "<WS>/ws",
+            "identityKey": "<WS>/ws",
+            "status": "running",
+            "pty": {
+              "stepId": "chat",
+              "cols": 100,
+              "rows": 30
+            }
+          }
+        ]
+      }
+    },
+    {
+      "step": "ptyInput",
+      "response": {
+        "result": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "step": "endSession after exit",
+      "response": {
+        "result": {
+          "ok": false
+        }
+      }
+    },
+    {
+      "step": "listRuns",
+      "response": {
+        "result": [
+          {
+            "version": 5,
+            "runId": "<RUN>",
+            "workflow": "chat",
+            "workdir": "<WS>/ws",
+            "dryRun": false,
+            "pid": "<PID>",
+            "pidScope": "<SCOPE>",
+            "startedAt": "<TS>",
+            "updatedAt": "<TS>",
+            "heartbeatAt": "<MS>",
+            "leaseId": "<UUID>",
+            "endedAt": "<TS>",
+            "status": "succeeded",
+            "ok": true,
+            "workflowSource": "project",
+            "inputs": {},
+            "sessionIds": {
+              "chat": "<UUID>"
+            },
+            "steps": [
+              {
+                "id": "chat",
+                "kind": "agent",
+                "runner": "claude",
+                "mode": "interactive",
+                "status": "done",
+                "exitCode": 0,
+                "artifact": "<WS>/ws/.whiphand/runs/<RUN>/chat.md",
+                "startedAt": "<TS>",
+                "endedAt": "<TS>",
+                "sessionStarted": true
+              }
+            ],
+            "runDir": "<WS>/ws/.whiphand/runs/<RUN>",
+            "locked": false
+          }
+        ]
+      }
+    },
+    {
+      "step": "readArtifact",
+      "response": {
+        "result": {
+          "content": "STUBBED ARTIFACT CONTENT\n",
+          "size": 25,
+          "mtimeMs": "<MS>"
+        }
+      }
+    }
+  ],
+  "notifications": {
+    "appStateChanged": [
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [],
+        "window": null,
+        "lastPage": null,
+        "theme": "system",
+        "workspaces": {
+          "<WS>/ws": {
+            "lastInputs": {
+              "chat": {}
+            },
+            "identityKey": "<WS>/ws",
+            "lastWorkflow": "chat"
+          }
+        },
+        "runsRetention": {
+          "maxPerWorkspace": 0
+        },
+        "showOngoingRuns": true
+      }
+    ],
+    "whiphandEvent": [
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "run:start",
+          "runId": "<RUN>",
+          "workflow": "chat",
+          "source": "project"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:start",
+          "stepId": "chat",
+          "kind": "agent",
+          "runner": "claude",
+          "mode": "interactive"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:spawn",
+          "stepId": "chat",
+          "spec": {
+            "argv": [
+              "claude",
+              "--session-id",
+              "<UUID>",
+              "--append-system-prompt-file",
+              "<WS>/ws/.whiphand/runs/<RUN>/.chat.system-prompt.md",
+              "--settings",
+              "<WS>/ws/.whiphand/runs/<RUN>/.chat.settings.json",
+              "Read and follow the instructions in .whiphand/runs/<RUN>/.chat.prompt"
+            ],
+            "cwd": ".",
+            "env": {},
+            "interactive": true,
+            "files": [
+              {
+                "path": ".whiphand/runs/<RUN>/.chat.prompt",
+                "content": "hello"
+              },
+              {
+                "path": ".whiphand/runs/<RUN>/.chat.system-prompt.md",
+                "content": "You are running as step 'chat' of a Whiphand workflow, in an interactive session with a human at this terminal. This is a collaboration, not a task queue.\n\nStay inside this step's scope: do what its prompt asks and nothing more. The workflow has later steps that do other work — implementing, reviewing, testing — and that work is not yours. Do not run ahead, and do not start implementing because the goal seems obvious.\n\nBefore you change anything, propose the approach and wait for the human to say go. Do not start editing on your own initiative.\n\nWhiphand's own run directory (.whiphand/runs/<RUN>) is not part of the working tree and is exempt from the rule above: the marker file below, and the artifact you will be asked to write once this session ends, are expected there.\n\nEnding the session: when the human agrees this step's goal is met, run exactly\n\n    touch .whiphand/runs/<RUN>/.chat.done\n\nthen stop and tell them the session is complete. That command is what ends the session — never run it for any other reason. Whiphand collects this step's 'chat.md' artifact afterwards, so do not write it yourself now."
+              },
+              {
+                "path": ".whiphand/runs/<RUN>/.chat.settings.json",
+                "content": "{\n  \"permissions\": {\n    \"allow\": [\n      \"Bash(touch .whiphand/runs/<RUN>/.chat.done)\"\n    ]\n  },\n  \"hooks\": {\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"printf '{\\\"r\\\":\\\"turn\\\"}' > '<WS>/ws/.whiphand/runs/<RUN>/.chat.await' 2>/dev/null; exit 0\"\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"printf '{\\\"r\\\":\\\"permission\\\"}' > '<WS>/ws/.whiphand/runs/<RUN>/.chat.await' 2>/dev/null; exit 0\"\n          }\n        ]\n      }\n    ],\n    \"Notification\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"cat > '<WS>/ws/.whiphand/runs/<RUN>/.chat.await' 2>/dev/null; exit 0\"\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"rm -f '<WS>/ws/.whiphand/runs/<RUN>/.chat.await' >/dev/null 2>&1; exit 0\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+              }
+            ],
+            "endSession": {
+              "markerPath": ".whiphand/runs/<RUN>/.chat.done",
+              "quitSequence": "/exit\r"
+            },
+            "awaitState": {
+              "statePath": ".whiphand/runs/<RUN>/.chat.await"
+            }
+          },
+          "phase": "main"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:pty-exit",
+          "stepId": "chat",
+          "exitCode": 0,
+          "reason": "exit"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "session:ended",
+          "stepId": "chat",
+          "via": "exit"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:spawn",
+          "stepId": "chat",
+          "spec": {
+            "argv": [
+              "claude",
+              "-p",
+              "--resume",
+              "<UUID>",
+              "--allowedTools=Write"
+            ],
+            "cwd": ".",
+            "env": {},
+            "interactive": false,
+            "files": [
+              {
+                "path": ".whiphand/runs/<RUN>/.chat.harvest-prompt",
+                "content": "Write the final 'chat.md' artifact we agreed on in this conversation to .whiphand/runs/<RUN>/chat.md. Write only the artifact content to that file, then reply with just: done"
+              }
+            ],
+            "stdinFile": ".whiphand/runs/<RUN>/.chat.harvest-prompt"
+          },
+          "phase": "harvest"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:done",
+          "stepId": "chat",
+          "exitCode": 0
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:artifact",
+          "stepId": "chat",
+          "path": ".whiphand/runs/<RUN>/chat.md",
+          "bytes": 25
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "run:done",
+          "runId": "<RUN>",
+          "ok": true
+        },
+        "ts": "<TS>"
+      }
+    ],
+    "runStateChanged": [
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "status": "running"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "status": "succeeded"
+      }
+    ],
+    "ptyStarted": [
+      {
+        "jobId": "<UUID>",
+        "stepId": "chat",
+        "cols": 80,
+        "rows": 24
+      }
+    ],
+    "ptyExit": [
+      {
+        "jobId": "<UUID>",
+        "exitCode": 0,
+        "reason": "exit"
+      }
+    ],
+    "whiphandEvent run:env": [
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "run:env",
+          "runId": "<RUN>",
+          "whiphandVersion": "<VERSION>",
+          "nodeVersion": "<NODE>",
+          "platform": "<PLATFORM>",
+          "runners": [
+            {
+              "id": "claude",
+              "installed": true,
+              "version": "9.9.9"
+            }
+          ],
+          "shell": "C:/Program Files/Git/usr/bin/sh.exe"
+        },
+        "ts": "<TS>"
+      }
+    ]
+  },
+  "terminals": {
+    "job1": "\u001b[?9001h\u001b[?1004h\u001b[?25l\u001b[2J\u001b[m\u001b[Hready\r\n\u001b]0;<NODE_BIN>\u0007\u001b[?25h\u001b[8;30;100t\u001b[?25l\u001b[?9001l\u001b[?1004l\u001b[Hready\u001b[K\r\ngo\u001b[K\r\nbye go\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\u001b[4;1H\u001b[?25h"
+  }
+}

@@ -15,7 +15,7 @@
  */
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { normalizeText } from './normalize.ts';
 
@@ -256,8 +256,12 @@ function normalize(t: Transcript, root: string): Transcript {
   };
   let text = JSON.stringify(t, replacer);
   text = replaceAll(text, process.execPath, '<NODE_BIN>');
-  // A workspace's identity key spells the root case-folded with `/` on Windows.
-  text = replaceAll(text, root.replace(/\\/g, '/').toLowerCase(), '<WS>');
+  // A workspace's identity key spells the root resolved (Windows' temp dir
+  // can be an 8.3 short name, `RUNNER~1`), and there case-folded with `/`.
+  const real = realpathSync.native(root);
+  for (const form of [real, real.replace(/\\/g, '/').toLowerCase(), root.replace(/\\/g, '/').toLowerCase()]) {
+    text = replaceAll(text, form, '<WS>');
+  }
   text = normalizeText(text, root)
     .replace(RUN_ID, '<RUN>')
     .replace(TOKEN, '"token":"<TOKEN>"')

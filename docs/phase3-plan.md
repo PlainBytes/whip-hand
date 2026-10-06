@@ -243,8 +243,8 @@ As planned, with these details:
   (`PARITY_RECORD=1` rewrites them). They were recorded from the Rust agent
   while it still matched the TS one scenario for scenario. Windows has its own
   set because its answers differ in substance (cmd.exe command lines, session
-  hook commands, ConPTY output). It is not recorded yet: the Windows leg fails
-  until it is, and CI uploads the transcripts it produced (step 8).
+  hook commands, ConPTY output). It was recorded from the PR's first Windows
+  CI runs (see "After the first CI run" below).
 - To make a transcript portable, scenarios run with their own `HOME`/
   `USERPROFILE` (a real `~/.opencode/bin` leaked into doctor), command steps
   run `node` from `PATH` rather than its absolute path (run logs echo the
@@ -322,6 +322,24 @@ Planned:
 - `benchmarks.md`: re-run `scripts/bench.mjs` for RSS, installer size and RPC
   round-trip time against the Phase 0 numbers.
 
+### After the first CI run
+
+Linux and macOS were green except two parity findings, and Windows failed
+only where expected:
+- **ConPTY children wrote to the agent's stdout.** A pseudoconsole child
+  inherits the parent's std handles when they are redirected, so the stdio
+  agent's stdout carried the session's raw output. `pty.rs` now passes
+  explicitly invalid std handles, as `portable-pty` does. In the desktop
+  app it would have depended on how the app was launched.
+- **`webRootPresent` depended on whether `apps/desktop/dist-web` was
+  built.** Each scenario now has its own web root.
+- **Windows identity keys** spell the root resolved (the runner's temp dir
+  is an 8.3 short name) and case-folded with `/`; the normalizer covers both.
+- **Windows terminal output** is compared by its visible lines, each once in
+  order of first appearance, since ConPTY repaints on its own schedule. POSIX
+  stays byte for byte.
+- The `win32` set was recorded from the second run's dump.
+
 ## Risks to watch
 
 - **Flaky remote tests.** `tests/remote.rs`'s `free_port()` binds port 0,
@@ -329,15 +347,17 @@ Planned:
   collide. `rotating_the_token_closes_every_socket_with_4001` failed once in
   a full workspace run and did not reproduce in 100 isolated runs. Fix by
   binding port 0 in the agent and reading the bound port back.
-- **Windows terminals.** The direct ConPTY code has only been compile-checked.
-  Watch `.cmd` shims, which go through `plan_launch`'s cmd.exe command line,
-  and kills: the first ends the process, later ones are ignored.
+- **Windows terminals.** The direct ConPTY code runs in Windows CI now (the
+  interactive scenario and `behavior.test.ts`). Still watch `.cmd` shims,
+  which go through `plan_launch`'s cmd.exe command line, and kills: the
+  first ends the process, later ones are ignored.
 - **Hard-coded paths.** Fixtures with POSIX paths or `pid: 1` pass on Linux
   for the wrong reason. The agent regression check runs on Windows CI against
   its own recorded set.
-- **Unrecorded Windows transcripts.** `parity/fixtures/agent/win32/` has to
-  come from a Windows CI run's uploaded dump, and be reviewed before it is
-  committed: nothing compared it with the TS agent.
+- **Windows transcripts never met the TS agent.** `parity/fixtures/agent/win32/`
+  was recorded from CI and reviewed by hand against the POSIX set, not
+  compared with the TS agent. `init` lists the files it created with `\`
+  there, as the TS `path.join` did.
 - **Lost exit signal.** Handled in step 5 (`on_exit`, restart on reattach),
   covered by a host test for a clean exit. A real engine-thread panic has
   not been exercised.

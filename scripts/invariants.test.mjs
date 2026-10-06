@@ -16,8 +16,10 @@
  *      reason — never inside a bare `if (process.platform …)` in a test that
  *      otherwise reports green.
  *   3. No `shell: true`.
- *   4. No `child_process` value import outside the launch seam (exec.ts).
- *   5. No second rename-with-retry implementation outside durable-fs.ts.
+ *   4. No `child_process` value import outside the launch seam
+ *      (scripts/lib/exec.mjs).
+ *   5. No rename-with-retry in JS: durable writes are the agent's
+ *      (crates/whiphand-core/src/durable_fs.rs).
  *   6. No `continue-on-error` in the CI workflow: a red leg must be red.
  *
  * There is no check for raw `===` path comparison: it cannot be done reliably,
@@ -142,7 +144,7 @@ test('nothing passes `shell: true`', () => {
       if (/\bshell\s*:\s*true\b/.test(line)) offenders.push(`${file}:${n}`);
     }
   }
-  assert.deepEqual(offenders, [], 'go through the launch seam (packages/core/src/exec.ts) instead');
+  assert.deepEqual(offenders, [], 'go through the launch seam (scripts/lib/exec.mjs) instead');
 });
 
 // ---------------------------------------------------------------------------
@@ -164,11 +166,11 @@ test('`child_process` is imported only by the launch seam (type-only imports asi
     }
   }
   assert.deepEqual(offenders, [],
-    'every process started from Node goes through packages/core/src/exec.ts (spawnRunner, execRunner, runSync, runInherited)');
+    'every process started from Node goes through scripts/lib/exec.mjs (spawnRunner, runSync, runInherited)');
 });
 
 test('the child_process allowlist is exactly the seam, with no stale entries', () => {
-  assert.deepEqual(allowlist.childProcess, ['packages/core/src/exec.ts']);
+  assert.deepEqual(allowlist.childProcess, ['scripts/lib/exec.mjs']);
   for (const file of allowlist.childProcess) assert.ok(fs.existsSync(path.join(root, file)), `${file} does not exist`);
 });
 
@@ -176,15 +178,14 @@ test('the child_process allowlist is exactly the seam, with no stale entries', (
 // 5. One durable-write helper
 // ---------------------------------------------------------------------------
 
-test('there is one rename-with-retry: nothing outside durable-fs.ts names the transient error codes', () => {
+test('there is one rename-with-retry, and it is not in JS: nothing names the transient error codes', () => {
   const offenders = [];
   for (const file of files.filter(f => isProduct(f) && f !== 'scripts/invariants.test.mjs')) {
-    if (file === 'packages/core/src/durable-fs.ts') continue;
     for (const { line, n } of codeLines(read(file))) {
       if (/['"]EBUSY['"]|TRANSIENT_RENAME_CODES\s*=/.test(line)) offenders.push(`${file}:${n}`);
     }
   }
-  assert.deepEqual(offenders, [], 'use writeFileAtomic / renameReplacing / removeTree from packages/core/src/durable-fs.ts');
+  assert.deepEqual(offenders, [], 'durable writes belong to the agent: crates/whiphand-core/src/durable_fs.rs');
 });
 
 // ---------------------------------------------------------------------------

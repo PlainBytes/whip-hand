@@ -780,7 +780,7 @@ mod tests {
             "parity/fixtures/core/merge/block-scalars.yaml".into(),
             "parity/fixtures/core/merge/flow-steps.yaml".into(),
         ];
-        for dir in ["packages/core/templates", "examples"] {
+        for dir in ["crates/whiphand-core/templates", "examples"] {
             for e in std::fs::read_dir(format!("{REPO}/{dir}")).unwrap() {
                 files.push(format!(
                     "{dir}/{}",

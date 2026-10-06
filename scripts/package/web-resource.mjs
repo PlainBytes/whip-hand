@@ -3,11 +3,9 @@
  * Builds the browser SPA into apps/desktop/src-tauri/resources/web/, so a
  * packaged app can serve it to another machine on the network.
  *
- * Same shape as node-pty-resource.mjs, and shipped the same way: a Tauri
- * bundle resource the sidecar reads off disk at runtime via a path handed to
- * it in WHIPHAND_WEB_ROOT (see packages/agent/src/remote/web-root.ts). The agent is
- * a plain Node process with no Tauri APIs, so a directory path is the only
- * hand-off available — exactly as with WHIPHAND_NODE_PTY_DIR.
+ * A Tauri bundle resource the agent's remote-access server reads off disk at
+ * runtime: apps/desktop/src-tauri/src/agent.rs finds it under the app's
+ * resource directory and hands its path to the in-process agent.
  *
  * Called from prepareDesktopBuild() rather than from the top-level
  * package:desktop script, and that placement is load-bearing: release.yml
@@ -18,10 +16,10 @@
  * building the web bundle there would cost every local build for an artifact
  * only the packaged app needs.
  */
-import { runInherited } from '../../packages/core/src/exec.ts';
+import { runInherited } from '../lib/exec.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
-import { repoRoot } from './sea.mjs';
+import { repoRoot } from './common.mjs';
 
 const appDir = path.join(repoRoot, 'apps/desktop');
 const targetDir = path.join(appDir, 'src-tauri/resources/web');

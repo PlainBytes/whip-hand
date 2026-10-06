@@ -1,7 +1,7 @@
 //! Workspace and workflow scaffolding (`scaffold.ts`): what `whiphand init`
 //! and `whiphand new-workflow` write, and the desktop's update, delete and
 //! clone of a workflow file.
-//! The templates are `packages/core/templates/*.yaml`, compiled in: a single
+//! The templates are `templates/*.yaml`, compiled in: a single
 //! binary has no files beside it to read.
 
 use std::io::{self, Write};
@@ -19,30 +19,18 @@ use crate::yaml_emit::stringify_yaml;
 
 /// Every shipped template, in the order `init_workspace` writes them.
 pub const SHIPPED_TEMPLATES: [(&str, &str); 6] = [
-    (
-        "feature",
-        include_str!("../../../packages/core/templates/feature.yaml"),
-    ),
+    ("feature", include_str!("../templates/feature.yaml")),
     (
         "feature-development",
-        include_str!("../../../packages/core/templates/feature-development.yaml"),
+        include_str!("../templates/feature-development.yaml"),
     ),
-    (
-        "spec-driven",
-        include_str!("../../../packages/core/templates/spec-driven.yaml"),
-    ),
+    ("spec-driven", include_str!("../templates/spec-driven.yaml")),
     (
         "staged-feature-development",
-        include_str!("../../../packages/core/templates/staged-feature-development.yaml"),
+        include_str!("../templates/staged-feature-development.yaml"),
     ),
-    (
-        "research",
-        include_str!("../../../packages/core/templates/research.yaml"),
-    ),
-    (
-        "bugfix",
-        include_str!("../../../packages/core/templates/bugfix.yaml"),
-    ),
+    ("research", include_str!("../templates/research.yaml")),
+    ("bugfix", include_str!("../templates/bugfix.yaml")),
 ];
 
 fn read_template(name: &str) -> &'static str {

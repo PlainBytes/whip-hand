@@ -7,8 +7,8 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { runSync } from '../../packages/core/src/exec.ts';
-import { distDir, repoRoot, runSignCommand } from './sea.mjs';
+import { runSync } from '../lib/exec.mjs';
+import { distDir, repoRoot, runSignCommand } from './common.mjs';
 import { smokeCli } from './smoke.mjs';
 
 const exe = process.platform === 'win32' ? '.exe' : '';

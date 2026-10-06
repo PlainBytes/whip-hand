@@ -1,7 +1,9 @@
 # Headless progress fixtures
 
-Real recorded stdout from one headless run of each runner, consumed by
-`packages/core/src/engine/progress.test.ts`.
+Real recorded stdout from one headless run of each runner. The TS core's progress
+tests read these; what its parser made of them is frozen in
+`parity/fixtures/core/suites/progress.json`, which `crates/whiphand-core/tests/parity.rs`
+holds `crates/whiphand-core/src/engine/progress.rs` to.
 
 These exist because `parseProgressLine` parses two **third-party output schemas**, which
 are much less stable than the flags catalogued in `docs/design.md`. Parsing a recorded

@@ -10,25 +10,20 @@
     "apps/*"
   ],
   "scripts": {
-    "test": "node --test --test-timeout=30000 \"packages/*/src/**/*.test.ts\" \"scripts/*.test.mjs\"",
+    "test": "node --test --test-timeout=30000 \"scripts/*.test.mjs\" \"scripts/lib/*.test.mjs\"",
     "test:parity": "node --test --test-timeout=120000 \"parity/**/*.test.ts\"",
     "parity:golden": "node parity/regenerate-golden.mjs",
-    "parity:core-golden": "node parity/regenerate-core-golden.ts",
     "typecheck": "tsc --noEmit",
     "verify": "bash scripts/verify.sh",
     "package": "npm run package:cli && npm run package:desktop",
     "package:cli": "node scripts/package/cli.mjs",
-    "package:agent": "node scripts/package/agent.mjs",
     "package:desktop": "node scripts/package/desktop.mjs",
     "reinstall": "node scripts/package/reinstall.mjs",
     "bump": "node scripts/version.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "@types/ws": "^8.18.1",
-    "esbuild": "^0.28.2",
     "playwright-core": "^1.63.0",
-    "postject": "^1.0.0-alpha.6",
     "typescript": "^5.9.0"
   }
 }

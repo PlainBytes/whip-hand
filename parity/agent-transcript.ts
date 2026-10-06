@@ -1,9 +1,9 @@
 /**
  * Plays an agent scenario over stdio and records what came back, for the
- * TS-vs-Rust agent gate (Phase 3 of docs/migration.md, parity/agent.test.ts).
+ * agent's regression check (parity/agent.test.ts).
  *
  * A scenario is a list of steps run one at a time: each request is sent only
- * once the previous one has been answered, because the TS agent serves
+ * once the previous one has been answered, because the agent serves
  * requests concurrently and pipelining would make the order a race. Every
  * response is recorded against its step. Notifications are recorded per
  * method, in arrival order: the order WITHIN a method is behavior (a run's
@@ -17,7 +17,7 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { normalizeText } from './store-probe.ts';
+import { normalizeText } from './normalize.ts';
 
 export type Message = Record<string, any>;
 
@@ -57,14 +57,26 @@ export interface Transcript {
   terminals: Record<string, string>;
 }
 
-/** The environment every scenario runs in: nothing of the real machine's whiphand state. */
+/**
+ * The environment every scenario runs in: nothing of the real machine's
+ * whiphand state, and a home of its own, so tools installed under the real
+ * one (`~/.opencode/bin`) stay out of the transcript.
+ */
 function baseEnv(ctx: Ctx): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (v !== undefined && !k.startsWith('WHIPHAND_')) env[k] = v;
   }
+  const home = path.join(ctx.root, 'user-home');
+  mkdirSync(home, { recursive: true });
+  // The node running this suite first on PATH, for command steps that run
+  // `node` (agent-corpus.ts). Windows spells the key `Path`; reuse whichever.
+  const pathKey = Object.keys(env).find(k => k.toUpperCase() === 'PATH') ?? 'PATH';
+  env[pathKey] = [path.dirname(process.execPath), env[pathKey]].filter(Boolean).join(path.delimiter);
   return {
     ...env,
+    HOME: home,
+    USERPROFILE: home,
     WHIPHAND_CONFIG_HOME: path.join(ctx.root, 'home'),
     WHIPHAND_APP_STATE_FILE: path.join(ctx.root, 'app-state.json'),
     WHIPHAND_REMOTE_CONFIG_FILE: path.join(ctx.root, 'remote-access.json'),
@@ -208,11 +220,19 @@ const PARSE_ERROR = /"parse error: [^"]*"/g;
 /** The Rust engine has no Node to report (docs/migration.md, Phase 2). */
 const NODE_VERSION = /"nodeVersion":"[^"]*"/g;
 const NODE_IN_LOG = /, node [^,]*, /g;
+const PLATFORM = /"platform":"[a-z0-9]+"/g;
+
+/** Every way `text` can spell `value`: raw, escaped once or twice as JSON writes it. */
+function replaceAll(text: string, value: string, placeholder: string): string {
+  const once = JSON.stringify(value).slice(1, -1);
+  const twice = JSON.stringify(once).slice(1, -1);
+  return text.split(twice).join(placeholder).split(once).join(placeholder).split(value).join(placeholder);
+}
 
 /**
- * What legitimately differs between two runs: the root path (identical for
- * the two agents, but not across machines), timestamps, ids, pids, tokens,
- * mtimes, the LAN addresses, and the remote port.
+ * What legitimately differs between two runs: the root path, the node that
+ * command steps run, timestamps, ids, pids, tokens, mtimes, the LAN
+ * addresses, the remote port, and the release and platform.
  */
 function normalize(t: Transcript, root: string): Transcript {
   const port = process.env.PARITY_REMOTE_PORT;
@@ -223,15 +243,20 @@ function normalize(t: Transcript, root: string): Transcript {
     if (key === 'startByte') return '<BYTE>';
     if (key === 'addresses' && Array.isArray(value)) return value.length === 0 ? [] : ['<ADDR>'];
     if (key === 'pid' && typeof value === 'number') return '<PID>';
+    // The host and pid namespace a run's lock belongs to.
+    if (key === 'pidScope' && typeof value === 'string') return '<SCOPE>';
+    // The release being tested, as `hello` and `run:env` report it.
+    if (key === 'whiphandVersion' || (key === 'version' && 'protocolVersion' in this)) return '<VERSION>';
     return value;
   };
-  let text = normalizeText(JSON.stringify(t, replacer), root)
+  let text = normalizeText(replaceAll(JSON.stringify(t, replacer), process.execPath, '<NODE_BIN>'), root)
     .replace(RUN_ID, '<RUN>')
     .replace(TOKEN, '"token":"<TOKEN>"')
     .replace(BASE64_TOKEN_PROTOCOL, 'whiphand.token.<TOKEN>')
     .replace(PARSE_ERROR, '"parse error: <detail>"')
     .replace(NODE_VERSION, '"nodeVersion":"<NODE>"')
-    .replace(NODE_IN_LOG, ', node <NODE>, ');
+    .replace(NODE_IN_LOG, ', node <NODE>, ')
+    .replace(PLATFORM, '"platform":"<PLATFORM>"');
   if (port) text = text.split(`"port":${port}`).join('"port":"<PORT>"').split(`:${port}`).join(':<PORT>');
   const parsed = runEnvApart(JSON.parse(text) as Transcript);
   return parsed;

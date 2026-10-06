@@ -5,7 +5,7 @@
  * rather than guessed.
  */
 import fs from 'node:fs';
-import { runSync } from '../../packages/core/src/exec.ts';
+import { runSync } from '../lib/exec.mjs';
 
 export function rssBytes(pid) {
   if (process.platform === 'linux') {

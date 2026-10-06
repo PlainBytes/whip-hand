@@ -1,0 +1,152 @@
+{
+  "responses": [
+    {
+      "step": "remoteAccessGet",
+      "response": {
+        "result": {
+          "enabled": false,
+          "port": 61338,
+          "token": "<TOKEN>",
+          "listening": false,
+          "error": null,
+          "clientCount": 0,
+          "addresses": [],
+          "webRootPresent": true
+        }
+      }
+    },
+    {
+      "step": "enable",
+      "response": {
+        "result": {
+          "enabled": true,
+          "port": "<PORT>",
+          "token": "<TOKEN>",
+          "listening": true,
+          "error": null,
+          "clientCount": 0,
+          "addresses": [
+            "<ADDR>"
+          ],
+          "webRootPresent": true
+        }
+      }
+    },
+    {
+      "step": "remoteAccessRotateToken",
+      "response": {
+        "result": {
+          "enabled": true,
+          "port": "<PORT>",
+          "token": "<TOKEN>",
+          "listening": true,
+          "error": null,
+          "clientCount": 0,
+          "addresses": [
+            "<ADDR>"
+          ],
+          "webRootPresent": true
+        }
+      }
+    },
+    {
+      "step": "remoteAccessGet on",
+      "response": {
+        "result": {
+          "enabled": true,
+          "port": "<PORT>",
+          "token": "<TOKEN>",
+          "listening": true,
+          "error": null,
+          "clientCount": 0,
+          "addresses": [
+            "<ADDR>"
+          ],
+          "webRootPresent": true
+        }
+      }
+    },
+    {
+      "step": "disable",
+      "response": {
+        "result": {
+          "enabled": false,
+          "port": "<PORT>",
+          "token": "<TOKEN>",
+          "listening": false,
+          "error": null,
+          "clientCount": 0,
+          "addresses": [],
+          "webRootPresent": true
+        }
+      }
+    }
+  ],
+  "notifications": {
+    "remoteAccessChanged": [
+      {
+        "enabled": true,
+        "port": "<PORT>",
+        "listening": true,
+        "error": null,
+        "clientCount": 0,
+        "addresses": [
+          "<ADDR>"
+        ],
+        "webRootPresent": true
+      },
+      {
+        "enabled": true,
+        "port": "<PORT>",
+        "listening": true,
+        "error": null,
+        "clientCount": 0,
+        "addresses": [
+          "<ADDR>"
+        ],
+        "webRootPresent": true
+      },
+      {
+        "enabled": true,
+        "port": "<PORT>",
+        "listening": true,
+        "error": null,
+        "clientCount": 0,
+        "addresses": [
+          "<ADDR>"
+        ],
+        "webRootPresent": true
+      },
+      {
+        "enabled": true,
+        "port": "<PORT>",
+        "listening": true,
+        "error": null,
+        "clientCount": 0,
+        "addresses": [
+          "<ADDR>"
+        ],
+        "webRootPresent": true
+      },
+      {
+        "enabled": false,
+        "port": "<PORT>",
+        "listening": false,
+        "error": null,
+        "clientCount": 0,
+        "addresses": [],
+        "webRootPresent": true
+      },
+      {
+        "enabled": false,
+        "port": "<PORT>",
+        "listening": false,
+        "error": null,
+        "clientCount": 0,
+        "addresses": [],
+        "webRootPresent": true
+      }
+    ]
+  },
+  "terminals": {}
+}

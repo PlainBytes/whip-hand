@@ -1,4 +1,4 @@
-//! The desktop's agent (`packages/agent`), in Rust: the NDJSON RPC the
+//! The desktop's agent, in Rust (it replaced the TS `packages/agent`): the NDJSON RPC the
 //! webview's `AgentClient` speaks, served over `whiphand-core` in the same
 //! process as its host.
 //!

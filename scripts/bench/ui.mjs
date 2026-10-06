@@ -16,9 +16,9 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { runSync } from '../../packages/core/src/exec.ts';
-import { repoRoot } from '../package/sea.mjs';
-import { discard } from '../package/smoke.mjs';
+import { runSync } from '../lib/exec.mjs';
+import { discard } from '../lib/child.mjs';
+import { repoRoot } from '../package/common.mjs';
 import { AgentSession, tempDir } from './agent-session.mjs';
 import { benchPath, seedAppState, LARGE_RUN_NAME } from './fixtures.mjs';
 import { median, summarize } from './stats.mjs';
@@ -321,7 +321,7 @@ export async function benchUi({ workspace, headed, note, log, agentEnv }) {
   seedAppState(path.join(stateDir, 'app-state.json'), workspace);
 
   const session = new AgentSession(
-    [process.execPath, path.join(repoRoot, 'packages/agent/src/main.ts')],
+    [path.join(repoRoot, 'target/release', `whiphand-agent${process.platform === 'win32' ? '.exe' : ''}`)],
     agentEnv(stateDir, { WHIPHAND_WEB_ROOT: WEB_ROOT, PATH: benchPath() }),
   );
   let browser;

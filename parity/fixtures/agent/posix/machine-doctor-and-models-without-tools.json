@@ -1,0 +1,254 @@
+{
+  "responses": [
+    {
+      "step": "listModels",
+      "response": {
+        "result": {
+          "claude": {
+            "source": "fallback",
+            "models": [
+              {
+                "id": "default"
+              },
+              {
+                "id": "opus"
+              },
+              {
+                "id": "sonnet"
+              },
+              {
+                "id": "haiku"
+              },
+              {
+                "id": "fable"
+              },
+              {
+                "id": "opusplan"
+              }
+            ],
+            "note": "couldn't query claude; showing built-in aliases"
+          },
+          "copilot": {
+            "source": "unavailable",
+            "models": []
+          },
+          "opencode": {
+            "source": "unavailable",
+            "models": []
+          }
+        }
+      }
+    },
+    {
+      "step": "doctor",
+      "response": {
+        "result": [
+          {
+            "id": "claude",
+            "label": "Claude Code",
+            "group": "harness",
+            "runner": true,
+            "optional": false,
+            "installed": false,
+            "url": "https://claude.com/claude-code"
+          },
+          {
+            "id": "copilot",
+            "label": "GitHub Copilot CLI",
+            "group": "harness",
+            "runner": true,
+            "optional": false,
+            "installed": false,
+            "url": "https://github.com/github/copilot-cli"
+          },
+          {
+            "id": "opencode",
+            "label": "opencode",
+            "group": "harness",
+            "runner": true,
+            "optional": true,
+            "installed": false,
+            "url": "https://opencode.ai"
+          },
+          {
+            "id": "git",
+            "label": "Git",
+            "group": "support",
+            "runner": false,
+            "optional": false,
+            "installed": false,
+            "url": "https://git-scm.com"
+          },
+          {
+            "id": "node",
+            "label": "Node.js",
+            "group": "support",
+            "runner": false,
+            "optional": true,
+            "installed": false,
+            "url": "https://nodejs.org"
+          },
+          {
+            "id": "npm",
+            "label": "npm",
+            "group": "support",
+            "runner": false,
+            "optional": true,
+            "installed": false,
+            "url": "https://docs.npmjs.com/cli"
+          },
+          {
+            "id": "python",
+            "label": "Python",
+            "group": "support",
+            "runner": false,
+            "optional": true,
+            "installed": false,
+            "url": "https://www.python.org"
+          },
+          {
+            "id": "rtk",
+            "label": "rtk",
+            "group": "support",
+            "runner": false,
+            "optional": true,
+            "installed": false
+          },
+          {
+            "id": "rg",
+            "label": "ripgrep",
+            "group": "support",
+            "runner": false,
+            "optional": true,
+            "installed": false,
+            "url": "https://github.com/BurntSushi/ripgrep"
+          },
+          {
+            "id": "fd",
+            "label": "fd",
+            "group": "support",
+            "runner": false,
+            "optional": true,
+            "installed": false,
+            "url": "https://github.com/sharkdp/fd"
+          },
+          {
+            "id": "jq",
+            "label": "jq",
+            "group": "support",
+            "runner": false,
+            "optional": true,
+            "installed": false,
+            "url": "https://jqlang.github.io/jq"
+          },
+          {
+            "id": "gh",
+            "label": "GitHub CLI",
+            "group": "support",
+            "runner": false,
+            "optional": true,
+            "installed": false,
+            "url": "https://cli.github.com"
+          },
+          {
+            "id": "ast-grep",
+            "label": "ast-grep",
+            "group": "support",
+            "runner": false,
+            "optional": true,
+            "installed": false,
+            "url": "https://ast-grep.github.io"
+          },
+          {
+            "id": "yq",
+            "label": "yq",
+            "group": "support",
+            "runner": false,
+            "optional": true,
+            "installed": false,
+            "url": "https://github.com/mikefarah/yq"
+          },
+          {
+            "id": "uv",
+            "label": "uv",
+            "group": "support",
+            "runner": false,
+            "optional": true,
+            "installed": false,
+            "url": "https://docs.astral.sh/uv"
+          },
+          {
+            "id": "ctags",
+            "label": "Universal Ctags",
+            "group": "support",
+            "runner": false,
+            "optional": true,
+            "installed": false,
+            "url": "https://ctags.io"
+          },
+          {
+            "id": "scc",
+            "label": "scc",
+            "group": "support",
+            "runner": false,
+            "optional": true,
+            "installed": false,
+            "url": "https://github.com/boyter/scc"
+          },
+          {
+            "id": "posix-shell",
+            "label": "POSIX shell",
+            "group": "support",
+            "runner": false,
+            "optional": false,
+            "installed": true,
+            "notes": [
+              "command steps run through /bin/sh"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "step": "listModels refresh",
+      "response": {
+        "result": {
+          "claude": {
+            "source": "fallback",
+            "models": [
+              {
+                "id": "default"
+              },
+              {
+                "id": "opus"
+              },
+              {
+                "id": "sonnet"
+              },
+              {
+                "id": "haiku"
+              },
+              {
+                "id": "fable"
+              },
+              {
+                "id": "opusplan"
+              }
+            ],
+            "note": "couldn't query claude; showing built-in aliases"
+          },
+          "copilot": {
+            "source": "unavailable",
+            "models": []
+          },
+          "opencode": {
+            "source": "unavailable",
+            "models": []
+          }
+        }
+      }
+    }
+  ],
+  "notifications": {},
+  "terminals": {}
+}

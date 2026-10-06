@@ -16,8 +16,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runSync } from '../../packages/core/src/exec.ts';
-import { formatLogLine } from '../../packages/core/src/log-rows.ts';
+import { runSync } from '../lib/exec.mjs';
+import { formatLogLine } from '../../apps/desktop/src/shared/log-rows.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const FIXTURES_DIR = path.join(here, 'fixtures');

@@ -6,9 +6,9 @@
 //!   `kill(-pgid)`, which reaches whatever a `sh -c` started. An interactive
 //!   child that inherits the terminal stays in the foreground group and is
 //!   signalled by pid.
-//! - Windows: a Job Object with kill-on-close, held in this process (the TS
-//!   frontends need the `whiphand-job.exe` helper for it). When this process
-//!   dies by any means its handle closes and the job ends every member.
+//! - Windows: a Job Object with kill-on-close, held in this process. When
+//!   this process dies by any means its handle closes and the job ends every
+//!   member.
 //!
 //! Known race, accepted as in TS: a child is assigned right after it is
 //! created, so a `sh -c` that forks inside that window can leave a grandchild

@@ -1,15 +1,14 @@
 /**
- * The agent the stdio tests drive: the TS agent by default, or the Rust
- * `whiphand-agent` binary (crates/whiphand-agent, Phase 3 of
- * docs/migration.md) when `WHIPHAND_PARITY_AGENT` names it. Built with
- * `cargo build --release -p whiphand-agent`.
+ * The agent the stdio tests drive: `target/release/whiphand-agent`
+ * (`cargo build --release -p whiphand-agent`), or the binary
+ * `WHIPHAND_PARITY_AGENT` names.
  */
 import { fileURLToPath } from 'node:url';
 
-const TS_AGENT = fileURLToPath(new URL('../packages/agent/src/main.ts', import.meta.url));
+const AGENT = process.env.WHIPHAND_PARITY_AGENT
+  ?? fileURLToPath(new URL(`../target/release/whiphand-agent${process.platform === 'win32' ? '.exe' : ''}`, import.meta.url));
 
 /** `[command, ...args]` to spawn the agent with. */
 export function agentCommand(): [string, string[]] {
-  const rust = process.env.WHIPHAND_PARITY_AGENT;
-  return rust ? [rust, []] : [process.execPath, [TS_AGENT]];
+  return [AGENT, []];
 }

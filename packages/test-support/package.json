@@ -3,6 +3,6 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Shared test helpers. A private workspace, deliberately not a `./testing` subpath on @whiphand/core's exports, so no test helper ships in core's public surface.",
+  "description": "Shared test helpers for the parity suite and the desktop app's tests. A private workspace, so no test helper ships.",
   "exports": { ".": "./src/index.ts" }
 }

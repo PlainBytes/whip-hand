@@ -19,9 +19,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { gzipSync } from 'node:zlib';
-import { runSync } from '../packages/core/src/exec.ts';
-import { repoRoot, distDir } from './package/sea.mjs';
-import { discard } from './package/smoke.mjs';
+import { runSync } from './lib/exec.mjs';
+import { discard } from './lib/child.mjs';
+import { repoRoot, distDir } from './package/common.mjs';
 import { summarize, compare, formatCompare } from './bench/stats.mjs';
 import { rssBytes } from './bench/rss.mjs';
 import { AgentSession, isolatedEnv, tempDir } from './bench/agent-session.mjs';
@@ -32,8 +32,9 @@ const exeSuffix = process.platform === 'win32' ? '.exe' : '';
 // build, and the packaged one is that binary copied into dist/.
 const CLI_DEV = [path.join(repoRoot, 'target/release', `whiphand${exeSuffix}`)];
 const CLI_PACKAGED = path.join(distDir, `whiphand${exeSuffix}`);
-const AGENT_DEV = [process.execPath, path.join(repoRoot, 'packages/agent/src/main.ts')];
-const AGENT_PACKAGED = path.join(distDir, `whiphand-agent${exeSuffix}`);
+// The agent is a Rust binary since Phase 3, and ships only inside the desktop
+// app, so its stdio build is the one there is to measure.
+const AGENT_DEV = [path.join(repoRoot, 'target/release', `whiphand-agent${exeSuffix}`)];
 const SECTIONS = ['cli', 'agent', 'rpc', 'sizes', 'ui'];
 export const RESULTS_FILE = path.join(repoRoot, 'scripts/bench/results', `${process.platform}-${process.arch}.json`);
 
@@ -59,9 +60,8 @@ function timeCommand(argv, { runs, cwd, warmup = 2 }) {
   return summarize(samples);
 }
 
-/** The packaged agent bakes in a node-pty location; point it at the repo's, as smoke.mjs does. */
 function agentEnv(stateDir, extra = {}) {
-  return isolatedEnv(stateDir, { WHIPHAND_NODE_PTY_DIR: path.join(repoRoot, 'node_modules/node-pty'), ...extra });
+  return isolatedEnv(stateDir, extra);
 }
 
 // ---------------------------------------------------------------------------
@@ -96,6 +96,7 @@ function benchCli({ runs }) {
 }
 
 async function startAgent(argv, stateDir, extraEnv) {
+  if (!fs.existsSync(argv[0])) throw new Error(`${argv[0]} missing — run \`cargo build --release -p whiphand-agent\``);
   const start = process.hrtime.bigint();
   const session = new AgentSession(argv, agentEnv(stateDir, extraEnv));
   await session.request('hello', { protocolVersion: 1 });
@@ -116,9 +117,6 @@ async function pageThroughLog(session, workdir, runId) {
 async function benchAgent({ runs, workspace }) {
   log('agent: startup and RSS');
   const variants = { dev: AGENT_DEV };
-  if (fs.existsSync(AGENT_PACKAGED)) variants.packaged = [AGENT_PACKAGED];
-  else note(`${path.relative(repoRoot, AGENT_PACKAGED)} missing — run \`npm run package:agent\` for the packaged rows`);
-
   const result = { dev: null, packaged: null };
   for (const [name, argv] of Object.entries(variants)) {
     const startups = [];
@@ -163,7 +161,7 @@ async function benchRpc({ runs, workspace }) {
   const stateDir = tempDir('rpc');
   const { session } = await startAgent(AGENT_DEV, stateDir);
   try {
-    await timeRequests(session, 50, 'hello', { protocolVersion: 1 }); // warm the JIT
+    await timeRequests(session, 50, 'hello', { protocolVersion: 1 }); // warm up
     const replay = [];
     for (let i = 0; i < Math.max(3, Math.floor(runs / 4)); i += 1) {
       const start = process.hrtime.bigint();
@@ -214,7 +212,6 @@ function benchSizes() {
   const js = webFiles.filter(file => file.endsWith('.js'));
   return {
     cliBytes: fileSize(CLI_PACKAGED),
-    agentBytes: fileSize(AGENT_PACKAGED),
     installerBytes: installers,
     webBundle: webFiles.length === 0 ? null : {
       totalBytes: webFiles.reduce((sum, file) => sum + fs.statSync(file).size, 0),

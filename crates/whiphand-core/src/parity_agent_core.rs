@@ -1,5 +1,6 @@
-//! The Rust half of the parity ops for the core pieces only the desktop agent
-//! used; `parity/agent-core-probe.ts` is the TS half and documents them.
+//! The parity ops for the core pieces only the desktop agent used. The TS
+//! half (`parity/agent-core-probe.ts`, removed in Phase 3) wrote their goldens;
+//! a name below in "the TS probe" is the function there this one mirrors.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -36,7 +37,7 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(status.success(), "git {args:?} failed");
 }
 
-/// `buildRepo` in agent-core-probe.ts.
+/// `buildRepo` in the TS probe.
 fn build_repo(dir: &Path, op: &Value) {
     if op["git"] != Value::Bool(false) {
         git(dir, &["init", "-q", "-b", "main"]);
@@ -109,7 +110,7 @@ fn entries(v: &Value) -> Vec<NumstatEntry> {
         .collect()
 }
 
-/// `abbreviate` in agent-core-probe.ts. JS slices by UTF-16 unit, so a cut
+/// `abbreviate` in the TS probe. JS slices by UTF-16 unit, so a cut
 /// through a surrogate pair is a lone surrogate there and U+FFFD here; the
 /// corpus never cuts one.
 fn abbreviate(diff: WorkingDiff) -> Value {
@@ -128,7 +129,7 @@ fn abbreviate(diff: WorkingDiff) -> Value {
     v
 }
 
-/// `commentsOf` in agent-core-probe.ts.
+/// `commentsOf` in the TS probe.
 fn comments_of(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for raw in text.split('\n') {
@@ -144,7 +145,7 @@ fn comments_of(text: &str) -> Vec<String> {
     out
 }
 
-/// `mergeResult` in agent-core-probe.ts.
+/// `mergeResult` in the TS probe.
 fn merge_result(text: &str) -> Value {
     let workflow = match crate::schema::parse_workflow(text) {
         Ok(w) => crate::jsval::to_json(&crate::engine::workflow_js::workflow_to_js(&w)),
@@ -153,7 +154,7 @@ fn merge_result(text: &str) -> Value {
     json!({ "workflow": workflow, "comments": comments_of(text) })
 }
 
-/// `workflowFilesOp` in agent-core-probe.ts.
+/// `workflowFilesOp` in the TS probe.
 fn workflow_files_op(op: &Value) -> Value {
     use crate::scaffold::{clone_workflow, create_workflow, delete_workflow, update_workflow};
     use crate::types::Scope;

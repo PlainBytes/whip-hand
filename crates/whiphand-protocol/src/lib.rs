@@ -1,4 +1,4 @@
-//! The agent RPC's wire types (`packages/agent/src/protocol.ts`): NDJSON, one
+//! The agent RPC's wire types: NDJSON, one
 //! JSON value per line, between the webview's `AgentClient` and the agent,
 //! whether the agent runs in the Tauri process or behind the remote server.
 //!
@@ -1138,7 +1138,7 @@ pub type AppStateChangedParams = AppState;
 
 // ------------------------------------------------------------------ tables
 
-/// Every method, in `protocol.ts`'s order, with its params and result types
+/// Every method, in the TS agent's `protocol.ts` order, with its params and result types
 /// as the generated TS names them.
 pub const METHODS: &[(&str, &str, &str)] = &[
     ("hello", "HelloParams", "HelloResult"),

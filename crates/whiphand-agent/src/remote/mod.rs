@@ -1,4 +1,4 @@
-//! Remote access (`packages/agent/src/remote`): a browser on the LAN drives
+//! Remote access: a browser on the LAN drives
 //! this agent over the same protocol the desktop speaks.
 //!
 //! The controller turns `remote-access.json` into a running (or stopped)

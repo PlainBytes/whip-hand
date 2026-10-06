@@ -151,7 +151,7 @@ the Rust binary through `WHIPHAND_PARITY_AGENT`. Against it they pass 24 of
   fire-and-forget probe answers, which shifts event ordinals and run.log
   offsets, and a run that ends first drops it.
 - CI's parity job builds `whiphand-agent`.
-- Recorded goldens are deferred to step 7 (see below).
+- Recorded transcripts replaced the live comparison in step 7.
 
 ### 5. Wire up the webview (done)
 
@@ -234,32 +234,55 @@ Planned:
 - `vite.web.config.ts` `forbidTauri()` stays, because the web build still
   needs it.
 
-### 7. Delete and repackage
+### 7. Delete and repackage (done)
 
-- Delete `packages/agent` and `packages/core`.
-- Move `packages/core/templates` to `crates/whiphand-core/templates`, which
-  `scaffold.rs` compiles in.
-- Move `packages/core/src/exec.ts`, which the scripts use as a spawn helper,
-  to `scripts/lib/exec.mjs`. Update `invariants.test.mjs`.
-- Delete `scripts/package/{agent,sea,guard,templates,node-pty-resource}.mjs`,
-  `sea.test.mjs` and `smokeAgent*`.
-- `desktop.mjs` `prepareDesktopBuild` now only builds the web resource.
-  Update the `desktop.test.mjs` expectations.
-- `bench/agent-session.mjs` and `bench/ui.mjs` drive the Rust
-  `whiphand-agent` binary.
-- Drop the `whiphand-job` binary, leaving job-guard as a library only.
-  Update `platform-gates.json`.
-- `version.mjs`: drop `packages/{core,agent}` and `CORE_VERSION`
-  (`whiphand-protocol` and `whiphand-agent` are already in).
-- Root `package.json`: drop `postject`, `node-pty` and `ws`, the
-  `package:agent` script and the core/agent globs in `npm test`.
-- The core goldens become frozen fixtures: delete `regenerate-core-golden.ts`,
-  the `*-probe.ts` files and `store-cross.test.ts`.
-  `crates/whiphand-core/tests/parity.rs` keeps checking them.
-- `parity/protocol-types.ts` goes with `protocol.ts`.
-- **Decide what replaces the live agent gate.** A TS transcript embeds
-  machine paths (node, shell), so recorded goldens need more normalization,
-  or a Rust-only regression check, before the TS agent can go.
+As planned, with these details:
+- **The agent gate became a Rust-only regression check.** `parity/agent.test.ts`
+  plays every scenario against `target/release/whiphand-agent` and compares
+  with transcripts recorded in `parity/fixtures/agent/<posix|win32>/`
+  (`PARITY_RECORD=1` rewrites them). They were recorded from the Rust agent
+  while it still matched the TS one scenario for scenario. Windows has its own
+  set because its answers differ in substance (cmd.exe command lines, session
+  hook commands, ConPTY output). It is not recorded yet: the Windows leg fails
+  until it is, and CI uploads the transcripts it produced (step 8).
+- To make a transcript portable, scenarios run with their own `HOME`/
+  `USERPROFILE` (a real `~/.opencode/bin` leaked into doctor), command steps
+  run `node` from `PATH` rather than its absolute path (run logs echo the
+  command line, so the path's length changed artifact sizes), and the release,
+  platform and pid scope are normalized. `normalizeText` moved from the store
+  probe to `parity/normalize.ts`.
+- The static "every method" check reads the method list from
+  `protocol.gen.ts`. `agent-command.ts` and `behavior.test.ts` drive the Rust
+  agent only; `behavior.test.ts` takes `TOOL_GROUP_LABELS` and `DoctorRow`
+  from the webview's shared modules and inlines core's default config.
+- The core goldens are frozen. `crates/whiphand-core/tests/parity.rs` gained
+  `WHIPHAND_UPDATE_GOLDEN=1` for a deliberate change (a template edit): it
+  rewrites only the lines whose result changed, keeping the TS writer's key
+  order everywhere else. The suites' template paths point at
+  `crates/whiphand-core/templates`. Gone: every `*-probe.ts` and `*-corpus.ts`
+  but the agent's, `core.test.ts`, `store-cross.test.ts`, `store-hold.ts`,
+  `regenerate-core-golden.ts`, `protocol-types.ts`, the `store_probe`
+  example, and `parity/fixtures/bin`. The recorded runner outputs in
+  `fixtures/progress` and `fixtures/models` stay as the frozen suites'
+  provenance.
+- `scripts/lib/exec.mjs` is the launch half of `exec.ts`, types stripped
+  (resolve, quote, the `.cmd` shim bypass, `spawnRunner`, `runSync`,
+  `runInherited`), with its 27 launch-plan tests in `exec.test.mjs`. It is
+  the invariants' only `child_process` importer. `scripts/lib/child.mjs` holds
+  the NDJSON and teardown helpers the bench used from `smoke.mjs`, and
+  `scripts/package/common.mjs` holds `repoRoot`, `distDir` and
+  `runSignCommand` from `sea.mjs`.
+- `platform-gates.json` is empty: every gate was in the TS packages.
+  Invariant 5 now forbids any rename-with-retry in JS.
+- `prepareDesktopBuild` only builds the web resource; it is synchronous now,
+  and `WHIPHAND_PACKAGE` is gone from `desktop.mjs` (release.yml in step 8).
+  `smoke.mjs` smokes the CLI only.
+- Bench drives `target/release/whiphand-agent` (there is no packaged agent);
+  `sizes.agentBytes` is gone, since the installer size covers it.
+- Root `package.json` also dropped `esbuild` and `@types/ws`. `npm test` runs
+  `scripts/*.test.mjs` and `scripts/lib/*.test.mjs`.
+- `test-support` lost what only the TS packages used: `withStubBin`,
+  `withUnreadableStubBin`, `withEnv` and the Windows pty-exit helper.
 
 ### 8. CI and docs
 
@@ -286,7 +309,11 @@ Planned:
   Watch `.cmd` shims, which go through `plan_launch`'s cmd.exe command line,
   and kills: the first ends the process, later ones are ignored.
 - **Hard-coded paths.** Fixtures with POSIX paths or `pid: 1` pass on Linux
-  for the wrong reason. The agent gate runs on Windows CI.
+  for the wrong reason. The agent regression check runs on Windows CI against
+  its own recorded set.
+- **Unrecorded Windows transcripts.** `parity/fixtures/agent/win32/` has to
+  come from a Windows CI run's uploaded dump, and be reviewed before it is
+  committed: nothing compared it with the TS agent.
 - **Lost exit signal.** Handled in step 5 (`on_exit`, restart on reattach),
   covered by a host test for a clean exit. A real engine-thread panic has
   not been exercised.
@@ -302,8 +329,8 @@ Planned:
   `cargo test --workspace`, including the codegen staleness check and the
   Windows compile check (`cargo check -p whiphand-agent --target
   x86_64-pc-windows-msvc --all-targets`).
-- Before the deletion commit: `npm run test:parity` with `agent.test.ts`
-  green, and `behavior.test.ts` against the Rust agent. After it: `npm test`,
+- `npm run test:parity` (the agent regression check and `behavior.test.ts`
+  against the Rust agent), `npm test`,
   `npm run typecheck`, `npm run test -w desktop` (with
   `NODE_OPTIONS=--no-experimental-webstorage`) and `npm run build -w desktop`.
 - `npm run package`, then check that the installer no longer contains

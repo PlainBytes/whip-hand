@@ -13,12 +13,16 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import type { Ctx, Message, Scenario } from './agent-transcript.ts';
 
-const NODE = JSON.stringify(process.execPath);
 const isWin = process.platform === 'win32';
 
-/** A command step's shell line that runs `js` under node, on every platform. */
+/**
+ * A command step's shell line that runs `js` under node, on every platform.
+ * `node` from PATH (agent-transcript.ts puts this node first), not its
+ * absolute path: run logs echo the command line, and a recorded transcript
+ * must not carry one machine's install path or its length.
+ */
 function nodeRun(js: string): string {
-  return `${NODE} -e ${JSON.stringify(js)}`;
+  return `node -e ${JSON.stringify(js)}`;
 }
 
 function workflow(name: string, steps: string): string {

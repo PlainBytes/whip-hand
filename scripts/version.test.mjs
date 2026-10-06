@@ -10,8 +10,6 @@ const scriptPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'v
 
 const FILES = {
   'apps/desktop/package.json': '{\n  "name": "desktop",\n  "version": "0.1.0",\n  "type": "module"\n}\n',
-  'packages/core/package.json': '{\n  "name": "@whiphand/core",\n  "version": "0.1.0"\n}\n',
-  'packages/agent/package.json': '{\n  "name": "@whiphand/agent",\n  "version": "0.1.0"\n}\n',
   'apps/desktop/src-tauri/Cargo.toml':
     '[package]\nname = "whiphand"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\nserde = "1"\n',
   'apps/desktop/src-tauri/Cargo.lock':
@@ -37,8 +35,6 @@ const FILES = {
     '  } }\n}\n',
   'apps/desktop/src/lib/updater.ts':
     "const RELEASE_PAGE_URL = 'https://github.com/PlainBytes/whip-hand/releases/latest';\n",
-  'packages/core/src/version.ts': "export const CORE_VERSION = '0.1.0';\n",
-  'packages/core/src/index.ts': "export { CORE_VERSION } from './version.ts';\nexport * from './types.ts';\n",
   'package-lock.json': `${JSON.stringify({
     name: 'whiphand',
     lockfileVersion: 3,
@@ -47,8 +43,7 @@ const FILES = {
       '': { name: 'whiphand', workspaces: ['packages/*', 'apps/*'] },
       'apps/desktop': { version: '0.1.0' },
       'node_modules/commander': { version: '14.0.0', license: 'MIT' },
-      'packages/agent': { name: '@whiphand/agent', version: '0.1.0', dependencies: { '@whiphand/core': '*' } },
-      'packages/core': { name: '@whiphand/core', version: '0.1.0' },
+      'packages/test-support': { name: '@whiphand/test-support', version: '0.0.7' },
     },
   }, null, 2)}\n`,
 };
@@ -95,7 +90,7 @@ test('--check exits non-zero and lists every mismatch', () => {
       assert.match(stderr, /src-tauri\/Cargo\.lock \(whiphand\): 0\.1\.0/);
       assert.match(stderr, /crates\/whiphand-core\/Cargo\.toml: 0\.1\.0/);
       assert.match(stderr, /^  Cargo\.lock \(whiphand-core\): 0\.1\.0/m);
-      assert.match(stderr, /package-lock\.json \(packages\/core\): 0\.1\.0/);
+      assert.match(stderr, /package-lock\.json \(apps\/desktop\): 0\.1\.0/);
       assert.match(stderr, /^  Cargo\.lock \(whiphand-cli\): 0\.1\.0/m);
       assert.match(stderr, /^  Cargo\.lock \(whiphand-protocol\): 0\.1\.0/m);
       return true;
@@ -134,16 +129,12 @@ test('writing a version updates every location, including Cargo.lock and package
     const tauriConf = JSON.parse(fs.readFileSync(path.join(root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'));
     assert.equal(tauriConf.version, '0.2.0');
 
-    const coreVersion = fs.readFileSync(path.join(root, 'packages/core/src/version.ts'), 'utf8');
-    assert.match(coreVersion, /CORE_VERSION = '0\.2\.0'/);
-
     const lockText = fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8');
     const lock = JSON.parse(lockText);
-    for (const workspace of ['apps/desktop', 'packages/core', 'packages/agent']) {
-      assert.equal(lock.packages[workspace].version, '0.2.0', workspace);
-    }
+    assert.equal(lock.packages['apps/desktop'].version, '0.2.0');
     assert.equal(lock.packages['node_modules/commander'].version, '14.0.0');
-    assert.equal(lock.packages['packages/agent'].dependencies['@whiphand/core'], '*');
+    // A private workspace that does not ship keeps its own version.
+    assert.equal(lock.packages['packages/test-support'].version, '0.0.7');
     assert.equal(lockText, `${JSON.stringify(lock, null, 2)}\n`);
 
     const checkOut = run(root, ['--check', '0.2.0']);

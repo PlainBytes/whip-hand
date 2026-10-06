@@ -1,6 +1,7 @@
-//! The Rust half of the run-store parity ops; `parity/store-probe.ts` is the
-//! TS half and documents them. Both normalize their results with the same
-//! rules, so the golden the TS side wrote is the one this side must match.
+//! The run-store parity ops. The TS half (`parity/store-probe.ts`, removed in
+//! Phase 3) wrote their goldens; this side normalizes its results by the same
+//! rules (`parity/normalize.ts` keeps them for the agent transcripts) and must
+//! still match.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -30,7 +31,7 @@ static WS_TOKEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<WS>[^"\s]*"#)
 
 const HEARTBEAT_NEVER: Duration = Duration::from_secs(1_000_000);
 
-/// `normalizeText` in store-probe.ts.
+/// `normalizeText` in parity/normalize.ts.
 fn fold_separators(token: &str) -> String {
     let trimmed = token.trim_end_matches('\\');
     let tail = &token[trimmed.len()..];

@@ -28,6 +28,14 @@ pub enum Group {
 }
 
 impl Group {
+    /// The name the doctor row carries on the wire.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Group::Harness => "harness",
+            Group::Support => "support",
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Group::Harness => "AI harnesses",

@@ -1,6 +1,7 @@
-//! The Rust half of the core parity harness. `parity/core-probe.ts` is the
-//! TS half: both run the same JSON ops (`parity/fixtures/core/suites`) and
-//! must produce the checked-in golden results byte for byte.
+//! The core parity harness: runs the JSON ops in `parity/fixtures/core/suites`
+//! and must produce the checked-in golden results byte for byte. The TS half
+//! (`parity/core-probe.ts`) wrote those goldens and was removed with the TS
+//! core in Phase 3; its rules survive in the comments here.
 //!
 //! Paths in results are written relative to the repo root as `<repo>/…`
 //! with forward slashes, so one golden serves every OS.
@@ -246,6 +247,7 @@ pub fn run_op(op: &Value, repo: &Path) -> Value {
             .or_else(|| crate::parity_process::run_process_op(op, repo))
             .or_else(|| crate::parity_adapters::run_adapter_op(op, repo))
             .or_else(|| crate::parity_engine::run_engine_op(op, repo))
+            .or_else(|| crate::parity_agent_core::run_agent_core_op(op))
             .unwrap_or_else(|| panic!("unknown parity op '{other}'")),
     }
 }

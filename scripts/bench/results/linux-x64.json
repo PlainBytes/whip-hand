@@ -682,5 +682,292 @@
         }
       }
     }
+  },
+  "phase3": {
+    "meta": {
+      "date": "2026-10-06T18:32:17.589Z",
+      "commit": "6aec366+dirty",
+      "node": "v24.21.0",
+      "os": "Linux 7.0.0-34-generic",
+      "cpu": "AMD Ryzen 9 5900X 12-Core Processor",
+      "cpus": 24,
+      "memBytes": 32472301568
+    },
+    "notes": [],
+    "metrics": {
+      "cli": {
+        "dev": {
+          "help": {
+            "n": 20,
+            "median": 3.05,
+            "p95": 3.21,
+            "p99": 3.23,
+            "min": 2.94,
+            "max": 3.23
+          },
+          "version": {
+            "n": 20,
+            "median": 2.89,
+            "p95": 3.01,
+            "p99": 3.07,
+            "min": 2.68,
+            "max": 3.07
+          },
+          "dryRun": {
+            "n": 20,
+            "median": 6.03,
+            "p95": 6.08,
+            "p99": 6.09,
+            "min": 5.7,
+            "max": 6.09
+          }
+        },
+        "packaged": {
+          "help": {
+            "n": 20,
+            "median": 2.98,
+            "p95": 3.1,
+            "p99": 3.15,
+            "min": 2.85,
+            "max": 3.15
+          },
+          "version": {
+            "n": 20,
+            "median": 2.89,
+            "p95": 3.02,
+            "p99": 3.1,
+            "min": 2.66,
+            "max": 3.1
+          },
+          "dryRun": {
+            "n": 20,
+            "median": 5.72,
+            "p95": 6.04,
+            "p99": 6.13,
+            "min": 5.39,
+            "max": 6.13
+          }
+        }
+      },
+      "agent": {
+        "dev": {
+          "startupMs": {
+            "n": 10,
+            "median": 3.02,
+            "p95": 5.13,
+            "p99": 5.13,
+            "min": 2.65,
+            "max": 5.13
+          },
+          "rssBytes": {
+            "idle": 5566464,
+            "afterLargeRun": 12140544,
+            "afterListRuns": 12140544
+          }
+        },
+        "packaged": null
+      },
+      "rpc": {
+        "hello": {
+          "n": 1000,
+          "median": 0.04,
+          "p95": 0.05,
+          "p99": 0.1,
+          "min": 0.03,
+          "max": 0.93
+        },
+        "listRuns500": {
+          "n": 20,
+          "median": 9.99,
+          "p95": 11.63,
+          "p99": 12.14,
+          "min": 9.88,
+          "max": 12.14
+        },
+        "getRunLarge": {
+          "n": 20,
+          "median": 15.74,
+          "p95": 18.39,
+          "p99": 19.32,
+          "min": 14.65,
+          "max": 19.32
+        },
+        "readRunLogTail": {
+          "n": 20,
+          "median": 6.93,
+          "p95": 8.51,
+          "p99": 9.87,
+          "min": 6.62,
+          "max": 9.87
+        },
+        "replayFullLog": {
+          "n": 5,
+          "median": 175.96,
+          "p95": 184.04,
+          "p99": 184.04,
+          "min": 167.9,
+          "max": 184.04
+        }
+      },
+      "sizes": {
+        "cliBytes": 3417608,
+        "installerBytes": {
+          "AppImage": 92408312,
+          "deb": 13290756
+        },
+        "webBundle": {
+          "totalBytes": 7120071,
+          "jsBytes": 5811655,
+          "jsGzipBytes": 1636055
+        }
+      },
+      "ui": {
+        "logs": {
+          "loadedRows": 12000,
+          "firstRowMs": 100,
+          "loadEarlierMs": 75,
+          "scroll": {
+            "p50": 16.7,
+            "p95": 16.8,
+            "max": 16.8,
+            "over33": 0,
+            "longTaskMs": 0
+          },
+          "domNodes": 415,
+          "jsHeapBytes": 44700000
+        },
+        "fileTree": {
+          "settleMs": 517,
+          "scroll": {
+            "p50": 16.7,
+            "p95": 16.7,
+            "max": 16.8,
+            "over33": 0,
+            "longTaskMs": 0
+          },
+          "domNodes": 460,
+          "jsHeapBytes": 131000000
+        },
+        "live": {
+          "runsPageDuringFlood": {
+            "p50": 16.7,
+            "p95": 16.8,
+            "max": 166.7,
+            "over33": 1,
+            "longTaskMs": 318
+          },
+          "logsTabDuringFlood": {
+            "p50": 16.7,
+            "p95": 16.8,
+            "max": 16.8,
+            "over33": 0,
+            "longTaskMs": 0
+          },
+          "terminalDuringPty": {
+            "p50": 16.7,
+            "p95": 16.8,
+            "max": 16.8,
+            "over33": 0,
+            "longTaskMs": 0
+          },
+          "reattachReplayMs": 401,
+          "reattachLongTaskMs": 134
+        },
+        "diff": {
+          "renderMs": 1196,
+          "scroll": {
+            "p50": 16.7,
+            "p95": 16.7,
+            "max": 16.8,
+            "over33": 0,
+            "longTaskMs": 0
+          },
+          "domNodes": 489,
+          "jsHeapBytes": 23100000
+        },
+        "rpc": {
+          "getAppState": {
+            "n": 12,
+            "median": 3.7,
+            "p95": 23.1,
+            "p99": 23.1,
+            "min": 1.6,
+            "max": 23.1
+          },
+          "getJobScrollback": {
+            "n": 18,
+            "median": 483.8,
+            "p95": 570.9,
+            "p99": 570.9,
+            "min": 353.2,
+            "max": 570.9
+          },
+          "getRun": {
+            "n": 18,
+            "median": 19.7,
+            "p95": 40.4,
+            "p99": 40.4,
+            "min": 0.4,
+            "max": 40.4
+          },
+          "getWorkingDiff": {
+            "n": 3,
+            "median": 17,
+            "p95": 19.6,
+            "p99": 19.6,
+            "min": 15.8,
+            "max": 19.6
+          },
+          "hello": {
+            "n": 12,
+            "median": 5.4,
+            "p95": 24.7,
+            "p99": 24.7,
+            "min": 2.8,
+            "max": 24.7
+          },
+          "listJobs": {
+            "n": 12,
+            "median": 8.3,
+            "p95": 28.1,
+            "p99": 28.1,
+            "min": 4.1,
+            "max": 28.1
+          },
+          "listRuns": {
+            "n": 12,
+            "median": 13.1,
+            "p95": 15.5,
+            "p99": 15.5,
+            "min": 11.8,
+            "max": 15.5
+          },
+          "ptyResize": {
+            "n": 6,
+            "median": 0.4,
+            "p95": 23.9,
+            "p99": 23.9,
+            "min": 0.3,
+            "max": 23.9
+          },
+          "readRunLog": {
+            "n": 21,
+            "median": 16.3,
+            "p95": 61.6,
+            "p99": 65.7,
+            "min": 14.9,
+            "max": 65.7
+          },
+          "setUiState": {
+            "n": 3,
+            "median": 147.4,
+            "p95": 148,
+            "p99": 148,
+            "min": 147.4,
+            "max": 148
+          }
+        }
+      }
+    }
   }
 }

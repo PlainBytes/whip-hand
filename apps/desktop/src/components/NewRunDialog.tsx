@@ -30,11 +30,11 @@ import { extensionForImageMime } from '../files/file-kind.ts';
 import { bytesToBase64 } from '../lib/base64.ts';
 import { parsePositiveInt } from '../lib/parse-number.ts';
 import { findWorkspaceMemory, useAppStore } from '../state/store.ts';
-import { collectLoops, findStep, flattenSteps, isLoopStep } from '../../../../packages/core/src/steps.ts';
-import { disabledRoots, droppedRefs, droppedRefSentence } from '../../../../packages/core/src/enabled.ts';
-import { attachmentNames, consumesAttachments } from '../../../../packages/core/src/attachments.ts';
-import type { Workflow } from '../../../../packages/core/src/types.ts';
-import type { ListWorkflowsResult } from '../../../../packages/agent/src/protocol.ts';
+import { collectLoops, findStep, flattenSteps, isLoopStep } from '../shared/steps.ts';
+import { disabledRoots, droppedRefs, droppedRefSentence } from '../shared/enabled.ts';
+import { attachmentNames, consumesAttachments } from '../shared/attachments.ts';
+import type { Workflow } from '../shared/types.ts';
+import type { ListWorkflowsResult } from '../shared/protocol.gen.ts';
 import { errorMessage } from '../lib/error-message.ts';
 
 type WorkflowEntry = ListWorkflowsResult[number];
@@ -59,10 +59,9 @@ function refFor(entry: WorkflowEntry): string {
 }
 
 /**
- * Mirrors core's `packages/core/src/workspace.ts` rather than importing it:
- * workspace.ts reads the filesystem to resolve a workflow ref, which core's own module has
- * no browser-safe way to do. Keep this in lockstep with workspace.ts's
- * `EXPLICIT_SCOPE_RE` by hand; there is no build-time check that can do it
+ * Mirrors whiphand-core's workspace.rs, which resolves a workflow ref against
+ * the filesystem and so cannot run here. Keep this in lockstep with its
+ * explicit-scope pattern by hand; there is no build-time check that can do it
  * for us.
  */
 const EXPLICIT_SCOPE_RE = /^(global|project):(.+)$/;

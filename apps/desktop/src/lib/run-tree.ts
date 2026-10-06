@@ -11,8 +11,8 @@
  * testing, and the stepper should only have to render what it is handed.
  */
 import type { StepState } from '../state/store.ts';
-import type { LoopRef } from '../../../../packages/core/src/types.ts';
-import { sameLoopRefs } from '../../../../packages/core/src/execution-key.ts';
+import type { LoopRef } from '../shared/types.ts';
+import { sameLoopRefs } from '../shared/execution-key.ts';
 
 interface NodeCommon {
   /** The declared step id. Unique among its siblings, not across the tree. */

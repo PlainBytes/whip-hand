@@ -1,6 +1,7 @@
-//! Workspace and workflow scaffolding (`scaffold.ts`'s `initWorkspace` and
-//! `createWorkflow`), what `whiphand init` and `whiphand new-workflow` write.
-//! The templates are `packages/core/templates/*.yaml`, compiled in: a single
+//! Workspace and workflow scaffolding (`scaffold.ts`): what `whiphand init`
+//! and `whiphand new-workflow` write, and the desktop's update, delete and
+//! clone of a workflow file.
+//! The templates are `templates/*.yaml`, compiled in: a single
 //! binary has no files beside it to read.
 
 use std::io::{self, Write};
@@ -8,37 +9,28 @@ use std::path::Path;
 
 use crate::config::{config_to_js, default_config};
 use crate::config_home::global_workflows_dir;
+use crate::engine::workflow_js::workflow_to_js;
 use crate::node_path;
-use crate::types::Scope;
+use crate::schema::{WorkflowError, parse_workflow, validate_workflow_semantics};
+use crate::types::{Scope, Workflow};
 use crate::workflow_name::assert_valid_workflow_name;
+use crate::workflow_write::merge_workflow;
 use crate::yaml_emit::stringify_yaml;
 
 /// Every shipped template, in the order `init_workspace` writes them.
 pub const SHIPPED_TEMPLATES: [(&str, &str); 6] = [
-    (
-        "feature",
-        include_str!("../../../packages/core/templates/feature.yaml"),
-    ),
+    ("feature", include_str!("../templates/feature.yaml")),
     (
         "feature-development",
-        include_str!("../../../packages/core/templates/feature-development.yaml"),
+        include_str!("../templates/feature-development.yaml"),
     ),
-    (
-        "spec-driven",
-        include_str!("../../../packages/core/templates/spec-driven.yaml"),
-    ),
+    ("spec-driven", include_str!("../templates/spec-driven.yaml")),
     (
         "staged-feature-development",
-        include_str!("../../../packages/core/templates/staged-feature-development.yaml"),
+        include_str!("../templates/staged-feature-development.yaml"),
     ),
-    (
-        "research",
-        include_str!("../../../packages/core/templates/research.yaml"),
-    ),
-    (
-        "bugfix",
-        include_str!("../../../packages/core/templates/bugfix.yaml"),
-    ),
+    ("research", include_str!("../templates/research.yaml")),
+    ("bugfix", include_str!("../templates/bugfix.yaml")),
 ];
 
 fn read_template(name: &str) -> &'static str {
@@ -149,6 +141,95 @@ pub fn create_workflow(
     config_home: &Path,
 ) -> Result<String, ScaffoldError> {
     write_workflow_file(workdir, name, &workflow_template(name), scope, config_home)
+}
+
+/// `updateWorkflow`: writes `workflow` under `name` (the name always wins
+/// over the workflow's own `name:`), merged onto the existing file so its
+/// comments and layout survive, or freshly emitted when there is none.
+pub fn update_workflow(
+    workdir: &str,
+    name: &str,
+    workflow: &Workflow,
+    scope: Scope,
+    config_home: &Path,
+) -> Result<String, ScaffoldError> {
+    assert_valid_workflow_name(name).map_err(ScaffoldError::Other)?;
+    let locked = Workflow {
+        name: name.to_string(),
+        ..workflow.clone()
+    };
+    let problems = validate_workflow_semantics(&locked);
+    if !problems.is_empty() {
+        return Err(ScaffoldError::Other(
+            WorkflowError::new(problems).to_string(),
+        ));
+    }
+    let dir = workflows_dir(workdir, scope, config_home);
+    std::fs::create_dir_all(&dir).map_err(|e| ScaffoldError::Other(e.to_string()))?;
+    let path = node_path::join(&[&dir, &format!("{name}.yaml")]);
+    let js = workflow_to_js(&locked);
+    let content = match std::fs::read(&path) {
+        Ok(bytes) => merge_workflow(&String::from_utf8_lossy(&bytes), &js),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => stringify_yaml(&js),
+        Err(e) => return Err(ScaffoldError::Other(e.to_string())),
+    };
+    std::fs::write(&path, content).map_err(|e| ScaffoldError::Other(e.to_string()))?;
+    Ok(path)
+}
+
+/// `deleteWorkflow`: removes `name.yaml`, else `name.yml`, from `scope`'s
+/// directory only, so a project override uncovers the global workflow rather
+/// than taking it too. `Ok(false)` when neither file was there.
+pub fn delete_workflow(
+    workdir: &str,
+    name: &str,
+    scope: Scope,
+    config_home: &Path,
+) -> Result<bool, ScaffoldError> {
+    assert_valid_workflow_name(name).map_err(ScaffoldError::Other)?;
+    let dir = workflows_dir(workdir, scope, config_home);
+    for ext in ["yaml", "yml"] {
+        match std::fs::remove_file(node_path::join(&[&dir, &format!("{name}.{ext}")])) {
+            Ok(()) => return Ok(true),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(ScaffoldError::Other(e.to_string())),
+        }
+    }
+    Ok(false)
+}
+
+/// `cloneWorkflow`: copies `from` onto `to` in the same scope. The source
+/// is reparsed and merged so `to` lands in its `name:` too, keeping the
+/// source's comments; an existing target is refused, never overwritten.
+pub fn clone_workflow(
+    workdir: &str,
+    from: &str,
+    to: &str,
+    scope: Scope,
+    config_home: &Path,
+) -> Result<String, ScaffoldError> {
+    assert_valid_workflow_name(from).map_err(ScaffoldError::Other)?;
+    assert_valid_workflow_name(to).map_err(ScaffoldError::Other)?;
+    let dir = workflows_dir(workdir, scope, config_home);
+    let mut raw = None;
+    for ext in ["yaml", "yml"] {
+        match std::fs::read(node_path::join(&[&dir, &format!("{from}.{ext}")])) {
+            Ok(bytes) => {
+                raw = Some(String::from_utf8_lossy(&bytes).into_owned());
+                break;
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(ScaffoldError::Other(e.to_string())),
+        }
+    }
+    let raw = raw.ok_or_else(|| ScaffoldError::Other(format!("workflow '{from}' not found")))?;
+    let parsed = parse_workflow(&raw).map_err(|e| ScaffoldError::Other(e.to_string()))?;
+    let renamed = Workflow {
+        name: to.to_string(),
+        ..parsed
+    };
+    let content = merge_workflow(&raw, &workflow_to_js(&renamed));
+    write_workflow_file(workdir, to, &content, scope, config_home)
 }
 
 /// `initWorkspace`: the default config and every shipped workflow, each

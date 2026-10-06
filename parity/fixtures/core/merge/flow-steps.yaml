@@ -1,0 +1,2 @@
+name: flow # flow-style steps
+steps: [{id: a, kind: command, run: echo a, output: a.log}, {id: b, kind: command, run: echo b, output: b.log}]

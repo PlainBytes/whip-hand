@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { agentCommand } from './agent-command.ts';
 import assert from 'node:assert/strict';
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -7,15 +8,22 @@ import { mkdtemp, cp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_CONFIG, TOOL_GROUP_LABELS } from '@whiphand/core';
-import type { ToolGroup } from '@whiphand/core';
-import type { DoctorRow } from '@whiphand/agent/src/protocol.ts';
+import { TOOL_GROUP_LABELS } from '../apps/desktop/src/shared/tool-groups.ts';
+import type { ToolGroup } from '../apps/desktop/src/shared/tool-groups.ts';
+import type { DoctorRow } from '../apps/desktop/src/shared/protocol.gen.ts';
 import { mintVersionStubs, pathWith, posix } from '@whiphand/test-support';
 import { CLI } from './cli-command.ts';
 
 const execFileAsync = promisify(execFile);
 
-const AGENT_MAIN = fileURLToPath(new URL('../packages/agent/src/main.ts', import.meta.url));
+/** whiphand-core's defaults (crates/whiphand-core/src/config.rs), as the settings form submits them. */
+const DEFAULT_CONFIG = {
+  defaults: { runner: 'claude' },
+  on_findings: 'report',
+  loop: { max_iterations: 3 },
+  artifacts_dir: '.whiphand/runs',
+  runs: { max_retained: null, auto_name: false, max_attachment_mb: 25 },
+};
 const FIXTURE_WORKSPACE = fileURLToPath(new URL('./fixtures/workspace', import.meta.url));
 // The doctor fixtures' stub runners, minted at start in the shape this platform
 // launches (see test-support) rather than the checked-in bash scripts, which need
@@ -69,7 +77,6 @@ const ISOLATED_ENV: Record<string, string> = {
 const HOST_ENV = [
   'PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'COMSPEC', 'ComSpec', 'HOME', 'USERPROFILE', 'TEMP', 'TMP', 'TMPDIR',
   'APPDATA', 'LOCALAPPDATA', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'PROGRAMFILES', 'NODE_OPTIONS', 'LANG', 'LC_ALL',
-  'WHIPHAND_JOB_GUARD', 'WHIPHAND_NODE_PTY_DIR',
 ];
 
 /** Host variables (allowlisted) plus isolation, with per-call overrides winning over both. */
@@ -80,7 +87,7 @@ function childEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
 
 // ---------------------------------------------------------------------------
 // Volatile-field normalization: both paths mint their own runId (timestamp +
-// random suffix, see packages/core/src/engine/artifacts.ts) and, for
+// random suffix, see crates/whiphand-core/src/engine/artifacts.rs) and, for
 // interactive claude steps, their own session UUID. Both also run against
 // their own mkdtemp'd copy of the fixture workspace, so the absolute workdir
 // differs too. None of that is meaningful drift — it has to be normalized
@@ -161,7 +168,7 @@ function startAgentProcess(env: Record<string, string> = {}): {
   waitFor(pred: (m: AgentMessage) => boolean, timeoutMs?: number): Promise<AgentMessage>;
   stop(): void;
 } {
-  const child = spawn(process.execPath, [AGENT_MAIN], {
+  const child = spawn(...agentCommand(), {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: childEnv(env),
   });
@@ -322,7 +329,7 @@ test('dry-run parity: CLI --attach and agent startRun attachments record the sam
 // ---------------------------------------------------------------------------
 
 /**
- * Both surfaces now call the same `detectTools()` in @whiphand/core, so they can no
+ * Both surfaces now call the same `detect_tools()` in whiphand-core, so they can no
  * longer disagree about what is installed — the duplicated loop this test was
  * written to police is gone. What it still catches is the half that stayed
  * separate: the CLI's renderer. This asserts that `whiphand doctor`'s text loses
@@ -344,7 +351,7 @@ interface DoctorFact {
   notes?: string[];
 }
 
-/** Section headings come from @whiphand/core, so rewording one cannot break the parse. */
+/** Section headings are the shared labels (tool-groups.ts mirrors whiphand-core's), so rewording one cannot break the parse. */
 const GROUP_BY_LABEL = new Map<string, ToolGroup>(
   (Object.entries(TOOL_GROUP_LABELS) as [ToolGroup, string][]).map(([group, label]) => [label, group]),
 );

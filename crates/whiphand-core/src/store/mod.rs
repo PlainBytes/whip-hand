@@ -7,5 +7,6 @@
 pub mod journal;
 pub mod markers;
 pub mod retention;
+pub mod run_log;
 pub mod runs;
 pub mod schema;

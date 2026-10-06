@@ -1,0 +1,931 @@
+{
+  "responses": [
+    {
+      "step": "startRun",
+      "response": {
+        "result": {
+          "jobId": "<UUID>"
+        }
+      }
+    },
+    {
+      "step": "listJobs",
+      "response": {
+        "result": [
+          {
+            "jobId": "<UUID>",
+            "workdir": "<WS>/ws",
+            "identityKey": "/<WS>/ws",
+            "runId": "<RUN>",
+            "status": "succeeded",
+            "pty": null
+          }
+        ]
+      }
+    },
+    {
+      "step": "getJobScrollback",
+      "response": {
+        "result": {
+          "pty": null,
+          "logs": {
+            "baseIndex": 0,
+            "trimmed": false,
+            "lines": [
+              {
+                "stream": "stdout",
+                "line": "one out"
+              },
+              {
+                "stream": "stderr",
+                "line": "one err"
+              },
+              {
+                "stream": "stdout",
+                "line": "two"
+              }
+            ]
+          },
+          "events": [
+            {
+              "jobId": "<UUID>",
+              "workdir": "<WS>/ws",
+              "identityKey": "/<WS>/ws",
+              "runId": "<RUN>",
+              "event": {
+                "type": "run:start",
+                "runId": "<RUN>",
+                "workflow": "build",
+                "source": "project"
+              },
+              "ts": "<TS>"
+            },
+            {
+              "jobId": "<UUID>",
+              "workdir": "<WS>/ws",
+              "identityKey": "/<WS>/ws",
+              "runId": "<RUN>",
+              "event": {
+                "type": "step:start",
+                "stepId": "one",
+                "kind": "command"
+              },
+              "ts": "<TS>"
+            },
+            {
+              "jobId": "<UUID>",
+              "workdir": "<WS>/ws",
+              "identityKey": "/<WS>/ws",
+              "runId": "<RUN>",
+              "event": {
+                "type": "step:spawn",
+                "stepId": "one",
+                "spec": {
+                  "argv": [
+                    "/bin/sh",
+                    "-c",
+                    "node -e \"console.log(\\\"one out\\\"); console.error(\\\"one err\\\")\""
+                  ],
+                  "cwd": ".",
+                  "env": {
+                    "WHIPHAND_RUN_ID": "<RUN>",
+                    "WHIPHAND_RUN_SLUG": "<RUN>",
+                    "WHIPHAND_RUN_DIR": "<WS>/ws/.whiphand/runs/<RUN>",
+                    "WHIPHAND_STEP_ID": "one"
+                  },
+                  "interactive": false,
+                  "capture": {
+                    "path": ".whiphand/runs/<RUN>/one.log"
+                  }
+                },
+                "phase": "main"
+              },
+              "ts": "<TS>"
+            },
+            {
+              "jobId": "<UUID>",
+              "workdir": "<WS>/ws",
+              "identityKey": "/<WS>/ws",
+              "runId": "<RUN>",
+              "event": {
+                "type": "step:done",
+                "stepId": "one",
+                "exitCode": 0
+              },
+              "ts": "<TS>"
+            },
+            {
+              "jobId": "<UUID>",
+              "workdir": "<WS>/ws",
+              "identityKey": "/<WS>/ws",
+              "runId": "<RUN>",
+              "event": {
+                "type": "step:artifact",
+                "stepId": "one",
+                "path": ".whiphand/runs/<RUN>/one.log",
+                "bytes": 111
+              },
+              "ts": "<TS>"
+            },
+            {
+              "jobId": "<UUID>",
+              "workdir": "<WS>/ws",
+              "identityKey": "/<WS>/ws",
+              "runId": "<RUN>",
+              "event": {
+                "type": "step:start",
+                "stepId": "two",
+                "kind": "command"
+              },
+              "ts": "<TS>"
+            },
+            {
+              "jobId": "<UUID>",
+              "workdir": "<WS>/ws",
+              "identityKey": "/<WS>/ws",
+              "runId": "<RUN>",
+              "event": {
+                "type": "step:spawn",
+                "stepId": "two",
+                "spec": {
+                  "argv": [
+                    "/bin/sh",
+                    "-c",
+                    "node -e \"require(\\\"fs\\\").writeFileSync(\\\".whiphand/two.txt\\\", \\\"x\\\"); console.log(\\\"two\\\")\""
+                  ],
+                  "cwd": ".",
+                  "env": {
+                    "WHIPHAND_RUN_ID": "<RUN>",
+                    "WHIPHAND_RUN_SLUG": "<RUN>",
+                    "WHIPHAND_RUN_DIR": "<WS>/ws/.whiphand/runs/<RUN>",
+                    "WHIPHAND_STEP_ID": "two"
+                  },
+                  "interactive": false,
+                  "capture": {
+                    "path": ".whiphand/runs/<RUN>/two.log"
+                  }
+                },
+                "phase": "main"
+              },
+              "ts": "<TS>"
+            },
+            {
+              "jobId": "<UUID>",
+              "workdir": "<WS>/ws",
+              "identityKey": "/<WS>/ws",
+              "runId": "<RUN>",
+              "event": {
+                "type": "step:done",
+                "stepId": "two",
+                "exitCode": 0
+              },
+              "ts": "<TS>"
+            },
+            {
+              "jobId": "<UUID>",
+              "workdir": "<WS>/ws",
+              "identityKey": "/<WS>/ws",
+              "runId": "<RUN>",
+              "event": {
+                "type": "step:artifact",
+                "stepId": "two",
+                "path": ".whiphand/runs/<RUN>/two.log",
+                "bytes": 128
+              },
+              "ts": "<TS>"
+            },
+            {
+              "jobId": "<UUID>",
+              "workdir": "<WS>/ws",
+              "identityKey": "/<WS>/ws",
+              "runId": "<RUN>",
+              "event": {
+                "type": "run:done",
+                "runId": "<RUN>",
+                "ok": true
+              },
+              "ts": "<TS>"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": "getJobScrollback unknown",
+      "response": {
+        "result": null
+      }
+    },
+    {
+      "step": "listRuns",
+      "response": {
+        "result": [
+          {
+            "version": 5,
+            "runId": "<RUN>",
+            "workflow": "build",
+            "workdir": "<WS>/ws",
+            "dryRun": false,
+            "pid": "<PID>",
+            "pidScope": "<SCOPE>",
+            "startedAt": "<TS>",
+            "updatedAt": "<TS>",
+            "heartbeatAt": "<MS>",
+            "leaseId": "<UUID>",
+            "endedAt": "<TS>",
+            "status": "succeeded",
+            "ok": true,
+            "workflowSource": "project",
+            "inputs": {},
+            "sessionIds": {},
+            "steps": [
+              {
+                "id": "one",
+                "kind": "command",
+                "status": "done",
+                "exitCode": 0,
+                "artifact": "<WS>/ws/.whiphand/runs/<RUN>/one.log",
+                "startedAt": "<TS>",
+                "endedAt": "<TS>"
+              },
+              {
+                "id": "two",
+                "kind": "command",
+                "status": "done",
+                "exitCode": 0,
+                "artifact": "<WS>/ws/.whiphand/runs/<RUN>/two.log",
+                "startedAt": "<TS>",
+                "endedAt": "<TS>"
+              }
+            ],
+            "runDir": "<WS>/ws/.whiphand/runs/<RUN>",
+            "locked": false
+          }
+        ]
+      }
+    },
+    {
+      "step": "getRun",
+      "response": {
+        "result": {
+          "version": 5,
+          "runId": "<RUN>",
+          "workflow": "build",
+          "workdir": "<WS>/ws",
+          "dryRun": false,
+          "pid": "<PID>",
+          "pidScope": "<SCOPE>",
+          "startedAt": "<TS>",
+          "updatedAt": "<TS>",
+          "heartbeatAt": "<MS>",
+          "leaseId": "<UUID>",
+          "endedAt": "<TS>",
+          "status": "succeeded",
+          "ok": true,
+          "workflowSource": "project",
+          "inputs": {},
+          "sessionIds": {},
+          "steps": [
+            {
+              "id": "one",
+              "kind": "command",
+              "status": "done",
+              "exitCode": 0,
+              "artifact": "<WS>/ws/.whiphand/runs/<RUN>/one.log",
+              "startedAt": "<TS>",
+              "endedAt": "<TS>"
+            },
+            {
+              "id": "two",
+              "kind": "command",
+              "status": "done",
+              "exitCode": 0,
+              "artifact": "<WS>/ws/.whiphand/runs/<RUN>/two.log",
+              "startedAt": "<TS>",
+              "endedAt": "<TS>"
+            }
+          ],
+          "runDir": "<WS>/ws/.whiphand/runs/<RUN>",
+          "locked": false,
+          "artifacts": [
+            {
+              "name": "one.log",
+              "path": "<WS>/ws/.whiphand/runs/<RUN>/one.log"
+            },
+            {
+              "name": "two.log",
+              "path": "<WS>/ws/.whiphand/runs/<RUN>/two.log"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": "getRun unknown",
+      "response": {
+        "result": null
+      }
+    },
+    {
+      "step": "readRunLog",
+      "response": {
+        "result": {
+          "lines": [
+            "<TS>  #  run:start  -  run started: workflow 'build', source project",
+            "<TS>  #  step:start  one  step started (command)"
+          ],
+          "total": 14,
+          "truncated": true
+        }
+      }
+    },
+    {
+      "step": "readRunLog tail",
+      "response": {
+        "result": {
+          "lines": [
+            "<TS>  #  step:artifact  two  wrote artifact .whiphand/runs/<RUN>/two.log (128 B)",
+            "<TS>  #  run:done  -  run done: ok"
+          ],
+          "startByte": "<BYTE>",
+          "atStart": false
+        }
+      }
+    },
+    {
+      "step": "readRunLog unknown",
+      "response": {
+        "error": {
+          "code": -32000,
+          "message": "unknown run 'nope'"
+        }
+      }
+    },
+    {
+      "step": "readArtifact",
+      "response": {
+        "result": {
+          "content": "$ node -e \"console.log(\\\"one out\\\"); console.error(\\\"one err\\\")\"\n# step 'one'\n\none out\none err\n\n(exit code: 0)\n",
+          "size": 111,
+          "mtimeMs": "<MS>"
+        }
+      }
+    },
+    {
+      "step": "readArtifact base64",
+      "response": {
+        "result": {
+          "content": "JCBub2RlIC1lICJjb25zb2xlLmxvZyhcIm9uZSBvdXRcIik7IGNvbnNvbGUuZXJyb3IoXCJvbmUgZXJyXCIpIgojIHN0ZXAgJ29uZScKCm9uZSBvdXQKb25lIGVycgoKKGV4aXQgY29kZTogMCkK",
+          "size": 111,
+          "mtimeMs": "<MS>"
+        }
+      }
+    },
+    {
+      "step": "readArtifact outside",
+      "response": {
+        "error": {
+          "code": -32000,
+          "message": "unknown artifact '../../x' for run '<RUN>'"
+        }
+      }
+    },
+    {
+      "step": "statArtifact",
+      "response": {
+        "result": {
+          "size": 128,
+          "mtimeMs": "<MS>"
+        }
+      }
+    },
+    {
+      "step": "writeArtifact",
+      "response": {
+        "result": {
+          "mtimeMs": "<MS>"
+        }
+      }
+    },
+    {
+      "step": "writeArtifact stale",
+      "response": {
+        "error": {
+          "code": -32000,
+          "message": "artifact 'two.log' changed on disk since it was read"
+        }
+      }
+    },
+    {
+      "step": "readArtifact after write",
+      "response": {
+        "result": {
+          "content": "edited\n",
+          "size": 7,
+          "mtimeMs": "<MS>"
+        }
+      }
+    },
+    {
+      "step": "renameRun",
+      "response": {
+        "result": {
+          "renamed": true,
+          "name": "Nice name"
+        }
+      }
+    },
+    {
+      "step": "renameRun unknown",
+      "response": {
+        "error": {
+          "code": -32000,
+          "message": "unknown run 'nope'"
+        }
+      }
+    },
+    {
+      "step": "setRunLocked",
+      "response": {
+        "result": {
+          "locked": true
+        }
+      }
+    },
+    {
+      "step": "deleteRun locked",
+      "response": {
+        "result": {
+          "deleted": false,
+          "reason": "locked"
+        }
+      }
+    },
+    {
+      "step": "setRunLocked off",
+      "response": {
+        "result": {
+          "locked": false
+        }
+      }
+    },
+    {
+      "step": "startRun dry with attachments",
+      "response": {
+        "error": {
+          "code": -32000,
+          "message": "2 files attached, but no step reads `attachments`.\nAdd it to a step's inputs, e.g.\n  - id: plan\n    inputs: [attachments]"
+        }
+      }
+    },
+    {
+      "step": "startRun attachments refused",
+      "response": {
+        "error": {
+          "code": -32000,
+          "message": "1 file attached, but no step reads `attachments`.\nAdd it to a step's inputs, e.g.\n  - id: plan\n    inputs: [attachments]"
+        }
+      }
+    },
+    {
+      "step": "startRun missing workflow",
+      "response": {
+        "result": {
+          "jobId": "<UUID>"
+        }
+      }
+    },
+    {
+      "step": "listRuns after",
+      "response": {
+        "result": [
+          {
+            "version": 5,
+            "runId": "<RUN>",
+            "workflow": "build",
+            "workdir": "<WS>/ws",
+            "dryRun": false,
+            "pid": "<PID>",
+            "pidScope": "<SCOPE>",
+            "startedAt": "<TS>",
+            "updatedAt": "<TS>",
+            "heartbeatAt": "<MS>",
+            "leaseId": "<UUID>",
+            "endedAt": "<TS>",
+            "status": "succeeded",
+            "ok": true,
+            "workflowSource": "project",
+            "inputs": {},
+            "sessionIds": {},
+            "steps": [
+              {
+                "id": "one",
+                "kind": "command",
+                "status": "done",
+                "exitCode": 0,
+                "artifact": "<WS>/ws/.whiphand/runs/<RUN>/one.log",
+                "startedAt": "<TS>",
+                "endedAt": "<TS>"
+              },
+              {
+                "id": "two",
+                "kind": "command",
+                "status": "done",
+                "exitCode": 0,
+                "artifact": "<WS>/ws/.whiphand/runs/<RUN>/two.log",
+                "startedAt": "<TS>",
+                "endedAt": "<TS>"
+              }
+            ],
+            "runDir": "<WS>/ws/.whiphand/runs/<RUN>",
+            "locked": false,
+            "name": "Nice name"
+          }
+        ]
+      }
+    },
+    {
+      "step": "pruneRuns",
+      "response": {
+        "result": {
+          "deleted": [],
+          "failed": []
+        }
+      }
+    },
+    {
+      "step": "deleteRun missing",
+      "response": {
+        "result": {
+          "deleted": false,
+          "reason": "missing"
+        }
+      }
+    },
+    {
+      "step": "listRuns final",
+      "response": {
+        "result": [
+          {
+            "version": 5,
+            "runId": "<RUN>",
+            "workflow": "build",
+            "workdir": "<WS>/ws",
+            "dryRun": false,
+            "pid": "<PID>",
+            "pidScope": "<SCOPE>",
+            "startedAt": "<TS>",
+            "updatedAt": "<TS>",
+            "heartbeatAt": "<MS>",
+            "leaseId": "<UUID>",
+            "endedAt": "<TS>",
+            "status": "succeeded",
+            "ok": true,
+            "workflowSource": "project",
+            "inputs": {},
+            "sessionIds": {},
+            "steps": [
+              {
+                "id": "one",
+                "kind": "command",
+                "status": "done",
+                "exitCode": 0,
+                "artifact": "<WS>/ws/.whiphand/runs/<RUN>/one.log",
+                "startedAt": "<TS>",
+                "endedAt": "<TS>"
+              },
+              {
+                "id": "two",
+                "kind": "command",
+                "status": "done",
+                "exitCode": 0,
+                "artifact": "<WS>/ws/.whiphand/runs/<RUN>/two.log",
+                "startedAt": "<TS>",
+                "endedAt": "<TS>"
+              }
+            ],
+            "runDir": "<WS>/ws/.whiphand/runs/<RUN>",
+            "locked": false,
+            "name": "Nice name"
+          }
+        ]
+      }
+    }
+  ],
+  "notifications": {
+    "appStateChanged": [
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [],
+        "window": null,
+        "lastPage": null,
+        "theme": "system",
+        "workspaces": {
+          "<WS>/ws": {
+            "lastInputs": {
+              "build": {}
+            },
+            "identityKey": "/<WS>/ws",
+            "lastWorkflow": "build"
+          }
+        },
+        "runsRetention": {
+          "maxPerWorkspace": 0
+        },
+        "showOngoingRuns": true
+      },
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [],
+        "window": null,
+        "lastPage": null,
+        "theme": "system",
+        "workspaces": {
+          "<WS>/ws": {
+            "lastInputs": {
+              "build": {},
+              "missing": {}
+            },
+            "identityKey": "/<WS>/ws",
+            "lastWorkflow": "missing"
+          }
+        },
+        "runsRetention": {
+          "maxPerWorkspace": 0
+        },
+        "showOngoingRuns": true
+      }
+    ],
+    "whiphandEvent": [
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "/<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "run:start",
+          "runId": "<RUN>",
+          "workflow": "build",
+          "source": "project"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "/<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:start",
+          "stepId": "one",
+          "kind": "command"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "/<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:spawn",
+          "stepId": "one",
+          "spec": {
+            "argv": [
+              "/bin/sh",
+              "-c",
+              "node -e \"console.log(\\\"one out\\\"); console.error(\\\"one err\\\")\""
+            ],
+            "cwd": ".",
+            "env": {
+              "WHIPHAND_RUN_ID": "<RUN>",
+              "WHIPHAND_RUN_SLUG": "<RUN>",
+              "WHIPHAND_RUN_DIR": "<WS>/ws/.whiphand/runs/<RUN>",
+              "WHIPHAND_STEP_ID": "one"
+            },
+            "interactive": false,
+            "capture": {
+              "path": ".whiphand/runs/<RUN>/one.log"
+            }
+          },
+          "phase": "main"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "/<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:log",
+          "stepId": "one",
+          "stream": "stdout",
+          "line": "one out"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "/<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:log",
+          "stepId": "one",
+          "stream": "stderr",
+          "line": "one err"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "/<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:done",
+          "stepId": "one",
+          "exitCode": 0
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "/<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:artifact",
+          "stepId": "one",
+          "path": ".whiphand/runs/<RUN>/one.log",
+          "bytes": 111
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "/<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:start",
+          "stepId": "two",
+          "kind": "command"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "/<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:spawn",
+          "stepId": "two",
+          "spec": {
+            "argv": [
+              "/bin/sh",
+              "-c",
+              "node -e \"require(\\\"fs\\\").writeFileSync(\\\".whiphand/two.txt\\\", \\\"x\\\"); console.log(\\\"two\\\")\""
+            ],
+            "cwd": ".",
+            "env": {
+              "WHIPHAND_RUN_ID": "<RUN>",
+              "WHIPHAND_RUN_SLUG": "<RUN>",
+              "WHIPHAND_RUN_DIR": "<WS>/ws/.whiphand/runs/<RUN>",
+              "WHIPHAND_STEP_ID": "two"
+            },
+            "interactive": false,
+            "capture": {
+              "path": ".whiphand/runs/<RUN>/two.log"
+            }
+          },
+          "phase": "main"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "/<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:log",
+          "stepId": "two",
+          "stream": "stdout",
+          "line": "two"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "/<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:done",
+          "stepId": "two",
+          "exitCode": 0
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "/<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:artifact",
+          "stepId": "two",
+          "path": ".whiphand/runs/<RUN>/two.log",
+          "bytes": 128
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "/<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "run:done",
+          "runId": "<RUN>",
+          "ok": true
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "/<WS>/ws",
+        "event": {
+          "type": "run:error",
+          "message": "workflow 'missing' not found — looked at <WS>/ws/.whiphand/workflows/missing.yaml and <WS>/home/workflows/missing.yaml"
+        },
+        "ts": "<TS>"
+      }
+    ],
+    "runStateChanged": [
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "/<WS>/ws",
+        "runId": "<RUN>",
+        "status": "running"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "/<WS>/ws",
+        "runId": "<RUN>",
+        "status": "succeeded"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "/<WS>/ws",
+        "status": "failed"
+      }
+    ],
+    "stepLog": [
+      {
+        "jobId": "<UUID>",
+        "stream": "stdout",
+        "line": "one out",
+        "seq": 0
+      },
+      {
+        "jobId": "<UUID>",
+        "stream": "stderr",
+        "line": "one err",
+        "seq": 1
+      },
+      {
+        "jobId": "<UUID>",
+        "stream": "stdout",
+        "line": "two",
+        "seq": 2
+      }
+    ],
+    "whiphandEvent run:env": [
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "/<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "run:env",
+          "runId": "<RUN>",
+          "whiphandVersion": "<VERSION>",
+          "nodeVersion": "<NODE>",
+          "platform": "<PLATFORM>",
+          "runners": [],
+          "shell": "/bin/sh"
+        },
+        "ts": "<TS>"
+      }
+    ]
+  },
+  "terminals": {}
+}

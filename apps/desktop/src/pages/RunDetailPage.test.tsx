@@ -9,7 +9,7 @@ import { AgentClientProvider } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
 import { AWAIT_LABEL } from '../lib/await-copy.ts';
 import { encodeToBase64 } from '../lib/base64.ts';
-import type { WhiphandEvent } from '../../../../packages/core/src/types.ts';
+import type { WhiphandEvent } from '../shared/types.ts';
 import { fromPosix } from '../../../../packages/test-support/src/paths.ts';
 
 // RunDetailPage only needs to exercise its own show/hide/collapse logic here —
@@ -2274,7 +2274,7 @@ describe('RunDetailPage: cycles and manual steps', () => {
  * The run-audit Logs tab: one merged, seq-ordered feed of the run's audit
  * trail (whiphandEvents) and its output (`step:log`), live or read back from
  * a finished run's run.log through `readRunLog`. See RunDetailPage's
- * `liveLogRows`/`finishedLogRows` and packages/core/src/engine/manifest.ts.
+ * `liveLogRows`/`finishedLogRows` and whiphand-core's store/journal.rs.
  */
 describe('RunDetailPage: Logs tab (run audit)', () => {
   beforeEach(() => {
@@ -2517,8 +2517,8 @@ describe('RunDetailPage: Logs tab (run audit)', () => {
 
   it('shows a resumed attempt\'s live rows even though its journal seq restarts at 1', async () => {
     // B1-residual-2: the merge used to key on "live seq > highest fetched
-    // seq", but seq is monotonic per RunJournal instance
-    // (packages/core/src/engine/manifest.ts), not per run. A resumed run
+    // seq", but seq is monotonic per journal instance
+    // (whiphand-core's store/journal.rs), not per run. A resumed run
     // rebinds this page to a new job whose journal starts over at seq 1, so
     // every one of its rows failed that comparison against the old attempt's
     // (much higher) fetched max and got silently dropped — the pane froze on

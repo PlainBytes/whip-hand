@@ -6,7 +6,7 @@ import {
   ChevronUpDownRegular, FolderOpenRegular, PinOffRegular, PinRegular,
 } from '@fluentui/react-icons';
 import { useAppStore } from '../state/store.ts';
-import { sameWorkspace } from '../../../../packages/core/src/path-form.ts';
+import { sameWorkspace } from '../shared/path-form.ts';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useCapabilities } from '../capabilities.tsx';
 import { OpenPathField } from './OpenPathField.tsx';
@@ -14,7 +14,7 @@ import { openWorkspace } from '../lib/workspace-switch.ts';
 import { basename, sortWorkspaces } from '../lib/workspace-identity.ts';
 import { WorkspaceDot } from './WorkspaceDot.tsx';
 import { RowGlyph, RowTrailing, SIDEBAR_ROW_STYLE } from './sidebar-row.tsx';
-import type { RecentWorkspace } from '../../../../packages/agent/src/app-state.ts';
+import type { RecentWorkspace } from '../shared/protocol.gen.ts';
 import { errorMessage } from '../lib/error-message.ts';
 
 // Stable reference so the zustand selector doesn't produce a fresh array on

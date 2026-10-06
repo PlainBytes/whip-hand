@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fromManualRequest } from './from-manual.ts';
 import { DIFF_SOURCE_ID } from './model.ts';
-import type { ManualRequest } from '../../../../packages/core/src/types.ts';
+import type { ManualRequest } from '../shared/types.ts';
 import { fromPosix } from '../../../../packages/test-support/src/paths.ts';
 
 function request(overrides: Partial<ManualRequest> = {}): ManualRequest {

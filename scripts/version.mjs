@@ -1,20 +1,19 @@
 #!/usr/bin/env node
 /**
  * `0.1.0` lives in places that nothing keeps in sync automatically:
- * `apps/desktop/package.json`, the two `packages/{core,agent}/package.json` files,
- * `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, and the literal
- * `CORE_VERSION` in `packages/core/src/version.ts`. The Tauri updater compares
- * `tauri.conf.json`'s version against `latest.json`, and `whiphand --version`
- * prints `CORE_VERSION` — so a release where these disagree is a bug class,
- * not untidiness. `Cargo.lock`'s own `desktop` entry is a seventh, mechanical
- * location: not a place a human would edit, but one `cargo` will flag as
- * stale if it drifts.
+ * `apps/desktop/package.json`, `src-tauri/Cargo.toml` and
+ * `src-tauri/tauri.conf.json`, and the Rust crates' own manifests. The Tauri
+ * updater compares `tauri.conf.json`'s version against `latest.json`, and
+ * `whiphand --version` and the agent's `hello` print whiphand-core's crate
+ * version — so a release where these disagree is a bug class, not
+ * untidiness.
  *
- * The Rust crates (`crates/whiphand-core` and the `whiphand` CLI in
- * `crates/whiphand-cli`, docs/migration.md) carry the same version, in their
- * own Cargo.toml and in the root workspace's Cargo.lock — the same two-place
- * pattern as the Tauri crate, so all are handled by one table
- * (`CARGO_CRATES`). The Rust CLI's `--version` is whiphand-core's crate version.
+ * Every Rust crate (`src-tauri`, `crates/whiphand-core`, the `whiphand` CLI in
+ * `crates/whiphand-cli`, `crates/whiphand-protocol` and
+ * `crates/whiphand-agent`) carries the version in its Cargo.toml and again in
+ * the Cargo.lock that records it: not a place a human would edit, but one
+ * `cargo` will flag as stale if it drifts. One table (`CARGO_CRATES`) handles
+ * all of them.
  *
  * `package-lock.json` records each workspace's version and that same pin
  * again. `npm ci` tolerates it lagging, but the next `npm install` rewrites
@@ -38,17 +37,16 @@ const SEMVER = /^\d+\.\d+\.\d+$/;
 
 const PACKAGE_JSON_FILES = [
   'apps/desktop/package.json',
-  'packages/core/package.json',
-  'packages/agent/package.json',
 ];
 /** Every Rust crate that ships the app's version: its manifest, the lockfile recording it, and its package name there. */
 const CARGO_CRATES = [
   { toml: 'apps/desktop/src-tauri/Cargo.toml', lock: 'apps/desktop/src-tauri/Cargo.lock', name: 'whiphand' },
   { toml: 'crates/whiphand-core/Cargo.toml', lock: 'Cargo.lock', name: 'whiphand-core' },
   { toml: 'crates/whiphand-cli/Cargo.toml', lock: 'Cargo.lock', name: 'whiphand-cli' },
+  { toml: 'crates/whiphand-protocol/Cargo.toml', lock: 'Cargo.lock', name: 'whiphand-protocol' },
+  { toml: 'crates/whiphand-agent/Cargo.toml', lock: 'Cargo.lock', name: 'whiphand-agent' },
 ];
 const TAURI_CONF = 'apps/desktop/src-tauri/tauri.conf.json';
-const CORE_INDEX = 'packages/core/src/version.ts';
 const PACKAGE_LOCK = 'package-lock.json';
 /** The `packages` keys under which package-lock.json records a workspace — the same ones as PACKAGE_JSON_FILES. */
 const LOCK_WORKSPACES = PACKAGE_JSON_FILES.map(file => path.posix.dirname(file));
@@ -112,12 +110,6 @@ function replaceCargoLockVersion(content, version, { lock, name }) {
   return content.replace(pattern, `$1"${version}"`);
 }
 
-function replaceCoreVersion(content, version) {
-  const pattern = /export const CORE_VERSION = '(\d+\.\d+\.\d+)';/;
-  if (!pattern.test(content)) throw new Error(`CORE_VERSION not found in ${CORE_INDEX}`);
-  return content.replace(pattern, `export const CORE_VERSION = '${version}';`);
-}
-
 /** npm writes the lockfile as two-space JSON with a trailing newline, and so does this. */
 function replacePackageLockVersions(content, version) {
   const lock = JSON.parse(content);
@@ -138,7 +130,6 @@ function writeVersion(version) {
     write(crate.lock, replaceCargoLockVersion(read(crate.lock), version, crate));
   }
   write(TAURI_CONF, replaceJsonVersion(read(TAURI_CONF), version, TAURI_CONF));
-  write(CORE_INDEX, replaceCoreVersion(read(CORE_INDEX), version));
   write(PACKAGE_LOCK, replacePackageLockVersions(read(PACKAGE_LOCK), version));
 }
 
@@ -153,9 +144,6 @@ function collectVersions() {
   }
 
   found.push([TAURI_CONF, readJsonVersion(read(TAURI_CONF), TAURI_CONF)]);
-
-  const coreIndex = read(CORE_INDEX);
-  found.push([CORE_INDEX, coreIndex.match(/CORE_VERSION = '(\d+\.\d+\.\d+)'/)?.[1] ?? '(missing)']);
 
   const lock = JSON.parse(read(PACKAGE_LOCK));
   for (const workspace of LOCK_WORKSPACES) {

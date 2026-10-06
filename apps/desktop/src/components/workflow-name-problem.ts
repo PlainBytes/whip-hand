@@ -1,5 +1,5 @@
-import { WORKFLOW_NAME_RE, workflowNameProblem as coreNameProblem } from '../../../../packages/core/src/workflow-name.ts';
-import type { Scope } from '../../../../packages/core/src/types.ts';
+import { WORKFLOW_NAME_RE, workflowNameProblem as coreNameProblem } from '../shared/workflow-name.ts';
+import type { Scope } from '../shared/types.ts';
 import { isWorkflowFile } from './workflow-lane/WorkflowLane.tsx';
 import type { WorkflowEntry } from './workflow-lane/WorkflowLane.tsx';
 

@@ -1,7 +1,7 @@
 //! Windows Job Objects for whiphand's process container: one job per run,
-//! KILL_ON_JOB_CLOSE, breakaway off. Shared by the `whiphand-job` guard
-//! binary (the TS agent's helper) and the Rust CLI, which holds its job
-//! in-process instead.
+//! KILL_ON_JOB_CLOSE, breakaway off, held in-process by whiphand-core's
+//! container (the CLI and the agent alike). It was once also a guard binary,
+//! `whiphand-job.exe`, for the TS agent.
 //!
 //! How it contains grandchildren: libuv puts every child into a
 //! process-global job that sets SILENT_BREAKAWAY_OK, which is why grandchildren

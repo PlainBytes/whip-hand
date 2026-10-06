@@ -23,7 +23,7 @@ import {
 import { highlightCode } from '../files/highlight.ts';
 import { useGlobalShortcut } from '../lib/use-global-shortcut.ts';
 import { PdfView } from '../pdf/PdfView.tsx';
-import { formatBytes } from '../../../../packages/core/src/format.ts';
+import { formatBytes } from '../shared/format.ts';
 import { errorMessage } from '../lib/error-message.ts';
 
 interface Loaded {

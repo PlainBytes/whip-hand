@@ -1,188 +1,13 @@
 import type { Transport } from './transport.ts';
 import { perfEnabled, recordRpc } from '../lib/perf-probe.ts';
 import type {
-  CancelRunParams,
-  CancelRunResult,
-  EndSessionParams,
-  EndSessionResult,
-  CloneWorkflowParams,
-  CloneWorkflowResult,
-  ConfigGetParams,
-  ConfigGetResult,
-  ConfigSetParams,
-  ConfigSetResult,
-  CreateWorkflowParams,
-  CreateWorkflowResult,
-  DeleteRunParams,
-  DeleteRunResult,
-  DeleteWorkflowParams,
-  DeleteWorkflowResult,
-  DoctorParams,
-  DoctorResult,
-  GetAppStateParams,
-  GetAppStateResult,
-  GetWorkflowParams,
-  GetWorkflowResult,
-  GetRunParams,
-  ReadRunLogParams,
-  ReadRunLogResult,
-  GetWorkingDiffParams,
-  GetWorkingDiffResult,
-  HelloParams,
-  HelloResult,
-  GetJobScrollbackParams,
-  GetJobScrollbackResult,
-  ListJobsParams,
-  ListJobsResult,
-  ListModelsParams,
-  ListModelsResult,
-  AppStateChangedParams,
-  RemoteAccessChangedParams,
-  RemoteAccessGetParams,
-  RemoteAccessGetResult,
-  RemoteAccessRotateTokenParams,
-  RemoteAccessRotateTokenResult,
-  RemoteAccessSetParams,
-  RemoteAccessSetResult,
-  InitWorkspaceParams,
-  InitWorkspaceResult,
-  ListRecentRunsParams,
-  ListWorkflowsParams,
-  ListWorkflowsResult,
-  ListRunsParams,
-  ManualRequestParams,
-  ManualResolvedParams,
-  WhiphandEventNotificationParams,
+  MethodMap,
   MethodName,
+  NotificationMap,
   NotificationName,
-  PtyDataParams,
-  PtyExitParams,
-  PtyAwaitParams,
-  PtyInputParams,
-  PtyInputResult,
-  PtyResizeParams,
-  PtyResizeResult,
-  PruneRunsParams,
-  PruneRunsResult,
-  PtyStartedParams,
-  ReadArtifactParams,
-  ReadArtifactResult,
-  WriteArtifactParams,
-  WriteArtifactResult,
-  ResolveManualParams,
-  ResolveManualResult,
-  RunStateChangedParams,
-  SetRunLockedParams,
-  RenameRunParams,
-  RenameRunResult,
-  SetRunLockedResult,
-  SetUiStateParams,
-  SetUiStateResult,
-  SetWorkspacePinnedParams,
-  SetWorkspacePinnedResult,
-  StatArtifactParams,
-  StatArtifactResult,
-  ResumeRunParams,
-  ResumeRunResult,
-  StartRunParams,
-  StartRunResult,
-  StepLogParams,
-  TouchRecentWorkspaceParams,
-  TouchRecentWorkspaceResult,
-  UpdateWorkflowParams,
-  UpdateWorkflowResult,
-} from '../../../../packages/agent/src/protocol.ts';
+} from '../shared/protocol.gen.ts';
 
-/**
- * listRuns/getRun results aren't exported as named types from protocol.ts —
- * only their params are (see runSummarySchema/runDetailSchema there, which
- * are intentionally loose: core owns the authoritative run shape). These
- * mirror that shape closely enough for the desktop app's own use.
- */
-export interface RunSummary {
-  runId: string;
-  runDir: string;
-  status: string;
-  locked?: boolean;
-  /**
-   * The run's display label. Comes from the `.name` marker beside run.json,
-   * not from the manifest — core overlays it onto every summary, exactly as
-   * it overlays `locked`. Absent for a run that was never named.
-   */
-  name?: string;
-  [key: string]: unknown;
-}
-export interface RunDetail extends RunSummary {
-  artifacts: { name: string; path: string }[];
-}
-
-interface MethodMap {
-  hello: { params: HelloParams; result: HelloResult };
-  listWorkflows: { params: ListWorkflowsParams; result: ListWorkflowsResult };
-  getWorkflow: { params: GetWorkflowParams; result: GetWorkflowResult };
-  createWorkflow: { params: CreateWorkflowParams; result: CreateWorkflowResult };
-  updateWorkflow: { params: UpdateWorkflowParams; result: UpdateWorkflowResult };
-  deleteWorkflow: { params: DeleteWorkflowParams; result: DeleteWorkflowResult };
-  cloneWorkflow: { params: CloneWorkflowParams; result: CloneWorkflowResult };
-  initWorkspace: { params: InitWorkspaceParams; result: InitWorkspaceResult };
-  doctor: { params: DoctorParams; result: DoctorResult };
-  listModels: { params: ListModelsParams; result: ListModelsResult };
-  configGet: { params: ConfigGetParams; result: ConfigGetResult };
-  configSet: { params: ConfigSetParams; result: ConfigSetResult };
-  startRun: { params: StartRunParams; result: StartRunResult };
-  resumeRun: { params: ResumeRunParams; result: ResumeRunResult };
-  cancelRun: { params: CancelRunParams; result: CancelRunResult };
-  deleteRun: { params: DeleteRunParams; result: DeleteRunResult };
-  setRunLocked: { params: SetRunLockedParams; result: SetRunLockedResult };
-  renameRun: { params: RenameRunParams; result: RenameRunResult };
-  pruneRuns: { params: PruneRunsParams; result: PruneRunsResult };
-  endSession: { params: EndSessionParams; result: EndSessionResult };
-  resolveManual: { params: ResolveManualParams; result: ResolveManualResult };
-  listRuns: { params: ListRunsParams; result: RunSummary[] };
-  getRun: { params: GetRunParams; result: RunDetail | null };
-  readRunLog: { params: ReadRunLogParams; result: ReadRunLogResult };
-  getWorkingDiff: { params: GetWorkingDiffParams; result: GetWorkingDiffResult };
-  readArtifact: { params: ReadArtifactParams; result: ReadArtifactResult };
-  writeArtifact: { params: WriteArtifactParams; result: WriteArtifactResult };
-  statArtifact: { params: StatArtifactParams; result: StatArtifactResult };
-  ptyInput: { params: PtyInputParams; result: PtyInputResult };
-  ptyResize: { params: PtyResizeParams; result: PtyResizeResult };
-  getAppState: { params: GetAppStateParams; result: GetAppStateResult };
-  touchRecentWorkspace: { params: TouchRecentWorkspaceParams; result: TouchRecentWorkspaceResult };
-  setWorkspacePinned: { params: SetWorkspacePinnedParams; result: SetWorkspacePinnedResult };
-  setUiState: { params: SetUiStateParams; result: SetUiStateResult };
-  listRecentRuns: { params: ListRecentRunsParams; result: (RunSummary & { workspace: string })[] };
-  listJobs: { params: ListJobsParams; result: ListJobsResult };
-  getJobScrollback: { params: GetJobScrollbackParams; result: GetJobScrollbackResult };
-  remoteAccessGet: { params: RemoteAccessGetParams; result: RemoteAccessGetResult };
-  remoteAccessSet: { params: RemoteAccessSetParams; result: RemoteAccessSetResult };
-  remoteAccessRotateToken: { params: RemoteAccessRotateTokenParams; result: RemoteAccessRotateTokenResult };
-}
-
-interface NotificationMap {
-  whiphandEvent: WhiphandEventNotificationParams;
-  runStateChanged: RunStateChangedParams;
-  ptyStarted: PtyStartedParams;
-  ptyData: PtyDataParams;
-  ptyExit: PtyExitParams;
-  ptyAwait: PtyAwaitParams;
-  stepLog: StepLogParams;
-  manualRequest: ManualRequestParams;
-  manualResolved: ManualResolvedParams;
-  remoteAccessChanged: RemoteAccessChangedParams;
-  appStateChanged: AppStateChangedParams;
-}
-
-/**
- * These two maps are hand-maintained mirrors of protocol.ts's `methods` and
- * `notifications`. Forgetting an entry does fail the build, but as a pile of
- * TS2536 "Type 'M' cannot be used to index type 'MethodMap'" errors pointing
- * at request()/onNotification() rather than at the omission. The asserts below
- * fail first, and name the missing member.
- */
-type AssertNever<T extends never> = T;
-type _EveryMethodIsMapped = AssertNever<Exclude<MethodName, keyof MethodMap>>;
-type _EveryNotificationIsMapped = AssertNever<Exclude<NotificationName, keyof NotificationMap>>;
+export type { RunDetail, RunSummary } from '../shared/core-types.ts';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'down';
 
@@ -208,11 +33,11 @@ const DEFAULT_MAX_RETRIES = 5;
 const DEFAULT_BASE_DELAY_MS = 500;
 
 /**
- * Correlation + supervision layer over a Transport (the @whiphand/agent sidecar
- * child process, or a MockTransport in tests). Owns request ids,
+ * Correlation + supervision layer over a Transport (the in-process agent, a
+ * WebSocket, or a MockTransport in tests). Owns request ids,
  * response/notification routing, per-request timeouts, and reconnect-with-
- * backoff when the underlying process exits. Never touches `@tauri-apps/*`
- * directly — that's TauriTransport's job — so this file is safe to import
+ * backoff when the connection ends. Never touches `@tauri-apps/*`
+ * directly — that's InProcessTransport's job — so this file is safe to import
  * from vitest.
  */
 export class AgentClient {
@@ -332,7 +157,7 @@ export class AgentClient {
     try {
       value = JSON.parse(line);
     } catch {
-      return; // malformed line from the sidecar; nothing sane to correlate it to
+      return; // malformed line from the agent; nothing sane to correlate it to
     }
     if (!value || typeof value !== 'object') return;
 

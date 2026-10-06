@@ -1,7 +1,11 @@
-//! The Rust side of the core parity corpus: every suite's ops, run through
-//! whiphand-core, must reproduce the golden results the TypeScript
-//! implementation wrote (`npm run parity:core-golden`). `parity/core.test.ts`
-//! checks the same golden from the TS side.
+//! The core parity corpus: every suite's ops, run through whiphand-core, must
+//! reproduce the golden results. The TypeScript implementation wrote them,
+//! and both were held to them until it was removed (Phase 3 of
+//! docs/migration.md); they are frozen now.
+//!
+//! `WHIPHAND_UPDATE_GOLDEN=1` rewrites the goldens from whiphand-core instead
+//! of comparing, for a deliberate change (a template edit, say). Review the
+//! diff: every changed line is a change in behavior.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -45,6 +49,38 @@ fn core_parity_matches_the_golden() {
     files.sort();
     assert!(!files.is_empty(), "no suites found");
 
+    if std::env::var_os("WHIPHAND_UPDATE_GOLDEN").is_some() {
+        for file in &files {
+            // A line that still matches keeps its text, so the diff shows
+            // only what changed (the TS writer ordered keys its own way).
+            let old = std::fs::read_to_string(golden.join(file)).unwrap_or_default();
+            let old: Vec<&str> = old
+                .lines()
+                .filter(|l| *l != "[" && *l != "]")
+                .map(|l| l.strip_suffix(',').unwrap_or(l))
+                .collect();
+            let lines: Vec<String> = read_lines(&suites.join(file))
+                .iter()
+                .enumerate()
+                .map(|(i, op)| {
+                    let got = run_op_line(op, &repo);
+                    match old.get(i).and_then(|l| serde_json::from_str(l).ok()) {
+                        Some(want) if canonical(&want) == got => old[i].to_string(),
+                        _ => got,
+                    }
+                })
+                .collect();
+            // One compact entry per line, so a diff reads line by line.
+            let text = if lines.is_empty() {
+                "[]\n".to_string()
+            } else {
+                format!("[\n{}\n]\n", lines.join(",\n"))
+            };
+            std::fs::write(golden.join(file), text).unwrap();
+        }
+        return;
+    }
+
     let mut failures = Vec::new();
     let mut total = 0;
     for file in &files {
@@ -53,7 +89,7 @@ fn core_parity_matches_the_golden() {
         assert_eq!(
             ops.len(),
             expected.len(),
-            "{file}: op and golden counts differ — regenerate the golden"
+            "{file}: op and golden counts differ — WHIPHAND_UPDATE_GOLDEN=1 rewrites the golden"
         );
         for (i, (op, want)) in ops.iter().zip(&expected).enumerate() {
             total += 1;

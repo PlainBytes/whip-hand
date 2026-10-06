@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { percentile, summarize, median, flatten, compare, formatCompare } from './bench/stats.mjs';
 import { buildLargeRunLog, smallRunManifest, rng } from './bench/fixtures.mjs';
-import { parseLogLine } from '../packages/core/src/log-rows.ts';
+import { parseLogLine } from '../apps/desktop/src/shared/log-rows.ts';
 
 // The pure half of scripts/bench.mjs. The measuring half spawns real
 // processes and a browser and is run by hand (docs/benchmarks.md).

@@ -1,0 +1,1037 @@
+{
+  "responses": [
+    {
+      "step": "startRun",
+      "response": {
+        "result": {
+          "jobId": "<UUID>"
+        }
+      }
+    },
+    {
+      "step": "listJobs parked",
+      "response": {
+        "result": [
+          {
+            "jobId": "<UUID>",
+            "workdir": "<WS>/ws",
+            "identityKey": "<WS>/ws",
+            "status": "running",
+            "pty": null,
+            "pendingManual": {
+              "stepId": "approve",
+              "kind": "approval",
+              "title": "Ship it?",
+              "instructions": "Look first.",
+              "choices": [
+                "continue",
+                "abort"
+              ],
+              "context": {
+                "artifacts": []
+              },
+              "defaultChoice": "continue"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "step": "resolveManual stale",
+      "response": {
+        "result": {
+          "ok": false
+        }
+      }
+    },
+    {
+      "step": "resolveManual unknown job",
+      "response": {
+        "result": {
+          "ok": false
+        }
+      }
+    },
+    {
+      "step": "resolveManual",
+      "response": {
+        "result": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "step": "startRun slow",
+      "response": {
+        "result": {
+          "jobId": "<UUID>"
+        }
+      }
+    },
+    {
+      "step": "cancelRun",
+      "response": {
+        "result": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "step": "cancelRun unknown job",
+      "response": {
+        "result": {
+          "ok": false
+        }
+      }
+    },
+    {
+      "step": "cancelRun unknown run",
+      "response": {
+        "result": {
+          "ok": false
+        }
+      }
+    },
+    {
+      "step": "startRun flaky",
+      "response": {
+        "result": {
+          "jobId": "<UUID>"
+        }
+      }
+    },
+    {
+      "step": "listRuns",
+      "response": {
+        "result": [
+          {
+            "version": 5,
+            "runId": "<RUN>",
+            "workflow": "flaky",
+            "workdir": "<WS>/ws",
+            "dryRun": false,
+            "pid": "<PID>",
+            "pidScope": "<SCOPE>",
+            "startedAt": "<TS>",
+            "updatedAt": "<TS>",
+            "heartbeatAt": "<MS>",
+            "leaseId": "<UUID>",
+            "endedAt": "<TS>",
+            "status": "failed",
+            "ok": false,
+            "workflowSource": "project",
+            "inputs": {},
+            "sessionIds": {},
+            "steps": [
+              {
+                "id": "first",
+                "kind": "command",
+                "status": "done",
+                "exitCode": 0,
+                "artifact": "<WS>/ws/.whiphand/runs/<RUN>/first.log",
+                "startedAt": "<TS>",
+                "endedAt": "<TS>"
+              },
+              {
+                "id": "second",
+                "kind": "command",
+                "status": "failed",
+                "exitCode": 3,
+                "startedAt": "<TS>",
+                "endedAt": "<TS>"
+              }
+            ],
+            "error": {
+              "stepId": "second",
+              "message": "command step 'second' exited with code 3"
+            },
+            "runDir": "<WS>/ws/.whiphand/runs/<RUN>",
+            "locked": false
+          },
+          {
+            "version": 5,
+            "runId": "<RUN>",
+            "workflow": "gate",
+            "workdir": "<WS>/ws",
+            "dryRun": false,
+            "pid": "<PID>",
+            "pidScope": "<SCOPE>",
+            "startedAt": "<TS>",
+            "updatedAt": "<TS>",
+            "heartbeatAt": "<MS>",
+            "leaseId": "<UUID>",
+            "endedAt": "<TS>",
+            "status": "succeeded",
+            "ok": true,
+            "workflowSource": "project",
+            "inputs": {},
+            "sessionIds": {},
+            "steps": [
+              {
+                "id": "before",
+                "kind": "command",
+                "status": "done",
+                "exitCode": 0,
+                "artifact": "<WS>/ws/.whiphand/runs/<RUN>/before.log",
+                "startedAt": "<TS>",
+                "endedAt": "<TS>"
+              },
+              {
+                "id": "approve",
+                "kind": "approval",
+                "status": "done",
+                "exitCode": 0,
+                "startedAt": "<TS>",
+                "endedAt": "<TS>"
+              }
+            ],
+            "runDir": "<WS>/ws/.whiphand/runs/<RUN>",
+            "locked": false
+          },
+          {
+            "version": 5,
+            "runId": "<RUN>",
+            "workflow": "slow",
+            "workdir": "<WS>/ws",
+            "dryRun": false,
+            "pid": "<PID>",
+            "pidScope": "<SCOPE>",
+            "startedAt": "<TS>",
+            "updatedAt": "<TS>",
+            "heartbeatAt": "<MS>",
+            "leaseId": "<UUID>",
+            "endedAt": "<TS>",
+            "status": "cancelled",
+            "ok": false,
+            "workflowSource": "project",
+            "inputs": {},
+            "sessionIds": {},
+            "steps": [
+              {
+                "id": "wait",
+                "kind": "command",
+                "status": "interrupted",
+                "startedAt": "<TS>",
+                "endedAt": "<TS>"
+              }
+            ],
+            "runDir": "<WS>/ws/.whiphand/runs/<RUN>",
+            "locked": false
+          }
+        ]
+      }
+    },
+    {
+      "step": "resumeRun unknown",
+      "response": {
+        "error": {
+          "code": -32000,
+          "message": "no run 'nope' under .whiphand/runs"
+        }
+      }
+    },
+    {
+      "step": "resumeRun",
+      "response": {
+        "result": {
+          "jobId": "<UUID>"
+        }
+      }
+    },
+    {
+      "step": "getRun resumed",
+      "response": {
+        "result": {
+          "version": 5,
+          "runId": "<RUN>",
+          "workflow": "flaky",
+          "workdir": "<WS>/ws",
+          "dryRun": false,
+          "pid": "<PID>",
+          "pidScope": "<SCOPE>",
+          "startedAt": "<TS>",
+          "updatedAt": "<TS>",
+          "heartbeatAt": "<MS>",
+          "leaseId": "<UUID>",
+          "endedAt": "<TS>",
+          "resumedAt": [
+            "<TS>"
+          ],
+          "status": "succeeded",
+          "ok": true,
+          "workflowSource": "project",
+          "inputs": {},
+          "sessionIds": {},
+          "steps": [
+            {
+              "id": "first",
+              "kind": "command",
+              "status": "done",
+              "exitCode": 0,
+              "artifact": "<WS>/ws/.whiphand/runs/<RUN>/first.log",
+              "startedAt": "<TS>",
+              "endedAt": "<TS>"
+            },
+            {
+              "id": "second",
+              "kind": "command",
+              "status": "done",
+              "exitCode": 0,
+              "artifact": "<WS>/ws/.whiphand/runs/<RUN>/second.log",
+              "startedAt": "<TS>",
+              "endedAt": "<TS>",
+              "attempted": true
+            }
+          ],
+          "runDir": "<WS>/ws/.whiphand/runs/<RUN>",
+          "locked": false,
+          "artifacts": [
+            {
+              "name": "first.log",
+              "path": "<WS>/ws/.whiphand/runs/<RUN>/first.log"
+            },
+            {
+              "name": "second.log",
+              "path": "<WS>/ws/.whiphand/runs/<RUN>/second.log"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "notifications": {
+    "appStateChanged": [
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [],
+        "window": null,
+        "lastPage": null,
+        "theme": "system",
+        "workspaces": {
+          "<WS>/ws": {
+            "lastInputs": {
+              "gate": {}
+            },
+            "identityKey": "<WS>/ws",
+            "lastWorkflow": "gate"
+          }
+        },
+        "runsRetention": {
+          "maxPerWorkspace": 0
+        },
+        "showOngoingRuns": true
+      },
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [],
+        "window": null,
+        "lastPage": null,
+        "theme": "system",
+        "workspaces": {
+          "<WS>/ws": {
+            "lastInputs": {
+              "gate": {},
+              "slow": {}
+            },
+            "identityKey": "<WS>/ws",
+            "lastWorkflow": "slow"
+          }
+        },
+        "runsRetention": {
+          "maxPerWorkspace": 0
+        },
+        "showOngoingRuns": true
+      },
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [],
+        "window": null,
+        "lastPage": null,
+        "theme": "system",
+        "workspaces": {
+          "<WS>/ws": {
+            "lastInputs": {
+              "gate": {},
+              "slow": {},
+              "flaky": {}
+            },
+            "identityKey": "<WS>/ws",
+            "lastWorkflow": "flaky"
+          }
+        },
+        "runsRetention": {
+          "maxPerWorkspace": 0
+        },
+        "showOngoingRuns": true
+      }
+    ],
+    "whiphandEvent": [
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "run:start",
+          "runId": "<RUN>",
+          "workflow": "gate",
+          "source": "project"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:start",
+          "stepId": "before",
+          "kind": "command"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:spawn",
+          "stepId": "before",
+          "spec": {
+            "argv": [
+              "C:/Program Files/Git/usr/bin/sh.exe",
+              "-c",
+              "node -e \"console.log(\\\"before\\\")\""
+            ],
+            "cwd": ".",
+            "env": {
+              "WHIPHAND_RUN_ID": "<RUN>",
+              "WHIPHAND_RUN_SLUG": "<RUN>",
+              "WHIPHAND_RUN_DIR": "<WS>/ws/.whiphand/runs/<RUN>",
+              "WHIPHAND_STEP_ID": "before"
+            },
+            "interactive": false,
+            "capture": {
+              "path": ".whiphand/runs/<RUN>/before.log"
+            }
+          },
+          "phase": "main"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:log",
+          "stepId": "before",
+          "stream": "stdout",
+          "line": "before"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:done",
+          "stepId": "before",
+          "exitCode": 0
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:artifact",
+          "stepId": "before",
+          "path": ".whiphand/runs/<RUN>/before.log",
+          "bytes": 76
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:start",
+          "stepId": "approve",
+          "kind": "approval"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:manual",
+          "stepId": "approve",
+          "request": {
+            "stepId": "approve",
+            "kind": "approval",
+            "title": "Ship it?",
+            "instructions": "Look first.",
+            "choices": [
+              "continue",
+              "abort"
+            ],
+            "context": {
+              "artifacts": []
+            },
+            "defaultChoice": "continue"
+          }
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:manual-resolved",
+          "stepId": "approve",
+          "choice": "continue"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:done",
+          "stepId": "approve",
+          "exitCode": 0
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "run:done",
+          "runId": "<RUN>",
+          "ok": true
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "run:start",
+          "runId": "<RUN>",
+          "workflow": "slow",
+          "source": "project"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:start",
+          "stepId": "wait",
+          "kind": "command"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:spawn",
+          "stepId": "wait",
+          "spec": {
+            "argv": [
+              "C:/Program Files/Git/usr/bin/sh.exe",
+              "-c",
+              "node -e \"setTimeout(() => {}, 60000)\""
+            ],
+            "cwd": ".",
+            "env": {
+              "WHIPHAND_RUN_ID": "<RUN>",
+              "WHIPHAND_RUN_SLUG": "<RUN>",
+              "WHIPHAND_RUN_DIR": "<WS>/ws/.whiphand/runs/<RUN>",
+              "WHIPHAND_STEP_ID": "wait"
+            },
+            "interactive": false,
+            "capture": {
+              "path": ".whiphand/runs/<RUN>/wait.log"
+            }
+          },
+          "phase": "main"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "run:cancelled",
+          "runId": "<RUN>"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "run:done",
+          "runId": "<RUN>",
+          "ok": false
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "run:start",
+          "runId": "<RUN>",
+          "workflow": "flaky",
+          "source": "project"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:start",
+          "stepId": "first",
+          "kind": "command"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:spawn",
+          "stepId": "first",
+          "spec": {
+            "argv": [
+              "C:/Program Files/Git/usr/bin/sh.exe",
+              "-c",
+              "node -e \"console.log(\\\"first\\\")\""
+            ],
+            "cwd": ".",
+            "env": {
+              "WHIPHAND_RUN_ID": "<RUN>",
+              "WHIPHAND_RUN_SLUG": "<RUN>",
+              "WHIPHAND_RUN_DIR": "<WS>/ws/.whiphand/runs/<RUN>",
+              "WHIPHAND_STEP_ID": "first"
+            },
+            "interactive": false,
+            "capture": {
+              "path": ".whiphand/runs/<RUN>/first.log"
+            }
+          },
+          "phase": "main"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:log",
+          "stepId": "first",
+          "stream": "stdout",
+          "line": "first"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:done",
+          "stepId": "first",
+          "exitCode": 0
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:artifact",
+          "stepId": "first",
+          "path": ".whiphand/runs/<RUN>/first.log",
+          "bytes": 73
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:start",
+          "stepId": "second",
+          "kind": "command"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:spawn",
+          "stepId": "second",
+          "spec": {
+            "argv": [
+              "C:/Program Files/Git/usr/bin/sh.exe",
+              "-c",
+              "node -e \"const fs = require(\\\"fs\\\"); if (!fs.existsSync(\\\"ok\\\")) process.exit(3); console.log(\\\"second\\\")\""
+            ],
+            "cwd": ".",
+            "env": {
+              "WHIPHAND_RUN_ID": "<RUN>",
+              "WHIPHAND_RUN_SLUG": "<RUN>",
+              "WHIPHAND_RUN_DIR": "<WS>/ws/.whiphand/runs/<RUN>",
+              "WHIPHAND_STEP_ID": "second"
+            },
+            "interactive": false,
+            "capture": {
+              "path": ".whiphand/runs/<RUN>/second.log"
+            }
+          },
+          "phase": "main"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:done",
+          "stepId": "second",
+          "exitCode": 3
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "run:error",
+          "stepId": "second",
+          "message": "command step 'second' exited with code 3"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "run:done",
+          "runId": "<RUN>",
+          "ok": false
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "guard:warning",
+          "message": "no working tree snapshot was recorded when this run stopped, so changes to the working tree since then cannot be reported"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "run:resume",
+          "runId": "<RUN>",
+          "workflow": "flaky",
+          "from": "second"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:skipped",
+          "stepId": "first"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:start",
+          "stepId": "second",
+          "kind": "command"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:spawn",
+          "stepId": "second",
+          "spec": {
+            "argv": [
+              "C:/Program Files/Git/usr/bin/sh.exe",
+              "-c",
+              "node -e \"const fs = require(\\\"fs\\\"); if (!fs.existsSync(\\\"ok\\\")) process.exit(3); console.log(\\\"second\\\")\""
+            ],
+            "cwd": ".",
+            "env": {
+              "WHIPHAND_RUN_ID": "<RUN>",
+              "WHIPHAND_RUN_SLUG": "<RUN>",
+              "WHIPHAND_RUN_DIR": "<WS>/ws/.whiphand/runs/<RUN>",
+              "WHIPHAND_STEP_ID": "second"
+            },
+            "interactive": false,
+            "capture": {
+              "path": ".whiphand/runs/<RUN>/second.log"
+            }
+          },
+          "phase": "main"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:log",
+          "stepId": "second",
+          "stream": "stdout",
+          "line": "second"
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:done",
+          "stepId": "second",
+          "exitCode": 0
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "step:artifact",
+          "stepId": "second",
+          "path": ".whiphand/runs/<RUN>/second.log",
+          "bytes": 149
+        },
+        "ts": "<TS>"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "run:done",
+          "runId": "<RUN>",
+          "ok": true
+        },
+        "ts": "<TS>"
+      }
+    ],
+    "runStateChanged": [
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "status": "running"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "status": "succeeded"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "status": "running"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "status": "cancelled"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "status": "running"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "status": "failed"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "status": "running"
+      },
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "status": "succeeded"
+      }
+    ],
+    "stepLog": [
+      {
+        "jobId": "<UUID>",
+        "stream": "stdout",
+        "line": "before",
+        "seq": 0
+      },
+      {
+        "jobId": "<UUID>",
+        "stream": "stdout",
+        "line": "first",
+        "seq": 0
+      },
+      {
+        "jobId": "<UUID>",
+        "stream": "stdout",
+        "line": "second",
+        "seq": 0
+      }
+    ],
+    "manualRequest": [
+      {
+        "jobId": "<UUID>",
+        "runId": "<RUN>",
+        "request": {
+          "stepId": "approve",
+          "kind": "approval",
+          "title": "Ship it?",
+          "instructions": "Look first.",
+          "choices": [
+            "continue",
+            "abort"
+          ],
+          "context": {
+            "artifacts": []
+          },
+          "defaultChoice": "continue"
+        }
+      }
+    ],
+    "manualResolved": [
+      {
+        "jobId": "<UUID>",
+        "stepId": "approve",
+        "choice": "continue"
+      }
+    ],
+    "whiphandEvent run:env": [
+      {
+        "jobId": "<UUID>",
+        "workdir": "<WS>/ws",
+        "identityKey": "<WS>/ws",
+        "runId": "<RUN>",
+        "event": {
+          "type": "run:env",
+          "runId": "<RUN>",
+          "whiphandVersion": "<VERSION>",
+          "nodeVersion": "<NODE>",
+          "platform": "<PLATFORM>",
+          "runners": [],
+          "shell": "C:/Program Files/Git/usr/bin/sh.exe"
+        },
+        "ts": "<TS>"
+      }
+    ]
+  },
+  "terminals": {}
+}

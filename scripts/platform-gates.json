@@ -1,70 +1,7 @@
 {
-  "_comment": "The Windows scoreboard. Every `skip:` in a test file is listed here, by file and reason; scripts/invariants.test.mjs fails the build on an unlisted gate and on a stale entry, so a new gate cannot be added silently and a removed one cannot linger. kind: 'asymmetry' is a real, agreed platform difference and must name a counterpart test asserting the other side; 'capability' skips only on a machine lacking a tool (it runs on every CI leg); 'temporary' is a gate that will be removed and must name the PR that removes it. The 19 harness-bug gates that once made up most of the Windows skip list (POSIX-only stub binaries, ':'-joined PATHs, POSIX path literals) are gone: converted to packages/test-support. exec.win.test.ts's inverted gate is listed and counted so nobody mistakes it for coverage that runs locally.",
-  "gates": [
-    {
-      "file": "packages/agent/src/spawn.test.ts",
-      "reason": "POSIX signal semantics",
-      "kind": "asymmetry",
-      "counterpart": "spawn.test.ts: 'abort on Windows settles at once and terminates the child — there is no signal disposition to honour'"
-    },
-    {
-      "file": "packages/agent/src/spawn.test.ts",
-      "reason": "Windows only: the counterpart of the POSIX signal-disposition tests",
-      "kind": "asymmetry",
-      "counterpart": "spawn.test.ts: 'abort settles at once with the sentinel exit code and still signals the child' (the POSIX half)"
-    },
-    {
-      "file": "packages/core/src/container.test.ts",
-      "reason": "POSIX process groups",
-      "kind": "asymmetry",
-      "counterpart": "container.win.test.ts: 'killing the parent from outside leaves no survivors, grandchildren included' and 'cancel: killAll ends the whole tree'"
-    },
-    {
-      "file": "packages/core/src/container.win.test.ts",
-      "reason": "Windows only: needs the real whiphand-job.exe and Job Objects",
-      "kind": "asymmetry",
-      "counterpart": "container.test.ts: the POSIX process-group tests (the same properties, by process group)"
-    },
-    {
-      "file": "packages/core/src/exec.win.test.ts",
-      "reason": "Windows only",
-      "kind": "asymmetry",
-      "counterpart": "exec.test.ts: the same launch-plan branches exercised with platform: 'win32' on any host; these are the empirical half that needs a real cmd.exe"
-    },
-    {
-      "file": "packages/agent/src/remote/config.test.ts",
-      "reason": "fs modes are not enforceable on Windows: the remote token file cannot be made 0600",
-      "kind": "asymmetry",
-      "counterpart": "tools.machine.test.ts: 'on Windows the remote token file mode gap is stated, not invisible' (doctor's token-file-mode row)"
-    },
-    {
-      "file": "packages/core/src/durable-fs.test.ts",
-      "reason": "fs modes are not enforceable on Windows",
-      "kind": "asymmetry",
-      "counterpart": "durable-fs.test.ts: 'writeFileAtomic replaces the target and leaves no temp behind' (the mode is the only POSIX-only part)"
-    },
-    {
-      "file": "packages/core/src/engine/runner.test.ts",
-      "reason": "needs a directory the current user cannot empty",
-      "kind": "asymmetry",
-      "counterpart": "durable-fs.test.ts: 'removeTree retries a transient failure ... and gives up on a persistent one' (the same failure, injected)"
-    },
-    {
-      "file": "packages/core/src/engine/manifest.test.ts",
-      "reason": "needs a POSIX non-root user",
-      "kind": "asymmetry",
-      "counterpart": "manifest.test.ts: 'listRuns: a fresh lease is left running with a live owner' (a live pid is never judged dead, on every OS; EPERM on a pid we may not signal is the POSIX-only case)"
-    },
-    {
-      "file": "packages/core/src/engine/command.test.ts",
-      "reason": "no POSIX shell on this machine",
-      "kind": "capability"
-    },
-    {
-      "file": "packages/core/src/scaffold.test.ts",
-      "reason": "no POSIX shell on this machine",
-      "kind": "capability"
-    }
-  ],
-  "childProcess": ["packages/core/src/exec.ts"]
+  "_comment": "The Windows scoreboard. Every `skip:` in a test file is listed here, by file and reason; scripts/invariants.test.mjs fails the build on an unlisted gate and on a stale entry, so a new gate cannot be added silently and a removed one cannot linger. kind: 'asymmetry' is a real, agreed platform difference and must name a counterpart test asserting the other side; 'capability' skips only on a machine lacking a tool (it runs on every CI leg); 'temporary' is a gate that will be removed and must name the PR that removes it. Empty since Phase 3: every gate was in the TS core and agent, and the Rust crates gate with cfg instead.",
+  "gates": [],
+  "childProcess": [
+    "scripts/lib/exec.mjs"
+  ]
 }

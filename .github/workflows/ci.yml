@@ -31,12 +31,6 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      # The process guard (crates/job-guard): the Windows job-object backend of
-      # the per-run container. container.win.test.ts kills a parent and asserts
-      # no survivors, grandchildren included — it needs the real binary.
-      - name: Build the process guard (Windows)
-        if: runner.os == 'Windows'
-        run: cargo build --release -p whiphand-job
       - run: npm ci
       - run: npm run typecheck
       # Includes scripts/invariants.test.mjs — the platform-gate allowlist and the
@@ -44,10 +38,9 @@ jobs:
       - run: npm test
 
   parity:
-    # Real spawns end to end, on both platforms. The Windows leg is what closes
-    # the gap this job used to name out loud — "a whole workflow's worth of
-    # spawning" — and it is the leg that exercises the job object, the pty
-    # command-line string and the prompt path together. It also runs the one
+    # Real spawns end to end, on both platforms, through the Rust CLI and
+    # agent. The Windows leg is the one that exercises the job object, the
+    # ConPTY command line and the prompt path together. It also runs the one
     # cross-OS scenario (parity/golden.test.ts): both legs compare their
     # normalized artifact bundle byte for byte against ONE checked-in golden.
     strategy:
@@ -62,22 +55,30 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - name: Install build tools (node-pty source-build fallback)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y build-essential python3
-      # parity/store-cross.test.ts runs a Rust run-store process against a TS
-      # one (it builds crates/whiphand-core's store_probe example itself).
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build the process guard (Windows)
-        if: runner.os == 'Windows'
-        run: cargo build --release -p whiphand-job
       # The CLI half of every CLI-vs-agent test, and the golden scenario, is
       # the Rust binary (parity/cli-command.ts).
       - name: Build the CLI
         run: cargo build --release -p whiphand-cli
+      # parity/agent.test.ts plays every agent scenario against this binary
+      # and compares it with the transcripts recorded for the platform
+      # (parity/fixtures/agent/{posix,win32}).
+      - name: Build the agent
+        run: cargo build --release -p whiphand-agent
       - run: npm ci
       - run: npm run test:parity
+        env:
+          PARITY_DUMP: ${{ runner.temp }}/agent-transcripts
+      # What the agent answered, to diff against the recorded set — or, for a
+      # platform without one yet, to review and commit as its first recording.
+      - name: Upload the agent transcripts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-transcripts-${{ runner.os }}
+          path: ${{ runner.temp }}/agent-transcripts
+          if-no-files-found: ignore
 
   desktop:
     timeout-minutes: 20
@@ -117,22 +118,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri
-      # tauri_build::build() copies bundle.externalBin and bundle.resources on
-      # every cargo invocation, `cargo check` included — and all three are
-      # gitignored build outputs that only `npm run package` produces. This job
+      # tauri_build::build() copies bundle.resources on every cargo
+      # invocation, `cargo check` included — and the web resource is a
+      # gitignored build output that only `npm run package` produces. This job
       # asks whether the Rust crate still compiles; whether a bundle can be
-      # assembled is the `package` job below. So drop the bundle inputs rather
-      # than fabricate empty ones. TAURI_CONFIG is an RFC 7386 merge patch, so
-      # null removes the key.
+      # assembled is the `package` job below. So drop the bundle input rather
+      # than fabricate an empty one. TAURI_CONFIG is an RFC 7386 merge patch,
+      # so null removes the key.
       - name: The Rust crate still compiles
         env:
-          TAURI_CONFIG: '{"bundle":{"externalBin":null,"resources":null}}'
+          TAURI_CONFIG: '{"bundle":{"resources":null}}'
         run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
 
-  # The root Cargo workspace (crates/*): the process guard now, whiphand-core
-  # from Phase 1 of docs/migration.md on. macOS is in the matrix here because
-  # the migration holds every Rust phase to all three platforms. The Tauri
-  # crate is not a member; the job above checks it.
+  # The root Cargo workspace (crates/*): core, protocol, agent, CLI and the
+  # process guard. macOS is in the matrix here because the migration holds
+  # every Rust phase to all three platforms. The Tauri crate is not a member;
+  # the job above checks it.
   rust:
     timeout-minutes: 20
     strategy:
@@ -150,11 +151,11 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
-  # The full `npm run package` pipeline — CLI SEA, agent sidecar, and the
-  # Tauri bundle — on push to main only, not on PRs: ~4 minutes per platform
-  # is too slow for a PR gate, but discovering a packaging break at release
-  # time (release.yml, on a pushed tag) is worse. Same runners release.yml
-  # uses, so a break here is a break there.
+  # The full `npm run package` pipeline — the CLI and the Tauri bundle — on
+  # push to main only, not on PRs: ~4 minutes per platform is too slow for a
+  # PR gate, but discovering a packaging break at release time (release.yml,
+  # on a pushed tag) is worse. Same runners release.yml uses, so a break here
+  # is a break there.
   package:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     timeout-minutes: 30

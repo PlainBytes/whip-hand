@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-# Packaging smoke-test stub: stands in for a real `claude` install so
-# smokeAgent() can drive a real interactive PTY session through whiphand-agent's own
-# NDJSON protocol without needing the actual CLI on the packaging machine.
-# Every invocation just exits clean — the point is only to prove node-pty
-# resolves and opens a real pty in the packaged binary, not to hold a
-# conversation.
-exit 0

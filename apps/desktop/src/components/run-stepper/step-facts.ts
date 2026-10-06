@@ -1,7 +1,7 @@
 import type { StepState } from '../../state/store.ts';
 import type { StepNode } from '../../lib/run-tree.ts';
-import { elapsedMs, formatElapsed } from '../../../../../packages/core/src/format.ts';
-import { usageParts } from '../../../../../packages/core/src/log-rows.ts';
+import { elapsedMs, formatElapsed } from '../../shared/format.ts';
+import { usageParts } from '../../shared/log-rows.ts';
 
 /**
  * The pill outline per status — the same fill the status badge uses, so the

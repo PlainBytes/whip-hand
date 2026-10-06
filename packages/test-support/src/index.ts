@@ -9,9 +9,7 @@
  * launches, PATH is joined with `path.delimiter`, and path literals go through
  * one helper.
  */
-export { withStubBin, withUnreadableStubBin, mintVersionStubs, pathWith, withEnv } from './stubs.ts';
-export type { StubBin } from './stubs.ts';
+export { mintVersionStubs, pathWith } from './stubs.ts';
 export { posix, fromPosix } from './paths.ts';
 export { captureBundle, NORMALIZATION } from './bundle.ts';
-export { exitWhenTestsFinishOnWindows } from './pty-exit.ts';
 export type { BundleFile, CaptureOptions } from './bundle.ts';

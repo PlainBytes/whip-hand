@@ -9,8 +9,8 @@
  * CLI needs it too. Both are derived from the same `droppedRefs`, so the two
  * voices can never disagree about the facts.
  */
-import { droppedRefs, joinNames } from '../../../../packages/core/src/enabled.ts';
-import type { Workflow } from '../../../../packages/core/src/types.ts';
+import { droppedRefs, joinNames } from '../shared/enabled.ts';
+import type { Workflow } from '../shared/types.ts';
 
 export interface ReaderNote {
   stepId: string;

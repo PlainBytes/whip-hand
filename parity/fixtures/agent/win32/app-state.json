@@ -1,0 +1,349 @@
+{
+  "responses": [
+    {
+      "step": "getAppState",
+      "response": {
+        "result": {
+          "schemaVersion": 1,
+          "recentWorkspaces": [],
+          "window": null,
+          "lastPage": null,
+          "theme": "system",
+          "workspaces": {},
+          "runsRetention": {
+            "maxPerWorkspace": 0
+          },
+          "showOngoingRuns": true
+        }
+      }
+    },
+    {
+      "step": "touchRecentWorkspace",
+      "response": {
+        "result": {
+          "recentWorkspaces": [
+            {
+              "path": "<WS>/ws",
+              "lastOpenedAt": "<TS>",
+              "identityKey": "<WS>/ws"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": "touch other",
+      "response": {
+        "result": {
+          "recentWorkspaces": [
+            {
+              "path": "<WS>/other",
+              "lastOpenedAt": "<TS>",
+              "identityKey": "<WS>/other"
+            },
+            {
+              "path": "<WS>/ws",
+              "lastOpenedAt": "<TS>",
+              "identityKey": "<WS>/ws"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": "touch missing",
+      "response": {
+        "error": {
+          "code": -32000,
+          "message": "not an existing directory: <WS>/nowhere"
+        }
+      }
+    },
+    {
+      "step": "setWorkspacePinned",
+      "response": {
+        "result": {
+          "recentWorkspaces": [
+            {
+              "path": "<WS>/other",
+              "lastOpenedAt": "<TS>",
+              "identityKey": "<WS>/other"
+            },
+            {
+              "path": "<WS>/ws",
+              "lastOpenedAt": "<TS>",
+              "identityKey": "<WS>/ws",
+              "pinned": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": "pin unknown",
+      "response": {
+        "result": {
+          "recentWorkspaces": [
+            {
+              "path": "<WS>/other",
+              "lastOpenedAt": "<TS>",
+              "identityKey": "<WS>/other"
+            },
+            {
+              "path": "<WS>/ws",
+              "lastOpenedAt": "<TS>",
+              "identityKey": "<WS>/ws",
+              "pinned": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": "setUiState",
+      "response": {
+        "result": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "step": "setUiState clear",
+      "response": {
+        "result": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "step": "getAppState after",
+      "response": {
+        "result": {
+          "schemaVersion": 1,
+          "recentWorkspaces": [
+            {
+              "path": "<WS>/other",
+              "lastOpenedAt": "<TS>",
+              "identityKey": "<WS>/other"
+            },
+            {
+              "path": "<WS>/ws",
+              "lastOpenedAt": "<TS>",
+              "identityKey": "<WS>/ws",
+              "pinned": true
+            }
+          ],
+          "window": null,
+          "lastPage": null,
+          "theme": "dark",
+          "workspaces": {},
+          "runsRetention": {
+            "maxPerWorkspace": 3
+          },
+          "showOngoingRuns": false
+        }
+      }
+    },
+    {
+      "step": "listRecentRuns",
+      "response": {
+        "result": []
+      }
+    },
+    {
+      "step": "listRecentRuns limit",
+      "response": {
+        "result": []
+      }
+    },
+    {
+      "step": "unpin",
+      "response": {
+        "result": {
+          "recentWorkspaces": [
+            {
+              "path": "<WS>/other",
+              "lastOpenedAt": "<TS>",
+              "identityKey": "<WS>/other"
+            },
+            {
+              "path": "<WS>/ws",
+              "lastOpenedAt": "<TS>",
+              "identityKey": "<WS>/ws"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "notifications": {
+    "appStateChanged": [
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [
+          {
+            "path": "<WS>/ws",
+            "lastOpenedAt": "<TS>",
+            "identityKey": "<WS>/ws"
+          }
+        ],
+        "window": null,
+        "lastPage": null,
+        "theme": "system",
+        "workspaces": {},
+        "runsRetention": {
+          "maxPerWorkspace": 0
+        },
+        "showOngoingRuns": true
+      },
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [
+          {
+            "path": "<WS>/other",
+            "lastOpenedAt": "<TS>",
+            "identityKey": "<WS>/other"
+          },
+          {
+            "path": "<WS>/ws",
+            "lastOpenedAt": "<TS>",
+            "identityKey": "<WS>/ws"
+          }
+        ],
+        "window": null,
+        "lastPage": null,
+        "theme": "system",
+        "workspaces": {},
+        "runsRetention": {
+          "maxPerWorkspace": 0
+        },
+        "showOngoingRuns": true
+      },
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [
+          {
+            "path": "<WS>/other",
+            "lastOpenedAt": "<TS>",
+            "identityKey": "<WS>/other"
+          },
+          {
+            "path": "<WS>/ws",
+            "lastOpenedAt": "<TS>",
+            "identityKey": "<WS>/ws",
+            "pinned": true
+          }
+        ],
+        "window": null,
+        "lastPage": null,
+        "theme": "system",
+        "workspaces": {},
+        "runsRetention": {
+          "maxPerWorkspace": 0
+        },
+        "showOngoingRuns": true
+      },
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [
+          {
+            "path": "<WS>/other",
+            "lastOpenedAt": "<TS>",
+            "identityKey": "<WS>/other"
+          },
+          {
+            "path": "<WS>/ws",
+            "lastOpenedAt": "<TS>",
+            "identityKey": "<WS>/ws",
+            "pinned": true
+          }
+        ],
+        "window": null,
+        "lastPage": null,
+        "theme": "system",
+        "workspaces": {},
+        "runsRetention": {
+          "maxPerWorkspace": 0
+        },
+        "showOngoingRuns": true
+      },
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [
+          {
+            "path": "<WS>/other",
+            "lastOpenedAt": "<TS>",
+            "identityKey": "<WS>/other"
+          },
+          {
+            "path": "<WS>/ws",
+            "lastOpenedAt": "<TS>",
+            "identityKey": "<WS>/ws",
+            "pinned": true
+          }
+        ],
+        "window": {
+          "width": 800,
+          "height": 600,
+          "x": -5,
+          "y": 10
+        },
+        "lastPage": "/runs",
+        "theme": "dark",
+        "workspaces": {},
+        "runsRetention": {
+          "maxPerWorkspace": 3
+        },
+        "showOngoingRuns": false
+      },
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [
+          {
+            "path": "<WS>/other",
+            "lastOpenedAt": "<TS>",
+            "identityKey": "<WS>/other"
+          },
+          {
+            "path": "<WS>/ws",
+            "lastOpenedAt": "<TS>",
+            "identityKey": "<WS>/ws",
+            "pinned": true
+          }
+        ],
+        "window": null,
+        "lastPage": null,
+        "theme": "dark",
+        "workspaces": {},
+        "runsRetention": {
+          "maxPerWorkspace": 3
+        },
+        "showOngoingRuns": false
+      },
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [
+          {
+            "path": "<WS>/other",
+            "lastOpenedAt": "<TS>",
+            "identityKey": "<WS>/other"
+          },
+          {
+            "path": "<WS>/ws",
+            "lastOpenedAt": "<TS>",
+            "identityKey": "<WS>/ws"
+          }
+        ],
+        "window": null,
+        "lastPage": null,
+        "theme": "dark",
+        "workspaces": {},
+        "runsRetention": {
+          "maxPerWorkspace": 3
+        },
+        "showOngoingRuns": false
+      }
+    ]
+  },
+  "terminals": {}
+}

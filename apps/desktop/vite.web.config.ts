@@ -118,10 +118,4 @@ export default defineConfig({
      * separate .mjs asset, which this warning does not measure at all.
      */
   },
-  server: {
-    fs: {
-      // Type-only imports reach packages/agent and @whiphand/core, outside this app.
-      allow: [repoRoot],
-    },
-  },
 });

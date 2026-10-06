@@ -1,22 +1,21 @@
 /**
- * Transport abstraction between AgentClient and whatever actually owns the
- * @whiphand/agent child process. This is the testability seam: AgentClient only
- * ever talks to this interface, never to `@tauri-apps/*` directly, so it can
- * be exercised in vitest (jsdom, no Tauri runtime) via MockTransport. The
- * real implementation, TauriTransport, lives in its own file
- * (./tauri-transport.ts) so nothing that vitest loads ever imports
- * `@tauri-apps/*` at module scope.
+ * Transport abstraction between AgentClient and wherever the agent runs. This
+ * is the testability seam: AgentClient only ever talks to this interface,
+ * never to `@tauri-apps/*` directly, so it can be exercised in vitest (jsdom,
+ * no Tauri runtime) via MockTransport. The desktop's implementation,
+ * InProcessTransport, lives in its own file (./inprocess-transport.ts) so
+ * nothing that vitest loads ever imports `@tauri-apps/*` at module scope.
  */
 export interface Transport {
-  /** Spawn/open the underlying process. May be called again after kill()/exit to restart. */
+  /** Connect to the agent. May be called again after kill()/exit to reconnect. */
   start(): Promise<void>;
-  /** Write one line (no trailing newline) to the process's stdin. */
+  /** Send one protocol line (no trailing newline). */
   send(line: string): void;
-  /** Register the handler invoked for each complete line read from stdout. Last registration wins. */
+  /** Register the handler invoked for each line from the agent. Last registration wins. */
   onLine(cb: (line: string) => void): void;
-  /** Register the handler invoked when the process exits, however it exits. Last registration wins. */
+  /** Register the handler invoked when the connection ends, however it ends. Last registration wins. */
   onExit(cb: (code: number | null) => void): void;
-  /** Forcibly terminate the process, if running. */
+  /** Disconnect, if connected. */
   kill(): void;
 }
 

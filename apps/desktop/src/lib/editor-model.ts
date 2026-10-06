@@ -5,11 +5,11 @@
  * highlight. Free of React, like `step-tree.ts` and `run-tree.ts` — this is
  * where the bulk of the editor's assertions live.
  */
-import type { LoopStep, StagesStep, Step, Workflow } from '../../../../packages/core/src/types.ts';
-import { flattenSteps, isCommandStep, isContainerStep, isStagesStep } from '../../../../packages/core/src/steps.ts';
-import { disabledIds, untilTargetOf } from '../../../../packages/core/src/enabled.ts';
-import { ATTACHMENTS_REF } from '../../../../packages/core/src/attachments.ts';
-import { STAGE_REF } from '../../../../packages/core/src/types.ts';
+import type { LoopStep, StagesStep, Step, Workflow } from '../shared/types.ts';
+import { flattenSteps, isCommandStep, isContainerStep, isStagesStep } from '../shared/steps.ts';
+import { disabledIds, untilTargetOf } from '../shared/enabled.ts';
+import { ATTACHMENTS_REF } from '../shared/attachments.ts';
+import { STAGE_REF } from '../shared/types.ts';
 import type { StepPath } from './step-tree.ts';
 
 export interface EditorRow {

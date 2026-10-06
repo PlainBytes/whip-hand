@@ -45,31 +45,31 @@ test('clearStaleBundles empties the bundle format directories an earlier build l
   }
 });
 
-test('clearStaleBundles removes earlier desktop bundles from dist/ but leaves the CLI and agent binaries', () => {
+test('clearStaleBundles removes earlier desktop bundles from dist/ but leaves the CLI binary', () => {
   const { root, bundleRoot, distDir } = scratch();
   try {
-    for (const name of ['Whiphand_0.1.0_amd64.deb', 'Whiphand_0.1.0_amd64.AppImage', 'Whiphand_0.1.0_amd64.AppImage.sig', 'whiphand', 'whiphand-agent']) {
+    for (const name of ['Whiphand_0.1.0_amd64.deb', 'Whiphand_0.1.0_amd64.AppImage', 'Whiphand_0.1.0_amd64.AppImage.sig', 'whiphand']) {
       touch(path.join(distDir, name));
     }
 
     clearStaleBundles({ bundleRoot, distDir, ...linux });
 
-    assert.deepEqual(fs.readdirSync(distDir).sort(), ['whiphand', 'whiphand-agent']);
+    assert.deepEqual(fs.readdirSync(distDir).sort(), ['whiphand']);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('clearStaleBundles on Windows does not mistake the CLI .exe binaries for installers', () => {
+test('clearStaleBundles on Windows does not mistake the CLI .exe for an installer', () => {
   const { root, bundleRoot, distDir } = scratch();
   try {
-    for (const name of ['Whiphand_0.1.0_x64-setup.exe', 'Whiphand_0.1.0_x64-setup.exe.sig', 'whiphand.exe', 'whiphand-agent.exe']) {
+    for (const name of ['Whiphand_0.1.0_x64-setup.exe', 'Whiphand_0.1.0_x64-setup.exe.sig', 'whiphand.exe']) {
       touch(path.join(distDir, name));
     }
 
     clearStaleBundles({ bundleRoot, distDir, productName: 'Whiphand', bundleFormats: ['nsis'], bundleExtensions: ['exe', 'exe.sig'] });
 
-    assert.deepEqual(fs.readdirSync(distDir).sort(), ['whiphand-agent.exe', 'whiphand.exe']);
+    assert.deepEqual(fs.readdirSync(distDir).sort(), ['whiphand.exe']);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

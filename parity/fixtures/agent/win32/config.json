@@ -1,0 +1,118 @@
+{
+  "responses": [
+    {
+      "step": "configGet",
+      "response": {
+        "error": {
+          "code": -32602,
+          "message": "invalid params: (root): Invalid input: expected object, received undefined"
+        }
+      }
+    },
+    {
+      "step": "configGet project",
+      "response": {
+        "result": {
+          "config": {
+            "defaults": {
+              "runner": "claude"
+            },
+            "on_findings": "report",
+            "loop": {
+              "max_iterations": 3
+            },
+            "artifacts_dir": ".whiphand/runs",
+            "runs": {
+              "max_retained": null,
+              "auto_name": false,
+              "max_attachment_mb": 25
+            }
+          },
+          "global": {
+            "config": {},
+            "path": "<WS>/home/config.yaml",
+            "exists": false
+          },
+          "project": {
+            "config": {},
+            "path": "<WS>/ws/.whiphand/config.yaml",
+            "exists": false
+          }
+        }
+      }
+    },
+    {
+      "step": "configSet global",
+      "response": {
+        "result": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "step": "configSet project",
+      "response": {
+        "result": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "step": "configSet project without workdir",
+      "response": {
+        "error": {
+          "code": -32000,
+          "message": "configSet: 'workdir' is required for project scope"
+        }
+      }
+    },
+    {
+      "step": "configGet after",
+      "response": {
+        "result": {
+          "config": {
+            "defaults": {
+              "runner": "copilot"
+            },
+            "on_findings": "loop",
+            "loop": {
+              "max_iterations": 3
+            },
+            "artifacts_dir": ".whiphand/runs",
+            "runs": {
+              "max_retained": 5,
+              "auto_name": true,
+              "max_attachment_mb": 1.5
+            }
+          },
+          "global": {
+            "config": {
+              "defaults": {
+                "runner": "copilot"
+              }
+            },
+            "path": "<WS>/home/config.yaml",
+            "exists": true
+          },
+          "project": {
+            "config": {
+              "on_findings": "loop",
+              "loop": {
+                "max_iterations": 3
+              },
+              "runs": {
+                "max_retained": 5,
+                "auto_name": true,
+                "max_attachment_mb": 1.5
+              }
+            },
+            "path": "<WS>/ws/.whiphand/config.yaml",
+            "exists": true
+          }
+        }
+      }
+    }
+  ],
+  "notifications": {},
+  "terminals": {}
+}

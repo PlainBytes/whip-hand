@@ -1,0 +1,1 @@
+{name: flowroot, steps: [{id: a, kind: command, run: echo a, output: a.log}]}

@@ -2,10 +2,10 @@
  * F4: restore window size/position on launch and persist changes (debounced)
  * via setUiState. All @tauri-apps/api access is behind a runtime guard +
  * dynamic import so vitest (jsdom) never loads it — same posture as
- * TauriTransport.
+ * InProcessTransport.
  */
 import type { AgentClient } from '../agent/client.ts';
-import type { WindowState } from '../../../../packages/agent/src/app-state.ts';
+import type { WindowState } from '../shared/protocol.gen.ts';
 
 export function debounce<A extends unknown[]>(fn: (...a: A) => void, ms: number): (...a: A) => void {
   let timer: ReturnType<typeof setTimeout> | undefined;

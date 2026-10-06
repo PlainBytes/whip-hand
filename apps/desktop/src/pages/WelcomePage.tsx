@@ -6,7 +6,7 @@ import { OpenPathField } from '../components/OpenPathField.tsx';
 import { useAppStore } from '../state/store.ts';
 import { openWorkspace } from '../lib/workspace-switch.ts';
 import { basename } from '../lib/workspace-identity.ts';
-import type { RecentWorkspace } from '../../../../packages/agent/src/app-state.ts';
+import type { RecentWorkspace } from '../shared/protocol.gen.ts';
 
 // Stable reference so the zustand selector below doesn't produce a fresh
 // array on every render when appState is null — an inline `?? []` fallback

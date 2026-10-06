@@ -1,0 +1,11 @@
+[package]
+name = "whiphand-protocol"
+version = "0.4.0"
+edition = "2024"
+description = "The agent RPC's wire types, shared by the desktop host and (as generated TS) the webview"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+ts-rs = { version = "11", features = ["serde-json-impl", "no-serde-warnings"] }

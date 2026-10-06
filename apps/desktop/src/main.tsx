@@ -2,7 +2,7 @@ import './index.css';
 import { createRoot } from 'react-dom/client';
 import { App } from './App.tsx';
 import { AgentClient } from './agent/client.ts';
-import { TauriTransport } from './agent/tauri-transport.ts';
+import { InProcessTransport } from './agent/inprocess-transport.ts';
 import { AgentClientProvider } from './agent/agent-context.tsx';
 import { FileSystemProvider } from './files/fs-context.tsx';
 import { TauriFileSystem } from './files/tauri-fs.ts';
@@ -15,7 +15,7 @@ import { open as openUrl } from '@tauri-apps/plugin-shell';
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('#root element not found');
 
-const client = new AgentClient(new TauriTransport());
+const client = new AgentClient(new InProcessTransport());
 const fileSystem = new TauriFileSystem();
 
 createRoot(rootEl).render(

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { StepSummary } from './StepSummary.tsx';
-import type { AgentStep, CommandStep, LoopStep, StagesStep } from '../../../../packages/core/src/types.ts';
+import type { AgentStep, CommandStep, LoopStep, StagesStep } from '../shared/types.ts';
 
 const agentStep: AgentStep = {
   kind: 'agent', id: 'execute', runner: 'claude', model: 'sonnet', mode: 'headless',

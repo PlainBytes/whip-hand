@@ -1,0 +1,54 @@
+# feature — plan interactively, then implement and review in a cycle
+name: feature
+description: Plan with a human, then implement and review in a cycle until the review passes.
+inputs:
+  feature:
+    required: true
+    prompt: What are we building?
+steps:
+  - id: plan # live terminal chat; artifact harvested afterwards
+    runner: claude
+    mode: interactive
+    writes: false
+    output: plan.md
+    prompt: |
+      We are planning: {{ inputs.feature }}. Work with me on a plan. Do not modify files.
+
+  - id: fix-cycle # repeats its body until 'review' returns VERDICT: PASS
+    kind: loop
+    until: review
+    max_iterations: 3
+    steps:
+      - id: execute # headless; may write
+        runner: claude
+        mode: headless
+        writes: true
+        inputs: [plan, review]
+        output: execute-report.md
+        prompt: Implement the attached plan.
+
+      # A shell step: no tokens, no runner. Uncomment to make the tests part of
+      # the cycle — with 'verdict: true' a non-zero exit sends the loop round
+      # again instead of failing the run.
+      # - id: tests
+      #   kind: command
+      #   run: npm test
+      #   verdict: true
+      #   output: tests.log
+
+      - id: review # headless, read-only, must end with VERDICT: PASS|FAIL
+        runner: claude
+        mode: headless
+        writes: false
+        verdict: true
+        inputs: [plan, execute]
+        output: review.md
+        prompt: Review the implementation against the attached plan.
+
+  # A human gate. Delete it to let the workflow run unattended.
+  - id: sign-off
+    kind: approval
+    title: Ship it?
+    instructions: Review the diff and the findings before this goes any further.
+    show_diff: true
+    inputs: [review]

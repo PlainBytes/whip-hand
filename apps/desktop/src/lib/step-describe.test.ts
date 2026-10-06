@@ -4,7 +4,7 @@ import {
 } from './step-describe.ts';
 import type {
   AgentStep, CommandStep, LoopStep, ManualStep, StagesStep, Step,
-} from '../../../../packages/core/src/types.ts';
+} from '../shared/types.ts';
 
 function agent(id: string, overrides: Partial<AgentStep> = {}): AgentStep {
   return {

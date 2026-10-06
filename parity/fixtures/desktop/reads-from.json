@@ -1,0 +1,82 @@
+{
+  "workflow": {
+    "name": "w",
+    "steps": [
+      {
+        "kind": "command",
+        "id": "plan",
+        "run": "echo plan",
+        "output": "plan.md"
+      },
+      {
+        "kind": "stages",
+        "id": "build",
+        "items": "plans/*.md",
+        "steps": [
+          {
+            "kind": "command",
+            "id": "impl",
+            "run": "echo impl",
+            "output": "impl.log"
+          },
+          {
+            "kind": "loop",
+            "id": "fix",
+            "until": "check",
+            "steps": [
+              {
+                "kind": "command",
+                "id": "patch",
+                "run": "echo patch",
+                "output": "patch.log"
+              },
+              {
+                "kind": "command",
+                "id": "check",
+                "run": "echo check",
+                "output": "check.log"
+              }
+            ]
+          },
+          {
+            "kind": "command",
+            "id": "gate",
+            "run": "echo gate",
+            "output": "gate.log"
+          }
+        ]
+      },
+      {
+        "kind": "command",
+        "id": "after",
+        "run": "echo after",
+        "output": "after.log"
+      }
+    ]
+  },
+  "offers": {
+    "plan": [],
+    "impl": [
+      "plan"
+    ],
+    "patch": [
+      "plan",
+      "impl",
+      "check"
+    ],
+    "check": [
+      "plan",
+      "impl",
+      "patch"
+    ],
+    "gate": [
+      "plan",
+      "impl",
+      "patch",
+      "check"
+    ],
+    "after": [
+      "plan"
+    ]
+  }
+}

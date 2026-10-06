@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Field, Input } from '@fluentui/react-components';
-import { ATTACHMENTS_REF } from '../../../../packages/core/src/attachments.ts';
+import { ATTACHMENTS_REF } from '../shared/attachments.ts';
 
 export interface StepIdFieldProps {
   id: string;

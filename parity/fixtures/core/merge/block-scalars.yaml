@@ -1,0 +1,22 @@
+name: scalars
+# keep me
+description: >
+  folded text that
+  spans lines
+steps:
+  - id: a
+    runner: claude
+    mode: headless
+    writes: false
+    output: a.md
+    prompt: |
+      line one
+      # not a comment, prompt text
+
+      line three
+  # before b
+  - id: b
+    kind: command
+    run: "echo 'quoted'"
+    output: b.log
+# trailing comment

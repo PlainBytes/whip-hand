@@ -14,7 +14,7 @@ import { DeleteWorkflowDialog } from '../components/DeleteWorkflowDialog.tsx';
 import { CloneWorkflowDialog } from '../components/CloneWorkflowDialog.tsx';
 import { NewWorkflowDialog } from '../components/NewWorkflowDialog.tsx';
 import type { WorkflowEntry } from '../components/workflow-lane/WorkflowLane.tsx';
-import type { Scope } from '../../../../packages/core/src/types.ts';
+import type { Scope } from '../shared/types.ts';
 import { WorkflowEditor } from '../workflow-editor/WorkflowEditor.tsx';
 import { errorMessage } from '../lib/error-message.ts';
 

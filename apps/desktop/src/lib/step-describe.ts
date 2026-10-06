@@ -3,16 +3,16 @@
  * kind of actor runs it, what it actually does in one line, how loops read
  * out loud, nested ordinals, and which tiles feed which. Kept out of the
  * components so the arithmetic is testable on its own, and out of
- * packages/core because it's presentation — a phrase like "until X passes"
+ * whiphand-core because it's presentation — a phrase like "until X passes"
  * has no business in the engine.
  */
 import type {
   AgentStep, CommandStep, LoopStep, ManualStep, StagesStep, Step,
-} from '../../../../packages/core/src/types.ts';
+} from '../shared/types.ts';
 import {
   findStep, flattenSteps, isCommandStep, isContainerStep, isLoopStep, isManualStep, isStagesStep,
-} from '../../../../packages/core/src/steps.ts';
-import { ATTACHMENTS_REF } from '../../../../packages/core/src/attachments.ts';
+} from '../shared/steps.ts';
+import { ATTACHMENTS_REF } from '../shared/attachments.ts';
 
 /** A step that can appear as a tile — everything except a container, which gets a group instead. */
 export type LeafStep = AgentStep | CommandStep | ManualStep;

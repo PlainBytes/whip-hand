@@ -188,7 +188,7 @@ pub fn boolean(cx: &mut Ctx, v: Option<&Raw>) -> Option<bool> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Bound {
     None,
     /// `.positive()`

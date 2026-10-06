@@ -5,10 +5,10 @@
  * `start()` is "open the socket", `kill()` is "close it", and `onExit` fires
  * when it closes however it closes — which is exactly the shape AgentClient
  * already handles, including its reconnect-with-backoff. A dropped Wi-Fi
- * connection therefore behaves like a crashed sidecar, and needs no new code.
+ * connection therefore behaves like a crashed agent, and needs no new code.
  *
  * Deliberately free of any @tauri-apps import (like MockTransport, unlike
- * TauriTransport) so it stays in the vitest graph and can be exercised against
+ * InProcessTransport) so it stays in the vitest graph and can be exercised against
  * a fake global WebSocket.
  *
  * The close code the agent uses for a rotated token is 4001; it is surfaced to
@@ -18,13 +18,13 @@
  */
 import type { Transport } from './transport.ts';
 
-/** Matches CLOSE_TOKEN_REVOKED in packages/agent/src/remote/server.ts. */
+/** Matches CLOSE_TOKEN_REVOKED in whiphand-agent's remote/server.rs. */
 export const CLOSE_TOKEN_REVOKED = 4001;
 
-/** Matches TOKEN_PROTOCOL_PREFIX in packages/agent/src/remote/auth.ts. */
+/** Matches TOKEN_PROTOCOL_PREFIX in whiphand-agent's remote/auth.rs. */
 const TOKEN_PROTOCOL_PREFIX = 'whiphand.token.';
 
-/** Matches PROTOCOL_NAME in packages/agent/src/remote/auth.ts. */
+/** Matches PROTOCOL_NAME in whiphand-agent's remote/auth.rs. */
 const PROTOCOL_NAME = 'whiphand';
 
 export interface WebSocketTransportOptions {
@@ -55,7 +55,7 @@ export class WebSocketTransport implements Transport {
     // A browser WebSocket cannot set request headers, but it can set
     // Sec-WebSocket-Protocol — the one handshake header exposed to callers —
     // so the token rides there instead of in the URL. The agent checks Host
-    // and Origin as well — see packages/agent/src/remote/auth.ts.
+    // and Origin as well — see whiphand-agent's remote/auth.rs.
     //
     // PROTOCOL_NAME rides alongside the token so the server has a non-secret
     // value to echo back: the handshake response must repeat one of the

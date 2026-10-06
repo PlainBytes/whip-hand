@@ -136,6 +136,34 @@ pub fn same_path(a: &str, b: &str) -> bool {
     path_key_as(a, windows) == path_key_as(b, windows)
 }
 
+/// A workspace as state stores it: the path it was opened by, and its
+/// `identityKey` when one was recorded.
+#[derive(Clone, Copy, Debug)]
+pub struct WorkspaceRef<'a> {
+    pub path: &'a str,
+    pub identity_key: Option<&'a str>,
+}
+
+/// Whether two workspaces are the same one: by identity key when both have
+/// one (it sees through 8.3 names, `subst` drives and junctions), else by path.
+pub fn same_workspace(a: WorkspaceRef, b: WorkspaceRef) -> bool {
+    match (a.identity_key, b.identity_key) {
+        (Some(x), Some(y)) => x == y,
+        _ => same_path(a.path, b.path),
+    }
+}
+
+/// The first key of `records` (path, identity key), in their order, that
+/// names `workspace`.
+pub fn find_workspace_key<'a>(
+    records: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+    workspace: WorkspaceRef,
+) -> Option<&'a str> {
+    records.into_iter().find_map(|(path, identity_key)| {
+        same_workspace(WorkspaceRef { path, identity_key }, workspace).then_some(path)
+    })
+}
+
 /// Whether `child` is `parent` or lies inside it.
 pub fn contains(parent: &str, child: &str) -> bool {
     relative_within(parent, child).is_some()

@@ -62,8 +62,8 @@ export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProp
   // buffer[i] is always absolute chunk (ptyDataBaseIndex + i).
   //
   // Also the single source of truth for the "already trimmed, show the
-  // marker" decision (see the replay effect): TauriTransport can dispatch many
-  // NDJSON lines within one stdout event, which React batches into one
+  // marker" decision (see the replay effect): the transport can dispatch many
+  // lines within one task, which React batches into one
   // render/effect pass, so a trim can jump past chunks this panel never wrote
   // individually — not only chunks trimmed before mount.
   const writtenAbsoluteRef = useRef(0);

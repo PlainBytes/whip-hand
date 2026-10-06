@@ -6,7 +6,7 @@ import { MockTransport } from '../agent/transport.ts';
 import { AgentClientProvider } from '../agent/agent-context.tsx';
 import { OpenExternalProvider } from '../lib/open-external.tsx';
 import { useAppStore } from '../state/store.ts';
-import type { DoctorRow } from '../../../../packages/agent/src/protocol.ts';
+import type { DoctorRow } from '../shared/protocol.gen.ts';
 
 function renderDoctor(openExternal = vi.fn()) {
   const transport = new MockTransport();

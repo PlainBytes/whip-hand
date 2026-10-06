@@ -1,6 +1,6 @@
 [package]
 name = "whiphand-cli"
-version = "0.3.5"
+version = "0.4.0"
 description = "The whiphand command line: a clap front end on whiphand-core's engine"
 edition = "2024"
 publish = false

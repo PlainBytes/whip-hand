@@ -1,14 +1,13 @@
 /**
  * One live whiphand-agent over its stdio NDJSON protocol, for the bench: a
- * request() that correlates by id, and a notification tap. smoke.mjs's
- * request() is one-shot (spawn, ask, kill); the bench needs many requests
- * against one warm process.
+ * request() that correlates by id, and a notification tap, so many requests
+ * go to one warm process.
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnRunner } from '../../packages/core/src/exec.ts';
-import { streamNdjson, terminate } from '../package/smoke.mjs';
+import { spawnRunner } from '../lib/exec.mjs';
+import { streamNdjson, terminate } from '../lib/child.mjs';
 
 /**
  * Env that keeps the agent off the real user's state: app state, config and
@@ -31,7 +30,7 @@ export function tempDir(prefix) {
 }
 
 export class AgentSession {
-  /** `argv` is the agent command line: `[node, main.ts]` or `[dist/whiphand-agent]`. */
+  /** `argv` is the agent command line: `[target/release/whiphand-agent]`. */
   constructor(argv, env) {
     this.child = spawnRunner(argv, { stdio: ['pipe', 'pipe', 'pipe'], env });
     this.nextId = 1;

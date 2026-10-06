@@ -2,7 +2,7 @@
  * One file's unified patch into rows a side-by-side view can draw.
  *
  * Pure and React-free on purpose: this is the logic worth testing. Core hands
- * over the patch text verbatim (packages/core/src/engine/diff.ts) and stops
+ * over the patch text verbatim (whiphand-core's engine/diff.rs) and stops
  * there — deciding what a *row* is belongs to the thing that draws rows.
  */
 

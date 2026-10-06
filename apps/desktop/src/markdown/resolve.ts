@@ -7,7 +7,7 @@
 import { joinPath, separatorOf } from '../files/tree-model.ts';
 import { isImagePath } from '../files/file-kind.ts';
 import type { DocResolution } from './types.ts';
-import { contains, isWindowsAbsolute } from '../../../../packages/core/src/path-form.ts';
+import { contains, isWindowsAbsolute } from '../shared/path-form.ts';
 
 const EXTERNAL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 

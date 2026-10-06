@@ -4,8 +4,8 @@
  * is a standalone OS notification, so it's capitalised — kept as two
  * registers on purpose, in one file, so a third can't quietly appear.
  */
-import type { AwaitReason } from '../../../../packages/agent/src/protocol.ts';
-import type { ManualRequest } from '../../../../packages/core/src/types.ts';
+import type { AwaitReason } from '../shared/protocol.gen.ts';
+import type { ManualRequest } from '../shared/types.ts';
 
 /** Badge register: what the run header and the step pill say. */
 export const AWAIT_LABEL: Record<AwaitReason, string> = {

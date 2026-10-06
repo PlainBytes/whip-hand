@@ -1,7 +1,7 @@
 import { Text } from '@fluentui/react-components';
 import { ArrowRepeatAllRegular } from '@fluentui/react-icons';
-import type { LoopStep, Step } from '../../../../../packages/core/src/types.ts';
-import { flattenSteps } from '../../../../../packages/core/src/steps.ts';
+import type { LoopStep, Step } from '../../shared/types.ts';
+import { flattenSteps } from '../../shared/steps.ts';
 import { loopRule, type DataFlowEntry } from '../../lib/step-describe.ts';
 import { StepTrack } from './StepTrack.tsx';
 

@@ -6,7 +6,7 @@ import { MockTransport } from '../agent/transport.ts';
 import { AgentClientProvider } from '../agent/agent-context.tsx';
 import { CapabilitiesProvider, DESKTOP_DEFAULT_CAPABILITIES, type AppCapabilities, type FileDropEvent } from '../capabilities.tsx';
 import { useAppStore } from '../state/store.ts';
-import { EMPTY_APP_STATE } from '../../../../packages/agent/src/app-state.ts';
+import { EMPTY_APP_STATE } from '../test/app-state.ts';
 
 const SCRIPTED_WORKFLOW = {
   name: 'ship-feature',

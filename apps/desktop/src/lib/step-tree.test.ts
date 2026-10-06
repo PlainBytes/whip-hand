@@ -3,8 +3,14 @@ import {
   appendAt, insertAfter, moveAt, referenceableIds, removeAt, removeStep, renameStep, siblingsAt, stepAt, updateAt,
 } from './step-tree.ts';
 import { stagesRule } from './step-describe.ts';
-import { validateWorkflowSemantics } from '../../../../packages/core/src/schema.ts';
-import type { CommandStep, LoopStep, StagesStep, Step } from '../../../../packages/core/src/types.ts';
+import type { CommandStep, LoopStep, StagesStep, Step } from '../shared/types.ts';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const READS_FROM_FIXTURE = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)), '../../../../parity/fixtures/desktop/reads-from.json',
+);
 
 const cmd = (id: string, output?: string): CommandStep =>
   ({ kind: 'command', id, run: `echo ${id}`, ...(output ? { output } : {}) });
@@ -239,21 +245,25 @@ describe('a stages body', () => {
     expect(referenceableIds(stagedTree(), [2])).not.toContain('build');
   });
 
-  it('offers nothing validateWorkflowSemantics would reject, from any card in the tree', () => {
+  // parity/fixtures/desktop/reads-from.json holds what this offers for the
+  // same tree; whiphand-core's tests/reads_from.rs checks that its validator
+  // accepts every one of those references.
+  it('offers exactly the references the validator is checked against', () => {
+    const fixture = JSON.parse(readFileSync(READS_FROM_FIXTURE, 'utf8')) as {
+      workflow: { steps: Step[] }; offers: Record<string, string[]>;
+    };
     const steps = stagedTree();
+    expect(fixture.workflow.steps).toEqual(steps);
     const walk = (list: Step[], prefix: number[]): number[][] => list.flatMap((step, i) => [
       [...prefix, i],
       ...('steps' in step ? walk(step.steps, [...prefix, i]) : []),
     ]);
+    const offers: Record<string, string[]> = {};
     for (const path of walk(steps, [])) {
       const reader = stepAt(steps, path)!;
       if (reader.kind === 'loop' || reader.kind === 'stages') continue;
-      for (const id of referenceableIds(steps, path)) {
-        const wired = updateAt(steps, path, { ...reader, inputs: [id] });
-        const refProblems = validateWorkflowSemantics({ name: 'w', steps: wired })
-          .filter(p => p.startsWith(`step '${reader.id}' reads`) || p.startsWith(`step '${reader.id}' references`));
-        expect(refProblems, `${reader.id} reading ${id}`).toEqual([]);
-      }
+      offers[reader.id] = referenceableIds(steps, path);
     }
+    expect(offers).toEqual(fixture.offers);
   });
 });

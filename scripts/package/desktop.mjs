@@ -4,47 +4,25 @@
  * installer on Windows.
  *
  * This script does not bundle anything itself — Tauri's own bundler does
- * that. `prepareDesktopBuild()` is the handoff: build the sidecar, put it
- * where `externalBin` expects it under the target triple Tauri will look
- * for, and assemble the node-pty resource tree the sidecar needs at runtime
- * (see node-pty-resource.mjs and packages/agent/src/native.ts). It is
- * exported separately from the `tauri build` invocation below because
- * release.yml needs exactly this half: the release build hands the actual
- * `tauri build` off to tauri-action, which also signs and uploads, so it
- * cannot go through `npm run tauri` itself the way local packaging does.
+ * that. `prepareDesktopBuild()` is the handoff: build the web UI the agent's
+ * remote access serves, as a Tauri resource. The agent itself is compiled
+ * into the app (crates/whiphand-agent). It is exported separately from the
+ * `tauri build` invocation below because release.yml needs exactly this
+ * half: the release build hands the actual `tauri build` off to
+ * tauri-action, which also signs and uploads, so it cannot go through
+ * `npm run tauri` itself the way local packaging does.
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { runInherited, runSync } from '../../packages/core/src/exec.ts';
-import { repoRoot, distDir } from './sea.mjs';
-import { packageAgent } from './agent.mjs';
-import { smokeAgent } from './smoke.mjs';
-import { assembleNodePtyResource } from './node-pty-resource.mjs';
+import { runInherited } from '../lib/exec.mjs';
+import { repoRoot, distDir } from './common.mjs';
 import { buildWebResource } from './web-resource.mjs';
 
 /**
- * Tauri appends the host target triple to every externalBin path, so the file
- * has to be named for it. Read from rustc rather than hardcoded, so an arm64
- * machine fails loudly instead of building a bundle with no sidecar in it.
+ * @returns {{ isWindows: boolean, bundleFormats: string[], bundleExtensions: string[] }}
  */
-function hostTargetTriple() {
-  const out = runSync(['rustc', '-vV'], { stdio: ['ignore', 'pipe', 'inherit'], check: true }).stdout;
-  const match = out.match(/^host:\s*(\S+)$/m);
-  if (!match) throw new Error('could not read the host target triple from `rustc -vV`');
-  return match[1];
-}
-
-/**
- * @returns {Promise<{ triple: string, isWindows: boolean, bundleFormats: string[], bundleExtensions: string[] }>}
- */
-export async function prepareDesktopBuild() {
-  const triple = hostTargetTriple();
+export function prepareDesktopBuild() {
   const isWindows = process.platform === 'win32';
-  // Tauri's own bundler appends the host target triple to externalBin paths,
-  // then — on Windows only — appends `.exe` after *that*. So the file on disk
-  // is `whiphand-agent-x86_64-pc-windows-msvc.exe`, not `whiphand-agent-x86_64-...msvc.exe`
-  // misread as `whiphand-agent-x86_64-...msvc` plus an extension of its own.
-  const sidecarName = `whiphand-agent-${triple}${isWindows ? '.exe' : ''}`;
   // Format list per platform, since Windows can only ever produce nsis and
   // Linux never will — this also becomes the `--bundles` argument, so
   // tauri.conf.json's own `targets: "all"` needs no per-platform fork.
@@ -54,28 +32,10 @@ export async function prepareDesktopBuild() {
   // self-updating bundle, and it belongs in dist/ next to what it signs.
   const bundleExtensions = isWindows ? ['exe', 'exe.sig'] : ['deb', 'AppImage', 'AppImage.sig'];
 
-  process.stdout.write(`preparing desktop sidecar (${triple})\n\n`);
-
-  const agentBinary = await packageAgent();
-  await smokeAgent();
-
-  const binariesDir = path.join(repoRoot, 'apps/desktop/src-tauri/binaries');
-  fs.mkdirSync(binariesDir, { recursive: true });
-  const sidecar = path.join(binariesDir, sidecarName);
-  fs.copyFileSync(agentBinary, sidecar);
-  // chmod +x means nothing on Windows (there is no exec bit), and fs.chmodSync
-  // there only toggles the read-only attribute — skip it rather than rely on
-  // that side effect being harmless.
-  if (!isWindows) fs.chmodSync(sidecar, 0o755);
-  process.stdout.write(`\n  sidecar   ${path.relative(repoRoot, sidecar)}\n\n`);
-
-  const nodePtyResource = assembleNodePtyResource();
-  process.stdout.write(`  resource  ${path.relative(repoRoot, nodePtyResource)}\n\n`);
-
   const webResource = buildWebResource();
   process.stdout.write(`\n  resource  ${path.relative(repoRoot, webResource)}\n\n`);
 
-  return { triple, isWindows, bundleFormats, bundleExtensions };
+  return { isWindows, bundleFormats, bundleExtensions };
 }
 
 /**
@@ -90,7 +50,7 @@ export async function prepareDesktopBuild() {
  * @returns {Promise<string[]>} absolute paths of the artifacts now in dist/
  */
 export async function buildDesktopBundles() {
-  const { isWindows, bundleFormats, bundleExtensions } = await prepareDesktopBuild();
+  const { isWindows, bundleFormats, bundleExtensions } = prepareDesktopBuild();
   const { productName, version } = JSON.parse(
     fs.readFileSync(path.join(repoRoot, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'),
   );
@@ -106,7 +66,7 @@ export async function buildDesktopBundles() {
   // allowlist entry.
   const status = runInherited(
     ['npm', 'run', 'tauri', '-w', 'desktop', '--', 'build', '--bundles', bundleFormats.join(',')],
-    { cwd: repoRoot, env: { ...process.env, WHIPHAND_PACKAGE: '1' } },
+    { cwd: repoRoot },
   );
   if (status !== 0) throw new Error(`tauri build exited with status ${status}`);
 
@@ -127,7 +87,7 @@ function bundlePattern(productName, bundleExtensions) {
  * so after a bump the previous version's `.deb` stays next to the new one —
  * and `Whiphand_0.1.0_amd64.deb` sorts first. reinstall.mjs once installed it
  * in place of the build it had just made. Matching on `<productName>_` in
- * `dist/` matters on Windows, where the CLI and agent binaries are `.exe` too.
+ * `dist/` matters on Windows, where the CLI binary is `.exe` too.
  */
 export function clearStaleBundles({ bundleRoot, distDir, productName, bundleFormats, bundleExtensions }) {
   for (const format of bundleFormats) {

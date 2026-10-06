@@ -3,7 +3,7 @@ import { Badge } from '@fluentui/react-components';
 import {
   flattenNodes, type LeafNode, type LoopNode, type StageGroup, type StagesNode, type StepNode,
 } from '../../lib/run-tree.ts';
-import { stageLabel } from '../../../../../packages/core/src/format.ts';
+import { stageLabel } from '../../shared/format.ts';
 import { stageRollup } from '../../lib/stage-rollup.ts';
 import {
   loopProgress, metaLine, spendSummary, stagesProgress, stepDuration, stepStatusColor,

@@ -3,7 +3,7 @@
  * title, instructions, sources to look at, and choices — independent of
  * what raised the request.
  */
-import type { CaptureSpec, ManualChoice } from '../../../../packages/core/src/types.ts';
+import type { CaptureSpec, ManualChoice } from '../shared/types.ts';
 
 /**
  * Something to look at before deciding. `diff` is the working tree's change

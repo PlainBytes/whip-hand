@@ -9,10 +9,6 @@ publish = false
 name = "whiphand_job"
 path = "src/lib.rs"
 
-[[bin]]
-name = "whiphand-job"
-path = "src/main.rs"
-
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",

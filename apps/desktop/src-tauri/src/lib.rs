@@ -1,7 +1,10 @@
-// Minimal Tauri 2 app: the webview talks to the @whiphand/agent sidecar over
-// stdio via the shell plugin. The fs plugin ships with an EMPTY static scope
+// Minimal Tauri 2 app: the webview talks to the agent, which runs in-process
+// (see agent.rs), through three commands. The fs plugin ships with an EMPTY static scope
 // and is granted directory access only at runtime (see grant_workspace below).
+use tauri::Manager;
 use tauri_plugin_fs::FsExt;
+
+mod agent;
 
 // Checks the path canonicalizes to a real directory and refuses the
 // filesystem root, but cannot verify it's the workspace the user actually
@@ -53,7 +56,23 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![grant_workspace, install_kind])
-        .run(tauri::generate_context!())
-        .expect("error while running Whiphand desktop app");
+        .manage(agent::AgentState::default())
+        .setup(|app| {
+            app.state::<agent::AgentState>().start(app.handle())?;
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            grant_workspace,
+            install_kind,
+            agent::agent_attach,
+            agent::agent_send,
+            agent::agent_detach,
+        ])
+        .build(tauri::generate_context!())
+        .expect("error while building Whiphand desktop app")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                app.state::<agent::AgentState>().shutdown();
+            }
+        });
 }

@@ -5,7 +5,7 @@
 
 /**
  * Files above this size are never read at all — the preview reports the size
- * instead. Mirrors MAX_ARTIFACT_BYTES in packages/agent/src/handlers.ts so a
+ * instead. Mirrors MAX_ARTIFACT_BYTES in whiphand-agent's handlers.rs so a
  * file the agent refuses to hand over isn't happily slurped by the webview.
  */
 export const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;

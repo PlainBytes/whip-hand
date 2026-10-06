@@ -24,9 +24,9 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { runSync } from '../../packages/core/src/exec.ts';
+import { runSync } from '../lib/exec.mjs';
 import { buildDesktopBundles } from './desktop.mjs';
-import { repoRoot } from './sea.mjs';
+import { repoRoot } from './common.mjs';
 
 // The `.deb`, dpkg and apt are all Ubuntu/Debian — on Windows this script's
 // build step produces an NSIS installer it could do nothing with, and on macOS

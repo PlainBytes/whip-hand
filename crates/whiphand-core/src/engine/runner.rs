@@ -1272,7 +1272,7 @@ impl<F: Frontend> Run<'_, F> {
             self.emit(obj! { "type" => "step:spawn", "stepId" => step.id.as_str(), "spec" => main.clone(), "phase" => "main" });
             let session_exit = self
                 .frontend
-                .run_interactive(&main, self.signal.child_token())
+                .run_interactive(&main, self.signal.child_token(), Box::new(|e| self.emit(e)))
                 .await?;
             let capture_fresh =
                 adapter.capabilities().session_id_capture && !self.ctx().is_resumed(&step.id);
@@ -2151,7 +2151,7 @@ impl<F: Frontend> Run<'_, F> {
             Err(failed) => return Ok(Some(failed)),
         };
         self.frontend
-            .run_interactive(&spec, self.signal.child_token())
+            .run_interactive(&spec, self.signal.child_token(), Box::new(|e| self.emit(e)))
             .await?;
         if self.aborted() {
             return Ok(Some(self.cancelled()));

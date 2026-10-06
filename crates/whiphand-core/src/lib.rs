@@ -1,9 +1,9 @@
 //! Whiphand's core library in Rust (docs/migration.md): the workflow schema
 //! and its validation, config layering and workspace lookup (Phase 1), and
 //! the run store (Phase 2a), and starting and containing processes (2b).
-//! Every user-visible string matches the TypeScript implementation in
-//! `packages/core`; `parity/fixtures/core` holds the corpus both are checked
-//! against.
+//! Every user-visible string matches the TypeScript implementation it
+//! replaced (`packages/core`, removed in Phase 3); `parity/fixtures/core`
+//! holds the corpus both were checked against, frozen now.
 
 pub mod adapters;
 pub mod canonicalize;
@@ -36,6 +36,7 @@ pub mod template;
 pub mod time;
 pub mod types;
 pub mod workflow_name;
+pub mod workflow_write;
 pub mod workspace;
 pub mod yaml_emit;
 pub mod zod;
@@ -44,6 +45,8 @@ pub mod zod;
 pub mod parity;
 #[doc(hidden)]
 pub mod parity_adapters;
+#[doc(hidden)]
+pub mod parity_agent_core;
 #[doc(hidden)]
 pub mod parity_engine;
 #[doc(hidden)]

@@ -5,14 +5,11 @@ apps/*/dist-web/
 apps/*/src-tauri/target/
 apps/*/src-tauri/gen/
 dist/
-apps/*/src-tauri/binaries/
 apps/*/src-tauri/resources/
 .worktrees/
 .whiphand/
 # The core parity corpus keeps workspace trees whose .whiphand/ is the fixture.
 !parity/fixtures/core/trees/*/.whiphand/
-# Written and removed by parity/core-corpus.ts while it captures schema.test.ts inputs.
-packages/core/src/.parity-capture*
 crates/*/target/
 /target/
 

@@ -3,7 +3,7 @@
  * order and filtering of the switcher's list. Pure and free of React so it
  * can be unit-tested directly.
  */
-import type { RecentWorkspace } from '../../../../packages/agent/src/app-state.ts';
+import type { RecentWorkspace } from '../shared/protocol.gen.ts';
 
 /** The last path segment, tolerating trailing separators and either style. */
 export function basename(path: string): string {

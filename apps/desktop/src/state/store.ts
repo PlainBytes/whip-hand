@@ -6,7 +6,7 @@ import type {
   JobStatus,
   ListModelsResult,
   ListWorkflowsResult,
-  WhiphandEventNotificationParams,
+  WhiphandEventParams,
   PtyDataParams,
   PtyExitParams,
   PtyAwaitParams,
@@ -17,18 +17,18 @@ import type {
   ManualRequestParams,
   ManualResolvedParams,
   RemoteAccessChangedParams,
-  JobScrollbackResult,
+  JobScrollback,
   JobSummary,
-} from '../../../../packages/agent/src/protocol.ts';
-import type { LoopRef, ManualRequest, StepKind, StepMode, StepProgress } from '../../../../packages/core/src/types.ts';
-import { executionKey } from '../../../../packages/core/src/execution-key.ts';
+} from '../shared/protocol.gen.ts';
+import type { LoopRef, ManualRequest, StepKind, StepMode, StepProgress } from '../shared/types.ts';
+import { executionKey } from '../shared/execution-key.ts';
 import { addDegradation, type RunDegradation } from '../lib/run-degradations.ts';
 import {
   findWorkspaceKey, sameWorkspace, toNative, type WorkspaceRef,
-} from '../../../../packages/core/src/path-form.ts';
-import type { AppState as AppStateData } from '../../../../packages/agent/src/app-state.ts';
-import type { LogRow } from '../../../../packages/core/src/log-rows.ts';
-import { mergeUsage, progressActionText, summarizeEvent } from '../../../../packages/core/src/log-rows.ts';
+} from '../shared/path-form.ts';
+import type { AppState as AppStateData } from '../shared/protocol.gen.ts';
+import type { LogRow } from '../shared/log-rows.ts';
+import { mergeUsage, progressActionText, summarizeEvent } from '../shared/log-rows.ts';
 
 /**
  * Workflows, the runs list, per-job live state, doctor results, config, the
@@ -50,7 +50,7 @@ export interface StepState {
   /**
    * Loops enclosing `loopId` itself, outermost first — absent or empty
    * outside nested loops. Mirrors the manifest row's own field (see
-   * packages/core/src/engine/manifest.ts); a loop's own row carries it too,
+   * whiphand-core's store/journal.rs); a loop's own row carries it too,
    * identified by *its* enclosing loop exactly as a leaf step's row is.
    */
   outerLoops?: LoopRef[];
@@ -136,8 +136,7 @@ export interface ActivityLine {
   text: string;
 }
 
-// executionKey is imported from packages/core/src/execution-key.ts
-// (dependency-free, unlike engine/manifest.ts) and re-exported here so
+// executionKey is imported from shared/execution-key.ts and re-exported here so
 // existing importers of this module (e.g. RunDetailPage.tsx) are unaffected.
 export { executionKey };
 
@@ -209,7 +208,7 @@ export interface JobState {
    * this array is unbounded, and a chatty step's output would otherwise grow
    * it without limit for the life of the process.
    */
-  events: WhiphandEventNotificationParams[];
+  events: WhiphandEventParams[];
   logTail: LogLine[];
   /**
    * `step:log` whiphandEvents only, as LogRow — the merged Logs tab's output
@@ -343,7 +342,7 @@ function appendPtyChunks(
 export type HighRateNotification =
   | { method: 'stepLog'; params: StepLogParams }
   | { method: 'ptyData'; params: PtyDataParams }
-  | { method: 'whiphandEvent'; params: WhiphandEventNotificationParams };
+  | { method: 'whiphandEvent'; params: WhiphandEventParams };
 
 /** A job mid-batch: its state so far, plus what the batch has yet to append to it. */
 interface PendingAppends {
@@ -442,8 +441,8 @@ function emptyJob(jobId: string): JobState {
 }
 
 /**
- * Upserts a step within a job, mirroring RunJournal's upsertStep in
- * packages/core/src/engine/manifest.ts: an event referencing a stepId never
+ * Upserts a step within a job, mirroring the journal's upsert_step in
+ * whiphand-core's store/journal.rs: an event referencing a stepId never
  * seen before (e.g. the interactive on_findings loop's ptyStarted can arrive
  * for a synthetic 'triage' step with no prior step:start) creates a default
  * entry rather than throwing or being dropped.
@@ -537,8 +536,8 @@ function patchCurrent(job: JobState, stepId: string, patch: Partial<StepState>):
 /**
  * Once the run is over no step can still be in flight. Without this a
  * cancelled or errored run leaves its last step spinning forever. Kept in
- * lockstep with RunJournal.finalizeRunningSteps in
- * packages/core/src/engine/manifest.ts, which does the same to run.json.
+ * lockstep with the journal's finalize_running_steps in
+ * whiphand-core's store/journal.rs, which does the same to run.json.
  */
 function finalizeRunningSteps(job: JobState, ts: string, failedStepId?: string): JobState {
   // The blamed step failed outright, even when its own step:done already
@@ -574,7 +573,7 @@ function finalizeRunningSteps(job: JobState, ts: string, failedStepId?: string):
  * workspace. Shared by reduceJobEvent and the high-rate batch, which handles
  * `step:log` without going through it.
  */
-function adoptEventIdentity(job: JobState, params: WhiphandEventNotificationParams): JobState {
+function adoptEventIdentity(job: JobState, params: WhiphandEventParams): JobState {
   const { event } = params;
 
   // The real agent includes runId on every whiphandEvent notification once the
@@ -597,7 +596,7 @@ function adoptEventIdentity(job: JobState, params: WhiphandEventNotificationPara
 }
 
 /** A `step:log` event as the Logs tab's output row. */
-function stepLogRow(params: WhiphandEventNotificationParams): LogRow {
+function stepLogRow(params: WhiphandEventParams): LogRow {
   return { seq: params.seq ?? 0, ts: params.ts, ...summarizeEvent(params.event) };
 }
 
@@ -607,7 +606,7 @@ function stepLogRow(params: WhiphandEventNotificationParams): LogRow {
  * buffered stream through it without going through zustand's `set` once per
  * event — `applyWhiphandEvent` below is a thin wrapper over the same function.
  */
-export function reduceJobEvent(job: JobState, params: WhiphandEventNotificationParams): JobState {
+export function reduceJobEvent(job: JobState, params: WhiphandEventParams): JobState {
   const { event } = params;
   job = adoptEventIdentity(job, params);
 
@@ -868,7 +867,7 @@ export interface AppState {
    * the `manifest?.name ?? job?.runName` fallback forever.
    */
   setJobRunName: (jobId: string, runName: string | undefined) => void;
-  applyWhiphandEvent: (params: WhiphandEventNotificationParams) => void;
+  applyWhiphandEvent: (params: WhiphandEventParams) => void;
   applyRunStateChanged: (params: RunStateChangedParams) => void;
   applyStepLog: (params: StepLogParams) => void;
   /**
@@ -888,7 +887,7 @@ export interface AppState {
    * attaches to a run that started before it connected — the desktop after a
    * webview reload, or a browser opened mid-run.
    */
-  applyScrollbackSnapshot: (jobId: string, snapshot: JobScrollbackResult) => void;
+  applyScrollbackSnapshot: (jobId: string, snapshot: JobScrollback) => void;
   /**
    * Replays the agent's buffered whiphandEvent stream for a job (from
    * getJobScrollback's `events`, when the agent is new enough to send them)
@@ -897,12 +896,12 @@ export interface AppState {
    * `currentExecution` mapping to route by, because it never saw that step's
    * own step:start — see patchCurrent's fallback for what happens then.
    */
-  applyEventReplay: (jobId: string, events: WhiphandEventNotificationParams[]) => void;
+  applyEventReplay: (jobId: string, events: WhiphandEventParams[]) => void;
   /**
    * applyScrollbackSnapshot then applyEventReplay for each attached job, in
    * one store write — what a (re)connect does for every job it learns about.
    */
-  applyJobSnapshots: (snapshots: readonly { jobId: string; snapshot: JobScrollbackResult }[]) => void;
+  applyJobSnapshots: (snapshots: readonly { jobId: string; snapshot: JobScrollback }[]) => void;
   /** Seeds jobs a client could not otherwise know about (see listJobs). */
   applyJobSummaries: (summaries: JobSummary[]) => void;
 
@@ -948,7 +947,7 @@ export interface AppState {
 }
 
 /** applyScrollbackSnapshot's reduction, pure so a reconnect can seed every job in one write. */
-function withScrollbackSnapshot(job: JobState, snapshot: JobScrollbackResult): JobState {
+function withScrollbackSnapshot(job: JobState, snapshot: JobScrollback): JobState {
   const next: JobState = { ...job };
 
   if (snapshot.pty) {
@@ -986,7 +985,7 @@ function withScrollbackSnapshot(job: JobState, snapshot: JobScrollbackResult): J
 }
 
 /** applyEventReplay's reduction, pure for the same reason as withScrollbackSnapshot. */
-function withEventReplay(current: JobState, events: WhiphandEventNotificationParams[]): JobState {
+function withEventReplay(current: JobState, events: WhiphandEventParams[]): JobState {
   const jobId = current.jobId;
 
   // Fold from a blank slate that keeps identity and every pty/log/events/

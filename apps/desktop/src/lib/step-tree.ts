@@ -7,9 +7,9 @@
  * that is. Kept out of WorkflowsPage so the tree arithmetic is testable on its
  * own.
  */
-import type { LoopStep, StagesStep, Step } from '../../../../packages/core/src/types.ts';
-import { isContainerStep, isLoopStep, isStagesStep } from '../../../../packages/core/src/steps.ts';
-import { ATTACHMENTS_REF } from '../../../../packages/core/src/attachments.ts';
+import type { LoopStep, StagesStep, Step } from '../shared/types.ts';
+import { isContainerStep, isLoopStep, isStagesStep } from '../shared/steps.ts';
+import { ATTACHMENTS_REF } from '../shared/attachments.ts';
 
 export type StepPath = number[];
 
@@ -155,8 +155,9 @@ export function moveAt(steps: Step[], path: StepPath, dir: -1 | 1): Step[] {
 /**
  * Ids a step at `path` is allowed to reference: everything declared before it,
  * plus — when it sits in a loop body — its later siblings, which resolve to the
- * previous iteration's artifact. Mirrors validateWorkflowSemantics in
- * packages/core/src/schema.ts; a dropdown that offers an id the validator will
+ * previous iteration's artifact. Mirrors validate_workflow_semantics in
+ * whiphand-core's schema/semantics.rs (parity/fixtures/desktop/reads-from.json
+ * ties the two together); a dropdown that offers an id the validator will
  * reject is worse than one that offers too few. So, for `stages`:
  *
  * - the stages step itself produces no artifact and is never offered;

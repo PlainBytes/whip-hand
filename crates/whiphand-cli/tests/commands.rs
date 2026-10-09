@@ -614,9 +614,18 @@ fn worktree_workflow(e: &Env, worktree: &str, run: &str) {
     );
 }
 
-/// `pwd -W` gives Git Bash's native `D:/...` form; plain `pwd` there gives `/d/...`,
-/// which Windows cannot canonicalize. Other shells reject `-W` and fall back.
-const RECORD_BRANCH_AND_PWD: &str = "git rev-parse --abbrev-ref HEAD > \"$WHIPHAND_RUN_DIR/branch.txt\" && { pwd -W 2>/dev/null || pwd; } > \"$WHIPHAND_RUN_DIR/pwd.txt\"";
+/// Records the step's cwd. `pwd -W` gives Git Bash's native `D:/...` form; plain `pwd`
+/// there gives `/d/...`, which Windows cannot canonicalize. Other shells reject `-W`.
+macro_rules! record_pwd {
+    () => {
+        "{ pwd -W 2>/dev/null || pwd; } > \"$WHIPHAND_RUN_DIR/pwd.txt\""
+    };
+}
+
+const RECORD_BRANCH_AND_PWD: &str = concat!(
+    "git rev-parse --abbrev-ref HEAD > \"$WHIPHAND_RUN_DIR/branch.txt\" && ",
+    record_pwd!()
+);
 
 fn canonical(p: &Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap()
@@ -794,7 +803,10 @@ fn worktree_branch_that_already_exists_fails_the_run() {
 fn resume_returns_to_the_same_worktree_and_refuses_a_missing_one() {
     let e = Env::new();
     git_workspace(&e);
-    let flaky = "pwd > \"$WHIPHAND_RUN_DIR/pwd.txt\" && test -f \"$WHIPHAND_RUN_DIR/ok\" || { touch \"$WHIPHAND_RUN_DIR/ok\"; exit 1; }";
+    let flaky = concat!(
+        record_pwd!(),
+        " && test -f \"$WHIPHAND_RUN_DIR/ok\" || { touch \"$WHIPHAND_RUN_DIR/ok\"; exit 1; }"
+    );
     worktree_workflow(&e, "worktree: true\n", flaky);
     let out = e.run(&["run", "wt"]);
     assert_eq!(out.code(), 1, "{}{}", out.stdout(), out.stderr());

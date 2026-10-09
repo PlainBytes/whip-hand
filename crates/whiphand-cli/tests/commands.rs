@@ -614,7 +614,9 @@ fn worktree_workflow(e: &Env, worktree: &str, run: &str) {
     );
 }
 
-const RECORD_BRANCH_AND_PWD: &str = "git rev-parse --abbrev-ref HEAD > \"$WHIPHAND_RUN_DIR/branch.txt\" && pwd > \"$WHIPHAND_RUN_DIR/pwd.txt\"";
+/// `pwd -W` gives Git Bash's native `D:/...` form; plain `pwd` there gives `/d/...`,
+/// which Windows cannot canonicalize. Other shells reject `-W` and fall back.
+const RECORD_BRANCH_AND_PWD: &str = "git rev-parse --abbrev-ref HEAD > \"$WHIPHAND_RUN_DIR/branch.txt\" && { pwd -W 2>/dev/null || pwd; } > \"$WHIPHAND_RUN_DIR/pwd.txt\"";
 
 fn canonical(p: &Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap()

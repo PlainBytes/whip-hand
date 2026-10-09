@@ -1027,7 +1027,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
     setDiffLoading(true);
     setDiffError(null);
     client
-      .request('getWorkingDiff', { workdir: workspacePath })
+      .request('getWorkingDiff', { workdir: workspacePath, runId: effectiveRunId })
       .then(result => {
         if (cancelled) return;
         setDiff(result);
@@ -1039,7 +1039,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
         setDiffLoading(false);
       });
     return () => { cancelled = true; };
-  }, [client, workspacePath, wantsDiff, reviewKey, diffToken]);
+  }, [client, workspacePath, effectiveRunId, wantsDiff, reviewKey, diffToken]);
 
   /**
    * A markdown artifact links to its siblings by name. resolveInArtifacts

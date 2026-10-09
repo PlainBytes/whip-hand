@@ -18,6 +18,7 @@ use whiphand_core::doctor::tools::detect_tools;
 use whiphand_core::engine::diff::{MAX_DIFF_FILES, working_diff_files};
 use whiphand_core::engine::runner::CORE_VERSION;
 use whiphand_core::engine::workflow_js::workflow_to_js;
+use whiphand_core::engine::worktree::{execution_tree, summary_for_protocol};
 use whiphand_core::js::locale_compare;
 use whiphand_core::jsval::{self, JsValue};
 use whiphand_core::node_path;
@@ -189,12 +190,18 @@ pub async fn call(agent: &Rc<Agent>, ctx: RequestCtx, method: &str, p: Value) ->
         "listRuns" => {
             let (wd, config) = workspace_config(&p)?;
             Ok(Value::Array(
-                list_runs(&wd, &config).iter().map(summary_json).collect(),
+                list_runs(&wd, &config)
+                    .iter()
+                    .map(|r| summary_json(r, &wd))
+                    .collect(),
             ))
         }
         "getRun" => {
             let (wd, config) = workspace_config(&p)?;
-            Ok(get_run(&wd, &config, s(&p, "runId")).map_or(Value::Null, |r| summary_json(&r)))
+            Ok(
+                get_run(&wd, &config, s(&p, "runId"))
+                    .map_or(Value::Null, |r| summary_json(&r, &wd)),
+            )
         }
         "readRunLog" => {
             let (detail, _) = require_run(&p)?;
@@ -222,7 +229,14 @@ pub async fn call(agent: &Rc<Agent>, ctx: RequestCtx, method: &str, p: Value) ->
             Ok(Value::Object(out))
         }
         "getWorkingDiff" => {
-            let diff = working_diff_files(Path::new(&workdir(&p)), MAX_DIFF_FILES).await?;
+            let tree = match p["runId"].as_str() {
+                Some(run_id) => {
+                    let (wd, config) = workspace_config(&p)?;
+                    execution_tree(&wd, &config, run_id)?
+                }
+                None => workdir(&p),
+            };
+            let diff = working_diff_files(Path::new(&tree), MAX_DIFF_FILES).await?;
             Ok(serde_json::to_value(diff).expect("a diff serializes"))
         }
         "readArtifact" => read_artifact(&p),
@@ -285,8 +299,8 @@ fn workspace_config(p: &Value) -> Result<(String, WorkspaceConfig), String> {
     Ok((wd, config))
 }
 
-fn summary_json(summary: &RunSummary) -> Value {
-    jsval::to_json(&JsValue::Obj(summary.obj.clone()))
+fn summary_json(summary: &RunSummary, workspace: &str) -> Value {
+    jsval::to_json(&JsValue::Obj(summary_for_protocol(&summary.obj, workspace)))
 }
 
 fn run_dir(detail: &RunSummary) -> String {
@@ -661,7 +675,7 @@ fn list_recent_runs(agent: &Rc<Agent>, p: &Value) -> Value {
             continue;
         };
         for run in list_runs(path, &config) {
-            let mut obj = summary_json(&run);
+            let mut obj = summary_json(&run, path);
             let map = obj.as_object_mut().expect("a run summary");
             map.insert("workspace".into(), json!(path));
             if let Some(k) = ws["identityKey"].as_str() {

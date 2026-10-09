@@ -407,7 +407,8 @@ pub fn params(method: &str) -> Option<S> {
         "hello" | "getAppState" | "listJobs" | "remoteAccessGet" | "remoteAccessRotateToken" => {
             empty_default()
         }
-        "listWorkflows" | "initWorkspace" | "listRuns" | "getWorkingDiff" => workdir(),
+        "listWorkflows" | "initWorkspace" | "listRuns" => workdir(),
+        "getWorkingDiff" => object! { "workdir" => StrMin1, "runId" => o(StrMin1) },
         "getWorkflow" | "deleteWorkflow" => object! {
             "workdir" => StrMin1, "name" => WorkflowName, "scope" => o(SCOPE),
         },

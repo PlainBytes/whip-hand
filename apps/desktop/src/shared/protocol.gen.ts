@@ -130,6 +130,12 @@ export type GetRunResult = RunDetail | null;
 
 export type ReadRunLogParams = { workdir: string, runId: string, offset?: number, limit?: number, fromEnd?: boolean, beforeByte?: number, };
 
+export type GetWorkingDiffParams = { workdir: string, 
+/**
+ * Diff this run's worktree instead of the workspace.
+ */
+runId?: string, };
+
 export type ReadRunLogResult = { lines: Array<string>, total?: number, truncated?: boolean, startByte?: number, atStart?: boolean, };
 
 export type DiffStatus = "added" | "modified" | "deleted" | "renamed";
@@ -262,7 +268,6 @@ export type EndSessionResult = OkResult;
 export type ResolveManualResult = OkResult;
 export type ListRunsParams = WorkdirParams;
 export type GetRunParams = RunRefParams;
-export type GetWorkingDiffParams = WorkdirParams;
 export type StatArtifactParams = ArtifactRefParams;
 export type PtyInputResult = OkTrue;
 export type PtyResizeResult = OkTrue;

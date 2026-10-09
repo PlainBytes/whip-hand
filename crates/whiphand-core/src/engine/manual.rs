@@ -305,7 +305,10 @@ mod tests {
             format!("Read and follow the instructions in {run_dir_fwd}/prompt.md")
         );
         let harvest = harvest_prompt(&step, &ctx);
-        assert!(harvest.contains(&format!("to {run_dir_fwd}/out.md.")), "{harvest}");
+        assert!(
+            harvest.contains(&format!("to {run_dir_fwd}/out.md.")),
+            "{harvest}"
+        );
 
         let manual = ManualStep {
             id: "m".into(),

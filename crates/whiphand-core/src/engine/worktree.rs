@@ -2,14 +2,16 @@
 
 use std::path::Path;
 
-use crate::jsval::{JsObject, ObjExt};
+use crate::config::WorkspaceConfig;
+use crate::jsval::{JsObject, JsValue, ObjExt};
 use crate::node_path;
 use crate::obj;
-use crate::path_form::{to_fwd_abs, to_native};
+use crate::path_form::{to_fwd_abs, to_native, to_workspace};
 use crate::process::git::{
     GitResult, branch_exists, check_ref_format, current_branch, rev_parse_commit, show_prefix,
     worktree_add,
 };
+use crate::store::runs::get_run;
 use crate::types::{Workflow, WorktreeSetting};
 
 /// What a run asked for, before rendering: `None` = run in the workspace.
@@ -212,6 +214,39 @@ pub fn record_to_event(r: &WorktreeRecord) -> JsObject {
     obj! {
         "path" => r.path.as_str(), "branch" => r.branch.as_str(),
         "base" => r.base.as_str(), "baseSha" => r.base_sha.as_str(),
+    }
+}
+
+/// Where a run's steps ran, as a native path: its worktree, or the workspace itself
+/// when it had none. A recorded worktree that is gone is an error, not the workspace.
+pub fn execution_tree(
+    workspace: &str,
+    config: &WorkspaceConfig,
+    run_id: &str,
+) -> Result<String, String> {
+    let run = get_run(workspace, config, run_id).ok_or_else(|| format!("no run '{run_id}'"))?;
+    let Some(record) = record_from_manifest(&run.obj) else {
+        return Ok(workspace.to_string());
+    };
+    let tree = record.native_tree();
+    if Path::new(&tree).is_dir() {
+        Ok(tree)
+    } else {
+        Err(format!("the worktree for run '{run_id}' no longer exists"))
+    }
+}
+
+/// A run summary as the protocol exposes it: `worktree` shrinks to the
+/// workspace-relative `path` and the `branch`; a run without one keeps no key.
+pub fn summary_for_protocol(summary: &JsObject, workspace: &str) -> JsObject {
+    match record_from_manifest(summary) {
+        Some(r) => summary.spread(&obj! {
+            "worktree" => JsValue::Obj(obj! {
+                "path" => to_workspace(&to_native(&r.path, ""), workspace),
+                "branch" => r.branch.as_str(),
+            }),
+        }),
+        None => summary.clone(),
     }
 }
 

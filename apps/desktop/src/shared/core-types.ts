@@ -20,6 +20,8 @@ export interface RunSummary {
    * it overlays `locked`. Absent for a run that was never named.
    */
   name?: string;
+  /** Present only for a run that executes in its own git worktree; `path` is workspace-relative. */
+  worktree?: { path: string; branch: string };
   [key: string]: unknown;
 }
 

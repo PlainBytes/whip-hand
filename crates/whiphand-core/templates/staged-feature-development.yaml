@@ -18,16 +18,17 @@ inputs:
     remember: true
     multiline: false
     prompt: Test command (leave blank to skip tests)
+worktree:
+  base: "{{ inputs.base }}"
+  branch: "feature/{{ run.slug }}"
 steps:
+  # Runs inside the run's fresh worktree, on its brand-new branch, so the reset
+  # can lose nothing. It brings the branch up to the remote base without
+  # touching the main tree's checkout.
   - id: sync-base
     kind: command
-    run: git checkout "{{ inputs.base }}" && git pull --ff-only
+    run: git fetch origin "{{ inputs.base }}" && git reset --hard FETCH_HEAD
     output: sync-base.log
-
-  - id: branch
-    kind: command
-    run: git checkout -b "feature/{{ run.slug }}"
-    output: branch.log
 
   - id: plan
     kind: agent

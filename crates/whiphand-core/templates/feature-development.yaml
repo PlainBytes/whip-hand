@@ -17,16 +17,17 @@ inputs:
     prompt: Test command (leave blank to skip tests)
     remember: true
     multiline: false
+worktree:
+  base: "{{ inputs.base }}"
+  branch: "feature/{{ run.slug }}"
 steps:
-  - id: sync-base       # a dirty tree or a diverged trunk fails the run here,
-    kind: command       # with git's own message in the artifact
-    run: git checkout "{{ inputs.base }}" && git pull --ff-only
-    output: sync-base.log
-
-  - id: branch
+  # Runs inside the run's fresh worktree, on its brand-new branch, so the reset
+  # can lose nothing. It brings the branch up to the remote base without
+  # touching the main tree's checkout.
+  - id: sync-base
     kind: command
-    run: git checkout -b "feature/{{ run.slug }}"
-    output: branch.log
+    run: git fetch origin "{{ inputs.base }}" && git reset --hard FETCH_HEAD
+    output: sync-base.log
 
   - id: plan
     kind: agent

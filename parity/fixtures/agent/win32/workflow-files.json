@@ -313,18 +313,16 @@
                   "multiline": false
                 }
               },
+              "worktree": {
+                "base": "{{ inputs.base }}",
+                "branch": "fix/{{ run.slug }}"
+              },
               "steps": [
                 {
                   "id": "sync-base",
                   "kind": "command",
-                  "run": "git checkout \"{{ inputs.base }}\" && git pull --ff-only",
+                  "run": "git fetch origin \"{{ inputs.base }}\" && git reset --hard FETCH_HEAD",
                   "output": "sync-base.log"
-                },
-                {
-                  "id": "branch",
-                  "kind": "command",
-                  "run": "git checkout -b \"fix/{{ run.slug }}\"",
-                  "output": "branch.log"
                 },
                 {
                   "id": "diagnose",
@@ -621,18 +619,16 @@
                   "multiline": false
                 }
               },
+              "worktree": {
+                "base": "{{ inputs.base }}",
+                "branch": "feature/{{ run.slug }}"
+              },
               "steps": [
                 {
                   "id": "sync-base",
                   "kind": "command",
-                  "run": "git checkout \"{{ inputs.base }}\" && git pull --ff-only",
+                  "run": "git fetch origin \"{{ inputs.base }}\" && git reset --hard FETCH_HEAD",
                   "output": "sync-base.log"
-                },
-                {
-                  "id": "branch",
-                  "kind": "command",
-                  "run": "git checkout -b \"feature/{{ run.slug }}\"",
-                  "output": "branch.log"
                 },
                 {
                   "id": "plan",
@@ -1157,18 +1153,16 @@
                   "multiline": false
                 }
               },
+              "worktree": {
+                "base": "{{ inputs.base }}",
+                "branch": "feature/{{ run.slug }}"
+              },
               "steps": [
                 {
                   "id": "sync-base",
                   "kind": "command",
-                  "run": "git checkout \"{{ inputs.base }}\" && git pull --ff-only",
+                  "run": "git fetch origin \"{{ inputs.base }}\" && git reset --hard FETCH_HEAD",
                   "output": "sync-base.log"
-                },
-                {
-                  "id": "branch",
-                  "kind": "command",
-                  "run": "git checkout -b \"feature/{{ run.slug }}\"",
-                  "output": "branch.log"
                 },
                 {
                   "id": "plan",

@@ -488,6 +488,7 @@ Every placeholder has one environment binding, from one table:
 | `run.id` / `run.slug` | `WHIPHAND_RUN_ID` / `WHIPHAND_RUN_SLUG` | always |
 | `run.name` | `WHIPHAND_RUN_NAME` (an unnamed run's name *is* its id, so it refers to `WHIPHAND_RUN_ID`) | when named |
 | `run.dir` | `WHIPHAND_RUN_DIR` — the run folder, absolute with forward slashes | always |
+| `run.workdir` | `WHIPHAND_WORKDIR` — the execution tree, absolute with forward slashes: the run's worktree, or the workspace when it has none | always |
 | `stage.index` / `total` / `id` / `title` | `WHIPHAND_STAGE_*` | inside a stages step |
 | `loop.iteration` / `loop.max_iterations` | `WHIPHAND_LOOP_ITERATION` / `WHIPHAND_LOOP_MAX_ITERATIONS` | inside a loop |
 | `inputs.<key>` | `WHIPHAND_INPUT_<KEY>` (upper-cased, `-` → `_`) | **only when the step references it** |
@@ -909,11 +910,11 @@ time**, before anything spawns — the same rule every other capability mismatch
 `capture: note` asks for free text and writes it as the step's artifact, so a later step can
 read it. `show_diff: true` puts the working tree's diff in front of whoever is deciding.
 
-That diff is the working tree **against `HEAD`**, so a workflow that gates on one has to tell
+That diff is the run's execution tree (its worktree, when it has one; see *Worktrees*) **against its `HEAD`**, so a workflow that gates on one has to tell
 its implementing agent to leave the work uncommitted — an agent that commits as it goes leaves
 a clean tree and a human approving a blank screen. Nothing in the engine enforces it: a commit
 *removes* porcelain lines rather than adding them, so the write-guard's snapshot cannot see one
-either. Every shipped template says it in its `execute` prompt, and scaffold.test.ts pins that.
+either. Every shipped template says it in its `execute` prompt, and `scaffold.rs` pins that (`executing_templates_keep_their_pins`).
 
 ### Sending work back (`capture: review`)
 
@@ -1047,7 +1048,7 @@ not a claim. It is `feature-development` with a diagnosis in place of the plan, 
 between writing the test and touching any code:
 
 ```yaml
-- id: sync-base / branch    # git checkout <base> && pull; then git checkout -b fix/<run slug>
+- id: sync-base             # in the run's worktree on fix/<run slug>: git fetch origin <base> && git reset --hard FETCH_HEAD
 - id: diagnose              # interactive, read-only, opus: writes diagnosis.md
 - id: reproduce             # headless, writes: the regression test and repro.sh, no fix
   inputs: [diagnose]
@@ -1190,6 +1191,7 @@ hazards:
 | the slug | `{{ run.slug }}` | `$WHIPHAND_RUN_SLUG` |
 | the id | `{{ run.id }}` | `$WHIPHAND_RUN_ID` |
 | the run directory | `{{ run.dir }}` | `$WHIPHAND_RUN_DIR` |
+| the execution tree | `{{ run.workdir }}` | `$WHIPHAND_WORKDIR` |
 
 `run.slug` is the name lowercased to `[a-z0-9-]`, capped at 48 characters — the same shape
 `WORKFLOW_NAME_RE` validates, which is already git-ref safe. An unnamed run (or one whose
@@ -1200,21 +1202,16 @@ whether a name exists.
 it into a `sh -c` string is a quoting hazard the slug only partly mitigates:
 
 ```yaml
-  - id: worktree
+  - id: push
     kind: command
-    run: git worktree add -b "whiphand/$WHIPHAND_RUN_SLUG" "../wt-$WHIPHAND_RUN_SLUG"
-    output: worktree.log
-
-  - id: tests
-    kind: command
-    cwd: ../wt-{{ run.slug }}     # cwd is templated, like run:
-    run: npm test
-    output: tests.log
+    run: git push -u origin "feature/$WHIPHAND_RUN_SLUG"
+    output: push.log
 ```
 
-That is the whole of `whiphand`'s worktree story: the variable, and your own `command` step.
-Per-step worktree isolation stays out of scope (see below) — there is no git-write layer
-here, and every step's `cwd` still flows from the one `workdir`.
+A workflow that wants its own branch and checkout does not need a `command` step for it: the
+`worktree` key makes the engine create one before the first step (see *Worktrees* below), and
+`{{ run.slug }}` is what the branch name is usually made of. Per-step worktree isolation stays out
+of scope (see below) — there is no git-write layer here.
 
 Both values are **frozen for the life of the process**. A rename mid-run must not change a
 slug a step has already put into a branch name, and `{{ run.name }}` must never disagree
@@ -1232,6 +1229,79 @@ plumbing command steps use. Its absence on an adapter *is* the capability check.
 It is best-effort in every direction: a runner that cannot answer, a failed spawn, a
 20-second timeout, or a reply with nothing usable in it all leave the run unnamed. It never
 fails or meaningfully delays a run, and a dry run skips it entirely.
+
+## Worktrees
+
+A run can execute in its own git worktree on its own new branch, so two runs of the same workflow
+proceed side by side without sharing a checkout. It is a property of the *run*, decided before
+step one.
+
+```yaml
+worktree:                          # or `worktree: true`, or `worktree: false`
+  base: "{{ inputs.base }}"        # a git revision; default HEAD
+  branch: "feature/{{ run.slug }}" # the new branch; default whiphand/{{ run.slug }}
+```
+
+`worktree: true` is the same as a mapping with both defaults. `base` and `branch` are templates
+over `inputs.*` and `run.*`, rendered after auto-naming, so the branch can carry the run's slug.
+All three shipped branching workflows (`feature-development`, `staged-feature-development`,
+`bugfix`) declare it, with `feature/…` or `fix/…` branches.
+
+**Per run override.** `whiphand run --worktree` turns it on for a workflow that does not ask for
+one (with the defaults above); `--no-worktree` runs in the workspace even if the workflow asks.
+They contradict each other, and neither applies to `--resume`: a resumed run returns to the tree
+it started in. The desktop's New Run dialog has the same choice as a switch, defaulting to what
+the workflow says.
+
+**Where it lives.** At `<workspace>/.whiphand/worktrees/<run-id>`. The engine writes a
+`.gitignore` containing `*` in `.whiphand/worktrees` itself, so the checkouts never show up as
+untracked in the main tree, whatever the repository's own ignore rules say.
+
+**Workspace versus execution tree.** The *workspace* is where the run was started: it holds
+`.whiphand/`, the run folder (`.whiphand/runs/<id>`, so artifacts, `run.json` and the journal),
+config and workflows. The *execution tree* is where steps run: their `cwd`, an agent's working
+directory, `git diff`. Without a worktree they are the same directory. With one, the execution
+tree is the worktree root plus the workspace's own prefix inside its repository, so a workspace in
+a repository subdirectory runs in the same subdirectory of the worktree. `{{ run.workdir }}` /
+`$WHIPHAND_WORKDIR` is the execution tree; `{{ run.dir }}` stays the run folder in the workspace.
+
+**Refusals and failures.** Problems the engine can see before creating anything are *preflight
+refusals* and leave no run behind: the workspace is not a git repository, git cannot be run,
+`base` is not a commit (or the repository has no commits). Problems found while creating the
+worktree are *creation failures*, and the run fails with the reason: the branch name is not a
+valid ref, the branch already exists, or `git worktree add` itself fails.
+
+**Resume.** A resumed run reuses the worktree it recorded, provided the directory still exists and
+is still on the recorded branch. If not, resume is refused with the path and the reason; it never
+falls back to the workspace, since that would run the remaining steps against the wrong tree.
+
+**The run folder from inside the worktree.** The run folder is outside the execution tree, so an
+agent that must read and write artifacts there is given access to it: claude and copilot get
+`--add-dir=<run dir>`, and the flag is present only when the run folder is outside the tree.
+
+**The diff.** `getWorkingDiff` is run-scoped: it takes the run id and diffs that run's execution
+tree against its `HEAD`, so a review screen shows the run's own changes whatever else is going on
+in the main checkout.
+
+**Cleanup.** Deleting a run, and retention pruning, remove the run's worktree first. A worktree with
+modified or untracked files is *dirty*: delete refuses (`worktree-dirty`) and keeps the run, and
+pruning skips that run and records why. A worktree already gone from disk is not an error; git's
+record of it is pruned. `whiphand worktree remove <run-id>` removes one by hand, keeping the run,
+and `--force` discards a dirty tree's changes. **Branches are never deleted** by any of this:
+the work on them is yours to merge or drop.
+
+**The network.** The engine never touches it. A worktree starts at the local `base`, so a template
+that wants the remote's state fetches inside the worktree, as the shipped `sync-base` does:
+
+```yaml
+- id: sync-base
+  kind: command
+  run: git fetch origin "{{ inputs.base }}" && git reset --hard FETCH_HEAD
+```
+
+That runs on a brand-new branch, so the reset can lose nothing, and the main tree's checkout is
+not touched. `whiphand init` writes templates to new workspaces only; an existing workspace keeps
+its copies, with their old `git checkout` flow, until you replace them.
 
 ## Workspace configuration
 
@@ -1325,7 +1395,7 @@ that a run with many stages fits on screen and looks the same at any window size
 
 ## Out of scope
 
-DAG or parallel steps, `codex`/`gemini` adapters, per-step git worktree isolation, and
+DAG or parallel steps, `codex`/`gemini` adapters, per-step git worktree isolation, merging a run's branch back, and
 spend ceilings/telemetry (`max_spend_usd` — cycles are bounded by `max_iterations` only).
 These are plausible follow-ups, not commitments.
 

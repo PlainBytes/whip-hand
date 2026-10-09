@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Runs can execute in their own git worktree
+
+- A workflow can declare `worktree:` (`true`, `false`, or `base` and `branch` templates). The engine then
+  creates a worktree under `.whiphand/worktrees/<run-id>` on a new branch before step one, and every step
+  runs there, so two runs of the same workflow no longer share a checkout. The run folder and its artifacts
+  stay in the workspace; agents that need them are given `--add-dir`. Resuming returns to the same worktree
+  and is refused if it is gone.
+- `{{ run.workdir }}` / `$WHIPHAND_WORKDIR` is the directory steps run in: the worktree, or the workspace
+  when the run has none.
+- `whiphand run --worktree` and `--no-worktree`, and a switch in the desktop's New Run dialog, override the
+  workflow's setting for one run.
+- A run's diff is read from its own worktree, so the review screen shows that run's changes.
+- Deleting a run, and pruning, remove its worktree. A worktree with uncommitted or untracked changes is not
+  removed: delete refuses and pruning skips it. Branches are never deleted.
+- `whiphand worktree remove <run-id> [--force]` removes a run's worktree by hand and keeps the run.
+
+### The shipped branching workflows run in a worktree
+
+- `feature-development`, `staged-feature-development` and `bugfix` now declare a worktree on `feature/<run slug>`
+  (`fix/<run slug>` for `bugfix`) and no longer have a `branch` step. `sync-base` fetches the base and resets the
+  fresh branch to it (`git fetch origin <base> && git reset --hard FETCH_HEAD`) instead of checking out the
+  base in your working folder, so your checkout is left alone.
+- `whiphand init` writes these to new workspaces only. An existing workspace keeps its copies, which still
+  check out and branch in the working folder; delete one and run `whiphand init` to get the new version.
+
 ### A `bugfix` workflow that proves the bug before fixing it
 
 - `whiphand init` now ships `bugfix`, which fixes a bug test-first. It syncs your trunk and cuts `fix/<run slug>`,

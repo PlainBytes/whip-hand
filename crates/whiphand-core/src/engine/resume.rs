@@ -587,11 +587,11 @@ fn load_workflow(
     parse_workflow(&String::from_utf8_lossy(&text)).map_err(|e| unreadable(e.to_string()))
 }
 
-async fn tree_warnings(detail: &JsObject, workdir: &str) -> Vec<String> {
+async fn tree_warnings(detail: &JsObject, tree: &str) -> Vec<String> {
     let Some(stopped) = detail.str_prop("stoppedTree") else {
         return vec!["no working tree snapshot was recorded when this run stopped, so changes to the working tree since then cannot be reported".into()];
     };
-    match snapshot_tree(std::path::Path::new(workdir)).await {
+    match snapshot_tree(std::path::Path::new(tree)).await {
         GitResult::NotARepo => Vec::new(),
         GitResult::Unavailable(reason) => {
             vec![format!(

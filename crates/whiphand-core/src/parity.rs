@@ -115,6 +115,7 @@ fn scope_from_json(v: &Value) -> TemplateScope {
         run_slug: text("runSlug").unwrap_or_default(),
         run_name: text("runName"),
         run_dir: text("runDir"),
+        run_workdir: text("runWorkdir"),
         loop_frame,
         frame: frame_from_json(&v["frame"]),
     }

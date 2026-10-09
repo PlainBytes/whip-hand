@@ -112,6 +112,20 @@ pub fn build_cli() -> Command {
                     "fresh-session",
                     "on resume, start a new agent session instead of continuing the recorded one",
                 ))
+                .arg(
+                    flag(
+                        "worktree",
+                        "run in a new git worktree on its own branch, even if the workflow does not ask for one",
+                    )
+                    .conflicts_with_all(["no-worktree", "resume"]),
+                )
+                .arg(
+                    flag(
+                        "no-worktree",
+                        "run in the workspace even if the workflow asks for a worktree",
+                    )
+                    .conflicts_with("resume"),
+                )
                 .arg(flag("dry-run", "resolve and print every step argv without spawning"))
                 .arg(variadic("input", "pair", "workflow input as key=value"))
                 .arg(variadic(
@@ -188,6 +202,28 @@ pub fn build_cli() -> Command {
             ))
             .arg(dir_option("working folder"))
             .arg(extra()),
+        )
+        .subcommand(
+            sub("worktree", "manage the git worktrees runs were made in")
+                .subcommand_required(true)
+                .subcommand(
+                    sub(
+                        "remove",
+                        "remove a run's git worktree; its branch is kept, and so is the run",
+                    )
+                    .arg(
+                        Arg::new("runId")
+                            .required(true)
+                            .help("run id, as shown by `whiphand run` and in the desktop app"),
+                    )
+                    .arg(flag(
+                        "force",
+                        "remove the worktree even with uncommitted or untracked changes in it, discarding them; \
+                         the branch is kept either way",
+                    ))
+                    .arg(dir_option("working folder"))
+                    .arg(extra()),
+                ),
         )
         .subcommand(
             sub("config", "read or write workspace or global config")

@@ -159,6 +159,7 @@ export interface Workflow {
   description?: string;
   inputs?: Record<string, WorkflowInput>;
   on_findings?: OnFindings;
+  worktree?: boolean | { base?: string; branch?: string };
   steps: Step[];
 }
 

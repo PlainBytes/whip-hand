@@ -35,6 +35,10 @@ export const uiActions: Record<string, Record<string, string>> = {
     // NewRunDialog's "Max loop iterations" Field/SpinButton, driving startRun's
     // `maxIterations`.
     '--max-iterations': 'new-run-dialog:maxIterationsInput',
+    // NewRunDialog's "Run in a separate worktree" Switch, driving startRun's
+    // `worktree`. The switch sends false explicitly, which is `--no-worktree`.
+    '--worktree': 'new-run-dialog:worktreeSwitch',
+    '--no-worktree': 'new-run-dialog:worktreeSwitch',
     // NewRunDialog's "Name (optional)" Field/Input, driving startRun's `name`.
     '--name': 'new-run-dialog:nameInput',
     // RunDetailPage's "Resume" button, shown for a failed, interrupted or
@@ -71,6 +75,14 @@ export const uiActions: Record<string, Record<string, string>> = {
     '-C': 'sidebar:workspaceSwitcher',
     // The dialog's Project/Global choice, driving createWorkflow's `scope`.
     '--global': 'workflows:newWorkflowScopeChoice',
+  },
+  // Removing a worktree on its own has no desktop button yet; deleting the run
+  // removes its worktree too, and refuses while it holds uncommitted changes.
+  'worktree remove': {
+    _command: 'exempt:cli-only-the-delete-run-dialog-removes-worktrees',
+    '<runId>': 'exempt:cli-only',
+    '--force': 'exempt:cli-only',
+    '-C': 'sidebar:workspaceSwitcher',
   },
   // `whiphand config get`/`whiphand config set` are the CLI's half of the global-config
   // layering the desktop reads/writes through configGet/configSet — a

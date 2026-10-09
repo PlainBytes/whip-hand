@@ -398,6 +398,7 @@ pub fn remote_params(method: &str) -> Option<S> {
         "maxIterations" => o(Num(Num::POSITIVE_INT)),
         "name" => o(Str),
         "attachments" => o(Arr(b(object!(Strictness::Strict; "name" => StrMin1, "base64" => Str)))),
+        "worktree" => o(Bool),
     })
 }
 
@@ -407,7 +408,8 @@ pub fn params(method: &str) -> Option<S> {
         "hello" | "getAppState" | "listJobs" | "remoteAccessGet" | "remoteAccessRotateToken" => {
             empty_default()
         }
-        "listWorkflows" | "initWorkspace" | "listRuns" | "getWorkingDiff" => workdir(),
+        "listWorkflows" | "initWorkspace" | "listRuns" => workdir(),
+        "getWorkingDiff" => object! { "workdir" => StrMin1, "runId" => o(StrMin1) },
         "getWorkflow" | "deleteWorkflow" => object! {
             "workdir" => StrMin1, "name" => WorkflowName, "scope" => o(SCOPE),
         },
@@ -441,6 +443,7 @@ pub fn params(method: &str) -> Option<S> {
                 b(object!(Strictness::Strict; "path" => StrMin1)),
                 b(object!(Strictness::Strict; "name" => StrMin1, "base64" => Str)),
             )))),
+            "worktree" => o(Bool),
         },
         "resumeRun" => object! {
             "workdir" => StrMin1,

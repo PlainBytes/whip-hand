@@ -9,7 +9,10 @@ use crate::template::{Frame, LoopFrame, TemplateScope, nearest_loop};
 
 #[derive(Clone, Debug, Default)]
 pub struct RunCtx {
-    /// Absolute, native.
+    /// Absolute, native. Home of `.whiphand/`: run dirs, config and workflows.
+    pub workspace: String,
+    /// Absolute, native. The execution tree: where steps run and whose git
+    /// working tree is guarded and diffed.
     pub workdir: String,
     pub run_id: String,
     /// Absolute, native.
@@ -48,6 +51,7 @@ impl RunCtx {
             run_slug: self.run_slug.clone(),
             run_name: self.run_name.clone(),
             run_dir: Some(self.run_dir.clone()),
+            run_workdir: Some(self.workdir.clone()),
             loop_frame: self.loop_frame.clone(),
             frame: self.frame.clone(),
         }

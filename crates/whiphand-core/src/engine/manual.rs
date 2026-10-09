@@ -132,7 +132,7 @@ pub async fn build_manual_request(
         .into_iter()
         .filter_map(|(id, path)| {
             path.map(|p| {
-                JsValue::Obj(obj! { "id" => id, "path" => to_workspace(&p, &ctx.workdir) })
+                JsValue::Obj(obj! { "id" => id, "path" => to_workspace(&p, &ctx.workspace) })
             })
         })
         .collect();
@@ -247,4 +247,101 @@ pub fn review_artifact(
         ]);
     }
     format!("{}\n", lines.join("\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::common::{harvest_prompt, prompt_pointer};
+    use crate::path_form::{same_path, to_fwd_abs};
+    use crate::types::{AgentStep, StepMode};
+
+    /// The workspace and the execution tree are two different directories, the
+    /// run dir lives under the workspace: what a step reads is relative to its
+    /// tree (so absolute here), what the desktop resolves is workspace-relative.
+    fn divergent_ctx(workspace: &str, tree: &str) -> RunCtx {
+        let run_dir = format!("{workspace}/.whiphand/runs/r1");
+        RunCtx {
+            workspace: workspace.into(),
+            workdir: tree.into(),
+            run_id: "r1".into(),
+            run_dir: run_dir.clone(),
+            artifacts: [("plan".to_string(), format!("{run_dir}/plan.md"))]
+                .into_iter()
+                .collect(),
+            ..RunCtx::default()
+        }
+    }
+
+    #[test]
+    fn divergent_workspace_and_tree_keep_their_own_paths() {
+        let ws = tempfile::tempdir().unwrap();
+        let tree = tempfile::tempdir().unwrap();
+        let ws_path = ws.path().to_str().unwrap();
+        let tree_path = tree.path().to_str().unwrap();
+        let ctx = divergent_ctx(ws_path, tree_path);
+        assert!(!same_path(&ctx.workspace, &ctx.workdir));
+
+        let run_dir_fwd = to_fwd_abs(&ctx.run_dir);
+        let step = AgentStep {
+            id: "s".into(),
+            inputs: None,
+            verdict: None,
+            enabled: None,
+            runner: "claude".into(),
+            model: None,
+            mode: StepMode::Headless,
+            writes: false,
+            prompt: "p".into(),
+            output: "out.md".into(),
+            allow_paths: None,
+            allow_commits: None,
+            effort: None,
+            harvest_timeout_ms: None,
+        };
+        let pointer = prompt_pointer(&format!("{}/prompt.md", ctx.run_dir), &ctx);
+        assert_eq!(
+            pointer,
+            format!("Read and follow the instructions in {run_dir_fwd}/prompt.md")
+        );
+        let harvest = harvest_prompt(&step, &ctx);
+        assert!(
+            harvest.contains(&format!("to {run_dir_fwd}/out.md.")),
+            "{harvest}"
+        );
+
+        let manual = ManualStep {
+            id: "m".into(),
+            inputs: Some(vec!["plan".into()]),
+            verdict: None,
+            enabled: None,
+            title: "t".into(),
+            instructions: "i".into(),
+            capture: None,
+            show_diff: None,
+            default: None,
+            output: None,
+        };
+        let (request, _) = futures_block(build_manual_request(
+            &manual,
+            "manual",
+            &ctx,
+            &ManualExtras::default(),
+        ))
+        .unwrap();
+        let artifacts = request.prop("context").as_obj().unwrap().prop("artifacts");
+        let path = artifacts.as_arr().unwrap()[0]
+            .as_obj()
+            .unwrap()
+            .str_prop("path")
+            .unwrap();
+        assert_eq!(path, ".whiphand/runs/r1/plan.md");
+    }
+
+    fn futures_block<T>(f: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(f)
+    }
 }

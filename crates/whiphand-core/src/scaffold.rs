@@ -278,4 +278,67 @@ mod tests {
         let err = create_workflow(&ws, "feature", Scope::Project, &home).unwrap_err();
         assert!(matches!(err, ScaffoldError::Exists(_)), "{err}");
     }
+
+    #[test]
+    fn branching_templates_run_in_a_worktree() {
+        use crate::types::WorktreeSetting;
+        for (name, prefix) in [
+            ("feature-development", "feature"),
+            ("staged-feature-development", "feature"),
+            ("bugfix", "fix"),
+        ] {
+            let text = read_template(name);
+            let wf = parse_workflow(text).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            assert_eq!(
+                wf.worktree,
+                Some(WorktreeSetting::Enabled {
+                    base: Some("{{ inputs.base }}".into()),
+                    branch: Some(format!("{prefix}/{{{{ run.slug }}}}")),
+                }),
+                "{name}"
+            );
+            assert!(
+                !text
+                    .lines()
+                    .any(|l| l.trim().trim_start_matches("- ").trim() == "id: branch"),
+                "{name} still has a branch step"
+            );
+            assert!(!text.contains("git checkout"), "{name} still checks out");
+            assert!(
+                text.contains(
+                    "run: git fetch origin \"{{ inputs.base }}\" && git reset --hard FETCH_HEAD"
+                ),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn executing_templates_keep_their_pins() {
+        for name in [
+            "feature-development",
+            "staged-feature-development",
+            "bugfix",
+        ] {
+            let text = read_template(name);
+            assert!(text.contains("uncommitted"), "{name}");
+        }
+        assert!(
+            read_template("feature-development")
+                .contains("run: eval \"{{ inputs.test_command }}\"")
+        );
+    }
+
+    #[test]
+    fn init_writes_the_worktree_templates() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().to_string_lossy().into_owned();
+        init_workspace(&ws, &dir.path().join("home")).unwrap();
+        let written = std::fs::read_to_string(
+            dir.path()
+                .join(".whiphand/workflows/feature-development.yaml"),
+        )
+        .unwrap();
+        assert!(written.contains("\nworktree:\n"));
+    }
 }

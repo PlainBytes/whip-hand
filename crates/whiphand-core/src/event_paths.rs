@@ -54,6 +54,12 @@ pub fn event_paths_to_workspace(event: &JsObject, root: &str) -> JsObject {
             Some(spec) => event.spread(&obj! { "spec" => spec_to_workspace(spec, root) }),
             None => event.clone(),
         },
+        Some("run:start") => match event.prop("worktree").as_obj() {
+            Some(w) => event.spread(
+                &obj! { "worktree" => w.spread(&obj! { "path" => ws(w.prop("path"), root) }) },
+            ),
+            None => event.clone(),
+        },
         _ => event.clone(),
     }
 }

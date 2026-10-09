@@ -253,7 +253,12 @@ export function NewRunDialog({ open, onOpenChange, onStarted }: NewRunDialogProp
   const [maxIterationsRaw, setMaxIterationsRaw] = useState('');
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
-  const [anotherRunActive, setAnotherRunActive] = useState(false);
+  // A running, non-dry-run run that works in the workspace itself. An isolated
+  // run touches nothing here, so it is no reason to warn.
+  const [workspaceRunActive, setWorkspaceRunActive] = useState(false);
+  // The person's choice for the selected workflow only; not remembered, and
+  // dropped when another workflow is selected, so the default follows it.
+  const [worktreeChoice, setWorktreeChoice] = useState<{ key: string | null; value: boolean } | null>(null);
   // Deliberately not remembered, and not carried over by Run again: a file
   // is picked for the run at hand, and may well be gone by the next one.
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
@@ -288,8 +293,10 @@ export function NewRunDialog({ open, onOpenChange, onStarted }: NewRunDialogProp
       .request('listRuns', { workdir: workspacePath })
       .then(result => {
         if (cancelled) return;
-        const running = result.some(run => run.status === 'running' && run.dryRun !== true);
-        setAnotherRunActive(running);
+        const running = result.some(
+          run => run.status === 'running' && run.dryRun !== true && run.worktree === undefined,
+        );
+        setWorkspaceRunActive(running);
       })
       .catch(() => {
         // Best-effort warning only — a failed check just means no warning shown.
@@ -304,6 +311,9 @@ export function NewRunDialog({ open, onOpenChange, onStarted }: NewRunDialogProp
     [workflows, selectedKey],
   );
   const selectedWorkflow = selectedEntry?.workflow ?? null;
+  const worktreeDefault = selectedWorkflow?.worktree !== undefined && selectedWorkflow.worktree !== false;
+  const worktree = worktreeChoice !== null && worktreeChoice.key === selectedKey ? worktreeChoice.value : worktreeDefault;
+  const anotherRunActive = workspaceRunActive && !worktree;
 
   function selectWorkflow(entry: WorkflowEntry, override?: Record<string, string>): void {
     setSelectedKey(entryKey(entry));
@@ -490,6 +500,7 @@ export function NewRunDialog({ open, onOpenChange, onStarted }: NewRunDialogProp
         workflow: workflowRef,
         inputs: values,
         dryRun,
+        worktree,
         ...(maxIterations === undefined ? {} : { maxIterations }),
         // Core normalizes and drops an empty one; send it only when typed so
         // an untouched field is indistinguishable from not passing --name.
@@ -638,6 +649,18 @@ export function NewRunDialog({ open, onOpenChange, onStarted }: NewRunDialogProp
                   checked={dryRun}
                   onChange={(_e, data) => setDryRun(data.checked)}
                 />
+
+                <Field
+                  style={NARROW}
+                  hint={<>Changes land on a new branch in <code>.whiphand/worktrees/</code>. Other runs keep the workspace.</>}
+                >
+                  <Switch
+                    data-testid="worktree-switch"
+                    label="Run in a separate worktree"
+                    checked={worktree}
+                    onChange={(_e, data) => setWorktreeChoice({ key: selectedKey, value: data.checked })}
+                  />
+                </Field>
 
                 {/* The CLI's `--max-iterations`. Only meaningful for a workflow
                     that contains a loop, so it is only offered for one. */}

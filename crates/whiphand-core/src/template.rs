@@ -20,7 +20,7 @@ impl std::fmt::Display for TemplateError {
 
 /// The fields each built-in namespace has — what the placeholder pattern accepts.
 pub const PLACEHOLDER_FIELDS: [(&str, &[&str]); 3] = [
-    ("run", &["id", "slug", "name", "dir"]),
+    ("run", &["id", "slug", "name", "dir", "workdir"]),
     ("stage", &["index", "total", "id", "title"]),
     ("loop", &["iteration", "max_iterations"]),
 ];
@@ -103,6 +103,8 @@ pub struct TemplateScope {
     pub run_name: Option<String>,
     /// The run's directory, absolute.
     pub run_dir: Option<String>,
+    /// The execution tree, absolute: the workspace unless the run has a worktree.
+    pub run_workdir: Option<String>,
     /// For a caller with no frame of its own; `frame` wins when both are set.
     pub loop_frame: Option<LoopFrame>,
     pub frame: Option<Frame>,
@@ -136,7 +138,7 @@ pub fn input_env_name(key: &str) -> String {
 static PLACEHOLDER: LazyLock<Regex> = LazyLock::new(|| {
     let ws = JS_WS_CLASS;
     Regex::new(&format!(
-        r"\{{\{{[{ws}]*(inputs\.[A-Za-z0-9_-]+|loop\.(?:iteration|max_iterations)|stage\.(?:index|total|id|title)|run\.(?:name|slug|id|dir))[{ws}]*\}}\}}"
+        r"\{{\{{[{ws}]*(inputs\.[A-Za-z0-9_-]+|loop\.(?:iteration|max_iterations)|stage\.(?:index|total|id|title)|run\.(?:name|slug|id|dir|workdir))[{ws}]*\}}\}}"
     ))
     .unwrap()
 });
@@ -158,6 +160,7 @@ fn ref_env(r: &str) -> &'static str {
         "run.slug" => "WHIPHAND_RUN_SLUG",
         "run.name" => "WHIPHAND_RUN_NAME",
         "run.dir" => "WHIPHAND_RUN_DIR",
+        "run.workdir" => "WHIPHAND_WORKDIR",
         "stage.index" => "WHIPHAND_STAGE_INDEX",
         "stage.total" => "WHIPHAND_STAGE_TOTAL",
         "stage.id" => "WHIPHAND_STAGE_ID",
@@ -211,6 +214,14 @@ fn bind(r: &str, scope: &TemplateScope) -> Result<Binding, TemplateError> {
             };
             return binding(ref_env(r), to_fwd_abs(dir));
         }
+        if r == "run.workdir" {
+            let Some(dir) = &scope.run_workdir else {
+                return Err(TemplateError(format!(
+                    "'{r}' needs a working directory, and this scope has none"
+                )));
+            };
+            return binding(ref_env(r), to_fwd_abs(dir));
+        }
         // An unnamed run's name *is* its id, and WHIPHAND_RUN_NAME stays unset.
         let value = match (r, &scope.run_name) {
             ("run.name", None) => return binding("WHIPHAND_RUN_ID", scope.run_id.clone()),
@@ -245,6 +256,9 @@ pub fn bindings(scope: &TemplateScope) -> Result<Vec<Binding>, TemplateError> {
         .to_vec();
     if scope.run_dir.is_some() {
         refs.push("run.dir".into());
+    }
+    if scope.run_workdir.is_some() {
+        refs.push("run.workdir".into());
     }
     if nearest_stage(scope.frame.as_ref()).is_some() {
         refs.extend(["stage.index", "stage.total", "stage.id", "stage.title"].map(String::from));

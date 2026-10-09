@@ -141,6 +141,7 @@ describe('NewRunDialog', () => {
       workflow: 'ship-feature',
       inputs: { ticket: 'TICK-1', branch: 'main', notes: '' },
       dryRun: true,
+      worktree: false,
     });
 
     transport.emitLine({ id: req.id, result: { jobId: 'job-42' } });
@@ -779,5 +780,86 @@ describe('NewRunDialog attachments', () => {
     act(() => emit!({ type: 'drop', paths: ['/home/me/trace.har'] }));
     expect(field).not.toHaveAttribute('data-drop-active');
     expect(await screen.findByText('trace.har')).toBeInTheDocument();
+  });
+
+  describe('worktree', () => {
+    const withWorktree = (name: string, worktree: unknown) => ({
+      ...SCRIPTED_WORKFLOW,
+      name,
+      workflow: { ...SCRIPTED_WORKFLOW.workflow, name, worktree },
+    });
+    const WARNING = 'Another run is already in progress in this workspace.';
+
+    async function open(workflows: unknown[], runs: unknown[], pick: string) {
+      const rendered = renderNewRunDialog();
+      await respond(rendered.transport, 'listWorkflows', workflows);
+      await respond(rendered.transport, 'listRuns', runs);
+      await selectWorkflow(rendered.transport, pick);
+      await screen.findByLabelText('Ticket ID', { exact: false });
+      return rendered;
+    }
+
+    it('defaults from the workflow, and follows a change of workflow', async () => {
+      const { transport } = await open(
+        [withWorktree('on', true), withWorktree('obj', { base: 'main' }), withWorktree('off', false), SCRIPTED_WORKFLOW],
+        [],
+        'on',
+      );
+      const sw = () => screen.getByRole('switch', { name: /separate worktree/i });
+      expect(sw()).toBeChecked();
+      fireEvent.click(sw());
+      expect(sw()).not.toBeChecked();
+      await selectWorkflow(transport, 'obj');
+      expect(sw()).toBeChecked();
+      await selectWorkflow(transport, 'off');
+      expect(sw()).not.toBeChecked();
+      await selectWorkflow(transport, 'ship-feature');
+      expect(sw()).not.toBeChecked();
+    });
+
+    it('sends the switch explicitly, in both directions', async () => {
+      const { transport } = await open([withWorktree('on', true)], [], 'on');
+      fireEvent.change(screen.getByLabelText('Ticket ID', { exact: false }), { target: { value: 'T-1' } });
+      fireEvent.click(screen.getByRole('switch', { name: /separate worktree/i }));
+      fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+      const req = await waitFor(() => {
+        const parsed = transport.sentRequest(transport.sent.length - 1);
+        if (parsed.method !== 'startRun') throw new Error('startRun not sent yet');
+        return parsed;
+      });
+      expect(req.params).toMatchObject({ worktree: false });
+    });
+
+    it('sends worktree: true when switched on over a workflow without the field', async () => {
+      const { transport } = await open([SCRIPTED_WORKFLOW], [], 'ship-feature');
+      fireEvent.change(screen.getByLabelText('Ticket ID', { exact: false }), { target: { value: 'T-1' } });
+      fireEvent.click(screen.getByRole('switch', { name: /separate worktree/i }));
+      fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+      const req = await waitFor(() => {
+        const parsed = transport.sentRequest(transport.sent.length - 1);
+        if (parsed.method !== 'startRun') throw new Error('startRun not sent yet');
+        return parsed;
+      });
+      expect(req.params).toMatchObject({ worktree: true });
+    });
+
+    it('warns about a running workspace run only while the switch is off', async () => {
+      await open([SCRIPTED_WORKFLOW], [{ runId: 'r1', runDir: '/r1', status: 'running' }], 'ship-feature');
+      expect(await screen.findByText(WARNING)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('switch', { name: /separate worktree/i }));
+      expect(screen.queryByText(WARNING)).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('switch', { name: /separate worktree/i }));
+      expect(screen.getByText(WARNING)).toBeInTheDocument();
+    });
+
+    it('does not warn when the only running run has its own worktree', async () => {
+      await open(
+        [SCRIPTED_WORKFLOW],
+        [{ runId: 'r1', runDir: '/r1', status: 'running', worktree: { path: '.whiphand/worktrees/r1', branch: 'whiphand/r1' } }],
+        'ship-feature',
+      );
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(screen.queryByText(WARNING)).not.toBeInTheDocument();
+    });
   });
 });

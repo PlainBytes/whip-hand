@@ -438,6 +438,9 @@ pub struct StartRunParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub attachments: Option<Vec<AttachmentSource>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub worktree: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -491,6 +494,8 @@ pub enum DeleteRefusal {
     Locked,
     Running,
     Missing,
+    #[serde(rename = "worktree-dirty")]
+    WorktreeDirty,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -619,7 +624,15 @@ pub struct ReadRunLogResult {
     pub at_start: Option<bool>,
 }
 
-pub type GetWorkingDiffParams = WorkdirParams;
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GetWorkingDiffParams {
+    pub workdir: String,
+    /// Diff this run's worktree instead of the workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub run_id: Option<String>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]

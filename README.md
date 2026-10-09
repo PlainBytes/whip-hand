@@ -33,6 +33,9 @@ whiphand run --resume 20260907-141233-a3f1 --extra-iterations 2              # c
 whiphand run feature --input feature="oauth support" --name "OAuth support"  # label the run
 whiphand run feature --input feature="fix login" --attach ./bug.png --attach ./server.log  # hand files to the plan step
 whiphand rename-run 20260907-141233-a3f1 "Something better"                  # relabel it later ('' clears)
+whiphand run examples/feature.yaml --input feature=x --worktree              # run on a new branch in its own git worktree
+whiphand run feature --input feature=x --no-worktree                         # run in the working folder even if the workflow asks for a worktree
+whiphand worktree remove 20260907-141233-a3f1                                # remove a run's worktree (--force discards uncommitted changes); the branch stays
 ```
 
 Workflows live in `.whiphand/workflows/<name>.yaml` (so `whiphand run feature` works) or anywhere as a
@@ -45,13 +48,23 @@ not just ship it or kill it. `feature` plans once, interactively, then implement
 cycle until the sign-off approves it — pick it when the shape of the change is already clear.
 `spec-driven` adds a second planning phase and grills you on both, then stops at an approval gate
 before any code is written, before its own implement/review/sign-off cycle. `feature-development`
-does the same as `feature` but on its own branch — it syncs your trunk, cuts `feature/<run slug>`,
-and commits the signed-off work with a message it writes from the diff. `staged-feature-development`
+does the same as `feature` but on its own branch in its own git worktree — it brings `feature/<run slug>` up
+to your trunk's remote state, and commits the signed-off work with a message it writes from the diff. `staged-feature-development`
 cuts the plan into stages and builds, reviews, accepts and commits them one at a time. `bugfix`
-fixes a bug test-first: it cuts `fix/<run slug>`, settles the root cause, the regression test and
+fixes a bug test-first: on `fix/<run slug>` in its own worktree, it settles the root cause, the regression test and
 the command that runs just that test with you, has an agent write only that test, and stops the run
 unless the test fails. Only then does it fix the bug, in the usual test-and-review cycle, so
 "fixed" means a failing test turned green.
+
+**Running workflows side by side.** `feature-development`, `staged-feature-development` and `bugfix`
+declare `worktree:`, so each run gets its own checkout under `.whiphand/worktrees/<run-id>` on a new
+branch, and your main checkout is never touched: start two features at once and they cannot collide.
+`--worktree` / `--no-worktree` (or the New Run dialog's switch) override the workflow's choice for one
+run; `--resume` always returns to the tree the run started in. Deleting a run removes its worktree
+(refusing if it has uncommitted changes) but never its branch; `whiphand worktree remove` does it by
+hand. whiphand never touches the network itself — the shipped `sync-base` step fetches inside the
+worktree. `whiphand init` writes templates to new workspaces only, so an existing workspace keeps its
+old copies until you replace them. See `docs/design.md`, *Worktrees*.
 
 `research` builds nothing. You settle the question with the agent in a live chat, then a headless
 agent investigates and writes a report whose every claim carries a `file:line` or a URL, a second

@@ -137,6 +137,7 @@ fn run_ctx(raw: &Value) -> RunCtx {
     let frame = frame_from_json(&raw["frame"]);
     let loop_frame = nearest_loop(frame.as_ref()).cloned();
     RunCtx {
+        workspace: ws().into(),
         workdir: ws().into(),
         run_id: run_id.clone(),
         run_dir: run_dir.clone(),

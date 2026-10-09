@@ -399,3 +399,25 @@ pub async fn capture_session_id(step: &AgentStep, ctx: &RunCtx) -> Option<String
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::common::test_support::{ctx, step};
+    use crate::types::StepMode;
+
+    #[test]
+    fn the_run_dir_is_reachable_whether_or_not_it_is_inside_the_tree() {
+        let root = tempfile::tempdir().unwrap();
+        let tree = root.path().join(".whiphand/worktrees/r1");
+        for c in [ctx(root.path(), root.path()), ctx(root.path(), &tree)] {
+            let spec = interactive(&step("opencode", StepMode::Interactive), &c).unwrap();
+            let config = spec
+                .prop("env")
+                .get("OPENCODE_CONFIG_CONTENT")
+                .to_js_string();
+            let external = format!("\"{}/*\":\"allow\"", to_fwd(&c.run_dir));
+            assert!(config.replace(' ', "").contains(&external), "{config}");
+        }
+    }
+}

@@ -170,7 +170,7 @@ pub fn contains(parent: &str, child: &str) -> bool {
 }
 
 /// The segments of `child` below `parent` (original casing), or None when it is not inside.
-fn relative_within(parent: &str, child: &str) -> Option<Vec<String>> {
+pub fn relative_within(parent: &str, child: &str) -> Option<Vec<String>> {
     let windows = host_windows() || is_windows_absolute(parent) || is_windows_absolute(child);
     let p = parse(parent, windows);
     let c = parse(child, windows);

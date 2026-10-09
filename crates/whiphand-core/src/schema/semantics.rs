@@ -10,7 +10,7 @@ use regex::Regex;
 
 use crate::segment::{validate_relative_path, validate_segment};
 use crate::steps::{disabled_ids, flatten_steps, join_names};
-use crate::template::{PLACEHOLDER_FIELDS, artifact_env_name, input_env_name};
+use crate::template::{PLACEHOLDER_FIELDS, artifact_env_name, input_env_name, referenced_refs};
 use crate::types::*;
 
 struct Located<'a> {
@@ -259,6 +259,48 @@ fn check_placeholders(located: &[Located], problems: &mut Vec<String>) {
     }
 }
 
+/// `worktree.base` and `worktree.branch` render once, before step 1: only `inputs.<key>` (declared),
+/// `run.id`, `run.slug` and `run.name` exist by then.
+fn check_worktree_placeholders(workflow: &Workflow, problems: &mut Vec<String>) {
+    let Some(WorktreeSetting::Enabled { base, branch }) = &workflow.worktree else {
+        return;
+    };
+    for (field, text) in [("base", base), ("branch", branch)] {
+        let Some(text) = text else { continue };
+        for caps in NAMESPACED.captures_iter(text) {
+            let (ns, name) = (&caps[1], &caps[2]);
+            let known = PLACEHOLDER_FIELDS
+                .iter()
+                .find(|(n, _)| *n == ns)
+                .map_or(&[][..], |(_, f)| *f);
+            if !known.contains(&name) {
+                problems.push(format!(
+                    "workflow: worktree.{field}: unknown placeholder '{{{{ {ns}.{name} }}}}' ({ns}.* has {})",
+                    join_names(known)
+                ));
+            } else if ns != "run" || name == "dir" || name == "workdir" {
+                problems.push(format!(
+                    "workflow: worktree.{field} uses '{{{{ {ns}.{name} }}}}', which is not available before the first step"
+                ));
+            }
+        }
+        for r in referenced_refs(text) {
+            let Some(key) = r.strip_prefix("inputs.") else {
+                continue;
+            };
+            if !workflow
+                .inputs
+                .as_ref()
+                .is_some_and(|i| i.contains_key(key))
+            {
+                problems.push(format!(
+                    "workflow: worktree.{field} uses '{{{{ {r} }}}}', which the workflow does not declare under inputs"
+                ));
+            }
+        }
+    }
+}
+
 /// Two input keys that collapse to one env name (`a-b` and `a_b`) would shadow each other.
 fn check_input_env_collisions(workflow: &Workflow, problems: &mut Vec<String>) {
     let mut seen: HashMap<String, &str> = HashMap::new();
@@ -380,6 +422,7 @@ pub fn validate_workflow_semantics(workflow: &Workflow) -> Vec<String> {
     check_names(&located, &mut problems);
     check_input_env_collisions(workflow, &mut problems);
     check_placeholders(&located, &mut problems);
+    check_worktree_placeholders(workflow, &mut problems);
 
     for src in &located {
         let step = src.step;

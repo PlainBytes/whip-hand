@@ -44,6 +44,9 @@ use crate::engine::verdict::{
     VERDICT_INSTRUCTION, parse_verdict, verdict_from_choice, verdict_from_exit,
 };
 use crate::engine::workflow_js::workflow_to_js;
+use crate::engine::worktree::{
+    self, Preflight, WorktreeRecord, WorktreeRequest, record_to_event, record_to_js,
+};
 use crate::event_paths::event_paths_to_workspace;
 use crate::js::Record;
 use crate::jsval::{JsObject, JsValue, ObjExt};
@@ -64,7 +67,8 @@ use crate::store::journal::{JournalInit, JournalOptions, RunJournal, SeedStep};
 use crate::store::markers::{WORKFLOW_SNAPSHOT_NAME, read_run_name, run_slug_for, set_run_name};
 use crate::store::retention::prune_runs;
 use crate::template::{
-    Frame, LoopFrame, Stage, StageFrame, nearest_loop, nearest_stage, render_template,
+    Frame, LoopFrame, Stage, StageFrame, TemplateScope, nearest_loop, nearest_stage,
+    render_template,
 };
 use crate::types::{
     ATTACHMENTS_REF, AgentStep, CommandStep, ManualStep, OnFindings, STAGE_REF, Scope, Step,
@@ -91,6 +95,9 @@ pub struct RunOptions {
     pub name: Option<String>,
     pub attachments: Vec<AttachmentSource>,
     pub cancel: CancellationToken,
+    /// The per-run `worktree` override: `Some(true)` forces a worktree on, `Some(false)` off,
+    /// `None` defers to the workflow.
+    pub worktree: Option<bool>,
     /// `(capability, reason)` the frontend already knows.
     pub degradations: Vec<(String, String)>,
 }
@@ -230,13 +237,17 @@ struct State {
     stage_notes: HashMap<String, StageNotes>,
     skippable: HashMap<String, DoneExecution>,
     warned_no_git: bool,
+    /// The worktree this run created, for `run:start`.
+    created_worktree: Option<WorktreeRecord>,
 }
 
 struct Run<'a, F: Frontend> {
     opts: &'a RunOptions,
     frontend: &'a F,
     journal: RunJournal,
-    workdir: String,
+    /// Home of `.whiphand/`: run dirs, config and workflows. The execution
+    /// tree is `tree()`.
+    workspace: String,
     run_id: String,
     run_dir: String,
     workflow: &'a Workflow,
@@ -263,6 +274,28 @@ fn get_vec(list: &[(String, Vec<String>)], key: &str) -> Vec<String> {
         .find(|(k, _)| k == key)
         .map(|(_, v)| v.clone())
         .unwrap_or_default()
+}
+
+/// The refusals a worktree run can make before it has a run directory.
+async fn preflight_worktree(
+    request: WorktreeRequest,
+    inputs: &Record<String>,
+    workspace: &str,
+) -> Result<(WorktreeRequest, Preflight), RunError> {
+    // The run's id and slug do not exist yet; the real base is rendered, and checked
+    // again, once they do.
+    let scope = TemplateScope {
+        inputs: inputs.clone(),
+        run_id: "run".into(),
+        run_slug: "run".into(),
+        ..TemplateScope::default()
+    };
+    let base = render_template(&request.base, &scope)
+        .map_err(|e| RunError::Workflow(vec![format!("worktree: base: {e}")]))?;
+    let pf = worktree::preflight(Path::new(workspace), &base)
+        .await
+        .map_err(|m| RunError::Workflow(vec![m]))?;
+    Ok((request, pf))
 }
 
 /// Runs a workflow to its end, or continues a stopped one (`opts.resume`).
@@ -329,6 +362,34 @@ pub async fn run_workflow<F: Frontend>(
         }
     }
     let workdir = node_path::resolve(&opts.workdir);
+    let mut tree = workdir.clone();
+    let mut requested: Option<(WorktreeRequest, Preflight)> = None;
+    match &opts.resume {
+        None => {
+            if let Some(request) = worktree::resolve_request(workflow, opts.worktree) {
+                requested = Some(preflight_worktree(request, &inputs, &workdir).await?);
+            }
+        }
+        Some(plan) => {
+            if opts.worktree.is_some() {
+                return Err(RunError::Workflow(vec![
+                    "a resumed run keeps the working tree it started in".into(),
+                ]));
+            }
+            if let Some(record) = &plan.worktree {
+                if worktree::check(record).await.is_err() {
+                    return Err(RunError::Workflow(vec![format!(
+                        "run '{}' ran in worktree {}, which no longer exists (or is not on branch '{}'); start a fresh run",
+                        plan.run_id, record.path, record.branch
+                    )]));
+                }
+                tree = record.native_tree();
+            } else if let Some(request) = worktree::resolve_request(workflow, None) {
+                // A run that failed while creating its worktree: creation runs again.
+                requested = Some(preflight_worktree(request, &inputs, &workdir).await?);
+            }
+        }
+    }
     let (run_id, run_dir) = match &opts.resume {
         None => create_run_dir(&workdir, &config.artifacts_dir)
             .map_err(|e| RunError::Failed(e.to_string()))?,
@@ -348,7 +409,8 @@ pub async fn run_workflow<F: Frontend>(
         .map_err(|e| RunError::Failed(e.to_string()))?;
     }
     let mut ctx = RunCtx {
-        workdir: workdir.clone(),
+        workspace: workdir.clone(),
+        workdir: tree,
         run_id: run_id.clone(),
         run_dir: run_dir.clone(),
         shell: match &shell {
@@ -467,7 +529,7 @@ pub async fn run_workflow<F: Frontend>(
         opts,
         frontend,
         journal,
-        workdir: workdir.clone(),
+        workspace: workdir.clone(),
         run_id: run_id.clone(),
         run_dir: run_dir.clone(),
         workflow,
@@ -492,9 +554,10 @@ pub async fn run_workflow<F: Frontend>(
                 .map(|r| r.done.clone())
                 .unwrap_or_default(),
             warned_no_git: false,
+            created_worktree: None,
         }),
     };
-    let result = run.start(&attachments).await;
+    let result = run.start(&attachments, requested.as_ref()).await;
     let result = match result {
         Ok(r) => Ok(r),
         Err(message) => {
@@ -524,12 +587,19 @@ impl<F: Frontend> Run<'_, F> {
     }
 
     fn emit_now(&self, raw: JsObject) {
-        let e = event_paths_to_workspace(&raw, &self.workdir);
+        let e = event_paths_to_workspace(&raw, &self.workspace);
         if e.str_prop("type") == Some("run:done") {
             self.run_ended.set(true);
         }
         let (seq, ts) = self.journal.record(&e);
         self.frontend.on_event(&e, seq, &ts);
+    }
+
+    /// The execution tree: where steps run and whose git working tree is
+    /// guarded and diffed. Read live, not copied: it can be repointed after
+    /// the `Run` is built.
+    fn tree(&self) -> String {
+        self.st.borrow().ctx.workdir.clone()
     }
 
     fn ctx(&self) -> RunCtx {
@@ -588,7 +658,11 @@ impl<F: Frontend> Run<'_, F> {
             .map(|m| self.fail(&m, Some(step_id)))
     }
 
-    async fn start(&self, attachments: &[PlannedAttachment]) -> Result<RunResult, String> {
+    async fn start(
+        &self,
+        attachments: &[PlannedAttachment],
+        requested: Option<&(WorktreeRequest, Preflight)>,
+    ) -> Result<RunResult, String> {
         if !self.opts.dry_run {
             copy_attachments(&self.run_dir, attachments).map_err(|e| e.to_string())?;
         }
@@ -613,13 +687,39 @@ impl<F: Frontend> Run<'_, F> {
                 st.ctx.run_name = Some(name);
             }
         }
+        if let Some((request, pf)) = requested
+            && !self.opts.dry_run
+        {
+            self.create_worktree(request, pf).await?;
+        }
         self.run_steps(attachments).await
+    }
+
+    /// Creates the run's worktree and repoints the execution tree at it.
+    async fn create_worktree(
+        &self,
+        request: &WorktreeRequest,
+        pf: &Preflight,
+    ) -> Result<(), String> {
+        let scope = self.ctx().scope();
+        let render = |field: &str, tpl: &str| {
+            render_template(tpl, &scope).map_err(|e| format!("worktree: {field}: {e}"))
+        };
+        let branch = render("branch", &request.branch)?;
+        let base = render("base", &request.base)?;
+        let record =
+            worktree::create(Path::new(&self.workspace), &self.run_id, &branch, &base, pf).await?;
+        self.journal.note_worktree(record_to_js(&record));
+        let mut st = self.st.borrow_mut();
+        st.ctx.workdir = record.native_tree();
+        st.created_worktree = Some(record);
+        Ok(())
     }
 
     async fn teardown(&self) {
         self.journal.close();
         if !self.opts.dry_run {
-            match snapshot_tree(Path::new(&self.workdir)).await {
+            match snapshot_tree(Path::new(&self.tree())).await {
                 GitResult::Ok(tree) => self.journal.note_stopped_tree(&tree),
                 GitResult::Unavailable(reason) if !self.journal.lost_lease() => self.emit_now(obj! {
                     "type" => "run:degraded", "capability" => "stopped-tree", "reason" => reason,
@@ -632,7 +732,7 @@ impl<F: Frontend> Run<'_, F> {
             .opts
             .max_retained_runs
             .unwrap_or(self.opts.config.runs.max_retained);
-        let pruned = prune_runs(&self.workdir, &self.opts.config, max);
+        let pruned = prune_runs(&self.workspace, &self.opts.config, max);
         if !self.journal.lost_lease() {
             for (run_id, reason) in pruned.failed {
                 self.emit_now(obj! {
@@ -656,7 +756,7 @@ impl<F: Frontend> Run<'_, F> {
             }
             ids
         };
-        let workdir = self.workdir.clone();
+        let tree = self.tree();
         let run_id = self.run_id.clone();
         let shell = match &self.shell {
             ShellResult::Ok(p) => Some(p.clone()),
@@ -665,7 +765,7 @@ impl<F: Frontend> Run<'_, F> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         *self.run_env.borrow_mut() = Some(rx);
         tokio::spawn(async move {
-            let dir = Path::new(&workdir);
+            let dir = Path::new(&tree);
             let (head, snapshot) = tokio::join!(head_sha(dir), snapshot_tree(dir));
             let mut runners = Vec::new();
             for id in runner_ids {
@@ -713,6 +813,9 @@ impl<F: Frontend> Run<'_, F> {
         }
         match &self.opts.resume {
             None => {
+                if let Some(record) = &self.st.borrow().created_worktree {
+                    start.set("worktree", record_to_event(record));
+                }
                 if !attachments.is_empty() {
                     let list: Vec<JsValue> = attachments
                         .iter()
@@ -811,7 +914,8 @@ impl<F: Frontend> Run<'_, F> {
         if !matches!(step, Step::Agent(_) | Step::Command(_)) {
             return (None, None, None);
         }
-        let dir = Path::new(&self.workdir);
+        let tree = self.tree();
+        let dir = Path::new(&tree);
         match snapshot_tree(dir).await {
             GitResult::Ok(tree) => {
                 let agent_held = matches!(step, Step::Agent(a) if a.allow_commits != Some(true));
@@ -862,7 +966,7 @@ impl<F: Frontend> Run<'_, F> {
 
     async fn check_head(&self, step: &AgentStep, head: Option<Option<String>>) -> Option<String> {
         let before = head?;
-        let now = head_position(Path::new(&self.workdir)).await;
+        let now = head_position(Path::new(&self.tree())).await;
         let now = match now {
             GitResult::Ok(sha) => sha,
             GitResult::Unavailable(reason) => {
@@ -902,7 +1006,7 @@ impl<F: Frontend> Run<'_, F> {
     ) -> Result<Outcome, String> {
         let id = step.id();
         if let Some(before) = before {
-            let tree = match snapshot_tree(Path::new(&self.workdir)).await {
+            let tree = match snapshot_tree(Path::new(&self.tree())).await {
                 GitResult::Ok(t) => t,
                 GitResult::Unavailable(r) => {
                     return Ok(self.fail(
@@ -1078,7 +1182,7 @@ impl<F: Frontend> Run<'_, F> {
                 let path = st.ctx.artifacts.get(id).cloned().unwrap_or_default();
                 format!(
                     "A previous review found problems. Read the findings at {} and address every one of them.",
-                    to_workspace(&path, &self.workdir)
+                    to_workspace(&path, &self.tree())
                 )
             })
             .collect();
@@ -1228,7 +1332,7 @@ impl<F: Frontend> Run<'_, F> {
                 "{}\n\nWrite your '{}' artifact to: {}",
                 headless_prompt(&step.id, step.writes, &eff.prompt),
                 step.output,
-                to_workspace(&artifact, &self.workdir)
+                to_workspace(&artifact, &self.tree())
             );
         }
 
@@ -1480,7 +1584,7 @@ impl<F: Frontend> Run<'_, F> {
             })
             .collect();
         if let Some(entry) = entry
-            && let GitResult::Ok(now) = snapshot_tree(Path::new(&self.workdir)).await
+            && let GitResult::Ok(now) = snapshot_tree(Path::new(&self.tree())).await
             && diff_snapshots(&entry, &now).is_empty()
         {
             notes.push("This stage produced no changes.".into());
@@ -1828,7 +1932,7 @@ impl<F: Frontend> Run<'_, F> {
         &self,
         stages: &crate::types::StagesStep,
     ) -> Result<Option<String>, Outcome> {
-        match snapshot_tree(Path::new(&self.workdir)).await {
+        match snapshot_tree(Path::new(&self.tree())).await {
             GitResult::Ok(t) => Ok(Some(t)),
             GitResult::Unavailable(reason) => {
                 if flatten_steps(&stages.steps)
@@ -1869,7 +1973,7 @@ impl<F: Frontend> Run<'_, F> {
             if self.aborted() {
                 return Ok(self.cancelled());
             }
-            let list = match discover_stages(&self.workdir, &pattern) {
+            let list = match discover_stages(&self.tree(), &pattern) {
                 Ok(l) => l,
                 Err(e) => {
                     return Ok(self.fail(

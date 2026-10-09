@@ -1376,6 +1376,7 @@ describe('RunDetailPage: cycles and manual steps', () => {
   it('shows the change set file by file when the step asked for a diff', async () => {
     const withDiff = { ...request, context: { artifacts: [], diff: 'stat + patch' } };
     const { transport } = renderRunDetail('job-diff');
+    emitWhiphandEvent(transport, 'job-diff', 'run-diff', { type: 'run:start', runId: 'run-diff', workflow: 'ship' }, 't1');
     transport.emitLine({ method: 'manualRequest', params: { jobId: 'job-diff', request: withDiff } });
     await screen.findByTestId('review-overlay');
 
@@ -1384,7 +1385,7 @@ describe('RunDetailPage: cycles and manual steps', () => {
       if (index === -1) throw new Error('getWorkingDiff not sent yet');
       return transport.sentRequest(index);
     });
-    expect(req.params).toMatchObject({ workdir: '/ws' });
+    expect(req.params).toMatchObject({ workdir: '/ws', runId: 'run-diff' });
 
     transport.emitLine({
       id: req.id,

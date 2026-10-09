@@ -5335,7 +5335,7 @@ dependencies = [
 
 [[package]]
 name = "whiphand-agent"
-version = "0.3.5"
+version = "0.4.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -5354,7 +5354,7 @@ dependencies = [
 
 [[package]]
 name = "whiphand-core"
-version = "0.3.5"
+version = "0.4.0"
 dependencies = [
  "getrandom 0.3.4",
  "libc",
@@ -5379,7 +5379,7 @@ dependencies = [
 
 [[package]]
 name = "whiphand-protocol"
-version = "0.3.5"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",

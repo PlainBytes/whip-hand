@@ -56,6 +56,8 @@ async fn dispatch(matches: ArgMatches) -> CmdResult {
                 name: string(m, "name"),
                 max_iterations: m.get_one::<u64>("max-iterations").copied(),
                 extra_iterations: m.get_one::<u64>("extra-iterations").copied(),
+                worktree: flag(m, "worktree"),
+                no_worktree: flag(m, "no-worktree"),
             })
             .await
         }
@@ -70,6 +72,14 @@ async fn dispatch(matches: ArgMatches) -> CmdResult {
             flag(m, "global"),
             &dir(m),
         ),
+        "worktree" => {
+            let (_, m) = m.subcommand().expect("a worktree subcommand is required");
+            commands::worktree_remove(
+                &string(m, "runId").unwrap_or_default(),
+                flag(m, "force"),
+                &dir(m),
+            )
+        }
         "config" => {
             let (sub, m) = m.subcommand().expect("a config subcommand is required");
             match sub {

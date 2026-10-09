@@ -92,7 +92,7 @@ export type PathAttachment = { path: string, };
 
 export type Base64Attachment = { name: string, base64: string, };
 
-export type StartRunParams = { workdir: string, workflow: string, inputs?: Record<string, string>, dryRun?: boolean, maxIterations?: number, name?: string, attachments?: Array<AttachmentSource>, };
+export type StartRunParams = { workdir: string, workflow: string, inputs?: Record<string, string>, dryRun?: boolean, maxIterations?: number, name?: string, attachments?: Array<AttachmentSource>, worktree?: boolean, };
 
 export type JobIdResult = { jobId: string, };
 
@@ -104,7 +104,7 @@ export type RunRefParams = { workdir: string, runId: string, };
 
 export type CancelRunParams = JobParams | RunRefParams;
 
-export type DeleteRefusal = "locked" | "running" | "missing";
+export type DeleteRefusal = "locked" | "running" | "missing" | "worktree-dirty";
 
 export type DeleteRunResult = { deleted: boolean, reason?: DeleteRefusal, };
 
@@ -129,6 +129,12 @@ export type ListRunsResult = RunSummary[];
 export type GetRunResult = RunDetail | null;
 
 export type ReadRunLogParams = { workdir: string, runId: string, offset?: number, limit?: number, fromEnd?: boolean, beforeByte?: number, };
+
+export type GetWorkingDiffParams = { workdir: string, 
+/**
+ * Diff this run's worktree instead of the workspace.
+ */
+runId?: string, };
 
 export type ReadRunLogResult = { lines: Array<string>, total?: number, truncated?: boolean, startByte?: number, atStart?: boolean, };
 
@@ -262,7 +268,6 @@ export type EndSessionResult = OkResult;
 export type ResolveManualResult = OkResult;
 export type ListRunsParams = WorkdirParams;
 export type GetRunParams = RunRefParams;
-export type GetWorkingDiffParams = WorkdirParams;
 export type StatArtifactParams = ArtifactRefParams;
 export type PtyInputResult = OkTrue;
 export type PtyResizeResult = OkTrue;

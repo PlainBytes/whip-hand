@@ -301,5 +301,19 @@ pub struct Workflow {
     pub inputs: Option<Record<WorkflowInput>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub on_findings: Option<OnFindings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<WorktreeSetting>,
     pub steps: Vec<Step>,
+}
+
+/// The workflow's `worktree:` key. `Disabled` (`worktree: false`) stays distinct from
+/// absent so a saved file round-trips byte for byte.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub enum WorktreeSetting {
+    Disabled,
+    /// `base` and `branch` are raw templates; `None` means the default.
+    Enabled {
+        base: Option<String>,
+        branch: Option<String>,
+    },
 }

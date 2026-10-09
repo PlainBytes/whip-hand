@@ -494,6 +494,8 @@ pub enum DeleteRefusal {
     Locked,
     Running,
     Missing,
+    #[serde(rename = "worktree-dirty")]
+    WorktreeDirty,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]

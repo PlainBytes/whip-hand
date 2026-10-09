@@ -76,6 +76,14 @@ export const uiActions: Record<string, Record<string, string>> = {
     // The dialog's Project/Global choice, driving createWorkflow's `scope`.
     '--global': 'workflows:newWorkflowScopeChoice',
   },
+  // Removing a worktree on its own has no desktop button yet; deleting the run
+  // removes its worktree too, and refuses while it holds uncommitted changes.
+  'worktree remove': {
+    _command: 'exempt:cli-only-the-delete-run-dialog-removes-worktrees',
+    '<runId>': 'exempt:cli-only',
+    '--force': 'exempt:cli-only',
+    '-C': 'sidebar:workspaceSwitcher',
+  },
   // `whiphand config get`/`whiphand config set` are the CLI's half of the global-config
   // layering the desktop reads/writes through configGet/configSet — a
   // dotted key and a raw value have no single UI field each maps onto, since

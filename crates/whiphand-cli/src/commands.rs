@@ -16,6 +16,7 @@ use whiphand_core::doctor::tools::{detect_tools, doctor_report};
 use whiphand_core::engine::attachments::{AttachmentSource, validate_attachments};
 use whiphand_core::engine::resume::{ResumePlan, plan_resume};
 use whiphand_core::engine::runner::{RunError, RunOptions, run_workflow};
+use whiphand_core::engine::worktree::{RemoveWorktree, record_from_manifest, remove_sync};
 use whiphand_core::js::number_to_string;
 use whiphand_core::node_path;
 use whiphand_core::process::container::Container;
@@ -23,7 +24,7 @@ use whiphand_core::scaffold::{create_workflow, init_workspace};
 use whiphand_core::schema::{
     WorkflowError, parse_workflow, unattended_problems, validate_workflow_warnings,
 };
-use whiphand_core::store::runs::rename_run;
+use whiphand_core::store::runs::{get_run, rename_run};
 use whiphand_core::types::{OnFindings, Scope, Workflow};
 use whiphand_core::workspace::{parse_input_pairs, resolve_workflow_path};
 use whiphand_core::yaml_emit::stringify_yaml;
@@ -127,6 +128,52 @@ pub fn rename(run_id: &str, name: &str, dir: &str) -> CmdResult {
         Some(n) => format!("{run_id} — {n}"),
     });
     Ok(0)
+}
+
+// ---------------------------------------------------------------- worktree remove
+
+pub fn worktree_remove(run_id: &str, force: bool, dir: &str) -> CmdResult {
+    let workdir = node_path::resolve(dir);
+    let config = workspace_config(&workdir)?;
+    let Some(run) = get_run(&workdir, &config, run_id) else {
+        err_line(&format!(
+            "✘ no run '{run_id}' under {}",
+            config.artifacts_dir
+        ));
+        return Ok(USAGE_ERROR);
+    };
+    if run.status() == "running" {
+        err_line(&format!("✘ run '{run_id}' is still running"));
+        return Ok(1);
+    }
+    let Some(record) = record_from_manifest(&run.obj) else {
+        err_line(&format!("✘ run '{run_id}' has no worktree"));
+        return Ok(1);
+    };
+    match remove_sync(&workdir, &record, force) {
+        RemoveWorktree::Removed => {
+            out_line(&format!(
+                "removed {}; branch {} kept",
+                record.path, record.branch
+            ));
+            Ok(0)
+        }
+        RemoveWorktree::Absent => {
+            out_line(&format!(
+                "{} is already gone; branch {} kept",
+                record.path, record.branch
+            ));
+            Ok(0)
+        }
+        RemoveWorktree::Dirty(reason) => {
+            err_line(&format!(
+                "✘ {reason}\n  Commit or discard the changes in {}, or run `whiphand worktree remove {run_id} --force`.",
+                record.path
+            ));
+            Ok(1)
+        }
+        RemoveWorktree::Failed(reason) => Err(Thrown::error(reason)),
+    }
 }
 
 // ---------------------------------------------------------------- config

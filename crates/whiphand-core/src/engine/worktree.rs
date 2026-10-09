@@ -190,6 +190,74 @@ pub async fn check(record: &WorktreeRecord) -> Result<(), String> {
     }
 }
 
+/// What `remove_sync` found.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RemoveWorktree {
+    Removed,
+    /// The directory was already gone; git's record of it is pruned.
+    Absent,
+    /// Modified or untracked files in it: git's first complaint line.
+    Dirty(String),
+    Failed(String),
+}
+
+fn git_sync(workspace: &str, args: &[&str]) -> Result<std::process::Output, String> {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(workspace)
+        .args(args)
+        .output()
+        .map_err(|e| format!("git could not be run: {e}"))
+}
+
+fn first_line(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .trim()
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// `git worktree remove [--force] <path>`, then `git worktree prune`. Never deletes the branch.
+/// Synchronous: retention is, so this does not go through `exec_runner`.
+pub fn remove_sync(workspace: &str, record: &WorktreeRecord, force: bool) -> RemoveWorktree {
+    let path = to_native(&record.path, "");
+    let prune = || git_sync(workspace, &["worktree", "prune"]);
+    if !Path::new(&path).exists() {
+        return match prune() {
+            Ok(out) if out.status.success() => RemoveWorktree::Absent,
+            Ok(out) => RemoveWorktree::Failed(format!(
+                "git worktree prune failed: {}",
+                first_line(&out.stderr)
+            )),
+            Err(reason) => RemoveWorktree::Failed(reason),
+        };
+    }
+    let mut args = vec!["worktree", "remove"];
+    if force {
+        args.push("--force");
+    }
+    args.push("--");
+    args.push(&path);
+    let out = match git_sync(workspace, &args) {
+        Ok(out) => out,
+        Err(reason) => return RemoveWorktree::Failed(reason),
+    };
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let line = first_line(&out.stderr);
+        return if stderr.contains("contains modified or untracked files") {
+            RemoveWorktree::Dirty(line)
+        } else {
+            RemoveWorktree::Failed(line)
+        };
+    }
+    // The tree is gone either way; a failed prune only leaves stale metadata.
+    let _ = prune();
+    RemoveWorktree::Removed
+}
+
 pub fn record_from_manifest(manifest: &JsObject) -> Option<WorktreeRecord> {
     let w = manifest.prop("worktree").as_obj()?;
     let field = |k: &str| w.str_prop(k).map(str::to_string);
@@ -373,6 +441,70 @@ mod tests {
         sh(d.path(), &["add", "."]);
         sh(d.path(), &["commit", "-q", "-m", "i"]);
         d
+    }
+
+    fn linked_worktree(repo: &Path) -> WorktreeRecord {
+        let tree = repo.join("wt");
+        sh(
+            repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "kept",
+                tree.to_str().unwrap(),
+            ],
+        );
+        let path = tree.to_string_lossy().replace('\\', "/");
+        WorktreeRecord {
+            path: path.clone(),
+            tree: path,
+            branch: "kept".into(),
+            base: "HEAD".into(),
+            base_sha: "abc".into(),
+        }
+    }
+
+    #[test]
+    fn remove_sync_removes_a_clean_tree_and_keeps_the_branch() {
+        let d = repo();
+        let record = linked_worktree(d.path());
+        let ws = d.path().to_string_lossy();
+        assert_eq!(remove_sync(&ws, &record, false), RemoveWorktree::Removed);
+        assert!(!d.path().join("wt").exists());
+        sh(d.path(), &["rev-parse", "--verify", "-q", "kept"]);
+    }
+
+    #[test]
+    fn remove_sync_refuses_a_dirty_tree_unless_forced() {
+        let d = repo();
+        let record = linked_worktree(d.path());
+        std::fs::write(d.path().join("wt/scratch"), "wip").unwrap();
+        let ws = d.path().to_string_lossy();
+        assert!(matches!(
+            remove_sync(&ws, &record, false),
+            RemoveWorktree::Dirty(_)
+        ));
+        assert!(d.path().join("wt/scratch").is_file());
+        assert_eq!(remove_sync(&ws, &record, true), RemoveWorktree::Removed);
+        assert!(!d.path().join("wt").exists());
+        sh(d.path(), &["rev-parse", "--verify", "-q", "kept"]);
+    }
+
+    #[test]
+    fn remove_sync_reports_a_tree_that_is_already_gone() {
+        let d = repo();
+        let record = linked_worktree(d.path());
+        std::fs::remove_dir_all(d.path().join("wt")).unwrap();
+        let ws = d.path().to_string_lossy();
+        assert_eq!(remove_sync(&ws, &record, false), RemoveWorktree::Absent);
+        let listed = std::process::Command::new("git")
+            .args(["worktree", "list"])
+            .current_dir(d.path())
+            .output()
+            .unwrap();
+        assert!(!String::from_utf8_lossy(&listed.stdout).contains("wt"));
     }
 
     #[test]

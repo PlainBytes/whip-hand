@@ -104,7 +104,7 @@ export type RunRefParams = { workdir: string, runId: string, };
 
 export type CancelRunParams = JobParams | RunRefParams;
 
-export type DeleteRefusal = "locked" | "running" | "missing";
+export type DeleteRefusal = "locked" | "running" | "missing" | "worktree-dirty";
 
 export type DeleteRunResult = { deleted: boolean, reason?: DeleteRefusal, };
 

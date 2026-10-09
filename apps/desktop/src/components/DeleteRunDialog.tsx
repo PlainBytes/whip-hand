@@ -22,9 +22,12 @@ export interface DeleteRunDialogProps {
  * the request itself succeeded — so it lands in the same error slot a thrown
  * RPC does but never reaches `onDeleted`.
  */
-function refusalMessage(reason: DeleteRunResult['reason']): string {
+function refusalMessage(reason: DeleteRunResult['reason'], runId: string): string {
   if (reason === 'locked') return 'This run is locked.';
   if (reason === 'running') return 'This run is still running.';
+  if (reason === 'worktree-dirty') {
+    return `This run's worktree has uncommitted changes. Commit or discard them in the worktree, or run \`whiphand worktree remove ${runId} --force\`.`;
+  }
   return 'This run no longer exists.';
 }
 
@@ -48,7 +51,7 @@ export function DeleteRunDialog({ workdir, runId, name, onDeleted, onDismiss }: 
     try {
       const result = await client.request('deleteRun', { workdir, runId });
       if (result.deleted) onDeleted();
-      else setError(refusalMessage(result.reason));
+      else setError(refusalMessage(result.reason, runId));
     } catch (err) {
       setError(errorMessage(err));
     } finally {

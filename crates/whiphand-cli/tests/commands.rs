@@ -884,3 +884,160 @@ fn run_workdir_is_the_workspace_without_a_worktree() {
         canonical(e.ws())
     );
 }
+
+// ------------------------------------------------------------------ worktree remove / retention
+
+const LEAVE_UNTRACKED_FILE: &str = "echo wip > scratch.txt";
+
+fn branch_listed(e: &Env, branch: &str) -> bool {
+    !git(e.ws(), &["branch", "--list", branch]).trim().is_empty()
+}
+
+fn worktree_listed(e: &Env, id: &str) -> bool {
+    git(e.ws(), &["worktree", "list", "--porcelain"]).contains(&format!("worktrees/{id}"))
+}
+
+fn run_ids(e: &Env) -> Vec<String> {
+    let mut ids: Vec<String> = std::fs::read_dir(e.runs_dir())
+        .unwrap()
+        .flatten()
+        .map(|d| d.file_name().to_string_lossy().into_owned())
+        .collect();
+    ids.sort();
+    ids
+}
+
+#[test]
+fn worktree_remove_deletes_the_tree_and_keeps_the_branch() {
+    let e = Env::new();
+    git_workspace(&e);
+    worktree_workflow(&e, "worktree: true\n", "true");
+    assert_eq!(e.run(&["run", "wt"]).code(), 0);
+    let id = run_id(&e.only_run());
+    let tree = e.ws().join(".whiphand/worktrees").join(&id);
+    assert!(tree.is_dir());
+
+    let out = e.run(&["worktree", "remove", &id]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    assert!(
+        out.stdout()
+            .contains(&format!("; branch whiphand/{id} kept")),
+        "{}",
+        out.stdout()
+    );
+    assert!(!tree.exists());
+    assert!(!worktree_listed(&e, &id));
+    assert!(branch_listed(&e, &format!("whiphand/{id}")));
+    // The run stays, still recording its worktree.
+    assert!(e.only_run().join("run.json").is_file());
+}
+
+#[test]
+fn worktree_remove_refuses_a_dirty_tree_until_forced() {
+    let e = Env::new();
+    git_workspace(&e);
+    worktree_workflow(&e, "worktree: true\n", LEAVE_UNTRACKED_FILE);
+    assert_eq!(e.run(&["run", "wt"]).code(), 0);
+    let id = run_id(&e.only_run());
+    let tree = e.ws().join(".whiphand/worktrees").join(&id);
+    assert!(tree.join("scratch.txt").is_file());
+
+    let out = e.run(&["worktree", "remove", &id]);
+    assert_eq!(out.code(), 1, "{}", out.stdout());
+    assert!(out.stderr().contains("--force"), "{}", out.stderr());
+    assert!(tree.is_dir());
+
+    let out = e.run(&["worktree", "remove", &id, "--force"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    assert!(!tree.exists());
+    assert!(branch_listed(&e, &format!("whiphand/{id}")));
+}
+
+#[test]
+fn worktree_remove_refuses_a_run_without_a_worktree() {
+    let e = Env::new();
+    git_workspace(&e);
+    worktree_workflow(&e, "", "true");
+    assert_eq!(e.run(&["run", "wt"]).code(), 0);
+    let id = run_id(&e.only_run());
+    let out = e.run(&["worktree", "remove", &id]);
+    assert_eq!(out.code(), 1);
+    assert!(
+        out.stderr()
+            .contains(&format!("run '{id}' has no worktree")),
+        "{}",
+        out.stderr()
+    );
+}
+
+#[test]
+fn worktree_remove_help_documents_force_and_the_kept_branch() {
+    let e = Env::new();
+    let out = Out(e
+        .command(&["worktree", "remove", "--help"], e.ws())
+        .output()
+        .unwrap());
+    assert_eq!(out.code(), 0);
+    assert!(out.stdout().contains("--force"), "{}", out.stdout());
+    assert!(out.stdout().contains("branch is kept"), "{}", out.stdout());
+}
+
+#[test]
+fn pruning_removes_the_oldest_runs_worktree_and_keeps_its_branch() {
+    let e = Env::new();
+    git_workspace(&e);
+    e.write(
+        ".whiphand/config.yaml",
+        "runs:\n  auto_name: false\n  max_retained: 1\n",
+    );
+    worktree_workflow(&e, "worktree: true\n", "true");
+    assert_eq!(e.run(&["run", "wt"]).code(), 0);
+    let first = run_id(&e.only_run());
+    // Run ids are second-resolution timestamps plus a suffix; make the second sort later.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    assert_eq!(e.run(&["run", "wt"]).code(), 0);
+
+    let ids = run_ids(&e);
+    assert_eq!(ids.len(), 1, "{ids:?}");
+    assert_ne!(ids[0], first);
+    assert!(!e.ws().join(".whiphand/worktrees").join(&first).exists());
+    assert!(!worktree_listed(&e, &first));
+    assert!(branch_listed(&e, &format!("whiphand/{first}")));
+    assert!(e.ws().join(".whiphand/worktrees").join(&ids[0]).is_dir());
+}
+
+#[test]
+fn pruning_keeps_a_dirty_worktree_run_and_says_so() {
+    let e = Env::new();
+    git_workspace(&e);
+    e.write(
+        ".whiphand/config.yaml",
+        "runs:\n  auto_name: false\n  max_retained: 1\n",
+    );
+    worktree_workflow(&e, "worktree: true\n", LEAVE_UNTRACKED_FILE);
+    assert_eq!(e.run(&["run", "wt"]).code(), 0);
+    let first = run_id(&e.only_run());
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let out = e.run(&["run", "wt", "--json"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+
+    assert!(e.runs_dir().join(&first).is_dir());
+    assert!(
+        e.ws()
+            .join(".whiphand/worktrees")
+            .join(&first)
+            .join("scratch.txt")
+            .is_file()
+    );
+    let degraded = out
+        .stdout()
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .find(|v| v["type"] == "run:degraded" && v["capability"] == "retention")
+        .unwrap_or_else(|| panic!("no retention event: {}", out.stdout()));
+    let reason = degraded["reason"].as_str().unwrap();
+    assert!(
+        reason.contains(&first) && reason.contains("worktree") && reason.contains("not removed"),
+        "{reason}"
+    );
+}

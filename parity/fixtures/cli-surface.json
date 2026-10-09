@@ -1,107 +1,108 @@
 {
   "commands": [
     {
-      "args": [],
       "name": "doctor",
+      "args": [],
       "options": [
         {
           "flags": "-C <dir>",
-          "hasDefault": true,
           "required": true,
+          "hasDefault": true,
           "short": "-C"
         }
       ]
     },
     {
+      "name": "run",
       "args": [
         {
           "name": "workflow",
           "required": false
         }
       ],
-      "name": "run",
       "options": [
         {
           "flags": "--resume <runId>",
+          "required": true,
           "hasDefault": false,
-          "long": "--resume",
-          "required": true
+          "long": "--resume"
         },
         {
           "flags": "--fresh-session",
+          "required": false,
           "hasDefault": true,
-          "long": "--fresh-session",
-          "required": false
+          "long": "--fresh-session"
         },
         {
           "flags": "--worktree",
+          "required": false,
           "hasDefault": true,
-          "long": "--worktree",
-          "required": false
+          "long": "--worktree"
         },
         {
           "flags": "--no-worktree",
+          "required": false,
           "hasDefault": true,
-          "long": "--no-worktree",
-          "required": false
+          "long": "--no-worktree"
         },
         {
           "flags": "--dry-run",
+          "required": false,
           "hasDefault": true,
-          "long": "--dry-run",
-          "required": false
+          "long": "--dry-run"
         },
         {
           "flags": "--input <pair...>",
+          "required": true,
           "hasDefault": true,
-          "long": "--input",
-          "required": true
+          "long": "--input"
         },
         {
           "flags": "--attach <path...>",
+          "required": true,
           "hasDefault": true,
-          "long": "--attach",
-          "required": true
+          "long": "--attach"
         },
         {
           "flags": "-C <dir>",
-          "hasDefault": true,
           "required": true,
+          "hasDefault": true,
           "short": "-C"
         },
         {
           "flags": "--json",
+          "required": false,
           "hasDefault": true,
-          "long": "--json",
-          "required": false
+          "long": "--json"
         },
         {
           "flags": "--yes",
+          "required": false,
           "hasDefault": true,
-          "long": "--yes",
-          "required": false
+          "long": "--yes"
         },
         {
           "flags": "--name <name>",
+          "required": true,
           "hasDefault": false,
-          "long": "--name",
-          "required": true
+          "long": "--name"
         },
         {
           "flags": "--max-iterations <n>",
+          "required": true,
           "hasDefault": false,
-          "long": "--max-iterations",
-          "required": true
+          "long": "--max-iterations"
         },
         {
           "flags": "--extra-iterations <n>",
+          "required": true,
           "hasDefault": false,
-          "long": "--extra-iterations",
-          "required": true
+          "long": "--extra-iterations"
         }
       ]
     },
     {
+      "name": "rename-run",
       "args": [
         {
           "name": "runId",
@@ -112,75 +113,98 @@
           "required": true
         }
       ],
-      "name": "rename-run",
       "options": [
         {
           "flags": "-C <dir>",
-          "hasDefault": true,
           "required": true,
+          "hasDefault": true,
           "short": "-C"
         }
       ]
     },
     {
-      "args": [],
       "name": "init",
+      "args": [],
       "options": [
         {
           "flags": "-C <dir>",
-          "hasDefault": true,
           "required": true,
+          "hasDefault": true,
           "short": "-C"
         }
       ]
     },
     {
+      "name": "new-workflow",
       "args": [
         {
           "name": "name",
           "required": true
         }
       ],
-      "name": "new-workflow",
       "options": [
         {
           "flags": "--global",
+          "required": false,
           "hasDefault": true,
-          "long": "--global",
-          "required": false
+          "long": "--global"
         },
         {
           "flags": "-C <dir>",
-          "hasDefault": true,
           "required": true,
+          "hasDefault": true,
           "short": "-C"
         }
       ]
     },
     {
+      "name": "worktree remove",
+      "args": [
+        {
+          "name": "runId",
+          "required": true
+        }
+      ],
+      "options": [
+        {
+          "flags": "--force",
+          "required": false,
+          "hasDefault": true,
+          "long": "--force"
+        },
+        {
+          "flags": "-C <dir>",
+          "required": true,
+          "hasDefault": true,
+          "short": "-C"
+        }
+      ]
+    },
+    {
+      "name": "config get",
       "args": [
         {
           "name": "key",
           "required": false
         }
       ],
-      "name": "config get",
       "options": [
         {
           "flags": "--global",
+          "required": false,
           "hasDefault": true,
-          "long": "--global",
-          "required": false
+          "long": "--global"
         },
         {
           "flags": "-C <dir>",
-          "hasDefault": true,
           "required": true,
+          "hasDefault": true,
           "short": "-C"
         }
       ]
     },
     {
+      "name": "config set",
       "args": [
         {
           "name": "key",
@@ -191,18 +215,17 @@
           "required": true
         }
       ],
-      "name": "config set",
       "options": [
         {
           "flags": "--global",
+          "required": false,
           "hasDefault": true,
-          "long": "--global",
-          "required": false
+          "long": "--global"
         },
         {
           "flags": "-C <dir>",
-          "hasDefault": true,
           "required": true,
+          "hasDefault": true,
           "short": "-C"
         }
       ]

@@ -204,6 +204,28 @@ pub fn build_cli() -> Command {
             .arg(extra()),
         )
         .subcommand(
+            sub("worktree", "manage the git worktrees runs were made in")
+                .subcommand_required(true)
+                .subcommand(
+                    sub(
+                        "remove",
+                        "remove a run's git worktree; its branch is kept, and so is the run",
+                    )
+                    .arg(
+                        Arg::new("runId")
+                            .required(true)
+                            .help("run id, as shown by `whiphand run` and in the desktop app"),
+                    )
+                    .arg(flag(
+                        "force",
+                        "remove the worktree even with uncommitted or untracked changes in it, discarding them; \
+                         the branch is kept either way",
+                    ))
+                    .arg(dir_option("working folder"))
+                    .arg(extra()),
+                ),
+        )
+        .subcommand(
             sub("config", "read or write workspace or global config")
                 .subcommand_required(true)
                 .subcommand(

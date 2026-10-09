@@ -34,6 +34,18 @@
           "required": false
         },
         {
+          "flags": "--worktree",
+          "hasDefault": true,
+          "long": "--worktree",
+          "required": false
+        },
+        {
+          "flags": "--no-worktree",
+          "hasDefault": true,
+          "long": "--no-worktree",
+          "required": false
+        },
+        {
           "flags": "--dry-run",
           "hasDefault": true,
           "long": "--dry-run",

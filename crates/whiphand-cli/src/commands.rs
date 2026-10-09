@@ -325,6 +325,8 @@ pub struct RunArgs {
     pub name: Option<String>,
     pub max_iterations: Option<u64>,
     pub extra_iterations: Option<u64>,
+    pub worktree: bool,
+    pub no_worktree: bool,
 }
 
 fn attachment_refusal(problems: &[String]) -> i32 {
@@ -341,6 +343,14 @@ fn usage_problem(a: &RunArgs) -> Option<&'static str> {
             "--extra-iterations only means something with --resume; a fresh run sets its budget with \
              --max-iterations",
         );
+    }
+    if (a.worktree || a.no_worktree) && a.resume.is_some() {
+        return Some(
+            "--resume returns to the working tree the run started in; --worktree and --no-worktree only apply to a new run",
+        );
+    }
+    if a.worktree && a.no_worktree {
+        return Some("--worktree and --no-worktree contradict each other; pass one");
     }
     if a.resume.is_some() {
         // The run's own snapshot decides what executes.
@@ -571,7 +581,11 @@ pub async fn run(a: RunArgs) -> CmdResult {
         name: a.name.clone(),
         attachments,
         cancel,
-        worktree: None,
+        worktree: match (a.worktree, a.no_worktree) {
+            (true, _) => Some(true),
+            (_, true) => Some(false),
+            _ => None,
+        },
         degradations: opened.degradations.clone(),
     };
     let result = run_workflow(&opts, &tty).await;

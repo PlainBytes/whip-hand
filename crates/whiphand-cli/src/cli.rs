@@ -112,6 +112,20 @@ pub fn build_cli() -> Command {
                     "fresh-session",
                     "on resume, start a new agent session instead of continuing the recorded one",
                 ))
+                .arg(
+                    flag(
+                        "worktree",
+                        "run in a new git worktree on its own branch, even if the workflow does not ask for one",
+                    )
+                    .conflicts_with_all(["no-worktree", "resume"]),
+                )
+                .arg(
+                    flag(
+                        "no-worktree",
+                        "run in the workspace even if the workflow asks for a worktree",
+                    )
+                    .conflicts_with("resume"),
+                )
                 .arg(flag("dry-run", "resolve and print every step argv without spawning"))
                 .arg(variadic("input", "pair", "workflow input as key=value"))
                 .arg(variadic(

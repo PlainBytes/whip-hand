@@ -35,6 +35,10 @@ export const uiActions: Record<string, Record<string, string>> = {
     // NewRunDialog's "Max loop iterations" Field/SpinButton, driving startRun's
     // `maxIterations`.
     '--max-iterations': 'new-run-dialog:maxIterationsInput',
+    // NewRunDialog's "Run in a separate worktree" Switch, driving startRun's
+    // `worktree`. The switch sends false explicitly, which is `--no-worktree`.
+    '--worktree': 'new-run-dialog:worktreeSwitch',
+    '--no-worktree': 'new-run-dialog:worktreeSwitch',
     // NewRunDialog's "Name (optional)" Field/Input, driving startRun's `name`.
     '--name': 'new-run-dialog:nameInput',
     // RunDetailPage's "Resume" button, shown for a failed, interrupted or

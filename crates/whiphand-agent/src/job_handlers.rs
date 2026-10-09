@@ -231,6 +231,7 @@ fn start_run(agent: &Rc<Agent>, p: &Value) -> R {
         max_iterations: p["maxIterations"].as_f64().map(|n| n as u64),
         name: p["name"].as_str().map(str::to_string),
         attachments,
+        worktree: p["worktree"].as_bool(),
     };
     let identity = opened.identity_key.clone();
     tokio::task::spawn_local(run_job(agent.clone(), job.clone(), params, opened));

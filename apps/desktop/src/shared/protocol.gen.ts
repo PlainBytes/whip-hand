@@ -92,7 +92,7 @@ export type PathAttachment = { path: string, };
 
 export type Base64Attachment = { name: string, base64: string, };
 
-export type StartRunParams = { workdir: string, workflow: string, inputs?: Record<string, string>, dryRun?: boolean, maxIterations?: number, name?: string, attachments?: Array<AttachmentSource>, };
+export type StartRunParams = { workdir: string, workflow: string, inputs?: Record<string, string>, dryRun?: boolean, maxIterations?: number, name?: string, attachments?: Array<AttachmentSource>, worktree?: boolean, };
 
 export type JobIdResult = { jobId: string, };
 

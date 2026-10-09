@@ -650,6 +650,71 @@ fn worktree_run_executes_on_a_new_branch_in_the_worktree() {
 }
 
 #[test]
+fn worktree_flag_creates_a_worktree_for_a_workflow_without_the_field() {
+    let e = Env::new();
+    git_workspace(&e);
+    worktree_workflow(&e, "", RECORD_BRANCH_AND_PWD);
+    let out = e.run(&["run", "wt", "--worktree"]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    let run = e.only_run();
+    let id = run_id(&run);
+    assert_eq!(recorded(&run, "branch.txt"), format!("whiphand/{id}"));
+    assert!(
+        out.stdout().contains(&format!(
+            "🌿 worktree .whiphand/worktrees/{id} on branch whiphand/{id}"
+        )),
+        "{}",
+        out.stdout()
+    );
+}
+
+#[test]
+fn no_worktree_flag_runs_in_the_workspace_despite_the_workflow() {
+    let e = Env::new();
+    git_workspace(&e);
+    worktree_workflow(&e, "worktree: true\n", RECORD_BRANCH_AND_PWD);
+    let out = e.run(&["run", "wt", "--no-worktree"]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    let run = e.only_run();
+    assert_eq!(
+        canonical(Path::new(&recorded(&run, "pwd.txt"))),
+        canonical(e.ws())
+    );
+    assert!(!out.stdout().contains("🌿"), "{}", out.stdout());
+    assert!(
+        !e.ws()
+            .join(".whiphand/worktrees")
+            .join(run_id(&run))
+            .exists()
+    );
+}
+
+#[test]
+fn worktree_flags_are_refused_with_resume_and_with_each_other() {
+    let e = Env::new();
+    git_workspace(&e);
+    worktree_workflow(&e, "", "true");
+    for flag in ["--worktree", "--no-worktree"] {
+        let out = e.run(&["run", "--resume", "x", flag]);
+        assert_ne!(out.code(), 0, "{flag}");
+        assert!(
+            out.stderr().contains("cannot be used with"),
+            "{}",
+            out.stderr()
+        );
+    }
+    let out = e.run(&["run", "wt", "--worktree", "--no-worktree"]);
+    assert_ne!(out.code(), 0);
+    assert!(
+        !e.ws().join(".whiphand/runs").exists()
+            || std::fs::read_dir(e.ws().join(".whiphand/runs"))
+                .unwrap()
+                .next()
+                .is_none()
+    );
+}
+
+#[test]
 fn worktree_run_keeps_the_main_tree_clean() {
     let e = Env::new();
     git_workspace(&e);

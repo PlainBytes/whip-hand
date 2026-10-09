@@ -190,6 +190,13 @@ impl Renderer {
                     named(e.prop("name")),
                     s(e.prop("workflow"))
                 ));
+                let tree = e.prop("worktree");
+                if let Some(path) = tree.get("path").as_str() {
+                    self.out(&format!(
+                        "🌿 worktree {path} on branch {}",
+                        s(tree.get("branch"))
+                    ));
+                }
                 let attached = e.prop("attachments").as_arr().unwrap_or(&[]);
                 if attached.is_empty() {
                     return;

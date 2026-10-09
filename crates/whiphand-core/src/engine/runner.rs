@@ -44,6 +44,9 @@ use crate::engine::verdict::{
     VERDICT_INSTRUCTION, parse_verdict, verdict_from_choice, verdict_from_exit,
 };
 use crate::engine::workflow_js::workflow_to_js;
+use crate::engine::worktree::{
+    self, Preflight, WorktreeRecord, WorktreeRequest, record_to_event, record_to_js,
+};
 use crate::event_paths::event_paths_to_workspace;
 use crate::js::Record;
 use crate::jsval::{JsObject, JsValue, ObjExt};
@@ -64,7 +67,8 @@ use crate::store::journal::{JournalInit, JournalOptions, RunJournal, SeedStep};
 use crate::store::markers::{WORKFLOW_SNAPSHOT_NAME, read_run_name, run_slug_for, set_run_name};
 use crate::store::retention::prune_runs;
 use crate::template::{
-    Frame, LoopFrame, Stage, StageFrame, nearest_loop, nearest_stage, render_template,
+    Frame, LoopFrame, Stage, StageFrame, TemplateScope, nearest_loop, nearest_stage,
+    render_template,
 };
 use crate::types::{
     ATTACHMENTS_REF, AgentStep, CommandStep, ManualStep, OnFindings, STAGE_REF, Scope, Step,
@@ -233,6 +237,8 @@ struct State {
     stage_notes: HashMap<String, StageNotes>,
     skippable: HashMap<String, DoneExecution>,
     warned_no_git: bool,
+    /// The worktree this run created, for `run:start`.
+    created_worktree: Option<WorktreeRecord>,
 }
 
 struct Run<'a, F: Frontend> {
@@ -268,6 +274,28 @@ fn get_vec(list: &[(String, Vec<String>)], key: &str) -> Vec<String> {
         .find(|(k, _)| k == key)
         .map(|(_, v)| v.clone())
         .unwrap_or_default()
+}
+
+/// The refusals a worktree run can make before it has a run directory.
+async fn preflight_worktree(
+    request: WorktreeRequest,
+    inputs: &Record<String>,
+    workspace: &str,
+) -> Result<(WorktreeRequest, Preflight), RunError> {
+    // The run's id and slug do not exist yet; the real base is rendered, and checked
+    // again, once they do.
+    let scope = TemplateScope {
+        inputs: inputs.clone(),
+        run_id: "run".into(),
+        run_slug: "run".into(),
+        ..TemplateScope::default()
+    };
+    let base = render_template(&request.base, &scope)
+        .map_err(|e| RunError::Workflow(vec![format!("worktree: base: {e}")]))?;
+    let pf = worktree::preflight(Path::new(workspace), &base)
+        .await
+        .map_err(|m| RunError::Workflow(vec![m]))?;
+    Ok((request, pf))
 }
 
 /// Runs a workflow to its end, or continues a stopped one (`opts.resume`).
@@ -334,6 +362,34 @@ pub async fn run_workflow<F: Frontend>(
         }
     }
     let workdir = node_path::resolve(&opts.workdir);
+    let mut tree = workdir.clone();
+    let mut requested: Option<(WorktreeRequest, Preflight)> = None;
+    match &opts.resume {
+        None => {
+            if let Some(request) = worktree::resolve_request(workflow, opts.worktree) {
+                requested = Some(preflight_worktree(request, &inputs, &workdir).await?);
+            }
+        }
+        Some(plan) => {
+            if opts.worktree.is_some() {
+                return Err(RunError::Workflow(vec![
+                    "a resumed run keeps the working tree it started in".into(),
+                ]));
+            }
+            if let Some(record) = &plan.worktree {
+                if worktree::check(record).await.is_err() {
+                    return Err(RunError::Workflow(vec![format!(
+                        "run '{}' ran in worktree {}, which no longer exists (or is not on branch '{}'); start a fresh run",
+                        plan.run_id, record.path, record.branch
+                    )]));
+                }
+                tree = record.native_tree();
+            } else if let Some(request) = worktree::resolve_request(workflow, None) {
+                // A run that failed while creating its worktree: creation runs again.
+                requested = Some(preflight_worktree(request, &inputs, &workdir).await?);
+            }
+        }
+    }
     let (run_id, run_dir) = match &opts.resume {
         None => create_run_dir(&workdir, &config.artifacts_dir)
             .map_err(|e| RunError::Failed(e.to_string()))?,
@@ -354,7 +410,7 @@ pub async fn run_workflow<F: Frontend>(
     }
     let mut ctx = RunCtx {
         workspace: workdir.clone(),
-        workdir: workdir.clone(),
+        workdir: tree,
         run_id: run_id.clone(),
         run_dir: run_dir.clone(),
         shell: match &shell {
@@ -498,9 +554,10 @@ pub async fn run_workflow<F: Frontend>(
                 .map(|r| r.done.clone())
                 .unwrap_or_default(),
             warned_no_git: false,
+            created_worktree: None,
         }),
     };
-    let result = run.start(&attachments).await;
+    let result = run.start(&attachments, requested.as_ref()).await;
     let result = match result {
         Ok(r) => Ok(r),
         Err(message) => {
@@ -601,7 +658,11 @@ impl<F: Frontend> Run<'_, F> {
             .map(|m| self.fail(&m, Some(step_id)))
     }
 
-    async fn start(&self, attachments: &[PlannedAttachment]) -> Result<RunResult, String> {
+    async fn start(
+        &self,
+        attachments: &[PlannedAttachment],
+        requested: Option<&(WorktreeRequest, Preflight)>,
+    ) -> Result<RunResult, String> {
         if !self.opts.dry_run {
             copy_attachments(&self.run_dir, attachments).map_err(|e| e.to_string())?;
         }
@@ -626,7 +687,33 @@ impl<F: Frontend> Run<'_, F> {
                 st.ctx.run_name = Some(name);
             }
         }
+        if let Some((request, pf)) = requested
+            && !self.opts.dry_run
+        {
+            self.create_worktree(request, pf).await?;
+        }
         self.run_steps(attachments).await
+    }
+
+    /// Creates the run's worktree and repoints the execution tree at it.
+    async fn create_worktree(
+        &self,
+        request: &WorktreeRequest,
+        pf: &Preflight,
+    ) -> Result<(), String> {
+        let scope = self.ctx().scope();
+        let render = |field: &str, tpl: &str| {
+            render_template(tpl, &scope).map_err(|e| format!("worktree: {field}: {e}"))
+        };
+        let branch = render("branch", &request.branch)?;
+        let base = render("base", &request.base)?;
+        let record =
+            worktree::create(Path::new(&self.workspace), &self.run_id, &branch, &base, pf).await?;
+        self.journal.note_worktree(record_to_js(&record));
+        let mut st = self.st.borrow_mut();
+        st.ctx.workdir = record.native_tree();
+        st.created_worktree = Some(record);
+        Ok(())
     }
 
     async fn teardown(&self) {
@@ -726,6 +813,9 @@ impl<F: Frontend> Run<'_, F> {
         }
         match &self.opts.resume {
             None => {
+                if let Some(record) = &self.st.borrow().created_worktree {
+                    start.set("worktree", record_to_event(record));
+                }
                 if !attachments.is_empty() {
                     let list: Vec<JsValue> = attachments
                         .iter()

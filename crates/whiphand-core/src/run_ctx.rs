@@ -51,6 +51,7 @@ impl RunCtx {
             run_slug: self.run_slug.clone(),
             run_name: self.run_name.clone(),
             run_dir: Some(self.run_dir.clone()),
+            run_workdir: Some(self.workdir.clone()),
             loop_frame: self.loop_frame.clone(),
             frame: self.frame.clone(),
         }

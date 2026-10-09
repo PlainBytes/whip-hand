@@ -278,7 +278,7 @@ fn check_worktree_placeholders(workflow: &Workflow, problems: &mut Vec<String>) 
                     "workflow: worktree.{field}: unknown placeholder '{{{{ {ns}.{name} }}}}' ({ns}.* has {})",
                     join_names(known)
                 ));
-            } else if ns != "run" || name == "dir" {
+            } else if ns != "run" || name == "dir" || name == "workdir" {
                 problems.push(format!(
                     "workflow: worktree.{field} uses '{{{{ {ns}.{name} }}}}', which is not available before the first step"
                 ));

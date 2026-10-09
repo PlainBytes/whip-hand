@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use crate::config::WorkspaceConfig;
 use crate::config_home::host_config_home;
 use crate::engine::artifacts::{artifact_path, assert_artifact};
+use crate::engine::worktree::{WorktreeRecord, record_from_manifest};
 use crate::execution_key::{LoopRef, execution_key};
 use crate::js::Record;
 use crate::jsval::{JsObject, JsValue, ObjExt};
@@ -58,6 +59,8 @@ pub struct ResumePlan {
     pub stages_interrupted: HashMap<String, u64>,
     pub stages_started: Vec<String>,
     pub warnings: Vec<String>,
+    /// The worktree the run executed in, when it had one.
+    pub worktree: Option<WorktreeRecord>,
 }
 
 /// A run's row, read the way resume.ts reads its fields.
@@ -754,7 +757,14 @@ pub async fn plan_resume(
         }
     }
     let attachments = recorded_attachments(&detail, &run_dir)?;
-    warnings.extend(tree_warnings(&detail, workdir).await);
+    let worktree = record_from_manifest(&detail);
+    let tree = worktree
+        .as_ref()
+        .map_or_else(|| workdir.to_string(), WorktreeRecord::native_tree);
+    // A worktree that is gone is refused by the runner; there is no tree to compare.
+    if std::path::Path::new(&tree).is_dir() || worktree.is_none() {
+        warnings.extend(tree_warnings(&detail, &tree).await);
+    }
     let inputs: Record<String> = detail
         .prop("inputs")
         .as_obj()
@@ -784,5 +794,6 @@ pub async fn plan_resume(
         stages_interrupted,
         stages_started: stages.started.clone(),
         warnings,
+        worktree,
     })
 }

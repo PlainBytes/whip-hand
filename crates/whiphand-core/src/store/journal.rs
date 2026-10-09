@@ -863,6 +863,13 @@ impl RunJournal {
         inner.persist();
     }
 
+    /// Records the worktree the run executes in, for a resume to return to.
+    pub fn note_worktree(&self, record: JsObject) {
+        let mut inner = self.lock();
+        inner.manifest.set("worktree", record);
+        inner.persist();
+    }
+
     /// Every write so far has landed, or the first one that failed.
     pub fn flush(&self) -> Result<(), String> {
         match &self.lock().failure {

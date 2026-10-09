@@ -18,6 +18,7 @@ const TRUNCATED_MARKER: &str = "…[truncated]";
 /// Injected by command steps, never a workflow-declared secret, so never redacted.
 const WHIPHAND_ENV_KEYS: &[&str] = &[
     "WHIPHAND_RUN_DIR",
+    "WHIPHAND_WORKDIR",
     "WHIPHAND_RUN_ID",
     "WHIPHAND_RUN_SLUG",
     "WHIPHAND_RUN_NAME",

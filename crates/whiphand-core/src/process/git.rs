@@ -112,6 +112,68 @@ pub async fn head_position(workdir: &Path) -> GitResult<Option<String>> {
     }
 }
 
+fn trimmed(stdout: &str) -> String {
+    stdout.trim_matches(crate::js::is_js_whitespace).to_string()
+}
+
+/// `git rev-parse --show-prefix`: where `workdir` sits inside its repository,
+/// `/`-form with a trailing `/`, or "" at the root.
+pub async fn show_prefix(workdir: &Path) -> GitResult<String> {
+    match git(workdir, &["rev-parse", "--show-prefix"]).await {
+        Ok(stdout) => GitResult::Ok(trimmed(&stdout)),
+        Err(e) => classify(&e),
+    }
+}
+
+/// The commit `rev` names, or `None` when it names none.
+pub async fn rev_parse_commit(workdir: &Path, rev: &str) -> GitResult<Option<String>> {
+    let spec = format!("{rev}^{{commit}}");
+    match git(workdir, &["rev-parse", "--verify", "--quiet", &spec]).await {
+        Ok(stdout) => GitResult::Ok(Some(trimmed(&stdout)).filter(|s| !s.is_empty())),
+        Err(e) if e.code == ExecCode::Exit(1) && e.stderr.trim().is_empty() => GitResult::Ok(None),
+        Err(e) => classify(&e),
+    }
+}
+
+/// Whether `refs/heads/<branch>` exists.
+pub async fn branch_exists(workdir: &Path, branch: &str) -> GitResult<bool> {
+    let name = format!("refs/heads/{branch}");
+    match git(workdir, &["show-ref", "--verify", "--quiet", &name]).await {
+        Ok(_) => GitResult::Ok(true),
+        Err(e) if e.code == ExecCode::Exit(1) && e.stderr.trim().is_empty() => GitResult::Ok(false),
+        Err(e) => classify(&e),
+    }
+}
+
+/// Whether `git check-ref-format --branch` accepts `branch`.
+pub async fn check_ref_format(workdir: &Path, branch: &str) -> GitResult<bool> {
+    match git(workdir, &["check-ref-format", "--branch", branch]).await {
+        Ok(_) => GitResult::Ok(true),
+        Err(e) if e.code == ExecCode::Exit(128) || e.code == ExecCode::Exit(1) => {
+            GitResult::Ok(false)
+        }
+        Err(e) => classify(&e),
+    }
+}
+
+/// `git worktree add -b <branch> <path> <start>`.
+pub async fn worktree_add(workdir: &Path, path: &Path, branch: &str, start: &str) -> GitResult<()> {
+    let path = path.to_string_lossy();
+    match git(workdir, &["worktree", "add", "-b", branch, &path, start]).await {
+        Ok(_) => GitResult::Ok(()),
+        Err(e) => classify(&e),
+    }
+}
+
+/// The branch HEAD is on; `None` when detached.
+pub async fn current_branch(workdir: &Path) -> GitResult<Option<String>> {
+    match git(workdir, &["symbolic-ref", "--quiet", "--short", "HEAD"]).await {
+        Ok(stdout) => GitResult::Ok(Some(trimmed(&stdout)).filter(|s| !s.is_empty())),
+        Err(e) if e.code == ExecCode::Exit(1) && e.stderr.trim().is_empty() => GitResult::Ok(None),
+        Err(e) => classify(&e),
+    }
+}
+
 /// A porcelain v1 line (or a rename's `old -> new`) as the bare path(s) it names.
 pub fn paths_from_status_lines(lines: &[String]) -> Vec<String> {
     let mut out = Vec::new();

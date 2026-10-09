@@ -91,6 +91,7 @@
                     "WHIPHAND_RUN_ID": "<RUN>",
                     "WHIPHAND_RUN_SLUG": "<RUN>",
                     "WHIPHAND_RUN_DIR": "<WS>/ws/.whiphand/runs/<RUN>",
+                    "WHIPHAND_WORKDIR": "<WS>/ws",
                     "WHIPHAND_STEP_ID": "one"
                   },
                   "interactive": false,
@@ -158,6 +159,7 @@
                     "WHIPHAND_RUN_ID": "<RUN>",
                     "WHIPHAND_RUN_SLUG": "<RUN>",
                     "WHIPHAND_RUN_DIR": "<WS>/ws/.whiphand/runs/<RUN>",
+                    "WHIPHAND_WORKDIR": "<WS>/ws",
                     "WHIPHAND_STEP_ID": "two"
                   },
                   "interactive": false,
@@ -701,6 +703,7 @@
               "WHIPHAND_RUN_ID": "<RUN>",
               "WHIPHAND_RUN_SLUG": "<RUN>",
               "WHIPHAND_RUN_DIR": "<WS>/ws/.whiphand/runs/<RUN>",
+              "WHIPHAND_WORKDIR": "<WS>/ws",
               "WHIPHAND_STEP_ID": "one"
             },
             "interactive": false,
@@ -794,6 +797,7 @@
               "WHIPHAND_RUN_ID": "<RUN>",
               "WHIPHAND_RUN_SLUG": "<RUN>",
               "WHIPHAND_RUN_DIR": "<WS>/ws/.whiphand/runs/<RUN>",
+              "WHIPHAND_WORKDIR": "<WS>/ws",
               "WHIPHAND_STEP_ID": "two"
             },
             "interactive": false,

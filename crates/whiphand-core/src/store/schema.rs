@@ -159,6 +159,16 @@ fn manifest_schema() -> S {
         opt("endedAt", str0()),
         opt("resumedAt", S::Arr(Box::new(str0()))),
         opt("stoppedTree", str0()),
+        opt(
+            "worktree",
+            S::Obj(vec![
+                req("path", str1()),
+                req("tree", str1()),
+                req("branch", str1()),
+                req("base", str1()),
+                req("baseSha", str1()),
+            ]),
+        ),
         req(
             "status",
             S::Enum(&["running", "succeeded", "failed", "cancelled", "interrupted"]),

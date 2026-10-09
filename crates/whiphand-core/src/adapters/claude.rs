@@ -1,7 +1,8 @@
 //! The claude adapter (`adapters/claude.ts`).
 
 use crate::adapters::common::{
-    file, flag_args, harvest_prompt, lf, prompt_pointer, require_session_id, spawn_spec,
+    add_dir_args, file, flag_args, harvest_prompt, lf, prompt_pointer, require_session_id,
+    spawn_spec,
 };
 use crate::engine::guidance::interactive_guidance;
 use crate::engine::step_files::{
@@ -73,6 +74,7 @@ pub fn interactive(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
     argv.extend(session_args);
     argv.extend(model_args(step));
     argv.extend(effort_args(step));
+    argv.extend(add_dir_args(ctx));
     if !step.writes {
         argv.push(format!("--disallowedTools={CLAUDE_WRITE_TOOLS}"));
     }
@@ -134,6 +136,7 @@ pub fn headless(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
     argv.extend(model_args(step));
     argv.extend(effort_args(step));
     argv.extend(tools);
+    argv.extend(add_dir_args(ctx));
     let prompt = step_file_path(&ctx.run_dir, &step.id, PROMPT)?;
     let text = lf(
         &build_prompt(&step.prompt, step.inputs.as_deref().unwrap_or(&[]), ctx).map_err(|e| e.0)?,
@@ -170,9 +173,43 @@ pub fn harvest(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
     ];
     argv.extend(model_args(step));
     argv.push("--allowedTools=Write".into());
+    argv.extend(add_dir_args(ctx));
     let path = step_file_path(&ctx.run_dir, &step.id, HARVEST_PROMPT)?;
     let mut spec = spawn_spec(ctx, &argv, false, JsObject::new());
     spec.set("files", vec![file(&path, &lf(&harvest_prompt(step, ctx)))]);
     spec.set("stdinFile", path.as_str());
     Ok(spec)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::common::test_support::{argv, ctx, step};
+    use crate::types::StepMode;
+
+    fn builds(ctx: &RunCtx) -> Vec<Vec<String>> {
+        let i_step = step("claude", StepMode::Interactive);
+        let h_step = step("claude", StepMode::Headless);
+        vec![
+            argv(&interactive(&i_step, ctx).unwrap()),
+            argv(&headless(&h_step, ctx).unwrap()),
+            argv(&harvest(&h_step, ctx).unwrap()),
+        ]
+    }
+
+    #[test]
+    fn add_dir_is_present_only_when_the_run_dir_is_outside_the_tree() {
+        let root = tempfile::tempdir().unwrap();
+        let inside = ctx(root.path(), root.path());
+        for argv in builds(&inside) {
+            assert!(!argv.iter().any(|a| a.starts_with("--add-dir")), "{argv:?}");
+        }
+        let tree = root.path().join(".whiphand/worktrees/r1");
+        let outside = ctx(root.path(), &tree);
+        let want = format!("--add-dir={}", outside.run_dir);
+        for argv in builds(&outside) {
+            assert_eq!(argv.iter().filter(|a| **a == want).count(), 1, "{argv:?}");
+            assert!(!argv.iter().any(|a| a == "--add-dir"), "{argv:?}");
+        }
+    }
 }

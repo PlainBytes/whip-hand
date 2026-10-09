@@ -575,3 +575,247 @@ fn version_is_the_core_version() {
         format!("{}\n", whiphand_core::engine::runner::CORE_VERSION)
     );
 }
+
+// ------------------------------------------------------------------ run: worktree
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// A git workspace with one commit. `.whiphand/` is ignored, as a user's would be.
+fn git_workspace(e: &Env) {
+    git(e.ws(), &["init", "-q"]);
+    git(e.ws(), &["config", "user.name", "T"]);
+    git(e.ws(), &["config", "user.email", "t@example.com"]);
+    e.write(".gitignore", ".whiphand/\n");
+    e.write("tracked.txt", "x\n");
+    e.write(".whiphand/config.yaml", "runs:\n  auto_name: false\n");
+    git(e.ws(), &["add", "."]);
+    git(e.ws(), &["commit", "-q", "-m", "init"]);
+}
+
+fn worktree_workflow(e: &Env, worktree: &str, run: &str) {
+    e.write(
+        ".whiphand/workflows/wt.yaml",
+        &format!(
+            "name: wt\n{worktree}steps:\n  - id: go\n    kind: command\n    run: {}\n    output: go.log\n",
+            serde_json::to_string(run).unwrap()
+        ),
+    );
+}
+
+const RECORD_BRANCH_AND_PWD: &str = "git rev-parse --abbrev-ref HEAD > \"$WHIPHAND_RUN_DIR/branch.txt\" && pwd > \"$WHIPHAND_RUN_DIR/pwd.txt\"";
+
+fn canonical(p: &Path) -> PathBuf {
+    std::fs::canonicalize(p).unwrap()
+}
+
+fn recorded(run: &Path, name: &str) -> String {
+    std::fs::read_to_string(run.join(name))
+        .unwrap()
+        .trim()
+        .to_string()
+}
+
+fn run_id(run: &Path) -> String {
+    run.file_name().unwrap().to_string_lossy().into_owned()
+}
+
+#[test]
+fn worktree_run_executes_on_a_new_branch_in_the_worktree() {
+    let e = Env::new();
+    git_workspace(&e);
+    worktree_workflow(&e, "worktree: true\n", RECORD_BRANCH_AND_PWD);
+    let out = e.run(&["run", "wt"]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    let run = e.only_run();
+    let id = run_id(&run);
+    assert_eq!(recorded(&run, "branch.txt"), format!("whiphand/{id}"));
+    let expected = e.ws().join(".whiphand/worktrees").join(&id);
+    assert_eq!(
+        canonical(Path::new(&recorded(&run, "pwd.txt"))),
+        canonical(&expected)
+    );
+    assert!(e.ws().join(".whiphand/worktrees/.gitignore").is_file());
+}
+
+#[test]
+fn worktree_run_keeps_the_main_tree_clean() {
+    let e = Env::new();
+    git_workspace(&e);
+    worktree_workflow(&e, "worktree: true\n", "echo hi > new.txt");
+    let out = e.run(&["run", "wt"]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    let id = run_id(&e.only_run());
+    assert!(
+        e.ws()
+            .join(".whiphand/worktrees")
+            .join(&id)
+            .join("new.txt")
+            .is_file()
+    );
+    assert!(!e.ws().join("new.txt").exists());
+    assert_eq!(git(e.ws(), &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn worktree_in_a_directory_that_is_not_a_repo_is_refused_without_a_run() {
+    let e = Env::new();
+    e.write(".whiphand/config.yaml", "runs:\n  auto_name: false\n");
+    worktree_workflow(&e, "worktree: true\n", "true");
+    let out = e.run(&["run", "wt"]);
+    assert_eq!(out.code(), 1, "{}", out.stderr());
+    assert!(
+        out.stderr().contains("is not a git repository"),
+        "{}",
+        out.stderr()
+    );
+    assert!(
+        out.stderr()
+            .contains(&e.ws().to_string_lossy().into_owned())
+    );
+    assert!(!e.runs_dir().exists());
+}
+
+#[test]
+fn worktree_with_an_unknown_base_is_refused_without_a_run() {
+    let e = Env::new();
+    git_workspace(&e);
+    worktree_workflow(&e, "worktree:\n  base: nope\n", "true");
+    let out = e.run(&["run", "wt"]);
+    assert_eq!(out.code(), 1, "{}", out.stderr());
+    assert!(
+        out.stderr().contains("base 'nope' is not a commit"),
+        "{}",
+        out.stderr()
+    );
+    assert!(!e.runs_dir().exists());
+}
+
+#[test]
+fn worktree_branch_that_already_exists_fails_the_run() {
+    let e = Env::new();
+    git_workspace(&e);
+    git(e.ws(), &["branch", "taken"]);
+    worktree_workflow(&e, "worktree:\n  branch: taken\n", "true");
+    let out = e.run(&["run", "wt"]);
+    assert_eq!(out.code(), 1, "{}{}", out.stdout(), out.stderr());
+    assert!(
+        out.stderr().contains("branch 'taken' already exists"),
+        "{}",
+        out.stderr()
+    );
+    assert!(
+        !e.ws()
+            .join(".whiphand/worktrees")
+            .join(run_id(&e.only_run()))
+            .exists()
+    );
+}
+
+#[test]
+fn resume_returns_to_the_same_worktree_and_refuses_a_missing_one() {
+    let e = Env::new();
+    git_workspace(&e);
+    let flaky = "pwd > \"$WHIPHAND_RUN_DIR/pwd.txt\" && test -f \"$WHIPHAND_RUN_DIR/ok\" || { touch \"$WHIPHAND_RUN_DIR/ok\"; exit 1; }";
+    worktree_workflow(&e, "worktree: true\n", flaky);
+    let out = e.run(&["run", "wt"]);
+    assert_eq!(out.code(), 1, "{}{}", out.stdout(), out.stderr());
+    let run = e.only_run();
+    let id = run_id(&run);
+    let first = recorded(&run, "pwd.txt");
+
+    let out = e.run(&["run", "--resume", &id]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    assert_eq!(
+        canonical(Path::new(&recorded(&run, "pwd.txt"))),
+        canonical(Path::new(&first))
+    );
+    assert_eq!(git(e.ws(), &["status", "--porcelain"]), "");
+
+    // A finished run cannot be resumed, so fail it again, then remove its worktree.
+    std::fs::remove_file(run.join("ok")).unwrap();
+    let out = e.run(&["run", "wt"]);
+    assert_eq!(out.code(), 1, "{}{}", out.stdout(), out.stderr());
+    let second = e
+        .runs_dir()
+        .read_dir()
+        .unwrap()
+        .flatten()
+        .map(|d| d.path())
+        .find(|p| *p != run)
+        .unwrap();
+    let second_id = run_id(&second);
+    let tree = e.ws().join(".whiphand/worktrees").join(&second_id);
+    git(
+        e.ws(),
+        &["worktree", "remove", "--force", &tree.to_string_lossy()],
+    );
+    let out = e.run(&["run", "--resume", &second_id]);
+    assert_eq!(out.code(), 1, "{}{}", out.stdout(), out.stderr());
+    assert!(
+        out.stderr().contains("no longer exists"),
+        "{}",
+        out.stderr()
+    );
+}
+
+#[test]
+fn worktree_is_recorded_in_run_json_and_run_start_is_workspace_relative() {
+    let e = Env::new();
+    git_workspace(&e);
+    worktree_workflow(&e, "worktree: true\n", "true");
+    let out = e.run(&["run", "wt", "--json"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    let run = e.only_run();
+    let id = run_id(&run);
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(run.join("run.json")).unwrap()).unwrap();
+    for key in ["path", "tree", "branch", "base", "baseSha"] {
+        assert!(
+            manifest["worktree"][key]
+                .as_str()
+                .is_some_and(|s| !s.is_empty()),
+            "{key}: {manifest}"
+        );
+    }
+    let start: serde_json::Value = out
+        .stdout()
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .find(|v| v["type"] == "run:start")
+        .unwrap();
+    assert_eq!(
+        start["worktree"]["path"],
+        format!(".whiphand/worktrees/{id}")
+    );
+    assert_eq!(start["worktree"]["branch"], format!("whiphand/{id}"));
+    assert_eq!(start["worktree"]["base"], "HEAD");
+}
+
+#[test]
+fn run_workdir_is_the_workspace_without_a_worktree() {
+    let e = Env::new();
+    git_workspace(&e);
+    worktree_workflow(
+        &e,
+        "",
+        "echo \"$WHIPHAND_WORKDIR\" > \"$WHIPHAND_RUN_DIR/wd.txt\"",
+    );
+    let out = e.run(&["run", "wt"]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    assert_eq!(
+        canonical(Path::new(&recorded(&e.only_run(), "wd.txt"))),
+        canonical(e.ws())
+    );
+}

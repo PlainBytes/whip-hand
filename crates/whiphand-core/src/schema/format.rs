@@ -232,6 +232,21 @@ fn classify_issue(
         };
     }
 
+    // The workflow's `worktree:` key, or one of its two fields.
+    if path.first().and_then(PathSeg::as_key) == Some("worktree") {
+        let phrase = phrase_for(issue, raw);
+        let sub = path
+            .get(1)
+            .and_then(PathSeg::as_key)
+            .map_or(String::new(), |k| format!("{k} "));
+        return WorkflowFieldProblem {
+            step_id: None,
+            field: Some("worktree".into()),
+            message: format!("workflow: worktree: {sub}{phrase}"),
+            phrase,
+        };
+    }
+
     // Not inside any step: a workflow root field.
     let field = path.first();
     let phrase = phrase_for(issue, raw);

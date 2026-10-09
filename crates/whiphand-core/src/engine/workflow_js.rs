@@ -7,6 +7,7 @@
 use crate::jsval::{JsObject, JsValue, ObjExt};
 use crate::types::{
     AgentStep, Capture, CommandStep, ManualDefault, ManualStep, OnFindings, Step, Workflow,
+    WorktreeSetting,
 };
 
 fn strings(v: &[String]) -> JsValue {
@@ -152,6 +153,21 @@ pub fn step_to_js(step: &Step) -> JsValue {
     })
 }
 
+fn worktree_to_js(setting: &WorktreeSetting) -> JsValue {
+    match setting {
+        WorktreeSetting::Disabled => JsValue::from(false),
+        WorktreeSetting::Enabled { base, branch } if base.is_none() && branch.is_none() => {
+            JsValue::from(true)
+        }
+        WorktreeSetting::Enabled { base, branch } => {
+            let mut o = JsObject::new();
+            opt(&mut o, "base", base.clone());
+            opt(&mut o, "branch", branch.clone());
+            JsValue::Obj(o)
+        }
+    }
+}
+
 pub fn workflow_to_js(w: &Workflow) -> JsValue {
     let mut o = JsObject::new();
     o.set("name", w.name.as_str());
@@ -170,6 +186,9 @@ pub fn workflow_to_js(w: &Workflow) -> JsValue {
         o.set("inputs", rec);
     }
     opt(&mut o, "on_findings", w.on_findings.map(on_findings));
+    if let Some(setting) = &w.worktree {
+        o.set("worktree", worktree_to_js(setting));
+    }
     o.set(
         "steps",
         JsValue::Arr(w.steps.iter().map(step_to_js).collect()),

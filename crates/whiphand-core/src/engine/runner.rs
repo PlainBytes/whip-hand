@@ -91,6 +91,9 @@ pub struct RunOptions {
     pub name: Option<String>,
     pub attachments: Vec<AttachmentSource>,
     pub cancel: CancellationToken,
+    /// The per-run `worktree` override: `Some(true)` forces a worktree on, `Some(false)` off,
+    /// `None` defers to the workflow.
+    pub worktree: Option<bool>,
     /// `(capability, reason)` the frontend already knows.
     pub degradations: Vec<(String, String)>,
 }

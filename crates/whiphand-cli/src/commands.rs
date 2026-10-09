@@ -571,6 +571,7 @@ pub async fn run(a: RunArgs) -> CmdResult {
         name: a.name.clone(),
         attachments,
         cancel,
+        worktree: None,
         degradations: opened.degradations.clone(),
     };
     let result = run_workflow(&opts, &tty).await;

@@ -94,7 +94,14 @@ fn check_misplaced_fields(raw: &Raw, problems: &mut Vec<String>) {
     }
 }
 
-const ROOT_KEYS: [&str; 5] = ["name", "description", "inputs", "on_findings", "steps"];
+const ROOT_KEYS: [&str; 6] = [
+    "name",
+    "description",
+    "inputs",
+    "on_findings",
+    "worktree",
+    "steps",
+];
 
 fn check_root_fields(raw: &Raw, problems: &mut Vec<String>) {
     let Some(obj) = raw.as_map() else { return };
@@ -207,4 +214,105 @@ pub fn parse_workflow(yaml_text: &str) -> Result<Workflow, WorkflowError> {
         return Err(WorkflowError::new(result.problems));
     }
     Ok(result.workflow.expect("no problems means a workflow"))
+}
+
+#[cfg(test)]
+mod worktree_tests {
+    use super::*;
+    use crate::types::WorktreeSetting;
+
+    fn doc(worktree: &str) -> String {
+        format!(
+            "name: w\ninputs:\n  base:\n    required: false\nworktree: {worktree}\nsteps:\n  - id: a\n    kind: command\n    run: echo a\n"
+        )
+    }
+
+    fn problems(worktree: &str) -> Vec<String> {
+        parse_workflow(&doc(worktree)).unwrap_err().problems
+    }
+
+    fn enabled(base: Option<&str>, branch: Option<&str>) -> Option<WorktreeSetting> {
+        Some(WorktreeSetting::Enabled {
+            base: base.map(Into::into),
+            branch: branch.map(Into::into),
+        })
+    }
+
+    #[test]
+    fn every_accepted_shape_parses() {
+        let parse = |w: &str| parse_workflow(&doc(w)).unwrap().worktree;
+        assert_eq!(parse("true"), enabled(None, None));
+        assert_eq!(parse("false"), Some(WorktreeSetting::Disabled));
+        assert_eq!(parse("{}"), enabled(None, None));
+        assert_eq!(
+            parse("{ base: x, branch: y }"),
+            enabled(Some("x"), Some("y"))
+        );
+        assert_eq!(
+            parse("{ base: '{{ inputs.base }}', branch: 'f/{{ run.slug }}' }"),
+            enabled(Some("{{ inputs.base }}"), Some("f/{{ run.slug }}"))
+        );
+        let absent = "name: w\nsteps:\n  - id: a\n    kind: command\n    run: echo a\n";
+        assert_eq!(parse_workflow(absent).unwrap().worktree, None);
+    }
+
+    #[test]
+    fn malformed_values_name_the_key() {
+        for bad in ["3", "{ foo: 1 }", "{ base: '' }", "'yes'", "{ branch: 4 }"] {
+            let found = problems(bad);
+            assert!(
+                found.iter().all(|p| p.starts_with("workflow: worktree")),
+                "{bad}: {found:?}"
+            );
+            assert!(!found.is_empty(), "{bad}");
+        }
+        assert_eq!(
+            problems("{ foo: 1 }"),
+            vec!["workflow: worktree: unknown key 'foo'"]
+        );
+    }
+
+    #[test]
+    fn placeholders_unavailable_before_step_one_are_refused() {
+        assert_eq!(
+            problems("{ branch: 'x-{{ loop.iteration }}' }"),
+            vec![
+                "workflow: worktree.branch uses '{{ loop.iteration }}', which is not available before the first step"
+            ]
+        );
+        assert_eq!(
+            problems("{ branch: '{{ run.dir }}' }"),
+            vec![
+                "workflow: worktree.branch uses '{{ run.dir }}', which is not available before the first step"
+            ]
+        );
+        assert_eq!(
+            problems("{ base: '{{ stage.id }}' }"),
+            vec![
+                "workflow: worktree.base uses '{{ stage.id }}', which is not available before the first step"
+            ]
+        );
+        assert_eq!(problems("{ base: '{{ run.nope }}' }").len(), 1);
+        assert_eq!(
+            problems("{ branch: '{{ inputs.undeclared }}' }"),
+            vec![
+                "workflow: worktree.branch uses '{{ inputs.undeclared }}', which the workflow does not declare under inputs"
+            ]
+        );
+        for ok in [
+            "{ branch: 'f/{{ run.slug }}' }",
+            "{ base: '{{ inputs.base }}' }",
+        ] {
+            assert!(parse_workflow(&doc(ok)).is_ok(), "{ok}");
+        }
+    }
+
+    #[test]
+    fn the_root_key_is_not_misplaced() {
+        assert!(
+            !problems("3")
+                .iter()
+                .any(|p| p.contains("belongs on a step"))
+        );
+    }
 }

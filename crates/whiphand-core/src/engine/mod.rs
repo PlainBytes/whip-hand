@@ -19,3 +19,4 @@ pub mod stages;
 pub mod step_files;
 pub mod verdict;
 pub mod workflow_js;
+pub mod worktree;

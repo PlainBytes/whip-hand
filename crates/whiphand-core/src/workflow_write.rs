@@ -797,6 +797,25 @@ mod tests {
     }
 
     #[test]
+    fn each_worktree_shape_round_trips_unchanged() {
+        for shape in [
+            "true",
+            "false",
+            "{ base: main, branch: 'f/{{ run.slug }}' }",
+            "{ base: main }",
+        ] {
+            let text = format!(
+                "name: w\nworktree: {shape}\nsteps:\n  - id: a\n    kind: command\n    run: echo a\n"
+            );
+            assert_eq!(merge_workflow(&text, &js(&text)), text, "{shape}");
+        }
+        // `{}` is `Enabled` with neither key, which the JS side spells `true`.
+        let wf =
+            js("name: w\nworktree: {}\nsteps:\n  - id: a\n    kind: command\n    run: echo a\n");
+        assert!(stringify_yaml(&wf).contains("worktree: true"));
+    }
+
+    #[test]
     fn disabling_a_nested_step_adds_one_line_after_its_id() {
         let text = fixture("parity/fixtures/core/merge/feature-commented.yaml");
         let mut wf = js(&text);

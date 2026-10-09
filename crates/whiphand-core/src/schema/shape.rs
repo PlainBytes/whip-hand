@@ -316,6 +316,52 @@ fn workflow_input(cx: &mut Ctx, v: Option<&Raw>) -> Option<WorkflowInput> {
     })
 }
 
+/// `worktree:` — `true`, `false`, or a map of only `base` and `branch`.
+fn worktree_setting(cx: &mut Ctx, v: Option<&Raw>) -> Option<WorktreeSetting> {
+    match v {
+        Some(Raw::Bool(true)) => Some(WorktreeSetting::Enabled {
+            base: None,
+            branch: None,
+        }),
+        Some(Raw::Bool(false)) => Some(WorktreeSetting::Disabled),
+        Some(Raw::Map(m)) => {
+            let mut ok = true;
+            for key in m.keys() {
+                if key != "base" && key != "branch" {
+                    cx.push(Code::Custom, format!("unknown key '{key}'"), true);
+                    ok = false;
+                }
+            }
+            let base = field!(cx, m, "base", |cx, v| zod::optional(
+                cx,
+                v,
+                zod::string_min1
+            ));
+            let branch = field!(cx, m, "branch", |cx, v| zod::optional(
+                cx,
+                v,
+                zod::string_min1
+            ));
+            if !ok {
+                return None;
+            }
+            Some(WorktreeSetting::Enabled {
+                base: base?,
+                branch: branch?,
+            })
+        }
+        _ => {
+            let received = v.map_or("undefined", Raw::zod_type_name);
+            cx.push(
+                Code::InvalidType,
+                format!("Invalid input: expected boolean or object, received {received}"),
+                false,
+            );
+            None
+        }
+    }
+}
+
 /// `workflowSchema`.
 pub fn workflow(cx: &mut Ctx, v: Option<&Raw>) -> Option<Workflow> {
     let m = zod::object(cx, v)?;
@@ -329,12 +375,18 @@ pub fn workflow(cx: &mut Ctx, v: Option<&Raw>) -> Option<Workflow> {
         v,
         |cx, v| zod::enumeration(cx, v, &ON_FINDINGS)
     ));
+    let worktree = field!(cx, m, "worktree", |cx, v| zod::optional(
+        cx,
+        v,
+        worktree_setting
+    ));
     let steps = field!(cx, m, "steps", |cx, v| zod::array(cx, v, true, step));
     Some(Workflow {
         name: name?,
         description: description?,
         inputs: inputs?,
         on_findings: on_findings?,
+        worktree: worktree?,
         steps: steps?,
     })
 }

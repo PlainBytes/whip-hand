@@ -301,9 +301,8 @@ mod tests {
             "develop still has a branch step"
         );
         assert!(!text.contains("git checkout"), "develop still checks out");
-        assert!(text.contains(
-            "run: git fetch origin \"{{ inputs.base }}\" && git reset --hard FETCH_HEAD"
-        ));
+        assert!(!text.contains("sync-base"), "develop still has a sync-base step");
+        assert!(!text.contains("git reset --hard"), "develop still resets hard");
         assert!(text.contains("run: eval \"{{ inputs.push_command }}\""));
     }
 

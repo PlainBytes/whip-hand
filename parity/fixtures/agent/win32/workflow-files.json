@@ -339,12 +339,6 @@
               },
               "steps": [
                 {
-                  "id": "sync-base",
-                  "kind": "command",
-                  "run": "git fetch origin \"{{ inputs.base }}\" && git reset --hard FETCH_HEAD",
-                  "output": "sync-base.log"
-                },
-                {
                   "id": "plan",
                   "inputs": [
                     "attachments"

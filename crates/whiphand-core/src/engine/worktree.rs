@@ -8,8 +8,8 @@ use crate::node_path;
 use crate::obj;
 use crate::path_form::{to_fwd_abs, to_native, to_workspace};
 use crate::process::git::{
-    GitResult, branch_exists, check_ref_format, current_branch, rev_parse_commit, show_prefix,
-    worktree_add,
+    GitResult, branch_exists, check_ref_format, current_branch, fetch, is_ancestor,
+    rev_parse_commit, show_prefix, upstream_of, worktree_add,
 };
 use crate::store::runs::get_run;
 use crate::types::{Workflow, WorktreeSetting};
@@ -65,8 +65,83 @@ pub struct WorktreeRecord {
     pub branch: String,
     /// Rendered, as written (e.g. `main`).
     pub base: String,
-    /// What `base` resolved to at creation.
+    /// The commit actually used: `base`'s, or its upstream's when synced.
     pub base_sha: String,
+    /// What the branch started from: `origin/main` when synced, else `base`. Absent in
+    /// records written before sync existed.
+    pub started_from: Option<String>,
+}
+
+/// A created worktree, and why it did not start from the synced upstream when it was
+/// asked to (the runner reports that as a `worktree-sync` degradation).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Created {
+    pub record: WorktreeRecord,
+    pub fallback: Option<String>,
+}
+
+/// Where the new branch starts.
+struct Start {
+    sha: String,
+    from: String,
+    fallback: Option<String>,
+}
+
+/// With `sync`, fetches `base`'s upstream and starts from the remote-tracking commit when the
+/// local `base` is behind it. Never checks out or moves `base`. A base with no upstream starts
+/// from itself silently; every other case that cannot sync falls back with a reason.
+async fn choose_start(workspace: &Path, base: &str, base_sha: String, sync: bool) -> Start {
+    let local = |fallback: Option<String>| Start {
+        sha: base_sha.clone(),
+        from: base.to_string(),
+        fallback,
+    };
+    if !sync {
+        return local(None);
+    }
+    let up = match upstream_of(workspace, base).await {
+        GitResult::Ok(Some(up)) => up,
+        GitResult::Ok(None) => return local(None),
+        GitResult::NotARepo => return local(Some(not_a_repo(workspace))),
+        GitResult::Unavailable(reason) => return local(Some(reason)),
+    };
+    match fetch(workspace, &up.remote, &up.merge_ref).await {
+        GitResult::Ok(()) => {}
+        GitResult::NotARepo => return local(Some(not_a_repo(workspace))),
+        GitResult::Unavailable(reason) => {
+            return local(Some(format!(
+                "could not fetch {} from {}, starting from local '{base}': {reason}",
+                up.merge_ref, up.remote
+            )));
+        }
+    }
+    let tracking = up
+        .tracking_ref
+        .strip_prefix("refs/remotes/")
+        .unwrap_or(&up.tracking_ref)
+        .to_string();
+    let tip = match rev_parse_commit(workspace, &up.tracking_ref).await {
+        GitResult::Ok(Some(sha)) => sha,
+        GitResult::Ok(None) => {
+            return local(Some(format!(
+                "{tracking} does not exist after the fetch, starting from local '{base}'"
+            )));
+        }
+        GitResult::NotARepo => return local(Some(not_a_repo(workspace))),
+        GitResult::Unavailable(reason) => return local(Some(reason)),
+    };
+    match is_ancestor(workspace, &base_sha, &tip).await {
+        GitResult::Ok(true) => Start {
+            sha: tip,
+            from: tracking,
+            fallback: None,
+        },
+        GitResult::Ok(false) => local(Some(format!(
+            "local '{base}' has commits not in {tracking}, starting from local '{base}'"
+        ))),
+        GitResult::NotARepo => local(Some(not_a_repo(workspace))),
+        GitResult::Unavailable(reason) => local(Some(reason)),
+    }
 }
 
 impl WorktreeRecord {
@@ -128,8 +203,9 @@ pub async fn create(
     run_id: &str,
     branch: &str,
     base: &str,
+    sync: bool,
     pf: &Preflight,
-) -> Result<WorktreeRecord, String> {
+) -> Result<Created, String> {
     let invalid = || format!("worktree: '{branch}' is not a valid branch name");
     match check_ref_format(workspace, branch).await {
         GitResult::Ok(true) => {}
@@ -145,7 +221,8 @@ pub async fn create(
         GitResult::NotARepo => return Err(not_a_repo(workspace)),
         GitResult::Unavailable(reason) => return Err(git_unavailable(reason)),
     }
-    let base_sha = resolve_base(workspace, base).await?;
+    let local_sha = resolve_base(workspace, base).await?;
+    let start = choose_start(workspace, base, local_sha, sync).await;
     let root = workspace.to_string_lossy();
     let parent = node_path::join(&[&root, WORKTREES_DIR]);
     std::fs::create_dir_all(&parent)
@@ -156,7 +233,7 @@ pub async fn create(
             .map_err(|e| format!("worktree: cannot write {ignore}: {e}"))?;
     }
     let path = node_path::join(&[&parent, run_id]);
-    match worktree_add(workspace, Path::new(&path), branch, &base_sha).await {
+    match worktree_add(workspace, Path::new(&path), branch, &start.sha).await {
         GitResult::Ok(()) => {}
         GitResult::NotARepo => return Err(not_a_repo(workspace)),
         GitResult::Unavailable(reason) => return Err(git_unavailable(reason)),
@@ -170,12 +247,16 @@ pub async fn create(
     // A workspace directory with nothing tracked in it is not in the checkout.
     std::fs::create_dir_all(to_native(&tree, ""))
         .map_err(|e| format!("worktree: cannot create {tree}: {e}"))?;
-    Ok(WorktreeRecord {
-        path,
-        tree,
-        branch: branch.to_string(),
-        base: base.to_string(),
-        base_sha,
+    Ok(Created {
+        record: WorktreeRecord {
+            path,
+            tree,
+            branch: branch.to_string(),
+            base: base.to_string(),
+            base_sha: start.sha,
+            started_from: Some(start.from),
+        },
+        fallback: start.fallback,
     })
 }
 
@@ -270,14 +351,19 @@ pub fn record_from_manifest(manifest: &JsObject) -> Option<WorktreeRecord> {
         branch: field("branch")?,
         base: field("base")?,
         base_sha: field("baseSha")?,
+        started_from: field("startedFrom"),
     })
 }
 
 pub fn record_to_js(r: &WorktreeRecord) -> JsObject {
-    obj! {
+    let mut o = obj! {
         "path" => r.path.as_str(), "tree" => r.tree.as_str(), "branch" => r.branch.as_str(),
         "base" => r.base.as_str(), "baseSha" => r.base_sha.as_str(),
+    };
+    if let Some(from) = &r.started_from {
+        o.set("startedFrom", from.as_str());
     }
+    o
 }
 
 /// The `worktree` an event carries: `path` is rewritten to workspace-relative on emit.
@@ -499,6 +585,7 @@ mod tests {
             branch: "kept".into(),
             base: "HEAD".into(),
             base_sha: "abc".into(),
+            started_from: None,
         }
     }
 
@@ -551,10 +638,35 @@ mod tests {
             branch: "b".into(),
             base: "main".into(),
             base_sha: "abc".into(),
+            started_from: Some("origin/main".into()),
         };
         let manifest = obj! { "worktree" => record_to_js(&r) };
         assert_eq!(record_from_manifest(&manifest), Some(r));
         assert_eq!(record_from_manifest(&JsObject::new()), None);
+    }
+
+    #[test]
+    fn a_record_without_started_from_still_loads() {
+        let mut js = record_to_js(&WorktreeRecord {
+            path: "/w/p".into(),
+            tree: "/w/p".into(),
+            branch: "b".into(),
+            base: "main".into(),
+            base_sha: "abc".into(),
+            started_from: None,
+        });
+        assert_eq!(js.str_prop("startedFrom"), None);
+        let manifest = obj! { "worktree" => js.clone() };
+        assert_eq!(record_from_manifest(&manifest).unwrap().started_from, None);
+        js.set("startedFrom", "origin/main");
+        let manifest = obj! { "worktree" => js };
+        assert_eq!(
+            record_from_manifest(&manifest)
+                .unwrap()
+                .started_from
+                .as_deref(),
+            Some("origin/main")
+        );
     }
 
     #[tokio::test]
@@ -584,18 +696,21 @@ mod tests {
         let pf = preflight(&sub, "HEAD").await.unwrap();
         assert_eq!(pf.prefix, "sub/");
 
-        let e = create(&sub, "r1", "bad..name", "HEAD", &pf)
+        let e = create(&sub, "r1", "bad..name", "HEAD", true, &pf)
             .await
             .unwrap_err();
         assert!(e.contains("not a valid branch name"), "{e}");
-        let rec = create(&sub, "r1", "master-or-main", "HEAD", &pf)
+        let created = create(&sub, "r1", "master-or-main", "HEAD", true, &pf)
             .await
             .unwrap();
+        assert_eq!(created.fallback, None);
+        let rec = created.record;
+        assert_eq!(rec.started_from.as_deref(), Some("HEAD"));
         assert!(rec.tree.ends_with("/r1/sub"), "{}", rec.tree);
         assert!(Path::new(&rec.native_tree()).is_dir());
         check(&rec).await.unwrap();
 
-        let e = create(&sub, "r2", "master-or-main", "HEAD", &pf)
+        let e = create(&sub, "r2", "master-or-main", "HEAD", true, &pf)
             .await
             .unwrap_err();
         assert!(e.contains("already exists"), "{e}");

@@ -725,6 +725,188 @@ fn worktree_flags_are_refused_with_resume_and_with_each_other() {
     );
 }
 
+/// `main` pushed to a bare local `origin`; returns the temp dir that owns it.
+fn with_origin(e: &Env) -> TempDir {
+    git(e.ws(), &["branch", "-M", "main"]);
+    let remote = tempfile::tempdir().unwrap();
+    let origin = remote.path().join("origin.git");
+    git(
+        remote.path(),
+        &["init", "-q", "--bare", origin.to_str().unwrap()],
+    );
+    git(
+        e.ws(),
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(e.ws(), &["push", "-q", "-u", "origin", "main"]);
+    remote
+}
+
+/// A commit on `origin`'s `main` made from a second clone; returns its sha.
+fn advance_origin(remote: &TempDir) -> String {
+    let other = remote.path().join("other");
+    let origin = remote.path().join("origin.git");
+    git(
+        remote.path(),
+        &[
+            "clone",
+            "-q",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    git(&other, &["config", "user.name", "T"]);
+    git(&other, &["config", "user.email", "t@example.com"]);
+    std::fs::write(other.join("remote.txt"), "r\n").unwrap();
+    git(&other, &["add", "."]);
+    git(&other, &["commit", "-q", "-m", "remote"]);
+    git(&other, &["push", "-q", "origin", "main"]);
+    git(&other, &["rev-parse", "HEAD"]).trim().to_string()
+}
+
+fn rev(dir: &Path, name: &str) -> String {
+    git(dir, &["rev-parse", name]).trim().to_string()
+}
+
+const BASE_MAIN: &str = "worktree:\n  base: main\n";
+
+fn manifest_of(run: &Path) -> serde_json::Value {
+    serde_json::from_str(&std::fs::read_to_string(run.join("run.json")).unwrap()).unwrap()
+}
+
+fn sync_degradations(run: &Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(run.join("events.ndjson"))
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["event"].clone())
+        .filter(|v| v["type"] == "run:degraded" && v["capability"] == "worktree-sync")
+        .collect()
+}
+
+#[test]
+fn worktree_starts_from_the_fetched_upstream_and_leaves_local_main_alone() {
+    let e = Env::new();
+    git_workspace(&e);
+    let remote = with_origin(&e);
+    let local_main = rev(e.ws(), "main");
+    let tip = advance_origin(&remote);
+    worktree_workflow(&e, BASE_MAIN, "true");
+    let out = e.run(&["run", "wt"]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    let run = e.only_run();
+    let m = manifest_of(&run);
+    assert_eq!(m["worktree"]["startedFrom"], "origin/main");
+    assert_eq!(m["worktree"]["baseSha"], tip);
+    assert_eq!(rev(e.ws(), m["worktree"]["branch"].as_str().unwrap()), tip);
+    assert_eq!(rev(e.ws(), "refs/heads/main"), local_main);
+    assert!(sync_degradations(&run).is_empty());
+}
+
+#[test]
+fn two_worktree_runs_on_main_leave_it_checked_out_only_in_the_main_tree() {
+    let e = Env::new();
+    git_workspace(&e);
+    let _remote = with_origin(&e);
+    worktree_workflow(&e, BASE_MAIN, "true");
+    for _ in 0..2 {
+        let out = e.run(&["run", "wt"]);
+        assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    }
+    let listed = git(e.ws(), &["worktree", "list", "--porcelain"]);
+    let on_main = listed
+        .lines()
+        .filter(|l| *l == "branch refs/heads/main")
+        .count();
+    assert_eq!(on_main, 1, "{listed}");
+    assert!(listed.lines().next().unwrap().starts_with("worktree "));
+    let first_block: Vec<&str> = listed.split("\n\n").next().unwrap().lines().collect();
+    assert!(first_block.contains(&"branch refs/heads/main"), "{listed}");
+}
+
+#[test]
+fn worktree_falls_back_to_local_main_when_the_remote_is_unreachable() {
+    let e = Env::new();
+    git_workspace(&e);
+    let remote = with_origin(&e);
+    git(
+        e.ws(),
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            remote.path().join("gone.git").to_str().unwrap(),
+        ],
+    );
+    let local_main = rev(e.ws(), "main");
+    worktree_workflow(&e, BASE_MAIN, "true");
+    let out = e.run(&["run", "wt"]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    let run = e.only_run();
+    let m = manifest_of(&run);
+    assert_eq!(m["worktree"]["baseSha"], local_main);
+    assert_eq!(m["worktree"]["startedFrom"], "main");
+    assert_eq!(sync_degradations(&run).len(), 1);
+}
+
+#[test]
+fn worktree_falls_back_to_local_main_when_it_is_ahead_of_the_remote() {
+    let e = Env::new();
+    git_workspace(&e);
+    let _remote = with_origin(&e);
+    e.write("ahead.txt", "a\n");
+    git(e.ws(), &["add", "."]);
+    git(e.ws(), &["commit", "-q", "-m", "ahead"]);
+    let local_main = rev(e.ws(), "main");
+    worktree_workflow(&e, BASE_MAIN, "true");
+    let out = e.run(&["run", "wt"]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    let run = e.only_run();
+    let m = manifest_of(&run);
+    assert_eq!(m["worktree"]["baseSha"], local_main);
+    assert_eq!(m["worktree"]["startedFrom"], "main");
+    let degraded = sync_degradations(&run);
+    assert_eq!(degraded.len(), 1, "{degraded:?}");
+    assert!(degraded[0]["reason"].as_str().unwrap().contains("not in"));
+}
+
+#[test]
+fn worktree_sync_false_does_not_fetch() {
+    let e = Env::new();
+    git_workspace(&e);
+    let remote = with_origin(&e);
+    let local_main = rev(e.ws(), "main");
+    let tracking = rev(e.ws(), "refs/remotes/origin/main");
+    advance_origin(&remote);
+    worktree_workflow(&e, "worktree:\n  base: main\n  sync: false\n", "true");
+    let out = e.run(&["run", "wt"]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    let run = e.only_run();
+    let m = manifest_of(&run);
+    assert_eq!(m["worktree"]["baseSha"], local_main);
+    assert_eq!(m["worktree"]["startedFrom"], "main");
+    assert_eq!(rev(e.ws(), "refs/remotes/origin/main"), tracking);
+    assert!(sync_degradations(&run).is_empty());
+}
+
+#[test]
+fn worktree_from_head_neither_fetches_nor_degrades() {
+    let e = Env::new();
+    git_workspace(&e);
+    let remote = with_origin(&e);
+    let tracking = rev(e.ws(), "refs/remotes/origin/main");
+    advance_origin(&remote);
+    worktree_workflow(&e, "worktree: true\n", "true");
+    let out = e.run(&["run", "wt"]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    let run = e.only_run();
+    let m = manifest_of(&run);
+    assert_eq!(m["worktree"]["startedFrom"], "HEAD");
+    assert_eq!(rev(e.ws(), "refs/remotes/origin/main"), tracking);
+    assert!(sync_degradations(&run).is_empty());
+}
+
 #[test]
 fn worktree_run_keeps_the_main_tree_clean() {
     let e = Env::new();

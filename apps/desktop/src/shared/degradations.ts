@@ -34,6 +34,8 @@ export const DEGRADATION_IDS = [
   'token-file-mode',
   /** doctor: the workspace path leaves too little headroom under the 260-character limit. */
   'long-path',
+  /** run: the worktree could not start from the base's synced upstream. */
+  'worktree-sync',
 ] as const;
 
 export type DegradationId = (typeof DEGRADATION_IDS)[number];
@@ -52,6 +54,7 @@ export const DEGRADATION_LABELS: Record<DegradationId, string> = {
   'git-ownership': 'git refuses this repository (dubious ownership)',
   'token-file-mode': 'Remote token file mode is not enforceable',
   'long-path': 'Workspace path leaves little headroom under 260 characters',
+  'worktree-sync': 'Worktree started from the local base, not its upstream',
 };
 
 export function isDegradationId(value: string): value is DegradationId {

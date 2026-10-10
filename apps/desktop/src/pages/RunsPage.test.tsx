@@ -5,16 +5,18 @@ import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
 import { AgentClientProvider } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
+import { CapabilitiesProvider, type AppCapabilities } from '../capabilities.tsx';
 import { hasInjectedStyle } from '../test/badge-style.ts';
 
-function renderRunsPage(onSelectRun = vi.fn(), onStarted = vi.fn()) {
+function renderRunsPage(onSelectRun = vi.fn(), onStarted = vi.fn(), capabilities?: AppCapabilities) {
   const transport = new MockTransport();
   const client = new AgentClient(transport);
-  render(
+  const page = (
     <AgentClientProvider client={client}>
       <RunsPage onSelectRun={onSelectRun} onStarted={onStarted} />
-    </AgentClientProvider>,
+    </AgentClientProvider>
   );
+  render(capabilities ? <CapabilitiesProvider value={capabilities}>{page}</CapabilitiesProvider> : page);
   return { transport, client, onSelectRun, onStarted };
 }
 
@@ -398,5 +400,70 @@ describe('RunsPage', () => {
     await respondListRuns(transport, []);
 
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
+  });
+
+  describe('worktree runs', () => {
+    const WORKTREE_RUN = {
+      runId: 'wt1', runDir: '/ws/.whiphand/runs/wt1', status: 'succeeded', workflow: 'demo',
+      worktree: { path: '.whiphand/worktrees/wt1', branch: 'whiphand/wt1' },
+    };
+    const PLAIN_RUN = { runId: 'plain1', runDir: '/ws/.whiphand/runs/plain1', status: 'succeeded', workflow: 'demo' };
+
+    afterEach(() => {
+      useAppStore.setState({ appState: null });
+    });
+
+    it('marks a worktree run with a glyph naming its branch and path, and a plain run with none', async () => {
+      const { transport } = renderRunsPage();
+      await respondListRuns(transport, [WORKTREE_RUN, PLAIN_RUN]);
+
+      await screen.findByText('wt1');
+      const glyphs = screen.getAllByLabelText('worktree');
+      expect(glyphs).toHaveLength(1);
+      expect(glyphs[0].parentElement).toHaveAttribute(
+        'title', 'Worktree on branch whiphand/wt1\n.whiphand/worktrees/wt1',
+      );
+    });
+
+    it('offers no open button without the capability, but keeps the glyph', async () => {
+      const { transport } = renderRunsPage();
+      await respondListRuns(transport, [WORKTREE_RUN]);
+
+      await screen.findByText('wt1');
+      expect(screen.getByLabelText('worktree')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Open in/ })).not.toBeInTheDocument();
+    });
+
+    it('opens the worktree in the chosen editor without opening the run', async () => {
+      const openInEditor = vi.fn().mockResolvedValue(undefined);
+      useAppStore.setState({ appState: { editor: { kind: 'cursor' } } as never });
+      const onSelectRun = vi.fn();
+      const { transport } = renderRunsPage(
+        onSelectRun, vi.fn(), { host: 'desktop', localFiles: true, openInEditor },
+      );
+      await respondListRuns(transport, [WORKTREE_RUN, PLAIN_RUN]);
+
+      const buttons = await screen.findAllByRole('button', { name: 'Open in Cursor' });
+      expect(buttons).toHaveLength(1);
+      fireEvent.click(buttons[0]);
+
+      await waitFor(() => expect(openInEditor).toHaveBeenCalledWith(
+        '/ws', '.whiphand/worktrees/wt1', { kind: 'cursor' },
+      ));
+      expect(onSelectRun).not.toHaveBeenCalled();
+    });
+
+    it('shows the launcher error above the grid', async () => {
+      const openInEditor = vi.fn().mockRejectedValue(new Error('worktree no longer exists'));
+      const { transport } = renderRunsPage(
+        vi.fn(), vi.fn(), { host: 'desktop', localFiles: true, openInEditor },
+      );
+      await respondListRuns(transport, [WORKTREE_RUN]);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Open in Visual Studio Code' }));
+
+      expect(await screen.findByTestId('runs-open-error')).toHaveTextContent('worktree no longer exists');
+      expect(screen.getByText('wt1')).toBeInTheDocument();
+    });
   });
 });

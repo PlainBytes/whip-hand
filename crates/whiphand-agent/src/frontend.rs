@@ -544,6 +544,7 @@ mod tests {
                     quit_grace: Duration::from_millis(200),
                     term_grace: Duration::from_millis(200),
                 },
+                remote: true,
             },
             inbox,
             Default::default(),

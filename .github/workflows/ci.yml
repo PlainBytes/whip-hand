@@ -237,6 +237,9 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      # The TUI links the agent without remote access; keep that build honest.
+      - run: cargo clippy -p whiphand-agent --no-default-features --all-targets -- -D warnings
+      - run: cargo test -p whiphand-agent --no-default-features
 
   # The full `npm run package` pipeline — the CLI and the Tauri bundle — on
   # push to main only, not on PRs: ~4 minutes per platform is too slow for a

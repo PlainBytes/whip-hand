@@ -48,6 +48,16 @@ pub fn resolve_app_state_path() -> PathBuf {
     dir.join("whiphand").join("app-state.json")
 }
 
+/// `WHIPHAND_REMOTE_CONFIG_FILE`, else beside the app state.
+pub fn resolve_remote_config_path() -> PathBuf {
+    if let Ok(v) = std::env::var("WHIPHAND_REMOTE_CONFIG_FILE")
+        && !v.is_empty()
+    {
+        return PathBuf::from(v);
+    }
+    resolve_app_state_path().with_file_name("remote-access.json")
+}
+
 fn workspace_ref(v: &Value) -> WorkspaceRef<'_> {
     WorkspaceRef {
         path: v["path"].as_str().unwrap_or_default(),

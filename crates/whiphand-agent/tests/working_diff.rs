@@ -55,6 +55,7 @@ impl Harness {
             remote_config_path: dir.path().join("remote-access.json"),
             web_root: None,
             timings: SessionTimings::default(),
+            remote: true,
         })
         .unwrap();
         let (tx, lines) = mpsc::channel();

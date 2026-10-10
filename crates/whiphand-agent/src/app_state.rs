@@ -7,6 +7,7 @@
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use serde_json::{Map, Value, json};
 use whiphand_core::durable_fs::write_file_atomic;
@@ -152,11 +153,18 @@ pub fn remember_run(
     workspaces.insert(key, Value::Object(memory));
 }
 
-/// Loaded once, written atomically. Every mutation runs to completion on the
-/// engine thread, so two never interleave.
+/// What changes when the file does: its mtime, and its length, since two
+/// writes can land within one mtime tick.
+type Stamp = Option<(SystemTime, u64)>;
+
+/// Written atomically. Every mutation runs to completion on the engine
+/// thread, so two never interleave here; another process (the desktop beside
+/// the TUI) may write the same file, so a mutation re-reads it first and a
+/// read reloads it when it changed.
 pub struct AppStateStore {
     path: PathBuf,
-    state: RefCell<Option<Value>>,
+    /// The state and the file's [`Stamp`] when it was read.
+    state: RefCell<Option<(Value, Stamp)>>,
     /// Called after every write that landed: app state is shared by every
     /// client, and only the one that changed it would otherwise know.
     on_change: Box<dyn Fn(Value)>,
@@ -176,12 +184,20 @@ impl AppStateStore {
     }
 
     pub fn get(&self) -> Value {
-        if let Some(s) = self.state.borrow().as_ref() {
+        let stamp = self.stamp();
+        if let Some((s, seen)) = self.state.borrow().as_ref()
+            && *seen == stamp
+        {
             return s.clone();
         }
         let loaded = self.load();
-        *self.state.borrow_mut() = Some(loaded.clone());
+        *self.state.borrow_mut() = Some((loaded.clone(), stamp));
         loaded
+    }
+
+    fn stamp(&self) -> Stamp {
+        let meta = std::fs::metadata(&self.path).ok()?;
+        Some((meta.modified().ok()?, meta.len()))
     }
 
     fn load(&self) -> Value {
@@ -203,16 +219,17 @@ impl AppStateStore {
         }
     }
 
-    /// Applies `f`, writes the result, then tells the listener.
+    /// Applies `f` to the file as it is now, writes the result, then tells
+    /// the listener.
     pub fn mutate(&self, f: impl FnOnce(&mut Value)) -> Result<Value, String> {
-        let mut next = self.get();
+        let mut next = self.load();
         f(&mut next);
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let text = jsval::stringify(&jsval::from_json(&next), Some(2)).unwrap_or_default();
         write_file_atomic(&self.path, format!("{text}\n").as_bytes()).map_err(|e| e.to_string())?;
-        *self.state.borrow_mut() = Some(next.clone());
+        *self.state.borrow_mut() = Some((next.clone(), self.stamp()));
         (self.on_change)(next.clone());
         Ok(next)
     }
@@ -288,5 +305,36 @@ mod tests {
         std::fs::write(&path, "{\"schemaVersion\": 2}").unwrap();
         let store = AppStateStore::new(path, Box::new(|_| {}));
         assert_eq!(store.get(), empty_app_state());
+    }
+
+    // The desktop and the TUI each keep a store on one file.
+    #[test]
+    fn two_stores_on_one_file_keep_each_others_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app-state.json");
+        let a = AppStateStore::new(path.clone(), Box::new(|_| {}));
+        let b = AppStateStore::new(path, Box::new(|_| {}));
+        // Both have read the empty state before either writes.
+        assert_eq!(a.get(), b.get());
+        let touch = |store: &AppStateStore, ws: &str| {
+            store
+                .mutate(|s| {
+                    let list = s["recentWorkspaces"].as_array().unwrap().clone();
+                    s["recentWorkspaces"] = Value::Array(touch_recent(&list, ws, "now", None));
+                })
+                .unwrap();
+        };
+        touch(&a, "/a");
+        touch(&b, "/b");
+        let paths = |v: Value| -> Vec<String> {
+            v["recentWorkspaces"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["path"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(paths(b.get()), ["/b", "/a"]);
+        assert_eq!(paths(a.get()), ["/b", "/a"]);
     }
 }

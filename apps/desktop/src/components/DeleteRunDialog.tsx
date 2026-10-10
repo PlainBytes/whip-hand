@@ -6,6 +6,7 @@ import {
 import { useAgentClient } from '../agent/agent-context.tsx';
 import type { DeleteRunResult } from '../shared/protocol.gen.ts';
 import { errorMessage } from '../lib/error-message.ts';
+import { DangerButton } from './DangerButton.tsx';
 
 export interface DeleteRunDialogProps {
   workdir: string;
@@ -78,9 +79,9 @@ export function DeleteRunDialog({ workdir, runId, name, onDeleted, onDismiss }: 
             </div>
           </DialogContent>
           <DialogActions>
-            <Button appearance="primary" disabled={busy} onClick={() => void confirm()}>
+            <DangerButton disabled={busy} onClick={() => void confirm()}>
               {busy ? <Spinner size="tiny" /> : 'Delete'}
-            </Button>
+            </DangerButton>
             <Button disabled={busy} onClick={onDismiss}>Cancel</Button>
           </DialogActions>
         </DialogBody>

@@ -7,6 +7,7 @@ import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
 import { AgentClientProvider } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
+import { hasInjectedStyle } from '../test/badge-style.ts';
 import { answerValidation } from '../test/validation.ts';
 
 const FEATURE_WORKFLOW = {
@@ -353,6 +354,21 @@ describe('WorkflowsPage - deleting a workflow', () => {
 
   afterEach(() => {
     useAppStore.setState({ workspacePath: null, workflows: [] });
+  });
+
+  it('styles the lane Delete subtle red and the confirm Delete filled red', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+
+    const laneDelete = await screen.findByRole('button', { name: /^delete$/i });
+    expect(hasInjectedStyle(laneDelete, 'color', 'var(--colorPaletteRedForeground1)')).toBe(true);
+    expect(hasInjectedStyle(laneDelete, 'background-color', 'var(--colorPaletteRedBackground3)')).toBe(false);
+
+    fireEvent.click(laneDelete);
+    await screen.findByText("Delete workflow 'feature'?");
+    const confirm = within(screen.getByRole('dialog')).getByRole('button', { name: /^delete$/i });
+    expect(hasInjectedStyle(confirm, 'background-color', 'var(--colorPaletteRedBackground3)')).toBe(true);
   });
 
   it('card Delete confirms, sends deleteWorkflow without a scope for a project workflow, and reloads the list', async () => {

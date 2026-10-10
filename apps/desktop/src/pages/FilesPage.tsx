@@ -25,6 +25,7 @@ import { UnsavedChangesDialog } from '../components/UnsavedChangesDialog.tsx';
 import { resolveInWorkspace } from '../markdown/resolve.ts';
 import { useOpenExternal } from '../lib/open-external.tsx';
 import { errorMessage } from '../lib/error-message.ts';
+import { DangerButton } from '../components/DangerButton.tsx';
 
 /**
  * What the dirty guard is holding until the user decides. Every one of these
@@ -398,9 +399,9 @@ export function FilesPage() {
                 {deleteError ? ` — ${deleteError}` : ''}
               </DialogContent>
               <DialogActions>
-                <Button appearance="primary" disabled={deleteBusy} onClick={() => void confirmDelete()}>
+                <DangerButton disabled={deleteBusy} onClick={() => void confirmDelete()}>
                   Delete
-                </Button>
+                </DangerButton>
                 <Button disabled={deleteBusy} onClick={() => setDeleting(null)}>Cancel</Button>
               </DialogActions>
             </DialogBody>

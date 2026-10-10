@@ -12,6 +12,7 @@ import { StepIdField } from './StepIdField.tsx';
 import { convertStep, StepRail } from './StepRail.tsx';
 import { useStepLayoutStyles } from './step-layout.ts';
 import { nonNegativeOrUndefined, numberOrUndefined } from './number-field.ts';
+import { DangerButton } from '../components/DangerButton.tsx';
 
 const KIND_OPTIONS: StepKind[] = ['agent', 'command', 'manual', 'approval', 'loop', 'stages'];
 
@@ -137,8 +138,8 @@ export function StepCard({
             />
           </Tooltip>
           <Tooltip content={guardTooltip ?? 'Remove step'} relationship="label">
-            <Button
-              appearance="subtle"
+            <DangerButton
+              variant="subtle"
               size="small"
               icon={<Delete20Regular />}
               aria-label="Remove step"

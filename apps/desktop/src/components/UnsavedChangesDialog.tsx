@@ -1,6 +1,7 @@
 import {
   Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle,
 } from '@fluentui/react-components';
+import { DangerButton } from './DangerButton.tsx';
 
 /**
  * The one unsaved-file prompt, raised from every exit that would discard a
@@ -27,7 +28,7 @@ export function UnsavedChangesDialog({ onDiscard, onKeepEditing }: UnsavedChange
           <DialogTitle>You have unsaved changes</DialogTitle>
           <DialogContent>Continuing will discard the edits you haven't saved.</DialogContent>
           <DialogActions>
-            <Button appearance="primary" onClick={onDiscard}>Discard changes</Button>
+            <DangerButton onClick={onDiscard}>Discard changes</DangerButton>
             <Button onClick={onKeepEditing}>Keep editing</Button>
           </DialogActions>
         </DialogBody>

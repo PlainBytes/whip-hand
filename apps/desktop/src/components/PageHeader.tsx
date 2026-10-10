@@ -6,10 +6,10 @@ import { useLayoutEffect, useRef, type ReactNode } from 'react';
  *
  * This matters because a scroll container clips overflow at its *padding
  * box*, while `position: sticky; top: 0` pins to its *content box* — 16px
- * lower. That difference leaves a band at each end of the scrollport where
- * scrolling content stays visible past the sticky bar. PageHeader and
- * PageFooter cancel it by sticking that much further out and padding the
- * distance back in, so the bars reach the real clip edge.
+ * lower. That difference leaves a band at the top of the scrollport where
+ * scrolling content stays visible past the sticky bar. PageHeader cancels it
+ * by sticking that much further out and padding the distance back in, so the
+ * bar reaches the real clip edge.
  *
  * Keep in sync with `<main>`'s padding in App.tsx. The top edge is the one
  * exception — see SCROLLPORT_PADDING_TOP.
@@ -41,8 +41,8 @@ export const SCROLLPORT_PADDING_TOP = SCROLLPORT_PADDING / 2;
 export const PAGE_HEADER_HEIGHT_VAR = '--whiphand-page-header-height';
 
 /**
- * Icon convention for buttons placed in a PageHeader or PageFooter (or in a
- * header/footer-shaped action row that doesn't yet use these components):
+ * Icon convention for buttons placed in a PageHeader (or in a header-shaped
+ * action row that doesn't yet use this component):
  * one verb -> one icon, everywhere in the app, so the same action never
  * looks different depending on which page it's on.
  *
@@ -59,6 +59,10 @@ export const PAGE_HEADER_HEIGHT_VAR = '--whiphand-page-header-height';
  *   Re-run something that finished -> Replay20Regular (not ArrowClockwise —
  *                                     that already means "refresh" here)
  *   End an interactive session  -> PlugDisconnected20Regular
+ *
+ * Delete (and other destructive actions) is always a DangerButton: filled
+ * for page-header and confirm-dialog actions, subtle for list rows and
+ * icon-only buttons.
  *
  * Sizing: 20px icons on default-size buttons, 16px icons on size="small"
  * buttons. A button whose label swaps while working (e.g. "Saving...")

@@ -23,6 +23,7 @@ import { POLL_INTERVAL_MS, runColumns, runLabel } from './run-columns.tsx';
 import { NewRunDialog } from '../components/NewRunDialog.tsx';
 import { DeleteRunDialog } from '../components/DeleteRunDialog.tsx';
 import { errorMessage } from '../lib/error-message.ts';
+import { DangerButton } from '../components/DangerButton.tsx';
 
 export interface RunsPageProps {
   onSelectRun: (runId: string) => void;
@@ -111,14 +112,15 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
         >
           {run.locked ? 'Locked' : 'Lock'}
         </ToggleButton>
-        <Button
+        <DangerButton
+          variant="subtle"
           size="small"
           icon={<Delete16Regular />}
           aria-label={`Delete ${runLabel(run)}`}
           onClick={event => { event.stopPropagation(); setDeleting(run); }}
         >
           Delete
-        </Button>
+        </DangerButton>
       </div>
     ),
     // handleToggleLock isn't memoized (it closes over poll, which already

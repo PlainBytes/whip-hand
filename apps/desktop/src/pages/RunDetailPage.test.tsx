@@ -11,6 +11,7 @@ import { AWAIT_LABEL } from '../lib/await-copy.ts';
 import { encodeToBase64 } from '../lib/base64.ts';
 import type { WhiphandEvent } from '../shared/types.ts';
 import { fromPosix } from '../../../../packages/test-support/src/paths.ts';
+import { hasInjectedStyle } from '../test/badge-style.ts';
 
 // RunDetailPage only needs to exercise its own show/hide/collapse logic here —
 // the real xterm wiring (encoding, buffering, resize debounce) is covered in
@@ -357,6 +358,15 @@ describe('RunDetailPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Back to runs' }));
     expect(onBack).toHaveBeenCalled();
+  });
+
+  it('styles the header Delete filled red', async () => {
+    const { transport } = renderRunDetail('job-red');
+    emitWhiphandEvent(transport, 'job-red', 'run-red', { type: 'step:start', stepId: 'plan', kind: 'agent', runner: 'claude', mode: 'headless' }, 't1');
+    await respondGetRun(transport, { runId: 'run-red', runDir: '/ws/.whiphand/runs/run-red', status: 'succeeded', artifacts: [] });
+
+    const del = await screen.findByRole('button', { name: 'Delete' });
+    expect(hasInjectedStyle(del, 'background-color', 'var(--colorPaletteRedBackground3)')).toBe(true);
   });
 
   it('deletes the run via deleteRun and navigates back on success', async () => {

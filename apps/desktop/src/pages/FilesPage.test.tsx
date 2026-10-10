@@ -4,6 +4,7 @@ import { FakeFileSystem } from '../files/fake-fs.ts';
 import { FileSystemProvider } from '../files/fs-context.tsx';
 import { useAppStore } from '../state/store.ts';
 import { FilesPage } from './FilesPage.tsx';
+import { hasInjectedStyle } from '../test/badge-style.ts';
 
 function workspace(): FakeFileSystem {
   const fs = new FakeFileSystem();
@@ -201,6 +202,16 @@ describe('FilesPage file operations', () => {
     });
   });
 
+  it('renders the delete confirmation button in filled red', async () => {
+    renderFilesPage(workspace());
+    fireEvent.click(await screen.findByText('notes.md'));
+    await screen.findByRole('heading', { name: 'Notes' });
+    rowAction('notes.md', /delete notes\.md/i);
+    const dialog = await screen.findByRole('dialog');
+    const confirm = within(dialog).getByRole('button', { name: /^delete$/i });
+    expect(hasInjectedStyle(confirm, 'background-color', 'var(--colorPaletteRedBackground3)')).toBe(true);
+  });
+
   it('deletes the selected file after confirmation and clears the preview', async () => {
     const fs = workspace();
     renderFilesPage(fs);
@@ -278,6 +289,15 @@ describe('FilesPage toolbar operations with unsaved edits', () => {
     rowAction('README.md', /delete README\.md/i);
     expect(await screen.findByText(/unsaved changes/i)).toBeInTheDocument();
     expect(screen.queryByText(/cannot be undone/i)).not.toBeInTheDocument();
+  });
+
+  it('renders Discard changes in filled red', async () => {
+    renderFilesPage(workspace());
+    await editReadme();
+
+    rowAction('README.md', /delete README\.md/i);
+    const discard = await screen.findByRole('button', { name: /discard changes/i });
+    expect(hasInjectedStyle(discard, 'background-color', 'var(--colorPaletteRedBackground3)')).toBe(true);
   });
 
   it('warns before a new file discards unsaved edits', async () => {

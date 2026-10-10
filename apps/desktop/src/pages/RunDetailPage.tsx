@@ -40,7 +40,7 @@ import { summarizeEvent, parseLogLine, type LogRow } from '../shared/log-rows.ts
 import { StatusBadge } from '../components/StatusBadge.tsx';
 import { AttentionBadge } from '../components/AttentionBadge.tsx';
 import { DangerButton } from '../components/DangerButton.tsx';
-import { PageHeader } from '../components/PageHeader.tsx';
+import { Page, PlainPage } from '../components/Page.tsx';
 import { AWAIT_LABEL } from '../lib/await-copy.ts';
 import { TerminalPanel } from '../components/TerminalPanel.tsx';
 import { RunStepper } from '../components/RunStepper.tsx';
@@ -1073,18 +1073,16 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
 
   if (!effectiveJobId && !effectiveRunId) {
     return (
-      <EmptyState icon={<TextBulletListSquare48Regular />}>
-        No run selected. Pick one from Runs to see how it went.
-      </EmptyState>
+      <PlainPage>
+        <EmptyState icon={<TextBulletListSquare48Regular />}>
+          No run selected. Pick one from Runs to see how it went.
+        </EmptyState>
+      </PlainPage>
     );
   }
 
   return (
-    <div
-      data-testid="run-detail-frame"
-      style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
-    >
-      <PageHeader>
+    <Page body="fill" header={<>
         {/*
           One row: title, status and actions all fit on a line, and this is the
           screen where every pixel above the fold belongs to the run itself.
@@ -1333,7 +1331,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
             )}
           </div>
         </div>
-      </PageHeader>
+    </>}>
 
       {/*
         Loud on purpose, and the same MessageBar the settings pages use: a run
@@ -1341,7 +1339,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
         scroll straight past.
       */}
       {(manifestError || runErrorMessage) && (
-        <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 8 }}>
+        <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
           {manifestError && (
             <MessageBar intent="error" data-testid="run-detail-error">
               <MessageBarBody>Could not load run details: {manifestError}</MessageBarBody>
@@ -1427,7 +1425,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
           keeps mounted-but-closed (cancel, rename, delete), which is the
           tabster race App.tsx documents — and it would stack again with
           FilePreview's own save-conflict dialog inside this pane.
-          PageHeader above stays put: a reviewer has to be able to see which
+          The page header above stays put: a reviewer has to be able to see which
           run they are signing off.
 
           Hidden with display:none rather than unmounted when the human backs
@@ -1833,6 +1831,6 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
         </div>
       </div>
       </div>
-    </div>
+    </Page>
   );
 }

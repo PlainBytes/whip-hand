@@ -6,7 +6,7 @@ import {
 import { Add20Regular, Delete20Regular, Dismiss20Regular, Save20Regular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { DeleteWorkflowDialog } from '../components/DeleteWorkflowDialog.tsx';
-import { PageHeader } from '../components/PageHeader.tsx';
+import { Page } from '../components/Page.tsx';
 import { DangerButton } from '../components/DangerButton.tsx';
 import type { Scope, Workflow } from '../shared/types.ts';
 import { isContainerStep } from '../shared/steps.ts';
@@ -250,19 +250,7 @@ export function WorkflowEditor({
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
-      {globalSaveConfirmDialog}
-      {confirmingDelete && (
-        <DeleteWorkflowDialog
-          name={name}
-          source={source}
-          workdir={workdir}
-          revealsGlobal={revealsGlobal}
-          onDeleted={onDeleted}
-          onDismiss={() => setConfirmingDelete(false)}
-        />
-      )}
-      <PageHeader>
+    <Page header={<>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Text weight="semibold" size={500}>
             Edit workflow: {name}
@@ -305,9 +293,19 @@ export function WorkflowEditor({
             </MessageBarBody>
           </MessageBar>
         )}
-      </PageHeader>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 16, paddingBottom: 16 }}>
+    </>}>
+      {globalSaveConfirmDialog}
+      {confirmingDelete && (
+        <DeleteWorkflowDialog
+          name={name}
+          source={source}
+          workdir={workdir}
+          revealsGlobal={revealsGlobal}
+          onDeleted={onDeleted}
+          onDismiss={() => setConfirmingDelete(false)}
+        />
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <WorkflowSettingsCard
           workflow={draft}
           collapsed={draftApi.settingsCollapsed}
@@ -369,7 +367,7 @@ export function WorkflowEditor({
           Add step
         </Button>
       </div>
-    </div>
+    </Page>
   );
 }
 

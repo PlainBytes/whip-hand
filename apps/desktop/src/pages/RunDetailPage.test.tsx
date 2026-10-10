@@ -1523,8 +1523,12 @@ describe('RunDetailPage: cycles and manual steps', () => {
   it('lays the page out as a full-height frame that does not scroll as a whole', async () => {
     renderRunDetail('job-frame');
 
-    const frame = await screen.findByTestId('run-detail-frame');
+    const frame = await screen.findByTestId('page');
     expect(frame).toHaveStyle({ height: '100%', flexDirection: 'column' });
+    // The body is a fill body: it lays out internal scrollers and never scrolls itself.
+    const body = screen.getByTestId('page-body');
+    expect(body).toHaveAttribute('data-body', 'fill');
+    expect(body).not.toHaveStyle({ overflow: 'auto' });
   });
 
   it('caps the stepper strip and scrolls it, so expanded stages cannot squeeze the tabs', async () => {

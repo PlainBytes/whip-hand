@@ -11,7 +11,7 @@ import { setVirtualViewportHeight, triggerResize, VIRTUAL_ROW_HEIGHT } from '../
 import { hasInjectedStyle } from '../test/badge-style.ts';
 
 /**
- * The "Show hidden files" Switch now lives in FilesPage's PageHeader, not in
+ * The "Show hidden files" Switch now lives in FilesPage's Page header, not in
  * FileTree, so the harness renders it here — the behaviour it drives (the
  * hook's filter) is still FileTree's to prove.
  */

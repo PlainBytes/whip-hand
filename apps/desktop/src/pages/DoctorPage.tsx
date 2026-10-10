@@ -17,7 +17,7 @@ import {
 } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useOpenExternal } from '../lib/open-external.tsx';
-import { PageHeader } from '../components/PageHeader.tsx';
+import { Page, PlainPage } from '../components/Page.tsx';
 import { useAppStore } from '../state/store.ts';
 import { errorMessage } from '../lib/error-message.ts';
 // tool-groups.ts, not tools.ts: the latter reaches for node:child_process to
@@ -137,12 +137,11 @@ export function DoctorPage() {
   }, [agentStatus, workspacePath]);
 
   if (agentStatus !== 'connected') {
-    return <Text>Waiting for the whiphand agent to connect…</Text>;
+    return <PlainPage><Text>Waiting for the whiphand agent to connect…</Text></PlainPage>;
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
-      <PageHeader>
+    <Page header={<>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
           <Text weight="semibold" size={500}>Doctor</Text>
           <Button
@@ -154,11 +153,8 @@ export function DoctorPage() {
             {loading ? 'Checking…' : 'Refresh'}
           </Button>
         </div>
-      </PageHeader>
-
-      {/* Padding, not margin: a margin on the sticky header above would
-          scroll with the bar and leave a transparent gap. */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 24, paddingTop: 16 }}>
+    </>}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
         {error !== null && (
           <MessageBar intent="error">
             <MessageBarBody>Doctor check failed: {error}</MessageBarBody>
@@ -181,6 +177,6 @@ export function DoctorPage() {
 
         {tools !== null && tools.length === 0 && !loading && <Text>No tools to check.</Text>}
       </div>
-    </div>
+    </Page>
   );
 }

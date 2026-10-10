@@ -11,6 +11,7 @@ import { PreferencesPage } from '../pages/PreferencesPage.tsx';
 import { ActivityPage } from '../pages/ActivityPage.tsx';
 import { RunDetailPage } from '../pages/RunDetailPage.tsx';
 import { WelcomePage } from '../pages/WelcomePage.tsx';
+import { PlainPage } from './Page.tsx';
 
 /** RunDetail is reached from a Runs row or a just-started run, not a tab of its own. */
 export interface RunDetailTarget {
@@ -53,7 +54,7 @@ export function PageContent({
 
   // Which pages survive without a workspace is nav.ts's `requiresWorkspace`
   // column, not a condition spelled out here.
-  if (requiresWorkspace(page) && !workspacePath) return restoreDone ? <WelcomePage /> : null;
+  if (requiresWorkspace(page) && !workspacePath) return restoreDone ? <PlainPage><WelcomePage /></PlainPage> : null;
 
   if (runDetailTarget) {
     return (
@@ -79,10 +80,12 @@ export function PageContent({
   return (
     <>
       {page === 'runs' && (
-        <RunsPage
-          onSelectRun={runId => onOpenRunDetail({ runId })}
-          onStarted={jobId => onOpenRunDetail({ jobId })}
-        />
+        <PlainPage>
+          <RunsPage
+            onSelectRun={runId => onOpenRunDetail({ runId })}
+            onStarted={jobId => onOpenRunDetail({ jobId })}
+          />
+        </PlainPage>
       )}
       {page === 'workflows' && (
         <WorkflowsPage
@@ -100,11 +103,11 @@ export function PageContent({
           }}
         />
       )}
-      {page === 'files' && (localFiles ? <FilesPage /> : <LocalFilesUnavailable />)}
-      {page === 'workspace-settings' && <WorkspaceSettingsPage />}
-      {page === 'activity' && <ActivityPage onSelectRun={runId => onOpenRunDetail({ runId })} />}
+      {page === 'files' && (localFiles ? <FilesPage /> : <PlainPage><LocalFilesUnavailable /></PlainPage>)}
+      {page === 'workspace-settings' && <PlainPage><WorkspaceSettingsPage /></PlainPage>}
+      {page === 'activity' && <PlainPage><ActivityPage onSelectRun={runId => onOpenRunDetail({ runId })} /></PlainPage>}
       {page === 'doctor' && <DoctorPage />}
-      {page === 'preferences' && <PreferencesPage />}
+      {page === 'preferences' && <PlainPage><PreferencesPage /></PlainPage>}
     </>
   );
 }

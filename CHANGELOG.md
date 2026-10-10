@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Three starter workflows instead of six
+
+- `whiphand init` now ships `iterate`, `develop` and `research` only. `feature`, `feature-development`,
+  `spec-driven` and `bugfix` are no longer shipped.
+- `iterate` is new: on the branch you are on, in your own checkout, it plans, implements, tests and reviews
+  in a cycle, then commits on sign-off. It never switches or creates a branch, so it suits several small
+  iterations on one branch. Changes already uncommitted when it starts end up in its commit; its first step,
+  `baseline`, records them (`git status --porcelain`) so the review does not hold them against the run.
+- `develop` is `staged-feature-development` renamed. Its push is now `eval "{{ inputs.push_command }}"`,
+  default `git push -u origin HEAD`; leave the input blank to skip pushing.
+- `iterate`'s planning step takes `--attach` files, like `develop` and `research`.
+- `whiphand new-workflow` scaffolds from `iterate` instead of `feature`.
+- `whiphand init` leaves existing workflow files alone. To switch an existing workspace over, delete the old
+  files from `.whiphand/workflows/` and run `whiphand init`.
+
 ### Runs can execute in their own git worktree
 
 - A workflow can declare `worktree:` (`true`, `false`, or `base` and `branch` templates). The engine then

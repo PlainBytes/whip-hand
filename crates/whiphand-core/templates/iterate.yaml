@@ -1,16 +1,14 @@
-# feature-development — branch off trunk, plan, implement, gate on tests
-# passing, and review in a cycle, then commit on sign-off. Reference: docs/design.md
-name: feature-development
-description: Branch off trunk, plan, implement, gate on tests, and review in a cycle, then commit on sign-off.
+# iterate — on the branch you are on, plan, implement, gate on tests passing,
+# and review in a cycle, then commit on sign-off. Run it again for the next
+# small step on the same branch. Reference: docs/design.md
+# It neither switches nor creates a branch, and it starts from the working tree
+# as it is: changes already uncommitted there become part of its commit.
+name: iterate
+description: On the current branch, plan, implement, gate on tests, and review in a cycle, then commit on sign-off.
 inputs:
   feature:
     required: true
-    prompt: What are we building?
-  base:
-    required: false
-    default: main
-    prompt: Branch to start from
-    multiline: false
+    prompt: What are we changing?
   test_command:
     required: false
     default: npm test
@@ -18,22 +16,21 @@ inputs:
     remember: true
     multiline: false
 steps:
-  - id: sync-base # a dirty tree or a diverged trunk fails the run here,
-    kind: command # with git's own message in the artifact
-    run: git checkout "{{ inputs.base }}" && git pull --ff-only
-    output: sync-base.log
-
-  - id: branch
+  # Records what was already uncommitted before the run touched anything, so
+  # 'review' can tell those changes from the executor's. They still go into
+  # this run's commit.
+  - id: baseline
     kind: command
-    run: git checkout -b "feature/{{ run.slug }}"
-    output: branch.log
+    run: git status --porcelain
+    output: baseline.log
 
   - id: plan
     kind: agent
     runner: claude
-    model: claude-opus-5-5
+    model: opus
     mode: interactive
     writes: false
+    inputs: [attachments]
     output: plan.md
     prompt: |
       We are planning: {{ inputs.feature }}.
@@ -42,8 +39,6 @@ steps:
       The artifact you write is the agreed plan as it now stands, not a transcript of our
       conversation. End it with a `## Verify` section: the exact command(s) that exercise
       this change, because the workflow's test command may not cover it.
-    inputs:
-      - attachments
 
   - kind: loop
     id: human-review
@@ -102,15 +97,15 @@ steps:
               - id: tests
                 kind: command
                 run: eval "{{ inputs.test_command }}"
-                verdict: true # a failing exit sends the loop round again, not a crash
+                verdict: true         # a failing exit sends the loop round again, not a crash
                 output: tests.log
-                timeout_ms: 1800000 # a hung suite fails the run (resumable) rather than blocking forever
+                timeout_ms: 1800000   # a hung suite fails the run (resumable) rather than blocking forever
           - id: review
-            inputs: [plan, execute, tests, sign-off]
+            inputs: [plan, execute, tests, sign-off, baseline]
             verdict: true
             kind: agent
             runner: claude
-            model: claude-opus-5-5
+            model: opus
             mode: headless
             writes: false
             prompt: |
@@ -127,6 +122,10 @@ steps:
               If the attached tests log does not exercise the changed code, say so and
               run the relevant tests yourself, with read-only commands only.
               An improvement outside the plan is non-blocking at most.
+              The attached baseline lists what was already uncommitted before this run
+              started. Those changes are not the executor's: they are not out of scope
+              and not a finding. In a file the baseline lists, judge only what the plan
+              asked for.
             output: review.md
       - id: sign-off
         inputs: [review]
@@ -152,9 +151,9 @@ steps:
     inputs: [plan, review, sign-off]
     kind: agent
     runner: claude
-    model: haiku # summarising a diff is not what the workflow's model is for
+    model: haiku        # summarising a diff is not what the workflow's model is for
     mode: headless
-    writes: false # Write/Edit denied; Bash stays, which is how it reads the diff
+    writes: false       # Write/Edit denied; Bash stays, which is how it reads the diff
     output: commit-message.md
     prompt: |
       Write the commit message for the change staged on this branch.

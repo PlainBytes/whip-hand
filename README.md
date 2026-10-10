@@ -30,35 +30,32 @@ whiphand run examples/cycle.yaml --dry-run --input feature=demo              # p
 whiphand run examples/feature.yaml --input feature="oauth support"           # the real thing
 whiphand run examples/cycle.yaml --input feature=x --max-iterations 5 --yes  # override the loop budget; don't ask
 whiphand run --resume 20260907-141233-a3f1 --extra-iterations 2              # continue a stopped run; grant 2 more iterations to any exhausted loop
-whiphand run feature --input feature="oauth support" --name "OAuth support"  # label the run
-whiphand run feature --input feature="fix login" --attach ./bug.png --attach ./server.log  # hand files to the plan step
+whiphand run iterate --input feature="oauth support" --name "OAuth support"  # label the run
+whiphand run iterate --input feature="fix login" --attach ./bug.png --attach ./server.log  # hand files to the plan step
 whiphand rename-run 20260907-141233-a3f1 "Something better"                  # relabel it later ('' clears)
 whiphand run examples/feature.yaml --input feature=x --worktree              # run on a new branch in its own git worktree
-whiphand run feature --input feature=x --no-worktree                         # run in the working folder even if the workflow asks for a worktree
+whiphand run develop --input feature=x --no-worktree                         # run in the working folder even if the workflow asks for a worktree
 whiphand worktree remove 20260907-141233-a3f1                                # remove a run's worktree (--force discards uncommitted changes); the branch stays
 ```
 
-Workflows live in `.whiphand/workflows/<name>.yaml` (so `whiphand run feature` works) or anywhere as a
+Workflows live in `.whiphand/workflows/<name>.yaml` (so `whiphand run iterate` works) or anywhere as a
 path. Artifacts land in `.whiphand/runs/<run-id>/` as plain markdown. Workspace defaults live in
 `.whiphand/config.yaml`.
 
-`whiphand init` ships six starter workflows. Five of them build something, and every one of those
-ends the same way: a human sign-off that can send the work back with comments for another cycle,
-not just ship it or kill it. `feature` plans once, interactively, then implements and reviews in a
-cycle until the sign-off approves it — pick it when the shape of the change is already clear.
-`spec-driven` adds a second planning phase and grills you on both, then stops at an approval gate
-before any code is written, before its own implement/review/sign-off cycle. `feature-development`
-does the same as `feature` but on its own branch in its own git worktree — it brings `feature/<run slug>` up
-to your trunk's remote state, and commits the signed-off work with a message it writes from the diff. `staged-feature-development`
-cuts the plan into stages and builds, reviews, accepts and commits them one at a time. `bugfix`
-fixes a bug test-first: on `fix/<run slug>` in its own worktree, it settles the root cause, the regression test and
-the command that runs just that test with you, has an agent write only that test, and stops the run
-unless the test fails. Only then does it fix the bug, in the usual test-and-review cycle, so
-"fixed" means a failing test turned green.
+`whiphand init` ships three starter workflows. The two that build something end the same way: a
+human gate that can send the work back with comments for another cycle, not just ship it or kill
+it. `iterate` works on the branch you are on, in your own checkout: it plans once, interactively,
+then implements and reviews in a cycle until the sign-off approves it, and commits the signed-off
+work with a message it writes from the diff. It never switches or creates a branch, so run it again
+for the next small step on the same branch. Anything already uncommitted when it starts ends up in
+its commit; a first step records it, so the review does not count it against the run. `develop` is for a larger feature: on `feature/<run slug>` in its own git worktree,
+brought up to your trunk's remote state, it cuts the plan into stages and builds, reviews, accepts
+and commits them one at a time, then pushes the branch (leave the push command blank to skip that).
+`whiphand new-workflow` scaffolds from `iterate`.
 
-**Running workflows side by side.** `feature-development`, `staged-feature-development` and `bugfix`
-declare `worktree:`, so each run gets its own checkout under `.whiphand/worktrees/<run-id>` on a new
-branch, and your main checkout is never touched: start two features at once and they cannot collide.
+**Running workflows side by side.** `develop` declares `worktree:`, so each run gets its own checkout
+under `.whiphand/worktrees/<run-id>` on a new branch, and your main checkout is never touched: start
+two features at once and they cannot collide.
 `--worktree` / `--no-worktree` (or the New Run dialog's switch) override the workflow's choice for one
 run; `--resume` always returns to the tree the run started in. Deleting a run removes its worktree
 (refusing if it has uncommitted changes) but never its branch; `whiphand worktree remove` does it by
@@ -289,7 +286,7 @@ Rejecting at the gate re-runs the whole stage, with the rejection handed to the 
 `writes: true` step before the gate, up to `max_retries` (default 2) before it hands the
 stage to you in a live session. `allow_paths` on a `writes: true` step fails it, naming the
 file, if it touched anything outside the given globs. See the shipped
-`staged-feature-development` workflow and `docs/design.md`'s "Stages" section for the rest.
+`develop` workflow and `docs/design.md`'s "Stages" section for the rest.
 That workflow's commit steps are POSIX shell lines; command steps run through a POSIX shell on every
 OS (see *Windows* below), so it runs unchanged on Linux, macOS and Windows.
 

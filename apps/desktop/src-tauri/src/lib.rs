@@ -5,6 +5,7 @@ use tauri::Manager;
 use tauri_plugin_fs::FsExt;
 
 mod agent;
+mod editor;
 
 // Checks the path canonicalizes to a real directory and refuses the
 // filesystem root, but cannot verify it's the workspace the user actually
@@ -64,6 +65,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             grant_workspace,
             install_kind,
+            editor::open_in_editor,
             agent::agent_attach,
             agent::agent_send,
             agent::agent_detach,

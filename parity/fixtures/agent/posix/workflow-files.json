@@ -258,12 +258,9 @@
         "result": {
           "created": [
             ".whiphand/config.yaml",
-            ".whiphand/workflows/feature.yaml",
-            ".whiphand/workflows/feature-development.yaml",
-            ".whiphand/workflows/spec-driven.yaml",
-            ".whiphand/workflows/staged-feature-development.yaml",
-            ".whiphand/workflows/research.yaml",
-            ".whiphand/workflows/bugfix.yaml"
+            ".whiphand/workflows/iterate.yaml",
+            ".whiphand/workflows/develop.yaml",
+            ".whiphand/workflows/research.yaml"
           ]
         }
       }
@@ -287,187 +284,6 @@
             "error": "invalid workflow:\n  - workflow: Steps Invalid input: expected array, received number"
           },
           {
-            "name": "bugfix",
-            "path": "<WS>/ws/.whiphand/workflows/bugfix.yaml",
-            "source": "project",
-            "workflow": {
-              "name": "bugfix",
-              "description": "Branch off trunk, diagnose a bug, prove it with a failing test, then fix it, gate on tests and review, and commit on sign-off.",
-              "inputs": {
-                "bug": {
-                  "required": true,
-                  "prompt": "What is broken? Steps, expected vs actual",
-                  "multiline": true
-                },
-                "base": {
-                  "required": false,
-                  "prompt": "Branch to start from",
-                  "default": "main",
-                  "multiline": false
-                },
-                "test_command": {
-                  "required": false,
-                  "prompt": "Test command (leave blank to skip tests)",
-                  "default": "npm test",
-                  "remember": true,
-                  "multiline": false
-                }
-              },
-              "worktree": {
-                "base": "{{ inputs.base }}",
-                "branch": "fix/{{ run.slug }}"
-              },
-              "steps": [
-                {
-                  "id": "sync-base",
-                  "kind": "command",
-                  "run": "git fetch origin \"{{ inputs.base }}\" && git reset --hard FETCH_HEAD",
-                  "output": "sync-base.log"
-                },
-                {
-                  "id": "diagnose",
-                  "inputs": [
-                    "attachments"
-                  ],
-                  "kind": "agent",
-                  "runner": "claude",
-                  "model": "opus",
-                  "mode": "interactive",
-                  "writes": false,
-                  "prompt": "We are diagnosing a bug: {{ inputs.bug }}\nBefore exploring, ask me whether there are files or docs you should read first.\nAsk for logs, stack traces and anything else that shows the bug happening, too.\nFind the root cause with me before anything is fixed. Read the code and the\nevidence, form a hypothesis, and check it against the code. Do not modify files.\nAgree with me on three things: the root cause (why it happens, not only where it\nshows), where the regression test goes, and the exact command that runs just\nthat test, not the whole suite.\nThe artifact you write is the agreed diagnosis as it now stands, not a transcript\nof our conversation. It has these sections under exactly these headings:\n## Symptom\nWhat happens, and what should happen instead.\n## Root cause\nWhy it happens, with file:line evidence. Say what is confirmed and what is still\na hypothesis.\n## Regression test\nThe test file, existing or new, and what the test asserts. It must fail today\nbecause of this bug, and pass once the bug is fixed.\n## Test command\nThe exact command, on one line, that runs just that test from the repository root.\n## Fix outline\nWhat the fix changes, and why that removes the root cause rather than masking the\nsymptom.\n",
-                  "output": "diagnosis.md"
-                },
-                {
-                  "id": "reproduce",
-                  "inputs": [
-                    "diagnose"
-                  ],
-                  "kind": "agent",
-                  "runner": "claude",
-                  "model": "sonnet",
-                  "mode": "headless",
-                  "writes": true,
-                  "prompt": "Write the regression test the attached diagnosis asks for, and nothing else: no\nfix, and no change to the code under test. Put it where the diagnosis's\nRegression test section says, in the style of the tests already there. Leave\nyour work uncommitted: a human reads the working tree at the gate below, and the\nworkflow commits it once they have approved.\nThen write the command that runs just that test into {{ run.dir }}/repro.sh, and\nwrite it nowhere else. The workflow sources that file in a POSIX sh subshell from\nthe repository root, on every OS, so keep it POSIX sh. Start from the diagnosis's\nTest command section, and correct it if the test ended up elsewhere. The last\ncommand in the file must be the test itself, so the script exits with the test's\nown status: no `|| true`, no pipe that hides it.\nRun it and watch it fail. It must fail because of the bug, on an assertion that\nshows the symptom. A failure from a typo, a missing import, a bad fixture or a\ncommand that cannot run does not count: fix the test until it fails for the bug's\nreason. If you cannot make it fail for that reason, the diagnosis is wrong or\nincomplete. Do not touch the code under test to force a failure: say so in the\nreport. The next step runs repro.sh and stops the whole run unless it fails.\nYour report, the artifact, has these sections under exactly these headings:\n## Changed\nThe test files you added or changed, and repro.sh, one line each.\n## How it fails\nThe command you ran, its exit status, and the output that shows the bug: the\nassertion message, expected against actual. Say why that failure is the bug's\nsymptom and not a mistake in the test.\n## Not done / not verified\nAnything you did not do or check, with the reason.\n",
-                  "output": "reproduce-report.md"
-                },
-                {
-                  "id": "confirm-red",
-                  "kind": "command",
-                  "run": "if [ ! -f \"{{ run.dir }}/repro.sh\" ]; then\n  echo \"confirm-red: reproduce wrote no repro.sh, so there is no regression test to run\" >&2\n  exit 1\nfi\n( . \"{{ run.dir }}/repro.sh\" )\ncode=$?\nif [ \"$code\" -eq 0 ]; then\n  echo \"confirm-red: the regression test passed, so it does not reproduce the bug\" >&2\n  exit 1\nfi\nif [ \"$code\" -eq 126 ] || [ \"$code\" -eq 127 ]; then\n  echo \"confirm-red: repro.sh could not run the test (exit $code), so its failure proves nothing\" >&2\n  exit 1\nfi\necho \"confirm-red: the regression test fails (exit $code), as it must before the fix\"\n",
-                  "timeout_ms": 1800000,
-                  "output": "confirm-red.log"
-                },
-                {
-                  "kind": "loop",
-                  "id": "human-review",
-                  "steps": [
-                    {
-                      "kind": "loop",
-                      "id": "fix-cycle",
-                      "steps": [
-                        {
-                          "kind": "loop",
-                          "id": "test-fix",
-                          "steps": [
-                            {
-                              "id": "execute",
-                              "inputs": [
-                                "diagnose",
-                                "reproduce",
-                                "tests",
-                                "review",
-                                "sign-off"
-                              ],
-                              "kind": "agent",
-                              "runner": "claude",
-                              "model": "sonnet",
-                              "mode": "headless",
-                              "writes": true,
-                              "prompt": "Fix the bug the attached diagnosis describes, at its root cause and not\nonly where it shows. The attached reproduce report says the regression\ntest fails today. Your fix must make it pass, and you must not change the\ntest to get there: do not weaken, skip or delete it, loosen an\nassertion or change an expected value. If the test itself is wrong, say\nso in the report; you may strengthen it. Change only what the fix needs:\nno unrelated cleanup or refactor.\nIf a tests log marked VERDICT: FAIL is attached, fix every failure it\nshows before anything else. It runs the regression test first, then the\nworkflow's test command. If review findings or sign-off feedback are\nattached, address every point. Leave your work uncommitted: a human reads\nthe working tree at the gate below, and the workflow commits it once\nthey have approved.\nImplement everything the diagnosis's fix outline asks. If something can't\nor shouldn't be done, don't drop it silently: say so in the report.\nYour report, the artifact, has these sections under exactly these headings:\n## Changed\nThe files you changed or added, one line each.\n## Verified\nThe exact commands you ran and their result. Run the tests relevant to\nwhat you changed, not only the workflow's test command. Include the\nregression test's command.\n## Regression test\nWhether you left it untouched. If you changed it, what and why.\n## Not done / not verified\nAnything you did not do or check, with the reason.\n## Deviations from the plan\nWhere you departed from the diagnosis's fix outline, with the reason.\n## Findings addressed\nOnly when a tests log, review findings or sign-off feedback were\nattached: one line per point, and how you addressed it.\n",
-                              "output": "execute-report.md"
-                            },
-                            {
-                              "id": "tests",
-                              "verdict": true,
-                              "kind": "command",
-                              "run": "( . \"{{ run.dir }}/repro.sh\" ) && eval \"{{ inputs.test_command }}\"",
-                              "timeout_ms": 1800000,
-                              "output": "tests.log"
-                            }
-                          ],
-                          "until": "tests",
-                          "max_iterations": 3
-                        },
-                        {
-                          "id": "review",
-                          "inputs": [
-                            "diagnose",
-                            "reproduce",
-                            "execute",
-                            "tests",
-                            "sign-off"
-                          ],
-                          "verdict": true,
-                          "kind": "agent",
-                          "runner": "claude",
-                          "model": "opus",
-                          "mode": "headless",
-                          "writes": false,
-                          "prompt": "Review the uncommitted working-tree diff (`git diff` plus untracked\nfiles) against the attached diagnosis. The diff holds both the regression\ntest and the fix. Walk the diagnosis's root cause, regression test and fix\noutline requirement by requirement and state for each whether it is met. If\nsign-off feedback is attached, FAIL unless every requested change is addressed.\nCheck every claim in the execute report against the diff. A false claim\nis blocking. Also blocking:\n- HEAD moved, or the executor committed (check `git log`)\n- the fix masks the symptom instead of removing the root cause the diagnosis\n  names: a special case for the failing input, a swallowed error, a widened\n  tolerance, a retry\n- the regression test is weaker than the diagnosis and the reproduce report\n  say it is: a loosened or removed assertion, a changed expected value, a\n  skip, a deleted test. Strengthening it is fine.\n- changes outside the diagnosis's scope, such as an unrelated cleanup,\n  refactor or fix\n- an empty diff when the diagnosis requires a fix\n- a review or sign-off point that was not addressed\nIf the attached tests log does not exercise the changed code, say so and\nrun the relevant tests yourself, with read-only commands only.\nAn improvement outside the diagnosis is non-blocking at most.\n",
-                          "output": "review.md"
-                        }
-                      ],
-                      "until": "review",
-                      "max_iterations": 3
-                    },
-                    {
-                      "id": "sign-off",
-                      "inputs": [
-                        "review"
-                      ],
-                      "verdict": true,
-                      "kind": "approval",
-                      "title": "Ship it?",
-                      "instructions": "Review the diff and the findings before this goes any further.",
-                      "capture": "review",
-                      "show_diff": true,
-                      "output": "feedback.md"
-                    }
-                  ],
-                  "until": "sign-off",
-                  "max_iterations": 5
-                },
-                {
-                  "id": "stage",
-                  "kind": "command",
-                  "run": "git add -A -- . \":![.]whiphand/runs/*\"",
-                  "output": "stage.log"
-                },
-                {
-                  "id": "commit-message",
-                  "inputs": [
-                    "diagnose",
-                    "review",
-                    "sign-off"
-                  ],
-                  "kind": "agent",
-                  "runner": "claude",
-                  "model": "haiku",
-                  "mode": "headless",
-                  "writes": false,
-                  "prompt": "Write the commit message for the change staged on this branch.\nIts source of truth is `git diff --cached`, plus the attached plan or stage\nfile, review and feedback for why the change was made. Do not copy or\nparaphrase an existing commit message, such as one from `git log`.\nThe subject is the first line: imperative mood, at most 72 characters, no\ntrailing period. Then one blank line, then a body of one to three lines, each\nwrapped at 72 characters, in plain sentences with no bullets. The body says\nwhat changed and why.\nTrailers such as `Co-Authored-By` are allowed. If you add any, put them after\nthe body, separated from it by one blank line.\nThe file holds the message and nothing else: no preamble, no code fences, no\nreview.\nIf the index is empty, write a one-line subject saying so instead of asking.\n",
-                  "output": "commit-message.md"
-                },
-                {
-                  "id": "commit",
-                  "kind": "command",
-                  "run": "git commit -F \".whiphand/runs/{{ run.id }}/commit-message.md\"",
-                  "output": "commit.log"
-                }
-              ]
-            }
-          },
-          {
             "name": "commented",
             "path": "<WS>/ws/.whiphand/workflows/commented.yaml",
             "source": "project",
@@ -485,654 +301,11 @@
             }
           },
           {
-            "name": "feature",
-            "path": "<WS>/ws/.whiphand/workflows/feature.yaml",
+            "name": "develop",
+            "path": "<WS>/ws/.whiphand/workflows/develop.yaml",
             "source": "project",
             "workflow": {
-              "name": "feature",
-              "description": "Plan with a human, then implement, gate on tests, and review in a cycle until the review passes.",
-              "inputs": {
-                "feature": {
-                  "required": true,
-                  "prompt": "What are we building?"
-                },
-                "test_command": {
-                  "required": false,
-                  "prompt": "Test command (leave blank to skip tests)",
-                  "default": "npm test",
-                  "remember": true,
-                  "multiline": false
-                }
-              },
-              "steps": [
-                {
-                  "id": "plan",
-                  "kind": "agent",
-                  "runner": "claude",
-                  "mode": "interactive",
-                  "writes": false,
-                  "prompt": "We are planning: {{ inputs.feature }}.\nBefore exploring, ask me whether there are files or docs you should read first.\nWork with me on a plan. Do not modify files.\nThe artifact you write is the agreed plan as it now stands, not a transcript of our\nconversation. End it with a `## Verify` section: the exact command(s) that exercise\nthis change, because the workflow's test command may not cover it.\n",
-                  "output": "plan.md"
-                },
-                {
-                  "kind": "loop",
-                  "id": "human-review",
-                  "steps": [
-                    {
-                      "kind": "loop",
-                      "id": "fix-cycle",
-                      "steps": [
-                        {
-                          "kind": "loop",
-                          "id": "test-fix",
-                          "steps": [
-                            {
-                              "id": "execute",
-                              "inputs": [
-                                "plan",
-                                "tests",
-                                "review",
-                                "sign-off"
-                              ],
-                              "kind": "agent",
-                              "runner": "claude",
-                              "mode": "headless",
-                              "writes": true,
-                              "prompt": "Implement the attached plan. If a tests log marked VERDICT: FAIL\nis attached, fix every failure it shows before anything else.\nIf review findings or sign-off feedback are attached, address\nevery point. Leave your work uncommitted: a human reads the\nworking tree at the gate below, and the workflow commits it\nonce they have approved.\nImplement everything the plan asks. If something can't or shouldn't be\ndone, don't drop it silently: say so in the report.\nYour report, the artifact, has these sections under exactly these headings:\n## Changed\nThe files you changed or added, one line each.\n## Verified\nThe exact commands you ran and their result. Run the tests relevant to\nwhat you changed, not only the workflow's test command.\n## Not done / not verified\nAnything you did not do or check, with the reason.\n## Deviations from the plan\nWhere you departed from the plan, with the reason.\n## Findings addressed\nOnly when a tests log, review findings or sign-off feedback were\nattached: one line per point, and how you addressed it.\n",
-                              "output": "execute-report.md"
-                            },
-                            {
-                              "id": "tests",
-                              "verdict": true,
-                              "kind": "command",
-                              "run": "eval \"{{ inputs.test_command }}\"",
-                              "timeout_ms": 1800000,
-                              "output": "tests.log"
-                            }
-                          ],
-                          "until": "tests",
-                          "max_iterations": 3
-                        },
-                        {
-                          "id": "review",
-                          "inputs": [
-                            "plan",
-                            "execute",
-                            "tests",
-                            "sign-off"
-                          ],
-                          "verdict": true,
-                          "kind": "agent",
-                          "runner": "claude",
-                          "mode": "headless",
-                          "writes": false,
-                          "prompt": "Review the uncommitted working-tree diff (`git diff` plus untracked\nfiles) against the attached plan. Walk the plan requirement by\nrequirement and state for each whether it is met. If sign-off\nfeedback is attached, FAIL unless every requested change is addressed.\nCheck every claim in the execute report against the diff. A false claim\nis blocking. Also blocking:\n- HEAD moved, or the executor committed (check `git log`)\n- changes outside the plan's scope\n- an empty diff when the plan requires changes\n- a review or sign-off point that was not addressed\nIf the attached tests log does not exercise the changed code, say so and\nrun the relevant tests yourself, with read-only commands only.\nAn improvement outside the plan is non-blocking at most.\n",
-                          "output": "review.md"
-                        }
-                      ],
-                      "until": "review",
-                      "max_iterations": 3
-                    },
-                    {
-                      "id": "sign-off",
-                      "inputs": [
-                        "review"
-                      ],
-                      "verdict": true,
-                      "kind": "approval",
-                      "title": "Ship it?",
-                      "instructions": "Approve, or request changes with comments on the whole change or on individual files.",
-                      "capture": "review",
-                      "show_diff": true,
-                      "output": "feedback.md"
-                    }
-                  ],
-                  "until": "sign-off",
-                  "max_iterations": 5
-                }
-              ]
-            }
-          },
-          {
-            "name": "feature-development",
-            "path": "<WS>/ws/.whiphand/workflows/feature-development.yaml",
-            "source": "project",
-            "workflow": {
-              "name": "feature-development",
-              "description": "Branch off trunk, plan, implement, gate on tests, and review in a cycle, then commit on sign-off.",
-              "inputs": {
-                "feature": {
-                  "required": true,
-                  "prompt": "What are we building?"
-                },
-                "base": {
-                  "required": false,
-                  "prompt": "Branch to start from",
-                  "default": "main",
-                  "multiline": false
-                },
-                "test_command": {
-                  "required": false,
-                  "prompt": "Test command (leave blank to skip tests)",
-                  "default": "npm test",
-                  "remember": true,
-                  "multiline": false
-                }
-              },
-              "worktree": {
-                "base": "{{ inputs.base }}",
-                "branch": "feature/{{ run.slug }}"
-              },
-              "steps": [
-                {
-                  "id": "sync-base",
-                  "kind": "command",
-                  "run": "git fetch origin \"{{ inputs.base }}\" && git reset --hard FETCH_HEAD",
-                  "output": "sync-base.log"
-                },
-                {
-                  "id": "plan",
-                  "kind": "agent",
-                  "runner": "claude",
-                  "model": "opus",
-                  "mode": "interactive",
-                  "writes": false,
-                  "prompt": "We are planning: {{ inputs.feature }}.\nBefore exploring, ask me whether there are files or docs you should read first.\nWork with me on a plan. Do not modify files.\nThe artifact you write is the agreed plan as it now stands, not a transcript of our\nconversation. End it with a `## Verify` section: the exact command(s) that exercise\nthis change, because the workflow's test command may not cover it.\n",
-                  "output": "plan.md"
-                },
-                {
-                  "kind": "loop",
-                  "id": "human-review",
-                  "steps": [
-                    {
-                      "kind": "loop",
-                      "id": "do-review",
-                      "steps": [
-                        {
-                          "kind": "loop",
-                          "id": "test-fix",
-                          "steps": [
-                            {
-                              "id": "execute",
-                              "inputs": [
-                                "plan",
-                                "tests",
-                                "review",
-                                "sign-off"
-                              ],
-                              "kind": "agent",
-                              "runner": "claude",
-                              "model": "sonnet",
-                              "mode": "headless",
-                              "writes": true,
-                              "prompt": "Implement the attached plan. If a tests log marked VERDICT: FAIL\nis attached, fix every failure it shows before anything else.\nIf review findings or sign-off feedback are attached, address\nevery point. Leave your work uncommitted: a human reads the\nworking tree at the gate below, and the workflow commits it\nonce they have approved.\nImplement everything the plan asks. If something can't or shouldn't be\ndone, don't drop it silently: say so in the report.\nYour report, the artifact, has these sections under exactly these headings:\n## Changed\nThe files you changed or added, one line each.\n## Verified\nThe exact commands you ran and their result. Run the tests relevant to\nwhat you changed, not only the workflow's test command.\n## Not done / not verified\nAnything you did not do or check, with the reason.\n## Deviations from the plan\nWhere you departed from the plan, with the reason.\n## Findings addressed\nOnly when a tests log, review findings or sign-off feedback were\nattached: one line per point, and how you addressed it.\n",
-                              "output": "execute-report.md"
-                            },
-                            {
-                              "id": "tests",
-                              "verdict": true,
-                              "kind": "command",
-                              "run": "eval \"{{ inputs.test_command }}\"",
-                              "timeout_ms": 1800000,
-                              "output": "tests.log"
-                            }
-                          ],
-                          "until": "tests",
-                          "max_iterations": 3
-                        },
-                        {
-                          "id": "review",
-                          "inputs": [
-                            "plan",
-                            "execute",
-                            "tests",
-                            "sign-off"
-                          ],
-                          "verdict": true,
-                          "kind": "agent",
-                          "runner": "claude",
-                          "model": "opus",
-                          "mode": "headless",
-                          "writes": false,
-                          "prompt": "Review the uncommitted working-tree diff (`git diff` plus untracked\nfiles) against the attached plan. Walk the plan requirement by\nrequirement and state for each whether it is met. If sign-off\nfeedback is attached, FAIL unless every requested change is addressed.\nCheck every claim in the execute report against the diff. A false claim\nis blocking. Also blocking:\n- HEAD moved, or the executor committed (check `git log`)\n- changes outside the plan's scope\n- an empty diff when the plan requires changes\n- a review or sign-off point that was not addressed\nIf the attached tests log does not exercise the changed code, say so and\nrun the relevant tests yourself, with read-only commands only.\nAn improvement outside the plan is non-blocking at most.\n",
-                          "output": "review.md"
-                        }
-                      ],
-                      "until": "review",
-                      "max_iterations": 10
-                    },
-                    {
-                      "id": "sign-off",
-                      "inputs": [
-                        "review"
-                      ],
-                      "verdict": true,
-                      "kind": "approval",
-                      "title": "Ship it?",
-                      "instructions": "Review the diff and the findings before this goes any further.",
-                      "capture": "review",
-                      "show_diff": true,
-                      "output": "feedback.md"
-                    }
-                  ],
-                  "until": "sign-off",
-                  "max_iterations": 5
-                },
-                {
-                  "id": "stage",
-                  "kind": "command",
-                  "run": "git add -A -- . \":![.]whiphand/runs/*\"",
-                  "output": "stage.log"
-                },
-                {
-                  "id": "commit-message",
-                  "inputs": [
-                    "plan",
-                    "review",
-                    "sign-off"
-                  ],
-                  "kind": "agent",
-                  "runner": "claude",
-                  "model": "haiku",
-                  "mode": "headless",
-                  "writes": false,
-                  "prompt": "Write the commit message for the change staged on this branch.\nIts source of truth is `git diff --cached`, plus the attached plan or stage\nfile, review and feedback for why the change was made. Do not copy or\nparaphrase an existing commit message, such as one from `git log`.\nThe subject is the first line: imperative mood, at most 72 characters, no\ntrailing period. Then one blank line, then a body of one to three lines, each\nwrapped at 72 characters, in plain sentences with no bullets. The body says\nwhat changed and why.\nTrailers such as `Co-Authored-By` are allowed. If you add any, put them after\nthe body, separated from it by one blank line.\nThe file holds the message and nothing else: no preamble, no code fences, no\nreview.\nIf the index is empty, write a one-line subject saying so instead of asking.\n",
-                  "output": "commit-message.md"
-                },
-                {
-                  "id": "commit",
-                  "kind": "command",
-                  "run": "git commit -F \".whiphand/runs/{{ run.id }}/commit-message.md\"",
-                  "output": "commit.log"
-                }
-              ]
-            }
-          },
-          {
-            "name": "global-only",
-            "path": "<WS>/home/workflows/global-only.yaml",
-            "source": "global",
-            "workflow": {
-              "name": "global-only",
-              "steps": [
-                {
-                  "id": "g",
-                  "kind": "command",
-                  "run": "echo g",
-                  "output": "g.log"
-                }
-              ]
-            }
-          },
-          {
-            "name": "made",
-            "path": "<WS>/ws/.whiphand/workflows/made.yaml",
-            "source": "project",
-            "workflow": {
-              "name": "made",
-              "description": "Plan with a human, then implement, gate on tests, and review in a cycle until the review passes.",
-              "inputs": {
-                "feature": {
-                  "required": true,
-                  "prompt": "What are we building?"
-                },
-                "test_command": {
-                  "required": false,
-                  "prompt": "Test command (leave blank to skip tests)",
-                  "default": "npm test",
-                  "remember": true,
-                  "multiline": false
-                }
-              },
-              "steps": [
-                {
-                  "id": "plan",
-                  "kind": "agent",
-                  "runner": "claude",
-                  "mode": "interactive",
-                  "writes": false,
-                  "prompt": "We are planning: {{ inputs.feature }}.\nBefore exploring, ask me whether there are files or docs you should read first.\nWork with me on a plan. Do not modify files.\nThe artifact you write is the agreed plan as it now stands, not a transcript of our\nconversation. End it with a `## Verify` section: the exact command(s) that exercise\nthis change, because the workflow's test command may not cover it.\n",
-                  "output": "plan.md"
-                },
-                {
-                  "kind": "loop",
-                  "id": "human-review",
-                  "steps": [
-                    {
-                      "kind": "loop",
-                      "id": "fix-cycle",
-                      "steps": [
-                        {
-                          "kind": "loop",
-                          "id": "test-fix",
-                          "steps": [
-                            {
-                              "id": "execute",
-                              "inputs": [
-                                "plan",
-                                "tests",
-                                "review",
-                                "sign-off"
-                              ],
-                              "kind": "agent",
-                              "runner": "claude",
-                              "mode": "headless",
-                              "writes": true,
-                              "prompt": "Implement the attached plan. If a tests log marked VERDICT: FAIL\nis attached, fix every failure it shows before anything else.\nIf review findings or sign-off feedback are attached, address\nevery point. Leave your work uncommitted: a human reads the\nworking tree at the gate below, and the workflow commits it\nonce they have approved.\nImplement everything the plan asks. If something can't or shouldn't be\ndone, don't drop it silently: say so in the report.\nYour report, the artifact, has these sections under exactly these headings:\n## Changed\nThe files you changed or added, one line each.\n## Verified\nThe exact commands you ran and their result. Run the tests relevant to\nwhat you changed, not only the workflow's test command.\n## Not done / not verified\nAnything you did not do or check, with the reason.\n## Deviations from the plan\nWhere you departed from the plan, with the reason.\n## Findings addressed\nOnly when a tests log, review findings or sign-off feedback were\nattached: one line per point, and how you addressed it.\n",
-                              "output": "execute-report.md"
-                            },
-                            {
-                              "id": "tests",
-                              "verdict": true,
-                              "kind": "command",
-                              "run": "eval \"{{ inputs.test_command }}\"",
-                              "timeout_ms": 1800000,
-                              "output": "tests.log"
-                            }
-                          ],
-                          "until": "tests",
-                          "max_iterations": 3
-                        },
-                        {
-                          "id": "review",
-                          "inputs": [
-                            "plan",
-                            "execute",
-                            "tests",
-                            "sign-off"
-                          ],
-                          "verdict": true,
-                          "kind": "agent",
-                          "runner": "claude",
-                          "mode": "headless",
-                          "writes": false,
-                          "prompt": "Review the uncommitted working-tree diff (`git diff` plus untracked\nfiles) against the attached plan. Walk the plan requirement by\nrequirement and state for each whether it is met. If sign-off\nfeedback is attached, FAIL unless every requested change is addressed.\nCheck every claim in the execute report against the diff. A false claim\nis blocking. Also blocking:\n- HEAD moved, or the executor committed (check `git log`)\n- changes outside the plan's scope\n- an empty diff when the plan requires changes\n- a review or sign-off point that was not addressed\nIf the attached tests log does not exercise the changed code, say so and\nrun the relevant tests yourself, with read-only commands only.\nAn improvement outside the plan is non-blocking at most.\n",
-                          "output": "review.md"
-                        }
-                      ],
-                      "until": "review",
-                      "max_iterations": 3
-                    },
-                    {
-                      "id": "sign-off",
-                      "inputs": [
-                        "review"
-                      ],
-                      "verdict": true,
-                      "kind": "approval",
-                      "title": "Ship it?",
-                      "instructions": "Approve, or request changes with comments on the whole change or on individual files.",
-                      "capture": "review",
-                      "show_diff": true,
-                      "output": "feedback.md"
-                    }
-                  ],
-                  "until": "sign-off",
-                  "max_iterations": 5
-                }
-              ]
-            }
-          },
-          {
-            "name": "research",
-            "path": "<WS>/ws/.whiphand/workflows/research.yaml",
-            "source": "project",
-            "workflow": {
-              "name": "research",
-              "description": "Settle a question with a human, then research and check it in a cycle until the report holds up.",
-              "inputs": {
-                "question": {
-                  "required": true,
-                  "prompt": "What do you want to find out?",
-                  "multiline": true
-                }
-              },
-              "steps": [
-                {
-                  "id": "frame",
-                  "inputs": [
-                    "attachments"
-                  ],
-                  "kind": "agent",
-                  "runner": "claude",
-                  "model": "opus",
-                  "mode": "interactive",
-                  "writes": false,
-                  "prompt": "We are framing a research question: {{ inputs.question }}\nBefore exploring, ask me whether there are files or docs you should read first.\nWork with me until the brief is settled: the precise question or questions, what is\nin scope and what is out, which sources count (code in this repo, docs, the web),\nand what the answer must contain to be useful to me. One question at a time. Do not\nmodify files, and do not start the research itself.\nThe artifact you write is the agreed brief as it now stands, not a transcript of our\nconversation.\n",
-                  "output": "brief.md"
-                },
-                {
-                  "kind": "loop",
-                  "id": "human-review",
-                  "steps": [
-                    {
-                      "kind": "loop",
-                      "id": "investigate",
-                      "steps": [
-                        {
-                          "id": "research",
-                          "inputs": [
-                            "frame",
-                            "check",
-                            "read"
-                          ],
-                          "kind": "agent",
-                          "runner": "claude",
-                          "model": "opus",
-                          "mode": "headless",
-                          "writes": false,
-                          "prompt": "Investigate the attached brief and answer it. Read the code and docs it names,\nand use web search or fetch tools if you have them and the brief lets the web\ncount as a source. Change nothing in the repository.\nIf check findings or read feedback are attached, address every point: fix what\nwas wrong, source what was unsourced, and say so in the report.\nNo claim without a source. A source is a file and line, or a URL, that you\nopened and that says what you claim. Do not cite from memory, and do not\ncite a source you did not open.\nYour report, the artifact, has these sections under exactly these headings:\n## Answer\nShort and direct: answer each of the brief's questions, in the brief's order.\n## Evidence\nEach claim, with its source: a `file:line` or a URL.\n## Confidence and gaps\nHow sure you are of each part of the answer, and what you could not find or\nverify, with the reason.\n## Open questions\nWhat the evidence leaves unsettled, or raises and the brief did not ask.\n",
-                          "output": "report.md"
-                        },
-                        {
-                          "id": "check",
-                          "inputs": [
-                            "frame",
-                            "research",
-                            "read"
-                          ],
-                          "verdict": true,
-                          "kind": "agent",
-                          "runner": "claude",
-                          "model": "opus",
-                          "mode": "headless",
-                          "writes": false,
-                          "prompt": "Check the attached report against the attached brief. Change nothing in the\nrepository. Walk the brief question by question and state for each whether the\nreport answers it. If read feedback is attached, FAIL unless every requested\nchange is addressed. FAIL if any of these hold:\n- the report does not answer a question in the brief\n- a claim in the report has no source\n- a source you spot-check does not say what the report claims\n- a required section is missing, or is not under its exact heading\nSpot-check by opening at least three of the report's sources, choosing the ones\nthe answer leans on most, and say which you opened and what you found. If it\ncites fewer than three, open them all. A source you cannot open counts as one\nthat does not say what is claimed.\nList every problem you found, so the next round can fix all of them at once.\nGaps and open questions the report states honestly are not failures.\n",
-                          "output": "check.md"
-                        }
-                      ],
-                      "until": "check",
-                      "max_iterations": 3
-                    },
-                    {
-                      "id": "read",
-                      "inputs": [
-                        "research"
-                      ],
-                      "verdict": true,
-                      "kind": "approval",
-                      "title": "Accept this report?",
-                      "instructions": "Read the report. Approve it, or request changes with a comment saying what to look into or fix.",
-                      "capture": "review",
-                      "output": "feedback.md"
-                    }
-                  ],
-                  "until": "read",
-                  "max_iterations": 5
-                }
-              ]
-            }
-          },
-          {
-            "name": "spec-driven",
-            "path": "<WS>/ws/.whiphand/workflows/spec-driven.yaml",
-            "source": "project",
-            "workflow": {
-              "name": "spec-driven",
-              "description": "A functional spec and a technical spec, each grilled, then a build/test/review cycle.",
-              "inputs": {
-                "feature": {
-                  "required": true,
-                  "prompt": "What are we building?"
-                },
-                "test_command": {
-                  "required": false,
-                  "prompt": "Test command (leave blank to skip tests)",
-                  "default": "npm test",
-                  "remember": true,
-                  "multiline": false
-                }
-              },
-              "steps": [
-                {
-                  "id": "functional-plan",
-                  "kind": "agent",
-                  "runner": "claude",
-                  "model": "opus",
-                  "mode": "interactive",
-                  "writes": false,
-                  "prompt": "We are settling WHAT to build, not how: {{ inputs.feature }}\nBefore exploring, ask me whether there are files or docs you should read first.\nWork with me on the problem, who it serves, the behaviour, the edge\ncases, what is explicitly out of scope, and how we will know it works.\nStay out of implementation — no file layout, no APIs, no libraries.\nOne question at a time. Do not modify files.\nThe artifact you write is the agreed plan as it now stands, not a transcript of our\nconversation.\n",
-                  "output": "functional-plan.md"
-                },
-                {
-                  "id": "functional-grill",
-                  "inputs": [
-                    "functional-plan"
-                  ],
-                  "kind": "agent",
-                  "runner": "claude",
-                  "model": "opus",
-                  "mode": "interactive",
-                  "writes": false,
-                  "prompt": "Grill me on the attached functional plan for: {{ inputs.feature }}\nAttack it: unstated assumptions, success criteria too vague to fail,\nmissing edge cases, scope that crept in, requirements that can be read\ntwo ways. One challenge at a time; push back when an answer hand-waves.\nWhen it holds up, the artifact you write is the REVISED functional\nspec as it now stands — not a transcript of the argument.\nDo not modify files.\n",
-                  "output": "functional-spec.md"
-                },
-                {
-                  "id": "technical-plan",
-                  "inputs": [
-                    "functional-grill"
-                  ],
-                  "kind": "agent",
-                  "runner": "claude",
-                  "model": "opus",
-                  "mode": "interactive",
-                  "writes": false,
-                  "prompt": "The functional spec is settled. Work with me on HOW to build it in this\ncodebase: the components and their boundaries, data flow, what existing\ncode changes, error handling, and how it gets tested. Before exploring,\nask me whether there are files or docs you should read first. Then read\nthe code before proposing structure. One question at a time. Do not\nmodify files.\nThe artifact you write is the agreed plan as it now stands, not a transcript of our\nconversation. End it with a `## Verify` section: the exact command(s) that exercise\nthis change, because the workflow's test command may not cover it.\n",
-                  "output": "technical-plan.md"
-                },
-                {
-                  "id": "technical-grill",
-                  "inputs": [
-                    "functional-grill",
-                    "technical-plan"
-                  ],
-                  "kind": "agent",
-                  "runner": "claude",
-                  "model": "opus",
-                  "mode": "interactive",
-                  "writes": false,
-                  "prompt": "Grill me on the attached technical plan. Attack it: does it actually\ndeliver the functional spec, what breaks under failure, what did it\ninvent that the codebase already has, where are the boundaries wrong,\nwhat is unnecessary. One challenge at a time.\nThe artifact you write is the REVISED technical spec as it now stands.\nDo not modify files.\n",
-                  "output": "technical-spec.md"
-                },
-                {
-                  "id": "build-it",
-                  "inputs": [
-                    "functional-grill",
-                    "technical-grill"
-                  ],
-                  "kind": "approval",
-                  "title": "Build this?",
-                  "instructions": "Both specs are settled. Continuing starts the implementation cycle,\nwhich writes code without stopping to ask.\n"
-                },
-                {
-                  "kind": "loop",
-                  "id": "human-review",
-                  "steps": [
-                    {
-                      "kind": "loop",
-                      "id": "build-cycle",
-                      "steps": [
-                        {
-                          "kind": "loop",
-                          "id": "test-fix",
-                          "steps": [
-                            {
-                              "id": "execute",
-                              "inputs": [
-                                "functional-grill",
-                                "technical-grill",
-                                "tests",
-                                "review",
-                                "sign-off"
-                              ],
-                              "kind": "agent",
-                              "runner": "claude",
-                              "model": "sonnet",
-                              "mode": "headless",
-                              "writes": true,
-                              "prompt": "Implement the attached technical spec. It serves the functional\nspec; where they disagree, say so rather than guessing. If a\ntests log marked VERDICT: FAIL is attached, fix every failure it\nshows before anything else. If sign-off feedback is attached,\naddress every requested change. Leave your work uncommitted: a\nhuman reads the working tree at the gate below, and the workflow\ncommits it once they have approved.\nImplement everything the technical spec asks. If something can't or shouldn't be\ndone, don't drop it silently: say so in the report.\nYour report, the artifact, has these sections under exactly these headings:\n## Changed\nThe files you changed or added, one line each.\n## Verified\nThe exact commands you ran and their result. Run the tests relevant to\nwhat you changed, not only the workflow's test command.\n## Not done / not verified\nAnything you did not do or check, with the reason.\n## Deviations from the plan\nWhere you departed from the technical spec, with the reason.\n## Findings addressed\nOnly when a tests log, review findings or sign-off feedback were\nattached: one line per point, and how you addressed it.\n",
-                              "output": "execute-report.md"
-                            },
-                            {
-                              "id": "tests",
-                              "verdict": true,
-                              "kind": "command",
-                              "run": "eval \"{{ inputs.test_command }}\"",
-                              "timeout_ms": 1800000,
-                              "output": "tests.log"
-                            }
-                          ],
-                          "until": "tests",
-                          "max_iterations": 3
-                        },
-                        {
-                          "id": "review",
-                          "inputs": [
-                            "functional-grill",
-                            "technical-grill",
-                            "execute",
-                            "tests",
-                            "sign-off"
-                          ],
-                          "verdict": true,
-                          "kind": "agent",
-                          "runner": "claude",
-                          "model": "opus",
-                          "mode": "headless",
-                          "writes": false,
-                          "prompt": "Review the uncommitted working-tree diff (`git diff` plus untracked\nfiles) against both specs — the functional one for whether it does the\nright thing, the technical one for whether it was built the agreed way.\nWalk each spec requirement by requirement and state for each whether it\nis met. If sign-off feedback is attached, FAIL unless every requested\nchange is addressed.\nCheck every claim in the execute report against the diff. A false claim\nis blocking. Also blocking:\n- HEAD moved, or the executor committed (check `git log`)\n- changes outside the specs' scope\n- an empty diff when the specs require changes\n- a review or sign-off point that was not addressed\nIf the attached tests log does not exercise the changed code, say so and\nrun the relevant tests yourself, with read-only commands only.\nAn improvement outside the specs is non-blocking at most.\nEnd with VERDICT: PASS or VERDICT: FAIL.\n",
-                          "output": "review.md"
-                        }
-                      ],
-                      "until": "review",
-                      "max_iterations": 3
-                    },
-                    {
-                      "id": "sign-off",
-                      "inputs": [
-                        "review"
-                      ],
-                      "verdict": true,
-                      "kind": "approval",
-                      "title": "Ship it?",
-                      "instructions": "Approve, or request changes with comments on the whole change or on individual files.",
-                      "capture": "review",
-                      "show_diff": true,
-                      "output": "feedback.md"
-                    }
-                  ],
-                  "until": "sign-off",
-                  "max_iterations": 5
-                }
-              ]
-            }
-          },
-          {
-            "name": "staged-feature-development",
-            "path": "<WS>/ws/.whiphand/workflows/staged-feature-development.yaml",
-            "source": "project",
-            "workflow": {
-              "name": "staged-feature-development",
+              "name": "develop",
               "description": "Cut a large feature into stages, then build, review, accept and commit one stage at a time.",
               "inputs": {
                 "feature": {
@@ -1149,6 +322,13 @@
                   "required": false,
                   "prompt": "Test command (leave blank to skip tests)",
                   "default": "npm test",
+                  "remember": true,
+                  "multiline": false
+                },
+                "push_command": {
+                  "required": false,
+                  "prompt": "Push command (leave blank to skip pushing)",
+                  "default": "git push -u origin HEAD",
                   "remember": true,
                   "multiline": false
                 }
@@ -1289,8 +469,412 @@
                 {
                   "id": "push",
                   "kind": "command",
-                  "run": "git push -u origin \"feature/{{ run.slug }}\"",
+                  "run": "eval \"{{ inputs.push_command }}\"",
                   "output": "push.log"
+                }
+              ]
+            }
+          },
+          {
+            "name": "global-only",
+            "path": "<WS>/home/workflows/global-only.yaml",
+            "source": "global",
+            "workflow": {
+              "name": "global-only",
+              "steps": [
+                {
+                  "id": "g",
+                  "kind": "command",
+                  "run": "echo g",
+                  "output": "g.log"
+                }
+              ]
+            }
+          },
+          {
+            "name": "iterate",
+            "path": "<WS>/ws/.whiphand/workflows/iterate.yaml",
+            "source": "project",
+            "workflow": {
+              "name": "iterate",
+              "description": "On the current branch, plan, implement, gate on tests, and review in a cycle, then commit on sign-off.",
+              "inputs": {
+                "feature": {
+                  "required": true,
+                  "prompt": "What are we changing?"
+                },
+                "test_command": {
+                  "required": false,
+                  "prompt": "Test command (leave blank to skip tests)",
+                  "default": "npm test",
+                  "remember": true,
+                  "multiline": false
+                }
+              },
+              "steps": [
+                {
+                  "id": "baseline",
+                  "kind": "command",
+                  "run": "git status --porcelain",
+                  "output": "baseline.log"
+                },
+                {
+                  "id": "plan",
+                  "inputs": [
+                    "attachments"
+                  ],
+                  "kind": "agent",
+                  "runner": "claude",
+                  "model": "opus",
+                  "mode": "interactive",
+                  "writes": false,
+                  "prompt": "We are planning: {{ inputs.feature }}.\nBefore exploring, ask me whether there are files or docs you should read first.\nWork with me on a plan. Do not modify files.\nThe artifact you write is the agreed plan as it now stands, not a transcript of our\nconversation. End it with a `## Verify` section: the exact command(s) that exercise\nthis change, because the workflow's test command may not cover it.\n",
+                  "output": "plan.md"
+                },
+                {
+                  "kind": "loop",
+                  "id": "human-review",
+                  "steps": [
+                    {
+                      "kind": "loop",
+                      "id": "do-review",
+                      "steps": [
+                        {
+                          "kind": "loop",
+                          "id": "test-fix",
+                          "steps": [
+                            {
+                              "id": "execute",
+                              "inputs": [
+                                "plan",
+                                "tests",
+                                "review",
+                                "sign-off"
+                              ],
+                              "kind": "agent",
+                              "runner": "claude",
+                              "model": "sonnet",
+                              "mode": "headless",
+                              "writes": true,
+                              "prompt": "Implement the attached plan. If a tests log marked VERDICT: FAIL\nis attached, fix every failure it shows before anything else.\nIf review findings or sign-off feedback are attached, address\nevery point. Leave your work uncommitted: a human reads the\nworking tree at the gate below, and the workflow commits it\nonce they have approved.\nImplement everything the plan asks. If something can't or shouldn't be\ndone, don't drop it silently: say so in the report.\nYour report, the artifact, has these sections under exactly these headings:\n## Changed\nThe files you changed or added, one line each.\n## Verified\nThe exact commands you ran and their result. Run the tests relevant to\nwhat you changed, not only the workflow's test command.\n## Not done / not verified\nAnything you did not do or check, with the reason.\n## Deviations from the plan\nWhere you departed from the plan, with the reason.\n## Findings addressed\nOnly when a tests log, review findings or sign-off feedback were\nattached: one line per point, and how you addressed it.\n",
+                              "output": "execute-report.md"
+                            },
+                            {
+                              "id": "tests",
+                              "verdict": true,
+                              "kind": "command",
+                              "run": "eval \"{{ inputs.test_command }}\"",
+                              "timeout_ms": 1800000,
+                              "output": "tests.log"
+                            }
+                          ],
+                          "until": "tests",
+                          "max_iterations": 3
+                        },
+                        {
+                          "id": "review",
+                          "inputs": [
+                            "plan",
+                            "execute",
+                            "tests",
+                            "sign-off",
+                            "baseline"
+                          ],
+                          "verdict": true,
+                          "kind": "agent",
+                          "runner": "claude",
+                          "model": "opus",
+                          "mode": "headless",
+                          "writes": false,
+                          "prompt": "Review the uncommitted working-tree diff (`git diff` plus untracked\nfiles) against the attached plan. Walk the plan requirement by\nrequirement and state for each whether it is met. If sign-off\nfeedback is attached, FAIL unless every requested change is addressed.\nCheck every claim in the execute report against the diff. A false claim\nis blocking. Also blocking:\n- HEAD moved, or the executor committed (check `git log`)\n- changes outside the plan's scope\n- an empty diff when the plan requires changes\n- a review or sign-off point that was not addressed\nIf the attached tests log does not exercise the changed code, say so and\nrun the relevant tests yourself, with read-only commands only.\nAn improvement outside the plan is non-blocking at most.\nThe attached baseline lists what was already uncommitted before this run\nstarted. Those changes are not the executor's: they are not out of scope\nand not a finding. In a file the baseline lists, judge only what the plan\nasked for.\n",
+                          "output": "review.md"
+                        }
+                      ],
+                      "until": "review",
+                      "max_iterations": 10
+                    },
+                    {
+                      "id": "sign-off",
+                      "inputs": [
+                        "review"
+                      ],
+                      "verdict": true,
+                      "kind": "approval",
+                      "title": "Ship it?",
+                      "instructions": "Review the diff and the findings before this goes any further.",
+                      "capture": "review",
+                      "show_diff": true,
+                      "output": "feedback.md"
+                    }
+                  ],
+                  "until": "sign-off",
+                  "max_iterations": 5
+                },
+                {
+                  "id": "stage",
+                  "kind": "command",
+                  "run": "git add -A -- . \":![.]whiphand/runs/*\"",
+                  "output": "stage.log"
+                },
+                {
+                  "id": "commit-message",
+                  "inputs": [
+                    "plan",
+                    "review",
+                    "sign-off"
+                  ],
+                  "kind": "agent",
+                  "runner": "claude",
+                  "model": "haiku",
+                  "mode": "headless",
+                  "writes": false,
+                  "prompt": "Write the commit message for the change staged on this branch.\nIts source of truth is `git diff --cached`, plus the attached plan or stage\nfile, review and feedback for why the change was made. Do not copy or\nparaphrase an existing commit message, such as one from `git log`.\nThe subject is the first line: imperative mood, at most 72 characters, no\ntrailing period. Then one blank line, then a body of one to three lines, each\nwrapped at 72 characters, in plain sentences with no bullets. The body says\nwhat changed and why.\nTrailers such as `Co-Authored-By` are allowed. If you add any, put them after\nthe body, separated from it by one blank line.\nThe file holds the message and nothing else: no preamble, no code fences, no\nreview.\nIf the index is empty, write a one-line subject saying so instead of asking.\n",
+                  "output": "commit-message.md"
+                },
+                {
+                  "id": "commit",
+                  "kind": "command",
+                  "run": "git commit -F \".whiphand/runs/{{ run.id }}/commit-message.md\"",
+                  "output": "commit.log"
+                }
+              ]
+            }
+          },
+          {
+            "name": "made",
+            "path": "<WS>/ws/.whiphand/workflows/made.yaml",
+            "source": "project",
+            "workflow": {
+              "name": "made",
+              "description": "On the current branch, plan, implement, gate on tests, and review in a cycle, then commit on sign-off.",
+              "inputs": {
+                "feature": {
+                  "required": true,
+                  "prompt": "What are we changing?"
+                },
+                "test_command": {
+                  "required": false,
+                  "prompt": "Test command (leave blank to skip tests)",
+                  "default": "npm test",
+                  "remember": true,
+                  "multiline": false
+                }
+              },
+              "steps": [
+                {
+                  "id": "baseline",
+                  "kind": "command",
+                  "run": "git status --porcelain",
+                  "output": "baseline.log"
+                },
+                {
+                  "id": "plan",
+                  "inputs": [
+                    "attachments"
+                  ],
+                  "kind": "agent",
+                  "runner": "claude",
+                  "model": "opus",
+                  "mode": "interactive",
+                  "writes": false,
+                  "prompt": "We are planning: {{ inputs.feature }}.\nBefore exploring, ask me whether there are files or docs you should read first.\nWork with me on a plan. Do not modify files.\nThe artifact you write is the agreed plan as it now stands, not a transcript of our\nconversation. End it with a `## Verify` section: the exact command(s) that exercise\nthis change, because the workflow's test command may not cover it.\n",
+                  "output": "plan.md"
+                },
+                {
+                  "kind": "loop",
+                  "id": "human-review",
+                  "steps": [
+                    {
+                      "kind": "loop",
+                      "id": "do-review",
+                      "steps": [
+                        {
+                          "kind": "loop",
+                          "id": "test-fix",
+                          "steps": [
+                            {
+                              "id": "execute",
+                              "inputs": [
+                                "plan",
+                                "tests",
+                                "review",
+                                "sign-off"
+                              ],
+                              "kind": "agent",
+                              "runner": "claude",
+                              "model": "sonnet",
+                              "mode": "headless",
+                              "writes": true,
+                              "prompt": "Implement the attached plan. If a tests log marked VERDICT: FAIL\nis attached, fix every failure it shows before anything else.\nIf review findings or sign-off feedback are attached, address\nevery point. Leave your work uncommitted: a human reads the\nworking tree at the gate below, and the workflow commits it\nonce they have approved.\nImplement everything the plan asks. If something can't or shouldn't be\ndone, don't drop it silently: say so in the report.\nYour report, the artifact, has these sections under exactly these headings:\n## Changed\nThe files you changed or added, one line each.\n## Verified\nThe exact commands you ran and their result. Run the tests relevant to\nwhat you changed, not only the workflow's test command.\n## Not done / not verified\nAnything you did not do or check, with the reason.\n## Deviations from the plan\nWhere you departed from the plan, with the reason.\n## Findings addressed\nOnly when a tests log, review findings or sign-off feedback were\nattached: one line per point, and how you addressed it.\n",
+                              "output": "execute-report.md"
+                            },
+                            {
+                              "id": "tests",
+                              "verdict": true,
+                              "kind": "command",
+                              "run": "eval \"{{ inputs.test_command }}\"",
+                              "timeout_ms": 1800000,
+                              "output": "tests.log"
+                            }
+                          ],
+                          "until": "tests",
+                          "max_iterations": 3
+                        },
+                        {
+                          "id": "review",
+                          "inputs": [
+                            "plan",
+                            "execute",
+                            "tests",
+                            "sign-off",
+                            "baseline"
+                          ],
+                          "verdict": true,
+                          "kind": "agent",
+                          "runner": "claude",
+                          "model": "opus",
+                          "mode": "headless",
+                          "writes": false,
+                          "prompt": "Review the uncommitted working-tree diff (`git diff` plus untracked\nfiles) against the attached plan. Walk the plan requirement by\nrequirement and state for each whether it is met. If sign-off\nfeedback is attached, FAIL unless every requested change is addressed.\nCheck every claim in the execute report against the diff. A false claim\nis blocking. Also blocking:\n- HEAD moved, or the executor committed (check `git log`)\n- changes outside the plan's scope\n- an empty diff when the plan requires changes\n- a review or sign-off point that was not addressed\nIf the attached tests log does not exercise the changed code, say so and\nrun the relevant tests yourself, with read-only commands only.\nAn improvement outside the plan is non-blocking at most.\nThe attached baseline lists what was already uncommitted before this run\nstarted. Those changes are not the executor's: they are not out of scope\nand not a finding. In a file the baseline lists, judge only what the plan\nasked for.\n",
+                          "output": "review.md"
+                        }
+                      ],
+                      "until": "review",
+                      "max_iterations": 10
+                    },
+                    {
+                      "id": "sign-off",
+                      "inputs": [
+                        "review"
+                      ],
+                      "verdict": true,
+                      "kind": "approval",
+                      "title": "Ship it?",
+                      "instructions": "Review the diff and the findings before this goes any further.",
+                      "capture": "review",
+                      "show_diff": true,
+                      "output": "feedback.md"
+                    }
+                  ],
+                  "until": "sign-off",
+                  "max_iterations": 5
+                },
+                {
+                  "id": "stage",
+                  "kind": "command",
+                  "run": "git add -A -- . \":![.]whiphand/runs/*\"",
+                  "output": "stage.log"
+                },
+                {
+                  "id": "commit-message",
+                  "inputs": [
+                    "plan",
+                    "review",
+                    "sign-off"
+                  ],
+                  "kind": "agent",
+                  "runner": "claude",
+                  "model": "haiku",
+                  "mode": "headless",
+                  "writes": false,
+                  "prompt": "Write the commit message for the change staged on this branch.\nIts source of truth is `git diff --cached`, plus the attached plan or stage\nfile, review and feedback for why the change was made. Do not copy or\nparaphrase an existing commit message, such as one from `git log`.\nThe subject is the first line: imperative mood, at most 72 characters, no\ntrailing period. Then one blank line, then a body of one to three lines, each\nwrapped at 72 characters, in plain sentences with no bullets. The body says\nwhat changed and why.\nTrailers such as `Co-Authored-By` are allowed. If you add any, put them after\nthe body, separated from it by one blank line.\nThe file holds the message and nothing else: no preamble, no code fences, no\nreview.\nIf the index is empty, write a one-line subject saying so instead of asking.\n",
+                  "output": "commit-message.md"
+                },
+                {
+                  "id": "commit",
+                  "kind": "command",
+                  "run": "git commit -F \".whiphand/runs/{{ run.id }}/commit-message.md\"",
+                  "output": "commit.log"
+                }
+              ]
+            }
+          },
+          {
+            "name": "research",
+            "path": "<WS>/ws/.whiphand/workflows/research.yaml",
+            "source": "project",
+            "workflow": {
+              "name": "research",
+              "description": "Settle a question with a human, then research and check it in a cycle until the report holds up.",
+              "inputs": {
+                "question": {
+                  "required": true,
+                  "prompt": "What do you want to find out?",
+                  "multiline": true
+                }
+              },
+              "steps": [
+                {
+                  "id": "frame",
+                  "inputs": [
+                    "attachments"
+                  ],
+                  "kind": "agent",
+                  "runner": "claude",
+                  "model": "opus",
+                  "mode": "interactive",
+                  "writes": false,
+                  "prompt": "We are framing a research question: {{ inputs.question }}\nBefore exploring, ask me whether there are files or docs you should read first.\nWork with me until the brief is settled: the precise question or questions, what is\nin scope and what is out, which sources count (code in this repo, docs, the web),\nand what the answer must contain to be useful to me. One question at a time. Do not\nmodify files, and do not start the research itself.\nThe artifact you write is the agreed brief as it now stands, not a transcript of our\nconversation.\n",
+                  "output": "brief.md"
+                },
+                {
+                  "kind": "loop",
+                  "id": "human-review",
+                  "steps": [
+                    {
+                      "kind": "loop",
+                      "id": "investigate",
+                      "steps": [
+                        {
+                          "id": "research",
+                          "inputs": [
+                            "frame",
+                            "check",
+                            "read"
+                          ],
+                          "kind": "agent",
+                          "runner": "claude",
+                          "model": "opus",
+                          "mode": "headless",
+                          "writes": false,
+                          "prompt": "Investigate the attached brief and answer it. Read the code and docs it names,\nand use web search or fetch tools if you have them and the brief lets the web\ncount as a source. Change nothing in the repository.\nIf check findings or read feedback are attached, address every point: fix what\nwas wrong, source what was unsourced, and say so in the report.\nNo claim without a source. A source is a file and line, or a URL, that you\nopened and that says what you claim. Do not cite from memory, and do not\ncite a source you did not open.\nYour report, the artifact, has these sections under exactly these headings:\n## Answer\nShort and direct: answer each of the brief's questions, in the brief's order.\n## Evidence\nEach claim, with its source: a `file:line` or a URL.\n## Confidence and gaps\nHow sure you are of each part of the answer, and what you could not find or\nverify, with the reason.\n## Open questions\nWhat the evidence leaves unsettled, or raises and the brief did not ask.\n",
+                          "output": "report.md"
+                        },
+                        {
+                          "id": "check",
+                          "inputs": [
+                            "frame",
+                            "research",
+                            "read"
+                          ],
+                          "verdict": true,
+                          "kind": "agent",
+                          "runner": "claude",
+                          "model": "opus",
+                          "mode": "headless",
+                          "writes": false,
+                          "prompt": "Check the attached report against the attached brief. Change nothing in the\nrepository. Walk the brief question by question and state for each whether the\nreport answers it. If read feedback is attached, FAIL unless every requested\nchange is addressed. FAIL if any of these hold:\n- the report does not answer a question in the brief\n- a claim in the report has no source\n- a source you spot-check does not say what the report claims\n- a required section is missing, or is not under its exact heading\nSpot-check by opening at least three of the report's sources, choosing the ones\nthe answer leans on most, and say which you opened and what you found. If it\ncites fewer than three, open them all. A source you cannot open counts as one\nthat does not say what is claimed.\nList every problem you found, so the next round can fix all of them at once.\nGaps and open questions the report states honestly are not failures.\n",
+                          "output": "check.md"
+                        }
+                      ],
+                      "until": "check",
+                      "max_iterations": 3
+                    },
+                    {
+                      "id": "read",
+                      "inputs": [
+                        "research"
+                      ],
+                      "verdict": true,
+                      "kind": "approval",
+                      "title": "Accept this report?",
+                      "instructions": "Read the report. Approve it, or request changes with a comment saying what to look into or fix.",
+                      "capture": "review",
+                      "output": "feedback.md"
+                    }
+                  ],
+                  "until": "read",
+                  "max_iterations": 5
                 }
               ]
             }

@@ -18,19 +18,10 @@ use crate::workflow_write::merge_workflow;
 use crate::yaml_emit::stringify_yaml;
 
 /// Every shipped template, in the order `init_workspace` writes them.
-pub const SHIPPED_TEMPLATES: [(&str, &str); 6] = [
-    ("feature", include_str!("../templates/feature.yaml")),
-    (
-        "feature-development",
-        include_str!("../templates/feature-development.yaml"),
-    ),
-    ("spec-driven", include_str!("../templates/spec-driven.yaml")),
-    (
-        "staged-feature-development",
-        include_str!("../templates/staged-feature-development.yaml"),
-    ),
+pub const SHIPPED_TEMPLATES: [(&str, &str); 3] = [
+    ("iterate", include_str!("../templates/iterate.yaml")),
+    ("develop", include_str!("../templates/develop.yaml")),
     ("research", include_str!("../templates/research.yaml")),
-    ("bugfix", include_str!("../templates/bugfix.yaml")),
 ];
 
 fn read_template(name: &str) -> &'static str {
@@ -62,15 +53,15 @@ fn replace_line_start(text: &str, from: &str, to: &str, whole_line: bool) -> Str
 }
 
 /// The workflow `whiphand new-workflow` scaffolds under any name: the
-/// `feature` template with its header comment and `name:` renamed.
+/// `iterate` template with its header comment and `name:` renamed.
 pub fn workflow_template(name: &str) -> String {
     let text = replace_line_start(
-        read_template("feature"),
-        "# feature — ",
+        read_template("iterate"),
+        "# iterate — ",
         &format!("# {name} — "),
         false,
     );
-    replace_line_start(&text, "name: feature", &format!("name: {name}"), true)
+    replace_line_start(&text, "name: iterate", &format!("name: {name}"), true)
 }
 
 /// The error a write over an existing workflow raises; `init` skips those.
@@ -133,7 +124,7 @@ fn write_workflow_file(
     }
 }
 
-/// `createWorkflow`: the `feature` template under `name`, in `scope`'s workflows dir.
+/// `createWorkflow`: the `iterate` template under `name`, in `scope`'s workflows dir.
 pub fn create_workflow(
     workdir: &str,
     name: &str,
@@ -261,10 +252,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn renames_the_feature_template() {
+    fn renames_the_iterate_template() {
         let t = workflow_template("triage");
         assert!(t.contains("\nname: triage\n") || t.starts_with("name: triage\n"));
-        assert!(!t.contains("\nname: feature\n"));
+        assert!(t.starts_with("# triage — "));
+        assert!(!t.contains("\nname: iterate\n"));
     }
 
     #[test]
@@ -275,58 +267,68 @@ mod tests {
         let first = init_workspace(&ws, &home).unwrap();
         assert_eq!(first.len(), 1 + SHIPPED_TEMPLATES.len());
         assert!(init_workspace(&ws, &home).unwrap().is_empty());
-        let err = create_workflow(&ws, "feature", Scope::Project, &home).unwrap_err();
+        let err = create_workflow(&ws, "iterate", Scope::Project, &home).unwrap_err();
         assert!(matches!(err, ScaffoldError::Exists(_)), "{err}");
     }
 
     #[test]
-    fn branching_templates_run_in_a_worktree() {
-        use crate::types::WorktreeSetting;
-        for (name, prefix) in [
-            ("feature-development", "feature"),
-            ("staged-feature-development", "feature"),
-            ("bugfix", "fix"),
-        ] {
-            let text = read_template(name);
+    fn every_shipped_template_validates() {
+        for (name, text) in SHIPPED_TEMPLATES {
             let wf = parse_workflow(text).unwrap_or_else(|e| panic!("{name}: {e:?}"));
-            assert_eq!(
-                wf.worktree,
-                Some(WorktreeSetting::Enabled {
-                    base: Some("{{ inputs.base }}".into()),
-                    branch: Some(format!("{prefix}/{{{{ run.slug }}}}")),
-                }),
-                "{name}"
-            );
-            assert!(
-                !text
-                    .lines()
-                    .any(|l| l.trim().trim_start_matches("- ").trim() == "id: branch"),
-                "{name} still has a branch step"
-            );
-            assert!(!text.contains("git checkout"), "{name} still checks out");
-            assert!(
-                text.contains(
-                    "run: git fetch origin \"{{ inputs.base }}\" && git reset --hard FETCH_HEAD"
-                ),
-                "{name}"
-            );
+            assert_eq!(wf.name, name);
+            let problems = validate_workflow_semantics(&wf);
+            assert!(problems.is_empty(), "{name}: {problems:?}");
         }
     }
 
     #[test]
+    fn develop_runs_in_a_worktree() {
+        use crate::types::WorktreeSetting;
+        let text = read_template("develop");
+        let wf = parse_workflow(text).unwrap();
+        assert_eq!(
+            wf.worktree,
+            Some(WorktreeSetting::Enabled {
+                base: Some("{{ inputs.base }}".into()),
+                branch: Some("feature/{{ run.slug }}".into()),
+            })
+        );
+        assert!(
+            !text
+                .lines()
+                .any(|l| l.trim().trim_start_matches("- ").trim() == "id: branch"),
+            "develop still has a branch step"
+        );
+        assert!(!text.contains("git checkout"), "develop still checks out");
+        assert!(text.contains(
+            "run: git fetch origin \"{{ inputs.base }}\" && git reset --hard FETCH_HEAD"
+        ));
+        assert!(text.contains("run: eval \"{{ inputs.push_command }}\""));
+    }
+
+    #[test]
+    fn iterate_stays_on_the_current_branch() {
+        let text = read_template("iterate");
+        let wf = parse_workflow(text).unwrap();
+        assert_eq!(wf.worktree, None);
+        for moves in ["git checkout", "git switch", "git reset", "git fetch"] {
+            assert!(!text.contains(moves), "iterate runs {moves}");
+        }
+        assert!(text.contains("\n  - id: commit\n"));
+        assert!(text.contains("run: git status --porcelain"));
+        assert!(text.contains("inputs: [plan, execute, tests, sign-off, baseline]"));
+    }
+
+    #[test]
     fn executing_templates_keep_their_pins() {
-        for name in [
-            "feature-development",
-            "staged-feature-development",
-            "bugfix",
-        ] {
+        for name in ["iterate", "develop"] {
             let text = read_template(name);
             assert!(text.contains("uncommitted"), "{name}");
+            assert!(
+                text.contains("run: eval \"{{ inputs.test_command }}\""),
+                "{name}"
+            );
         }
-        assert!(
-            read_template("feature-development")
-                .contains("run: eval \"{{ inputs.test_command }}\"")
-        );
     }
 
     #[test]
@@ -334,11 +336,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ws = dir.path().to_string_lossy().into_owned();
         init_workspace(&ws, &dir.path().join("home")).unwrap();
-        let written = std::fs::read_to_string(
-            dir.path()
-                .join(".whiphand/workflows/feature-development.yaml"),
-        )
-        .unwrap();
+        let written =
+            std::fs::read_to_string(dir.path().join(".whiphand/workflows/develop.yaml")).unwrap();
         assert!(written.contains("\nworktree:\n"));
     }
 }

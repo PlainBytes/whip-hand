@@ -89,6 +89,7 @@ pub enum Action {
     SendBack,
     AbortStep,
     EditNote,
+    Attach,
 }
 
 /// A key as the table spells it.
@@ -296,6 +297,13 @@ pub const BINDINGS: &[Binding] = &[
         "lock or unlock the run",
     ),
     b(C::Detail, &[Char('x')], "x", A::Delete, "delete the run"),
+    b(
+        C::Detail,
+        &[Char('t')],
+        "t",
+        A::Attach,
+        "attach to the interactive session (Ctrl-] detaches)",
+    ),
     b(
         C::Detail,
         &[Char('E')],

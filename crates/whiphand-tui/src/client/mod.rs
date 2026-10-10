@@ -66,6 +66,8 @@ methods! {
     ListWorkflows = "listWorkflows" (p::ListWorkflowsParams) -> p::ListWorkflowsResult;
     StartRun = "startRun" (p::StartRunParams) -> p::StartRunResult;
     ResolveManual = "resolveManual" (p::ResolveManualParams) -> p::ResolveManualResult;
+    PtyInput = "ptyInput" (p::PtyInputParams) -> p::PtyInputResult;
+    PtyResize = "ptyResize" (p::PtyResizeParams) -> p::PtyResizeResult;
 }
 
 /// Methods the TUI leaves to the desktop. A desktop PR that adds a protocol
@@ -94,8 +96,6 @@ pub const LATER: &[&str] = &[
     "pruneRuns",
     "writeArtifact",
     "setUiState",
-    "ptyInput",
-    "ptyResize",
 ];
 
 /// A request as `update` describes it: no id yet, and what to do with the

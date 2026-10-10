@@ -25,6 +25,9 @@ fn methods(cmds: &[Cmd]) -> Vec<&'static str> {
             Cmd::Notify(_) => "notify",
             Cmd::Suspend(_) => "suspend",
             Cmd::Quit => "quit",
+            Cmd::Attach => "attach",
+            Cmd::Detach => "detach",
+            Cmd::Stdout(_) => "stdout",
         })
         .collect()
 }

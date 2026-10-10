@@ -3,6 +3,7 @@
 //! [`actions`].
 
 pub mod actions;
+pub mod attach;
 pub mod detail;
 pub mod manual;
 pub mod new_run;
@@ -153,16 +154,24 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             }
             vec![]
         }
+        Msg::Stdin(bytes) => attach::on_stdin(model, &bytes),
+        Msg::PtySize { cols, rows } => attach::on_size(model, cols, rows),
+        Msg::AttachFailed(why) => {
+            model.attach = None;
+            model.notice = Some(format!("could not attach: {why}"));
+            model.dirty = true;
+            vec![]
+        }
         Msg::HostGone => {
             model.fatal = Some("the agent stopped; restart whiphand tui".into());
             model.dirty = true;
-            vec![]
+            attach::on_host_gone(model)
         }
     }
 }
 
 fn on_key(model: &mut Model, key: KeyEvent) -> Vec<Cmd> {
-    if key.kind == KeyEventKind::Release {
+    if key.kind == KeyEventKind::Release || model.attach.is_some() {
         return vec![];
     }
     model.dirty = true;
@@ -213,6 +222,11 @@ fn edit_filter(model: &mut Model, key: KeyEvent) {
 }
 
 fn act(model: &mut Model, action: Action) -> Vec<Cmd> {
+    if action == Action::Open
+        && let Some(cmds) = attach::on_open(model)
+    {
+        return cmds;
+    }
     if *model.screen() == Route::RunDetail
         && let Some(cmds) = detail::act(model, action)
     {
@@ -281,6 +295,7 @@ fn act(model: &mut Model, action: Action) -> Vec<Cmd> {
         Action::Open => open(model),
         Action::NewRun => new_run::open(model),
         Action::OpenManual => manual::open_for_focus(model),
+        Action::Attach => attach::for_focus(model),
         Action::Filter => {
             model.runs_ui.editing = true;
             vec![]
@@ -407,6 +422,12 @@ fn quit(model: &mut Model) -> Vec<Cmd> {
 }
 
 fn on_tick(model: &mut Model, now_ms: f64) -> Vec<Cmd> {
+    let mut cmds = on_tick_screens(model, now_ms);
+    cmds.extend(attach::on_tick(model));
+    cmds
+}
+
+fn on_tick_screens(model: &mut Model, now_ms: f64) -> Vec<Cmd> {
     // Elapsed times move by the second, not by the tick.
     if (now_ms / 1000.0).floor() != (model.now_ms / 1000.0).floor() {
         model.dirty |= match model.screen() {
@@ -504,10 +525,35 @@ fn on_notification(model: &mut Model, n: Notification) -> Vec<Cmd> {
             }
             cmds
         }
+        Notification::PtyStarted(s) => {
+            let job = model
+                .jobs
+                .entry(s.job_id)
+                .or_insert_with(|| Job::new(JobStatus::Running));
+            job.pty.started(&s.step_id, s.cols, s.rows);
+            model.dirty = true;
+            vec![]
+        }
+        Notification::PtyData(d) => {
+            let Some(job) = model.jobs.get_mut(&d.job_id) else {
+                return vec![];
+            };
+            let bytes = job.pty.append(&d.data, d.seq);
+            attach::on_output(model, &d.job_id, bytes)
+        }
+        Notification::PtyExit(x) => {
+            if let Some(job) = model.jobs.get_mut(&x.job_id) {
+                job.pty.exit(x.exit_code, x.reason);
+                job.awaiting = false;
+            }
+            model.dirty = true;
+            attach::on_exit(model, &x.job_id, x.exit_code, x.reason)
+        }
         Notification::PtyAwait(a) => {
             let Some(job) = model.jobs.get_mut(&a.job_id) else {
                 return vec![];
             };
+            job.pty.awaiting = a.reason.filter(|_| a.awaiting);
             let rising = a.awaiting && !job.awaiting;
             job.awaiting = a.awaiting;
             let run_id = job.run_id.clone();
@@ -633,7 +679,7 @@ fn on_reply(model: &mut Model, then: Then, value: Value) -> Vec<Cmd> {
             }
             Err(e) => model.fatal = Some(e),
         },
-        Then::Touched => {}
+        Then::Touched | Then::PtyAck => {}
         Then::Runs => match client::decode::<ListRuns>(value) {
             Ok(runs) => {
                 let was_foreign: Vec<String> = model

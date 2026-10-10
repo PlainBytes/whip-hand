@@ -12,6 +12,13 @@ pub enum Cmd {
     Notify(Notice),
     /// Shut the host down (cancelling live runs) and leave.
     Quit,
+    /// Hand the terminal to `model.attach`'s session; the runtime answers
+    /// with `Msg::PtySize`, then forwards stdin as `Msg::Stdin`.
+    Attach,
+    /// Take the terminal back from the session.
+    Detach,
+    /// Bytes for the real terminal while attached.
+    Stdout(Vec<u8>),
 }
 
 /// A program the screen is handed to. The runtime resolves `$PAGER` and
@@ -84,4 +91,6 @@ pub enum Then {
     Resolved(String),
     /// `getWorkingDiff` for a job's manual step.
     ManualDiff(String),
+    /// `ptyInput`, `ptyResize`: nothing to do with the answer.
+    PtyAck,
 }

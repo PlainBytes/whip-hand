@@ -262,7 +262,7 @@ fn check_placeholders(located: &[Located], problems: &mut Vec<String>) {
 /// `worktree.base` and `worktree.branch` render once, before step 1: only `inputs.<key>` (declared),
 /// `run.id`, `run.slug` and `run.name` exist by then.
 fn check_worktree_placeholders(workflow: &Workflow, problems: &mut Vec<String>) {
-    let Some(WorktreeSetting::Enabled { base, branch }) = &workflow.worktree else {
+    let Some(WorktreeSetting::Enabled { base, branch, .. }) = &workflow.worktree else {
         return;
     };
     for (field, text) in [("base", base), ("branch", branch)] {

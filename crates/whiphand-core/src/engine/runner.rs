@@ -239,6 +239,8 @@ struct State {
     warned_no_git: bool,
     /// The worktree this run created, for `run:start`.
     created_worktree: Option<WorktreeRecord>,
+    /// Why that worktree did not start from the synced upstream, emitted after `run:start`.
+    worktree_fallback: Option<String>,
 }
 
 struct Run<'a, F: Frontend> {
@@ -555,6 +557,7 @@ pub async fn run_workflow<F: Frontend>(
                 .unwrap_or_default(),
             warned_no_git: false,
             created_worktree: None,
+            worktree_fallback: None,
         }),
     };
     let result = run.start(&attachments, requested.as_ref()).await;
@@ -707,12 +710,22 @@ impl<F: Frontend> Run<'_, F> {
         };
         let branch = render("branch", &request.branch)?;
         let base = render("base", &request.base)?;
-        let record =
-            worktree::create(Path::new(&self.workspace), &self.run_id, &branch, &base, pf).await?;
+        let created = worktree::create(
+            Path::new(&self.workspace),
+            &self.run_id,
+            &scope.run_slug,
+            &branch,
+            &base,
+            request.sync,
+            pf,
+        )
+        .await?;
+        let record = created.record;
         self.journal.note_worktree(record_to_js(&record));
         let mut st = self.st.borrow_mut();
         st.ctx.workdir = record.native_tree();
         st.created_worktree = Some(record);
+        st.worktree_fallback = created.fallback;
         Ok(())
     }
 
@@ -839,6 +852,10 @@ impl<F: Frontend> Run<'_, F> {
         }
         for (capability, reason) in &self.opts.degradations {
             self.emit(obj! { "type" => "run:degraded", "capability" => capability.as_str(), "reason" => reason.as_str() });
+        }
+        let fallback = self.st.borrow_mut().worktree_fallback.take();
+        if let Some(reason) = fallback {
+            self.emit(obj! { "type" => "run:degraded", "capability" => "worktree-sync", "reason" => reason });
         }
         if !self.opts.dry_run {
             self.start_run_env();

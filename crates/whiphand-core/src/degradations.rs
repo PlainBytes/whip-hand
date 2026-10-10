@@ -28,6 +28,10 @@ pub const DEGRADATIONS: &[(&str, &str)] = &[
         "long-path",
         "Workspace path leaves little headroom under 260 characters",
     ),
+    (
+        "worktree-sync",
+        "Worktree started from the local base, not its upstream",
+    ),
 ];
 
 pub fn is_degradation_id(value: &str) -> bool {

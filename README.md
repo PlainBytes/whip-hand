@@ -65,14 +65,14 @@ and commits them one at a time, then pushes the branch (leave the push command b
 `whiphand new-workflow` scaffolds from `iterate`.
 
 **Running workflows side by side.** `develop` declares `worktree:`, so each run gets its own checkout
-under `.whiphand/worktrees/<run-id>` on a new branch, and your main checkout is never touched: start
+under `.whiphand/worktrees/<run-id>-<slug>` (just `<run-id>` for an unnamed run) on a new branch, and your main checkout is never touched: start
 two features at once and they cannot collide.
 `--worktree` / `--no-worktree` (or the New Run dialog's switch) override the workflow's choice for one
 run; `--resume` always returns to the tree the run started in. Deleting a run removes its worktree
 (refusing if it has uncommitted changes) but never its branch; `whiphand worktree remove` does it by
-hand. whiphand never touches the network itself — the shipped `sync-base` step fetches inside the
-worktree. `whiphand init` writes templates to new workspaces only, so an existing workspace keeps its
-old copies until you replace them. See `docs/design.md`, *Worktrees*.
+hand. A worktree starts from the base's fetched upstream (`worktree.sync`, on by default; set it to
+`false` to start from the local base). `whiphand init` writes templates to new workspaces only, so an
+existing workspace keeps its old copies until you replace them. See `docs/design.md`, *Worktrees*.
 
 `research` builds nothing. You settle the question with the agent in a live chat, then a headless
 agent investigates and writes a report whose every claim carries a `file:line` or a URL, a second

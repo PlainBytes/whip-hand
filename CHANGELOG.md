@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Worktrees start from the up-to-date base
+
+- A run's worktree now starts from the base branch's fetched upstream by default. `worktree.sync: false`
+  opts out and starts from the local base.
+- The base branch is never checked out, so concurrent runs no longer fail with "already checked out".
+- A failed or non-fast-forward sync falls back to the local base and records a `worktree-sync` degraded
+  warning.
+- Worktree folders are named `<run-id>-<slug>` (just `<run-id>` for an unnamed run).
+- `develop` no longer has a `sync-base` step; the engine does the fetch, so `develop` can no longer
+  `git reset --hard` your own checkout when it runs without a worktree.
+- An existing workspace keeps its old `develop.yaml`, which still works, until you replace it
+  (`whiphand init` writes templates to new workspaces only).
+
 ### Three starter workflows instead of six
 
 - `whiphand init` now ships `iterate`, `develop` and `research` only. `feature`, `feature-development`,

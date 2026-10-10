@@ -311,9 +311,11 @@ pub struct Workflow {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum WorktreeSetting {
     Disabled,
-    /// `base` and `branch` are raw templates; `None` means the default.
+    /// `base` and `branch` are raw templates; `None` means the default. `sync: None` means
+    /// the default too, which is on.
     Enabled {
         base: Option<String>,
         branch: Option<String>,
+        sync: Option<bool>,
     },
 }

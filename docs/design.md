@@ -1182,6 +1182,7 @@ step one.
 worktree:                          # or `worktree: true`, or `worktree: false`
   base: "{{ inputs.base }}"        # a git revision; default HEAD
   branch: "feature/{{ run.slug }}" # the new branch; default whiphand/{{ run.slug }}
+  sync: true                       # start from the base's fetched upstream; default true
 ```
 
 `worktree: true` is the same as a mapping with both defaults. `base` and `branch` are templates
@@ -1195,7 +1196,9 @@ They contradict each other, and neither applies to `--resume`: a resumed run ret
 it started in. The desktop's New Run dialog has the same choice as a switch, defaulting to what
 the workflow says.
 
-**Where it lives.** At `<workspace>/.whiphand/worktrees/<run-id>`. The engine writes a
+**Where it lives.** At `<workspace>/.whiphand/worktrees/<run-id>-<slug>`, where the slug comes from the run's name
+(just `<run-id>` for an unnamed run); the recorded `worktree.path` is what resume, remove and the
+diff read, so older runs keep their plain `<run-id>` folder. The engine writes a
 `.gitignore` containing `*` in `.whiphand/worktrees` itself, so the checkouts never show up as
 untracked in the main tree, whatever the repository's own ignore rules say.
 
@@ -1232,18 +1235,46 @@ record of it is pruned. `whiphand worktree remove <run-id>` removes one by hand,
 and `--force` discards a dirty tree's changes. **Branches are never deleted** by any of this:
 the work on them is yours to merge or drop.
 
-**The network.** The engine never touches it. A worktree starts at the local `base`, so a template
-that wants the remote's state fetches inside the worktree, as the shipped `sync-base` does:
+**Syncing the base.** By default the engine starts the branch from the base's upstream, not from
+whatever the local base happens to be:
 
 ```yaml
-- id: sync-base
-  kind: command
-  run: git fetch origin "{{ inputs.base }}" && git reset --hard FETCH_HEAD
+worktree:
+  base: main
+  sync: true      # the default; `sync: false` starts from the local base and never fetches
 ```
 
-That runs on a brand-new branch, so the reset can lose nothing, and the main tree's checkout is
-not touched. `whiphand init` writes templates to new workspaces only; an existing workspace keeps
-its copies, with their old `git checkout` flow, until you replace them.
+With `sync` on, the start commit is chosen like this:
+
+1. If `base` is not a local branch with an upstream (`HEAD`, a SHA, a tag, a branch that exists
+   only locally), the branch starts from the local `base`. Nothing is fetched and nothing is
+   reported.
+2. Otherwise the engine runs `git fetch <remote> <branch>`. If that fails (offline, no
+   credentials; a credential prompt fails rather than hanging), the branch starts from the local
+   `base`.
+3. After a fetch, if the local `base` is an ancestor of the remote-tracking ref (it is behind or
+   level), the branch starts from the remote-tracking commit. If the local `base` has commits the
+   remote lacks, it starts from the local `base`.
+
+Each fallback in 2 and 3 is reported as `run:degraded` with capability `worktree-sync` and git's
+reason, so it appears in the run log and the journal. A fallback never fails the run. `run.json`
+records the commit actually used as `worktree.baseSha`, and what it started from as
+`worktree.startedFrom`: `origin/main` when synced, the base as written (`main`, `HEAD`) when not.
+Runs recorded before `startedFrom` existed resume and are removed as before. Preflight is
+unchanged: `base` must still resolve locally.
+
+**Why the base branch is never checked out.** The engine only reads the remote-tracking ref and
+never checks out, fast-forwards or otherwise moves the local base, in the worktree or anywhere
+else. Git refuses to check a branch out in two worktrees at once, so a flow that ran
+`git checkout main && git pull` inside the worktree left `main` taken there, and `git checkout
+main` then failed in the main tree and in the next run's worktree. Starting the new branch from a
+commit leaves the local `main` where it was, so concurrent runs and the main checkout never
+collide. The cost is that local `main` is not updated by a run; the remote-tracking ref is.
+
+Templates written for the older flow, which fetched inside the worktree with a `sync-base` step
+(`git fetch origin "{{ inputs.base }}" && git reset --hard FETCH_HEAD`), still work and are
+redundant. `whiphand init` writes templates to new workspaces only; an existing workspace keeps its
+copies until you replace them.
 
 ## Workspace configuration
 

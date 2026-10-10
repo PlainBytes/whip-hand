@@ -28,14 +28,6 @@ worktree:
   base: "{{ inputs.base }}"
   branch: "feature/{{ run.slug }}"
 steps:
-  # Runs inside the run's fresh worktree, on its brand-new branch, so the reset
-  # can lose nothing. It brings the branch up to the remote base without
-  # touching the main tree's checkout.
-  - id: sync-base
-    kind: command
-    run: git fetch origin "{{ inputs.base }}" && git reset --hard FETCH_HEAD
-    output: sync-base.log
-
   - id: plan
     kind: agent
     runner: claude

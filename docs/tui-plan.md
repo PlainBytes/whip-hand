@@ -7,7 +7,7 @@ one feature branch and one PR into `main`, with each step one or more commits.
 
 | Phase | Status | PR |
 |---|---|---|
-| 0. Groundwork | In progress | |
+| 0. Groundwork | Done | [#27](https://github.com/PlainBytes/whip-hand/pull/27) |
 | 1. Read-only MVP | Not started | |
 | 2. Driving runs | Not started | |
 | 3. Workflows and settings | Not started | |

@@ -3,7 +3,7 @@
 //! terminal and the real stderr; the agent keeps running meanwhile and its
 //! lines queue until the TUI is back.
 
-use std::io;
+use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
 
@@ -78,22 +78,27 @@ fn editor() -> (String, Vec<String>) {
         })
 }
 
-/// Hands `text` to the editor in a temporary file and reads it back.
+/// Hands `text` to the editor in a temporary file and reads it back. The
+/// file has a random name, is created exclusively and only its owner can
+/// read it: the text may be a review nobody else should see.
 pub fn edit(terminal: &mut Term, text: &str, log: &Path) -> Result<String, String> {
-    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!("whiphand-tui-{}-{n}.md", std::process::id()));
-    std::fs::write(&path, text).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+    let mut file = tempfile::Builder::new()
+        .prefix("whiphand-tui-")
+        .suffix(".md")
+        .tempfile()
+        .map_err(|e| format!("could not make a file to edit: {e}"))?;
+    file.write_all(text.as_bytes())
+        .and_then(|()| file.flush())
+        .map_err(|e| format!("could not write {}: {e}", file.path().display()))?;
     let what = External::Editor {
         text: String::new(),
     };
     let mut cmd = command(&what);
-    cmd.arg(&path);
-    let ran = hand_over(terminal, cmd, log);
-    let back = std::fs::read_to_string(&path);
-    let _ = std::fs::remove_file(&path);
-    ran?;
-    back.map_err(|e| format!("could not read {}: {e}", path.display()))
+    cmd.arg(file.path());
+    hand_over(terminal, cmd, log)?;
+    // By path: an editor may have replaced the file rather than written it.
+    std::fs::read_to_string(file.path())
+        .map_err(|e| format!("could not read {}: {e}", file.path().display()))
 }
 
 /// Runs `what` on the real terminal and comes back to the TUI.

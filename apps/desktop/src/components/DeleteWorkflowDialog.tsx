@@ -6,6 +6,7 @@ import {
 import { useAgentClient } from '../agent/agent-context.tsx';
 import type { Scope } from '../shared/types.ts';
 import { errorMessage } from '../lib/error-message.ts';
+import { DangerButton } from './DangerButton.tsx';
 
 export interface DeleteWorkflowDialogProps {
   /** The list entry's `name` + `source` — the file to delete, never the workflow's own `name:` field. */
@@ -77,9 +78,9 @@ export function DeleteWorkflowDialog({
             </div>
           </DialogContent>
           <DialogActions>
-            <Button appearance="primary" disabled={busy} onClick={() => void confirm()}>
+            <DangerButton disabled={busy} onClick={() => void confirm()}>
               {busy ? <Spinner size="tiny" /> : 'Delete'}
-            </Button>
+            </DangerButton>
             <Button disabled={busy} onClick={onDismiss}>Cancel</Button>
           </DialogActions>
         </DialogBody>

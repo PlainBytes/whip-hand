@@ -8,6 +8,7 @@ import { useFileTree } from '../files/use-file-tree.ts';
 import { FileTree, type FileTreeActions } from './FileTree.tsx';
 import type { TreeNodes } from '../files/tree-model.ts';
 import { setVirtualViewportHeight, VIRTUAL_ROW_HEIGHT } from '../test/setup.ts';
+import { hasInjectedStyle } from '../test/badge-style.ts';
 
 /**
  * The "Show hidden files" Switch now lives in FilesPage's PageHeader, not in
@@ -208,6 +209,16 @@ describe('FileTree row actions', () => {
     expect(onCreateFolder).toHaveBeenCalledWith('/ws/docs');
     expect(onRename).toHaveBeenCalledWith('/ws/docs');
     expect(onDelete).toHaveBeenCalledWith('/ws/docs');
+  });
+
+  it('renders the row Delete in subtle red', async () => {
+    renderTree(workspace(), '/ws', { onDelete: vi.fn() });
+    await screen.findByText('docs');
+    hoverRow('docs');
+
+    const del = screen.getByRole('button', { name: /delete docs/i });
+    expect(hasInjectedStyle(del, 'color', 'var(--colorPaletteRedForeground1)')).toBe(true);
+    expect(hasInjectedStyle(del, 'background-color', 'var(--colorPaletteRedBackground3)')).toBe(false);
   });
 
   it('offers only rename and delete on a file row', async () => {

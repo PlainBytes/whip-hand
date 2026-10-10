@@ -5,6 +5,7 @@ import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
 import { AgentClientProvider } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
+import { hasInjectedStyle } from '../test/badge-style.ts';
 
 function renderRunsPage(onSelectRun = vi.fn(), onStarted = vi.fn()) {
   const transport = new MockTransport();
@@ -87,6 +88,21 @@ describe('RunsPage', () => {
     expect(await screen.findByLabelText('Lock OAuth support')).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('Delete OAuth support'));
     expect(await screen.findByText('Delete OAuth support?')).toBeInTheDocument();
+  });
+
+  it('styles the row Delete subtle red and the confirm Delete filled red', async () => {
+    const { transport } = renderRunsPage();
+    await respondListRuns(transport, [
+      { runId: 'r1', runDir: '/ws/.whiphand/runs/r1', status: 'succeeded', workflow: 'demo' },
+    ]);
+
+    const rowDelete = await screen.findByRole('button', { name: 'Delete r1' });
+    expect(hasInjectedStyle(rowDelete, 'color', 'var(--colorPaletteRedForeground1)')).toBe(true);
+    expect(hasInjectedStyle(rowDelete, 'background-color', 'var(--colorPaletteRedBackground3)')).toBe(false);
+
+    fireEvent.click(rowDelete);
+    const confirm = within(await screen.findByRole('dialog')).getByRole('button', { name: 'Delete' });
+    expect(hasInjectedStyle(confirm, 'background-color', 'var(--colorPaletteRedBackground3)')).toBe(true);
   });
 
   it('shows a run blocked on the human as waiting, not merely running', async () => {

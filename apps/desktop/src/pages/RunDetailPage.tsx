@@ -39,6 +39,7 @@ import type { RunDetail as RunDetailResult } from '../agent/client.ts';
 import { summarizeEvent, parseLogLine, type LogRow } from '../shared/log-rows.ts';
 import { StatusBadge } from '../components/StatusBadge.tsx';
 import { AttentionBadge } from '../components/AttentionBadge.tsx';
+import { DangerButton } from '../components/DangerButton.tsx';
 import { PageHeader } from '../components/PageHeader.tsx';
 import { AWAIT_LABEL } from '../lib/await-copy.ts';
 import { TerminalPanel } from '../components/TerminalPanel.tsx';
@@ -1314,9 +1315,9 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
               </ToggleButton>
             )}
             {effectiveRunId && (
-              <Button appearance="secondary" icon={<Delete20Regular />} onClick={() => setDeleteOpen(true)}>
+              <DangerButton icon={<Delete20Regular />} onClick={() => setDeleteOpen(true)}>
                 Delete
-              </Button>
+              </DangerButton>
             )}
             {deleteOpen && workspacePath && effectiveRunId && (
               <DeleteRunDialog

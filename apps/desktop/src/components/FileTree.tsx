@@ -25,6 +25,7 @@ import {
 } from '@fluentui/react-icons';
 import { flattenVisible, visibleRowValue, type TreeNode, type TreeNodes, type VisibleTreeRow } from '../files/tree-model.ts';
 import { spacerHeights, useVirtualRows, VIRTUAL_SCROLLER_PROPS } from '../lib/use-virtual-rows.ts';
+import { DangerButton } from './DangerButton.tsx';
 
 /** Callbacks the row actions fire, each with the path of its own row. */
 export interface FileTreeActions {
@@ -99,8 +100,8 @@ function RowActions({
         />
       )}
       {onDelete && (
-        <Button
-          appearance="subtle"
+        <DangerButton
+          variant="subtle"
           size="small"
           icon={<Delete20Regular />}
           aria-label={`Delete ${node.name}`}

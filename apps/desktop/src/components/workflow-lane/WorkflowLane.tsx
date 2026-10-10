@@ -11,6 +11,7 @@ import { flattenSteps, isLoopStep, isStagesStep } from '../../shared/steps.ts';
 import { disabledRoots } from '../../shared/enabled.ts';
 import { dataFlow, ordinals as ordinalsOf, type DataFlowEntry } from '../../lib/step-describe.ts';
 import { StepTrack } from './StepTrack.tsx';
+import { DangerButton } from '../DangerButton.tsx';
 
 /** One entry of the listWorkflows result: a parsed workflow, or the error that stopped it parsing. */
 export type WorkflowEntry = ListWorkflowsResult[number];
@@ -130,7 +131,7 @@ export function WorkflowLane({
             </>
           )}
           {(workflow || isWorkflowFile(entry)) && (
-            <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => onDelete(entry)}>Delete</Button>
+            <DangerButton variant="subtle" icon={<Delete20Regular />} onClick={() => onDelete(entry)}>Delete</DangerButton>
           )}
         </div>
       </div>

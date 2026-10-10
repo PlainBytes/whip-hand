@@ -341,6 +341,14 @@ describe('WorkflowEditor: insert below and rename', () => {
     await lastRequest(transport, 'updateWorkflow');
   });
 
+  it('renders Remove step in subtle red', () => {
+    renderEditor(NESTED_WORKFLOW);
+    const buttons = screen.getAllByLabelText('Remove step');
+    for (const b of buttons) {
+      expect(hasInjectedStyle(b, 'color', 'var(--colorPaletteRedForeground1)')).toBe(true);
+    }
+  });
+
   it('collapsing a card with a pending Step ID error clears it, instead of leaving Save stuck', async () => {
     const { transport } = renderEditor(NESTED_WORKFLOW);
     fireEvent.click(screen.getByTestId('step-collapse-stage'));

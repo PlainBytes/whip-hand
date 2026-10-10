@@ -1,6 +1,8 @@
 //! `update(&mut Model, Msg) -> Vec<Cmd>`: every state change, pure. The run
-//! detail screen's own handling is in [`detail`].
+//! detail screen's own handling is in [`detail`], the run actions' in
+//! [`actions`].
 
+pub mod actions;
 pub mod detail;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
@@ -15,7 +17,7 @@ use crate::client::{
 };
 use crate::cmd::{Cmd, Notice, Then};
 use crate::model::log::LogEntry;
-use crate::model::{JOB_LOG_CAP, Job, Model, Route};
+use crate::model::{Ask, Dialog, JOB_LOG_CAP, Job, Model, Route};
 use crate::msg::Msg;
 use crate::view::keymap::{self, Action};
 
@@ -141,12 +143,8 @@ fn on_key(model: &mut Model, key: KeyEvent) -> Vec<Cmd> {
     }
     model.dirty = true;
     model.notice = None;
-    if model.confirm_quit {
-        model.confirm_quit = false;
-        return match key.code {
-            KeyCode::Char('y' | 'Y') => vec![Cmd::Quit],
-            _ => vec![],
-        };
+    if model.dialog.is_some() {
+        return actions::on_dialog_key(model, &key);
     }
     if model.help {
         model.help = false;
@@ -188,6 +186,9 @@ fn act(model: &mut Model, action: Action) -> Vec<Cmd> {
     if *model.screen() == Route::RunDetail
         && let Some(cmds) = detail::act(model, action)
     {
+        return cmds;
+    }
+    if let Some(cmds) = actions::act(model, action) {
         return cmds;
     }
     match action {
@@ -343,7 +344,10 @@ pub fn switch_workspace(model: &mut Model, path: String) -> Vec<Cmd> {
 /// Quits at once when nothing would be lost; otherwise asks first.
 fn quit(model: &mut Model) -> Vec<Cmd> {
     if model.live_jobs() > 0 && model.fatal.is_none() {
-        model.confirm_quit = true;
+        model.dialog = Some(Dialog::Confirm {
+            question: actions::quit_question(model.live_jobs()),
+            ask: Ask::Quit,
+        });
         vec![]
     } else {
         vec![Cmd::Quit]
@@ -540,6 +544,10 @@ pub fn doctor_text(rows: &[DoctorRow]) -> String {
 }
 
 fn on_reply(model: &mut Model, then: Then, value: Value) -> Vec<Cmd> {
+    let value = match actions::on_reply(model, &then, value) {
+        Ok(cmds) => return cmds,
+        Err(value) => value,
+    };
     match then {
         Then::Hello => match client::decode::<Hello>(value) {
             Ok(h) if h.protocol_version == PROTOCOL_VERSION => {

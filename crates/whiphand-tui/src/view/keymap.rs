@@ -68,6 +68,14 @@ pub enum Action {
     Pager,
     ExternalDiff,
     Refresh,
+    /// Ctrl-c: cancel the run in focus, else quit; both ask first.
+    Interrupt,
+    Cancel,
+    Resume,
+    Rename,
+    Lock,
+    Delete,
+    EndSession,
 }
 
 /// A key as the table spells it.
@@ -127,12 +135,13 @@ pub const BINDINGS: &[Binding] = &[
         A::Back,
         "back; quit from the first screen",
     ),
+    b(C::Global, &[Char('Q')], "Q", A::Quit, "quit"),
     b(
         C::Global,
-        &[Char('Q'), Ctrl('c')],
-        "Q Ctrl-c",
-        A::Quit,
-        "quit",
+        &[Ctrl('c')],
+        "Ctrl-c",
+        A::Interrupt,
+        "cancel the run in focus, else quit",
     ),
     b(
         C::Global,
@@ -190,6 +199,17 @@ pub const BINDINGS: &[Binding] = &[
         A::Ongoing,
         "ongoing runs in every workspace",
     ),
+    b(C::Runs, &[Char('c')], "c", A::Cancel, "cancel the run"),
+    b(C::Runs, &[Char('r')], "r", A::Resume, "resume the run"),
+    b(C::Runs, &[Char('R')], "R", A::Rename, "rename the run"),
+    b(
+        C::Runs,
+        &[Char('L')],
+        "L",
+        A::Lock,
+        "lock or unlock the run",
+    ),
+    b(C::Runs, &[Char('x')], "x", A::Delete, "delete the run"),
     b(
         C::Detail,
         &[Code(KeyCode::Tab), Code(KeyCode::BackTab)],
@@ -243,6 +263,24 @@ pub const BINDINGS: &[Binding] = &[
         "Ctrl-r",
         A::Refresh,
         "reload the diff",
+    ),
+    b(C::Detail, &[Char('c')], "c", A::Cancel, "cancel the run"),
+    b(C::Detail, &[Char('r')], "r", A::Resume, "resume the run"),
+    b(C::Detail, &[Char('R')], "R", A::Rename, "rename the run"),
+    b(
+        C::Detail,
+        &[Char('L')],
+        "L",
+        A::Lock,
+        "lock or unlock the run",
+    ),
+    b(C::Detail, &[Char('x')], "x", A::Delete, "delete the run"),
+    b(
+        C::Detail,
+        &[Char('E')],
+        "E",
+        A::EndSession,
+        "end the interactive session",
     ),
     b(C::Doctor, &[Char('r')], "r", A::Refresh, "check again"),
 ];
@@ -330,6 +368,9 @@ mod tests {
         let ctrl_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
         assert_eq!(action(&Route::RunDetail, false, &ctrl_r), Some(A::Refresh));
         let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(action(&Route::Runs, false, &ctrl_c), Some(A::Quit));
+        assert_eq!(action(&Route::Runs, false, &ctrl_c), Some(A::Interrupt));
+        let r = KeyEvent::from(KeyCode::Char('r'));
+        assert_eq!(action(&Route::RunDetail, false, &r), Some(A::Resume));
+        assert_eq!(action(&Route::Doctor, false, &r), Some(A::Refresh));
     }
 }

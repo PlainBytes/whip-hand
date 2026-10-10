@@ -57,6 +57,12 @@ methods! {
     ReadArtifact = "readArtifact" (p::ReadArtifactParams) -> p::ReadArtifactResult;
     StatArtifact = "statArtifact" (p::StatArtifactParams) -> p::StatArtifactResult;
     Doctor = "doctor" (p::DoctorParams) -> p::DoctorResult;
+    CancelRun = "cancelRun" (p::CancelRunParams) -> p::CancelRunResult;
+    ResumeRun = "resumeRun" (p::ResumeRunParams) -> p::ResumeRunResult;
+    RenameRun = "renameRun" (p::RenameRunParams) -> p::RenameRunResult;
+    SetRunLocked = "setRunLocked" (p::SetRunLockedParams) -> p::SetRunLockedResult;
+    DeleteRun = "deleteRun" (p::DeleteRunParams) -> p::DeleteRunResult;
+    EndSession = "endSession" (p::EndSessionParams) -> p::EndSessionResult;
 }
 
 /// Methods the TUI leaves to the desktop. A desktop PR that adds a protocol
@@ -83,16 +89,10 @@ pub const LATER: &[&str] = &[
     "listModels",
     "configGet",
     "configSet",
-    "deleteRun",
-    "setRunLocked",
-    "renameRun",
     "pruneRuns",
     "writeArtifact",
     "setUiState",
     "startRun",
-    "resumeRun",
-    "cancelRun",
-    "endSession",
     "resolveManual",
     "ptyInput",
     "ptyResize",

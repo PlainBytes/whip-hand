@@ -1,6 +1,7 @@
 //! Everything the TUI knows. Only `update` changes it; `view` only reads it.
 
 pub mod detail;
+pub mod input;
 pub mod log;
 pub mod runs;
 
@@ -10,6 +11,7 @@ use serde_json::Value;
 use whiphand_protocol::{DoctorRow, JobStatus, RecentWorkspace};
 
 use self::detail::RunDetail;
+use self::input::Input;
 use self::log::LogEntry;
 
 /// Live rows kept per job, as the agent's own log scrollback caps them
@@ -59,6 +61,48 @@ impl Route {
             Route::Doctor => "Doctor",
         }
     }
+}
+
+/// A run an action is about: its workspace and id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunRef {
+    pub workdir: String,
+    pub run_id: String,
+}
+
+/// What answering a dialog goes on to do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Ask {
+    /// Quit, cancelling the runs in progress.
+    Quit,
+    Cancel {
+        job_id: String,
+        run_id: String,
+    },
+    Delete(RunRef),
+    EndSession {
+        job_id: String,
+        run_id: String,
+    },
+    /// `y` resumes, `f` with a fresh session, `+` asks how many more iterations.
+    Resume(RunRef),
+    /// The prompts: their text is the answer.
+    Rename(RunRef),
+    MoreIterations(RunRef),
+}
+
+/// A question in the footer that takes the keys until it is answered.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Dialog {
+    /// The question, with its keys spelled out; `y` answers yes, `Esc` or
+    /// `n` drops it.
+    Confirm { question: String, ask: Ask },
+    /// One line of text: Enter answers, Esc drops it.
+    Prompt {
+        label: String,
+        input: Input,
+        ask: Ask,
+    },
 }
 
 /// The runs screen's own state.
@@ -125,8 +169,8 @@ pub struct Model {
     /// `g` was pressed; the next key picks a screen.
     pub pending_g: bool,
     pub now_ms: f64,
-    /// Asked "quit and cancel N runs?"; waiting for y/n.
-    pub confirm_quit: bool,
+    /// A question waiting for its answer.
+    pub dialog: Option<Dialog>,
     /// The last error worth showing; cleared by the next key.
     pub notice: Option<String>,
     /// A passing message (a run finished) and when it goes.

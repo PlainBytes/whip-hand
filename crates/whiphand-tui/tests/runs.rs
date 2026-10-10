@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
 
+use crossterm::event::{KeyCode, KeyEvent};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use whiphand_agent::frontend::SessionTimings;
@@ -14,7 +15,9 @@ use whiphand_tui::client::AgentClient;
 use whiphand_tui::client::wire::{self, Inbound};
 use whiphand_tui::cmd::Cmd;
 use whiphand_tui::model::Model;
+use whiphand_tui::model::Route;
 use whiphand_tui::msg::Msg;
+use whiphand_tui::update::detail::is_foreign;
 use whiphand_tui::update::{init, update};
 
 const WAIT: Duration = Duration::from_secs(60);
@@ -42,13 +45,20 @@ struct Tui {
     client: AgentClient,
     rx: mpsc::UnboundedReceiver<String>,
     model: Model,
+    /// Notifications `update` asked the terminal for.
+    notices: Vec<String>,
 }
 
 impl Tui {
     fn start(host: &Host, workdir: &Path) -> Tui {
         let (client, rx) = AgentClient::connect(host);
         let model = Model::new(workdir.to_string_lossy().into_owned(), 0.0);
-        let mut tui = Tui { client, rx, model };
+        let mut tui = Tui {
+            client,
+            rx,
+            model,
+            notices: Vec::new(),
+        };
         let cmds = init(&tui.model);
         tui.dispatch(cmds);
         tui
@@ -58,6 +68,8 @@ impl Tui {
         for cmd in cmds {
             match cmd {
                 Cmd::Rpc(call) => self.client.send(call),
+                Cmd::Notify(n) => self.notices.push(n.title),
+                Cmd::Suspend(what) => panic!("no terminal to hand to {what:?}"),
                 Cmd::Quit => panic!("quit"),
             }
         }
@@ -94,6 +106,44 @@ impl Tui {
                 }
             }
         });
+    }
+
+    fn key(&mut self, code: KeyCode) {
+        let cmds = update(&mut self.model, Msg::Key(KeyEvent::from(code)));
+        self.dispatch(cmds);
+    }
+
+    /// A second of ticks: what a foreign run's detail polls on.
+    fn second(&mut self) {
+        let now = self.model.now_ms;
+        let cmds = (1..=10)
+            .flat_map(|i| {
+                update(
+                    &mut self.model,
+                    Msg::Tick {
+                        now_ms: now + f64::from(i) * 100.0,
+                    },
+                )
+            })
+            .collect();
+        self.dispatch(cmds);
+    }
+
+    /// The open run's log, by what each row says.
+    fn log(&self) -> Vec<(String, String, Option<String>, String)> {
+        let d = self.model.detail.as_ref().expect("a run is open");
+        d.log
+            .entries
+            .iter()
+            .map(|e| {
+                (
+                    e.ts.clone(),
+                    e.row.kind.clone(),
+                    e.row.step_id.clone(),
+                    e.row.text.clone(),
+                )
+            })
+            .collect()
     }
 
     /// One `listRuns`, as the tick would ask for.
@@ -169,6 +219,12 @@ impl Desktop {
 fn workspace() -> tempfile::TempDir {
     let ws = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(ws.path().join(".whiphand")).unwrap();
+    // Real (not dry) runs write run.log; this one is quick and runs anywhere.
+    std::fs::write(
+        ws.path().join("echo.yaml"),
+        "name: echo\nsteps:\n  - id: hello\n    kind: command\n    run: echo hello\n  - id: bye\n    kind: command\n    run: echo bye\n",
+    )
+    .unwrap();
     std::fs::write(
         ws.path().join("wait.yaml"),
         "name: wait\nsteps:\n  - id: ask\n    kind: manual\n    title: Wait\n    instructions: Nothing to do.\n",
@@ -230,17 +286,37 @@ fn a_run_another_host_drives_is_foreign() {
     tui.until("the foreign run", |m| m.rows().iter().any(|r| r.foreign));
     let row = &tui.model.rows()[0];
     assert_eq!((row.status.as_str(), row.waiting), ("running", false));
+    let run_id = row.run_id.clone();
+
+    // Its detail is read-only and read again every second.
+    tui.key(KeyCode::Enter);
+    tui.settle();
+    assert_eq!(*tui.model.screen(), Route::RunDetail);
+    assert!(is_foreign(&tui.model));
+    assert_eq!(
+        tui.model.detail.as_ref().unwrap().steps[0].status,
+        "running"
+    );
+    assert!(tui.log().iter().any(|r| r.1 == "step:start"));
+    tui.second();
+    assert!(tui.client.pending() >= 2, "a poll of getRun and readRunLog");
+    tui.settle();
+    tui.key(KeyCode::Esc);
 
     // Cancelled by its owner, the next poll shows it as it ended. (By job:
     // by run id, the agent would SIGTERM the run's pid, this test process.)
     desktop.call("cancelRun", json!({ "jobId": started["jobId"] }));
     desktop.wait_for("runStateChanged", |p| p["status"] == "cancelled");
-    let run_id = row.run_id.clone();
     tui.poll();
     tui.settle();
     assert!(tui.model.rows().iter().all(|r| !r.foreign));
     assert_eq!(tui.model.rows()[0].run_id, run_id);
     assert_eq!(tui.model.rows()[0].status, "cancelled");
+    assert!(
+        tui.notices.iter().any(|n| n == "run cancelled"),
+        "{:?}",
+        tui.notices
+    );
     drop(tui);
     tui_host.shutdown();
     desktop_host.shutdown();
@@ -270,4 +346,60 @@ fn recents_written_by_both_hosts_survive() {
     drop(tui);
     tui_host.shutdown();
     desktop_host.shutdown();
+}
+
+#[test]
+fn a_run_can_be_followed_in_its_detail_and_read_back_cold() {
+    let (app, ws) = (tempfile::tempdir().unwrap(), workspace());
+    let host1 = host(app.path());
+    let mut tui = Tui::start(&host1, ws.path());
+    tui.until("hello", |m| m.agent_version.is_some());
+    let mut desktop = Desktop::connect(&host1);
+    desktop.call(
+        "startRun",
+        json!({ "workdir": ws.path(), "workflow": ws.path().join("echo.yaml") }),
+    );
+    tui.until("the run to list", |m| m.rows().len() == 1);
+    tui.key(KeyCode::Enter);
+    // Followed live to the end: the tree as the manifest has it, the log
+    // through to run:done.
+    tui.until("the run to finish in its detail", |m| {
+        let d = m.detail.as_ref().unwrap();
+        d.status() == Some("succeeded") && d.log.entries.iter().any(|e| e.row.kind == "run:done")
+    });
+    tui.second();
+    tui.settle();
+    let d = tui.model.detail.as_ref().unwrap();
+    assert!(!d.tree.is_empty());
+    assert!(
+        d.steps.iter().all(|s| s.status == "done"),
+        "{:?}",
+        d.steps
+            .iter()
+            .map(|s| (&s.id, &s.status))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(d.tree.len(), 2);
+    assert!(!is_foreign(&tui.model));
+    let live = tui.log();
+    assert!(
+        live.iter()
+            .any(|r| r.1 == "step:log" && r.3.trim() == "hello"),
+        "{live:?}"
+    );
+    drop(tui);
+    host1.shutdown();
+
+    // A fresh process has no job for it: everything comes from run.log, and
+    // reads the same.
+    let host2 = host(app.path());
+    let mut cold = Tui::start(&host2, ws.path());
+    cold.until("the run to list", |m| m.rows().len() == 1);
+    cold.key(KeyCode::Enter);
+    cold.settle();
+    let d = cold.model.detail.as_ref().unwrap();
+    assert!(d.log.loaded, "notice: {:?}", cold.model.notice);
+    assert_eq!(cold.log(), live);
+    drop(cold);
+    host2.shutdown();
 }

@@ -1,13 +1,15 @@
 //! `view(&Model, &mut Frame)`: rendering, pure. Only `runtime/` does I/O.
 
-mod runs;
+pub mod keymap;
+mod screens;
+pub mod theme;
+pub mod widgets;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::model::Model;
+use crate::model::{Model, Route};
 
 pub fn view(model: &Model, frame: &mut Frame) {
     let [header, body, footer] = Layout::vertical([
@@ -17,26 +19,38 @@ pub fn view(model: &Model, frame: &mut Frame) {
     ])
     .areas(frame.area());
     frame.render_widget(header_line(model), header);
-    runs::render(model, frame, body);
+    match model.screen() {
+        Route::Workspaces => screens::workspaces::render(model, frame, body),
+        Route::Runs => screens::runs::render(model, frame, body),
+        Route::RunDetail => screens::detail::render(model, frame, body),
+        Route::Doctor => screens::doctor::render(model, frame, body),
+    }
     frame.render_widget(footer_line(model), footer);
+    if model.help {
+        widgets::help::render(frame, body, model.screen());
+    }
+    if model.no_color {
+        theme::strip_colour(frame.buffer_mut());
+    }
 }
 
 fn header_line(model: &Model) -> Line<'_> {
-    let dim = Style::new().add_modifier(Modifier::DIM);
-    Line::from(vec![
-        Span::styled("whiphand", Style::new().add_modifier(Modifier::BOLD)),
+    let mut spans = vec![
+        Span::styled("whiphand", theme::bold()),
         Span::raw("  "),
-        Span::raw(model.workdir.as_str()),
-        Span::styled("  (experimental)", dim),
-    ])
+        Span::raw(model.workdir.as_deref().unwrap_or("no workspace")),
+        Span::styled(format!("  · {}", model.screen().title()), theme::dim()),
+        Span::styled("  (experimental)", theme::dim()),
+    ];
+    if model.pending_g {
+        spans.push(Span::styled("  g…", theme::waiting()));
+    }
+    Line::from(spans)
 }
 
 fn footer_line(model: &Model) -> Line<'_> {
     if let Some(fatal) = &model.fatal {
-        return Line::styled(
-            format!(" {fatal}  ·  q quit"),
-            Style::new().fg(Color::White).bg(Color::Red),
-        );
+        return Line::styled(format!(" {fatal}  ·  q quit"), theme::fatal_bar());
     }
     if model.confirm_quit {
         let n = model.live_jobs();
@@ -49,14 +63,17 @@ fn footer_line(model: &Model) -> Line<'_> {
             format!(
                 " {n} {runs} in progress will be cancelled; {they} can be resumed. Quit? (y/n)"
             ),
-            Style::new().fg(Color::Black).bg(Color::Yellow),
+            theme::warning_bar(),
         );
     }
     if let Some(notice) = &model.notice {
-        return Line::styled(format!(" {notice}"), Style::new().fg(Color::Red));
+        return Line::styled(format!(" {notice}"), theme::error());
     }
-    Line::styled(
-        " j/k move  ·  q quit",
-        Style::new().add_modifier(Modifier::DIM),
-    )
+    if let Some((toast, _)) = &model.toast {
+        return Line::styled(format!(" {toast}"), theme::waiting());
+    }
+    if model.runs_ui.editing && *model.screen() == Route::Runs {
+        return Line::styled(" type to filter  ·  Enter keep  ·  Esc clear", theme::dim());
+    }
+    Line::styled(format!(" {}", keymap::hints(model.screen())), theme::dim())
 }

@@ -516,6 +516,74 @@ pub fn format_log_line(seq: u64, ts: &str, row: &LogRow) -> String {
     format!("{prefix}{text}\n")
 }
 
+/// `escape_text` undone: each two-character token back to its character, in
+/// one left-to-right pass, so `\\n` reads as a backslash then `n`.
+fn unescape_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match (c, chars.peek()) {
+            ('\\', Some('\\')) => {
+                chars.next();
+                out.push('\\');
+            }
+            ('\\', Some('n')) => {
+                chars.next();
+                out.push('\n');
+            }
+            (c, _) => out.push(c),
+        }
+    }
+    out
+}
+
+/// One `run.log` line read back: the row and the stamp it was written with.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParsedLogLine {
+    pub seq: u64,
+    pub ts: String,
+    pub row: LogRow,
+}
+
+/// The inverse of [`format_log_line`] (`parseLogLine` in the desktop's
+/// `log-rows.ts`). `None` for a line without the fixed prefix: a corrupt or
+/// foreign line is skipped, never an error. A `step:log:<stream>` kind comes
+/// back as `step:log` with its stream, as the TS reader returns it.
+pub fn parse_log_line(line: &str) -> Option<ParsedLogLine> {
+    let line = line.strip_suffix('\n').unwrap_or(line);
+    let mut parts = line.split("  ");
+    let ts = parts.next()?;
+    let seq_raw = parts.next()?;
+    let raw_kind = parts.next()?;
+    let step_raw = parts.next()?;
+    let text = parts.collect::<Vec<_>>().join("  ");
+    // `Number(seqRaw)`: blank is 0, anything else must be a whole number.
+    let seq_raw = seq_raw.trim();
+    let seq = if seq_raw.is_empty() {
+        0
+    } else {
+        let n: f64 = seq_raw.parse().ok()?;
+        if !n.is_finite() || n < 0.0 {
+            return None;
+        }
+        n as u64
+    };
+    let (kind, stream) = match raw_kind.strip_prefix("step:log:") {
+        Some(stream @ ("stdout" | "stderr")) => ("step:log".to_string(), Some(stream.to_string())),
+        _ => (raw_kind.to_string(), None),
+    };
+    Some(ParsedLogLine {
+        seq,
+        ts: ts.to_string(),
+        row: LogRow {
+            kind,
+            step_id: (step_raw != "-").then(|| step_raw.to_string()),
+            text: unescape_text(&text),
+            stream,
+        },
+    })
+}
+
 /// A line for a row that has no event behind it (the `log:truncated` note).
 pub fn format_note_line(seq: u64, ts: &str, kind: &str, text: &str) -> String {
     format_log_line(
@@ -582,5 +650,72 @@ mod tests {
     #[test]
     fn escapes() {
         assert_eq!(escape_text("a\\n\nb"), "a\\\\n\\nb");
+    }
+
+    #[test]
+    fn parse_log_line_undoes_format_log_line() {
+        let rows = [
+            LogRow {
+                kind: "step:start".into(),
+                step_id: Some("plan".into()),
+                text: "start agent".into(),
+                stream: None,
+            },
+            LogRow {
+                kind: "run:done".into(),
+                step_id: None,
+                text: "run done: ok".into(),
+                stream: None,
+            },
+            LogRow {
+                kind: "step:progress:text".into(),
+                step_id: Some("a".into()),
+                text: "two  spaces\nand a\\n literal".into(),
+                stream: None,
+            },
+            LogRow {
+                kind: "step:progress:tool".into(),
+                step_id: Some("a".into()),
+                text: String::new(),
+                stream: None,
+            },
+        ];
+        for (i, row) in rows.iter().enumerate() {
+            let line = format_log_line(i as u64 + 1, "2024-01-01T00:00:00.000Z", row);
+            let back = parse_log_line(&line).unwrap();
+            assert_eq!(back.seq, i as u64 + 1);
+            assert_eq!(back.ts, "2024-01-01T00:00:00.000Z");
+            assert_eq!(&back.row, row);
+        }
+    }
+
+    #[test]
+    fn parse_log_line_splits_the_stream_out_of_a_step_log_kind() {
+        let row = LogRow {
+            kind: "step:log:stderr".into(),
+            step_id: Some("b".into()),
+            text: "oops".into(),
+            stream: Some("stderr".into()),
+        };
+        let back = parse_log_line(&format_log_line(7, "t", &row)).unwrap();
+        assert_eq!(back.row.kind, "step:log");
+        assert_eq!(back.row.stream.as_deref(), Some("stderr"));
+        assert_eq!(back.row.text, "oops");
+    }
+
+    #[test]
+    fn parse_log_line_skips_what_it_cannot_read() {
+        assert_eq!(parse_log_line(""), None);
+        assert_eq!(parse_log_line("garbage"), None);
+        assert_eq!(parse_log_line("t  x  kind  -  text"), None);
+        let r = parse_log_line("t  3  log:truncated  -").unwrap();
+        assert_eq!((r.seq, r.row.text.as_str(), r.row.step_id), (3, "", None));
+    }
+
+    #[test]
+    fn unescapes_in_one_pass() {
+        for text in ["a\\n\nb", "\\", "\\\\n", "plain", "trailing\\"] {
+            assert_eq!(unescape_text(&escape_text(text)), text);
+        }
     }
 }

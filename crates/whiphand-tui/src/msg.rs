@@ -17,6 +17,8 @@ pub enum Msg {
     },
     Agent(Notification),
     Reply(Then, Result<Value, RpcError>),
+    /// A program the screen was handed to has returned; why it failed, if it did.
+    External(Result<(), String>),
     /// The agent's engine thread is gone: its channel closed.
     HostGone,
 }

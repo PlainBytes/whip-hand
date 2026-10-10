@@ -319,7 +319,10 @@
         "runsRetention": {
           "maxPerWorkspace": 0
         },
-        "showOngoingRuns": true
+        "showOngoingRuns": true,
+        "editor": {
+          "kind": "vscode"
+        }
       },
       {
         "schemaVersion": 1,
@@ -340,7 +343,10 @@
         "runsRetention": {
           "maxPerWorkspace": 0
         },
-        "showOngoingRuns": true
+        "showOngoingRuns": true,
+        "editor": {
+          "kind": "vscode"
+        }
       },
       {
         "schemaVersion": 1,
@@ -362,7 +368,10 @@
         "runsRetention": {
           "maxPerWorkspace": 0
         },
-        "showOngoingRuns": true
+        "showOngoingRuns": true,
+        "editor": {
+          "kind": "vscode"
+        }
       }
     ],
     "whiphandEvent": [

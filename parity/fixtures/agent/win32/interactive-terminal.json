@@ -151,7 +151,10 @@
         "runsRetention": {
           "maxPerWorkspace": 0
         },
-        "showOngoingRuns": true
+        "showOngoingRuns": true,
+        "editor": {
+          "kind": "vscode"
+        }
       }
     ],
     "whiphandEvent": [

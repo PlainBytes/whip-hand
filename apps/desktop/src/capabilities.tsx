@@ -1,4 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react';
+import type { EditorPreference } from './shared/protocol.gen.ts';
 
 /**
  * What this host can do that the other cannot — the same UI runs in the Tauri
@@ -26,6 +27,13 @@ export interface AppCapabilities {
    * as pickFiles.
    */
   readonly onFileDrop?: (handler: (event: FileDropEvent) => void) => Promise<() => void>;
+  /**
+   * Opens `relPath` under `workdir` in the configured editor. The launch runs
+   * in the Tauri shell, never over the agent RPC, so a browser gains no way
+   * to start processes on the host. Rejects with a displayable message.
+   * Undefined in a browser, where the UI hides the affordance.
+   */
+  readonly openInEditor?: (workdir: string, relPath: string, editor: EditorPreference) => Promise<void>;
   /** Whether the local filesystem — and therefore the Files page — is reachable. */
   readonly localFiles: boolean;
 }

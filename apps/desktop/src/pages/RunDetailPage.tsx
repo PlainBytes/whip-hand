@@ -28,7 +28,7 @@ import {
   ToggleButton,
 } from '@fluentui/react-components';
 import {
-  ArrowDown20Regular, ArrowLeft20Regular, Copy20Regular, Delete20Regular, DocumentFolder48Regular,
+  ArrowDown20Regular, ArrowLeft20Regular, BranchFork16Regular, Copy20Regular, Delete20Regular, DocumentFolder48Regular,
   LockClosed20Regular, LockOpen20Regular,
   PlayCircle20Regular, PlugDisconnected20Regular, PlugDisconnected48Regular, Prompt48Regular,
   Rename20Regular, Stop20Regular, Replay20Regular, TextBulletListSquare48Regular,
@@ -40,6 +40,7 @@ import { summarizeEvent, parseLogLine, type LogRow } from '../shared/log-rows.ts
 import { StatusBadge } from '../components/StatusBadge.tsx';
 import { AttentionBadge } from '../components/AttentionBadge.tsx';
 import { DangerButton } from '../components/DangerButton.tsx';
+import { OpenInEditorButton } from '../components/OpenInEditorButton.tsx';
 import { PageHeader } from '../components/PageHeader.tsx';
 import { AWAIT_LABEL } from '../lib/await-copy.ts';
 import { TerminalPanel } from '../components/TerminalPanel.tsx';
@@ -326,6 +327,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
   const [extraIterationsOpen, setExtraIterationsOpen] = useState(false);
   const [extraIterationsRaw, setExtraIterationsRaw] = useState('1');
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
   /**
    * Whether the review screen is up. Auto-opened when a decision arrives (the
    * run is hard-blocked, which is the moment that deserves the screen), but a
@@ -1255,6 +1257,14 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
                 Run again
               </Button>
             )}
+            {manifest?.worktree && workspacePath && (
+              <OpenInEditorButton
+                workdir={workspacePath}
+                worktree={manifest.worktree}
+                size="medium"
+                onError={setOpenError}
+              />
+            )}
             {effectiveRunId && (
               <Dialog
                 open={renameOpen}
@@ -1333,6 +1343,19 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
             )}
           </div>
         </div>
+        {manifest?.worktree && (
+          <div
+            data-testid="run-detail-worktree"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6, paddingTop: 4,
+              color: 'var(--colorNeutralForeground3)',
+            }}
+          >
+            <BranchFork16Regular aria-hidden />
+            <Text>branch {manifest.worktree.branch}</Text>
+            <Text style={{ fontFamily: 'monospace' }}>{manifest.worktree.path}</Text>
+          </div>
+        )}
       </PageHeader>
 
       {/*
@@ -1340,6 +1363,13 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
         that failed says so once, here, and a line of ordinary text was easy to
         scroll straight past.
       */}
+      {openError && (
+        <div style={{ flexShrink: 0, paddingTop: 8 }}>
+          <MessageBar intent="error" data-testid="run-open-error">
+            <MessageBarBody>{openError}</MessageBarBody>
+          </MessageBar>
+        </div>
+      )}
       {(manifestError || runErrorMessage) && (
         <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 8 }}>
           {manifestError && (

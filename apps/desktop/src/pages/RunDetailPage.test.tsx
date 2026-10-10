@@ -11,6 +11,7 @@ import { AWAIT_LABEL } from '../lib/await-copy.ts';
 import { encodeToBase64 } from '../lib/base64.ts';
 import type { WhiphandEvent } from '../shared/types.ts';
 import { fromPosix } from '../../../../packages/test-support/src/paths.ts';
+import { CapabilitiesProvider, type AppCapabilities } from '../capabilities.tsx';
 import { hasInjectedStyle } from '../test/badge-style.ts';
 
 // RunDetailPage only needs to exercise its own show/hide/collapse logic here —
@@ -36,14 +37,16 @@ vi.mock('../components/TerminalPanel.tsx', () => ({
 
 function renderRunDetail(
   jobId?: string, onBack = vi.fn(), onRunAgain = vi.fn(), runId?: string, onResumed = vi.fn(),
+  capabilities?: AppCapabilities,
 ) {
   const transport = new MockTransport();
   const client = new AgentClient(transport);
-  render(
+  const page = (
     <AgentClientProvider client={client}>
       <RunDetailPage jobId={jobId} runId={runId} onBack={onBack} onRunAgain={onRunAgain} onResumed={onResumed} />
-    </AgentClientProvider>,
+    </AgentClientProvider>
   );
+  render(capabilities ? <CapabilitiesProvider value={capabilities}>{page}</CapabilitiesProvider> : page);
   return { transport, client, onBack, onRunAgain, onResumed };
 }
 
@@ -123,6 +126,64 @@ describe('RunDetailPage', () => {
     });
     expect(await screen.findByText('OAuth support')).toBeInTheDocument();
     expect(screen.getByTestId('run-detail-id')).toHaveTextContent('run-1');
+  });
+
+  describe('worktree', () => {
+    const WORKTREE = { path: '.whiphand/worktrees/run-1', branch: 'whiphand/run-1' };
+    const base = { runId: 'run-1', runDir: '/ws/.whiphand/runs/run-1', status: 'succeeded', artifacts: [] };
+
+    afterEach(() => {
+      useAppStore.setState({ appState: null });
+    });
+
+    it('shows the branch and path line for a worktree run, and nothing for a plain run', async () => {
+      const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1');
+      await respondGetRun(transport, { ...base, worktree: WORKTREE });
+      const line = await screen.findByTestId('run-detail-worktree');
+      expect(line).toHaveTextContent('branch whiphand/run-1');
+      expect(line).toHaveTextContent('.whiphand/worktrees/run-1');
+      cleanup();
+
+      const plain = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1');
+      await respondGetRun(plain.transport, base);
+      await screen.findByText('Run run-1');
+      expect(screen.queryByTestId('run-detail-worktree')).not.toBeInTheDocument();
+    });
+
+    it('has no open button without the capability, but still shows the line', async () => {
+      const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1');
+      await respondGetRun(transport, { ...base, worktree: WORKTREE });
+      await screen.findByTestId('run-detail-worktree');
+      expect(screen.queryByRole('button', { name: /Open in/ })).not.toBeInTheDocument();
+    });
+
+    it('opens the worktree in the chosen editor, labelled by the preference', async () => {
+      const openInEditor = vi.fn().mockResolvedValue(undefined);
+      useAppStore.setState({ appState: { editor: { kind: 'zed' } } as never });
+      const { transport } = renderRunDetail(
+        undefined, vi.fn(), vi.fn(), 'run-1', vi.fn(), { host: 'desktop', localFiles: true, openInEditor },
+      );
+      await respondGetRun(transport, { ...base, worktree: WORKTREE });
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Open in Zed' }));
+
+      await waitFor(() => expect(openInEditor).toHaveBeenCalledWith(
+        '/ws', '.whiphand/worktrees/run-1', { kind: 'zed' },
+      ));
+    });
+
+    it('shows a rejected open in a message bar and keeps the page', async () => {
+      const openInEditor = vi.fn().mockRejectedValue(new Error('editor not found on PATH'));
+      const { transport } = renderRunDetail(
+        undefined, vi.fn(), vi.fn(), 'run-1', vi.fn(), { host: 'desktop', localFiles: true, openInEditor },
+      );
+      await respondGetRun(transport, { ...base, worktree: WORKTREE });
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Open in Visual Studio Code' }));
+
+      expect(await screen.findByTestId('run-open-error')).toHaveTextContent('editor not found on PATH');
+      expect(screen.getByTestId('run-detail-worktree')).toBeInTheDocument();
+    });
   });
 
   it('an unnamed run still reads as "Run <id>"', async () => {

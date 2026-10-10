@@ -34,4 +34,10 @@ export const tauriCapabilities: AppCapabilities = {
       handler(payload.type === 'drop' ? { type: 'drop', paths: payload.paths } : { type: payload.type });
     });
   },
+  // A custom command registered in lib.rs, so no capability entry is needed.
+  // The Rust side returns its error as a string, which invoke rejects with.
+  openInEditor: async (workdir, relPath, editor) => {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('open_in_editor', { workdir, relPath, editor });
+  },
 };

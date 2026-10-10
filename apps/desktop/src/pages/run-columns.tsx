@@ -5,7 +5,7 @@
  * leading Workspace column.
  */
 import { createTableColumn, tokens, type TableColumnDefinition } from '@fluentui/react-components';
-import { LockClosed16Regular } from '@fluentui/react-icons';
+import { BranchFork16Regular, LockClosed16Regular } from '@fluentui/react-icons';
 import type { RunSummary } from '../agent/client.ts';
 import { StatusBadge } from '../components/StatusBadge.tsx';
 import { elapsedMs, formatElapsed } from '../shared/format.ts';
@@ -91,6 +91,11 @@ export function runColumns<T extends RunSummary>(
       renderCell: run => (
         <span style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
           {run.locked && <LockClosed16Regular aria-label="locked" />}
+          {run.worktree && (
+            <span title={`Worktree on branch ${run.worktree.branch}\n${run.worktree.path}`} style={{ display: 'inline-flex' }}>
+              <BranchFork16Regular aria-label="worktree" />
+            </span>
+          )}
           {run.name === undefined ? run.runId : (
             <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

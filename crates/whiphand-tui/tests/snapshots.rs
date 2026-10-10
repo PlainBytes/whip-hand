@@ -480,3 +480,47 @@ fn new_run_form() {
     chars(&mut model, "with saved cards");
     snapshot("new_run_editing", &model);
 }
+
+// ------------------------------------------------------------------ manual
+
+fn sign_off(model: &mut Model) {
+    let request = json!({
+        "stepId": "sign-off", "kind": "approval", "title": "Ship it?",
+        "instructions": "Review the diff and the findings before this goes any further.\n\n- tests pass\n- **no** new warnings",
+        "choices": ["continue", "retry", "abort"],
+        "capture": { "kind": "review", "label": "Feedback", "requiredFor": ["retry"], "perFile": true },
+        "context": { "artifacts": [{ "id": "review", "path": ".whiphand/runs/20261010-100000-a1b2/review.md" }],
+                     "diff": "diff --git a/src/cart.ts b/src/cart.ts\n" },
+        "defaultChoice": "continue",
+        "stage": { "stagesId": "build", "id": "two", "title": "Checkout", "index": 2, "total": 3, "attempt": 2, "maxAttempts": 3 },
+    });
+    let params =
+        serde_json::from_value(json!({ "jobId": "j1", "runId": RUN, "request": request })).unwrap();
+    update(model, Msg::Agent(Notification::ManualRequest(params)));
+    reply(
+        model,
+        Then::ManualDiff("j1".into()),
+        json!({ "files": [
+            { "path": "src/cart.ts", "status": "modified", "additions": 2, "deletions": 1, "binary": false,
+              "patch": "diff --git a/src/cart.ts b/src/cart.ts\n--- a/src/cart.ts\n+++ b/src/cart.ts\n@@ -10,3 +10,4 @@ export function total(items: Item[]) {\n   let sum = 0;\n-  for (const i of items) sum += i.price;\n+  for (const i of items) sum += i.price * i.qty;\n+  // quantities, not lines\n   return sum;\n" },
+            { "path": "src/cart.test.ts", "status": "added", "additions": 12, "deletions": 0, "binary": false },
+        ] }),
+    );
+    model.toast = None;
+}
+
+#[test]
+fn a_sign_off_over_the_run() {
+    let mut model = live_detail();
+    sign_off(&mut model);
+    snapshot("manual_sign_off", &model);
+    // Feedback written, the patch of the first file with a comment on it.
+    key(&mut model, KeyCode::Char('i'));
+    chars(&mut model, "Quantities need a test.");
+    key(&mut model, KeyCode::Esc);
+    key(&mut model, KeyCode::Char('j'));
+    key(&mut model, KeyCode::Char('j'));
+    key(&mut model, KeyCode::Enter);
+    chars(&mut model, "Name it lineTotal.");
+    snapshot("manual_commenting", &model);
+}

@@ -80,4 +80,8 @@ pub enum Then {
     SessionEnded(String),
     Workflows,
     Started,
+    /// `resolveManual` for a job.
+    Resolved(String),
+    /// `getWorkingDiff` for a job's manual step.
+    ManualDiff(String),
 }

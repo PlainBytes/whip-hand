@@ -868,3 +868,145 @@ fn a_resumed_run_is_its_new_job_whichever_order_the_ids_sort_in() {
         assert!(!model.jobs.contains_key(old), "the replaced job is dropped");
     }
 }
+
+// The manual screen (update/manual.rs).
+
+fn sign_off() -> Value {
+    json!({
+        "stepId": "sign-off", "kind": "approval", "title": "Ship it?",
+        "instructions": "Read the **diff**.", "choices": ["continue", "retry", "abort"],
+        "capture": { "kind": "review", "label": "Feedback", "requiredFor": ["retry"], "perFile": true },
+        "context": { "artifacts": [{ "id": "plan", "path": ".whiphand/runs/r1/plan.md" }],
+                     "diff": "diff --git a/src/a.rs b/src/a.rs\n" },
+        "defaultChoice": "continue",
+    })
+}
+
+fn ask(model: &mut Model, request: Value) -> Vec<Cmd> {
+    let params =
+        serde_json::from_value(json!({ "jobId": "j1", "runId": "r1", "request": request }))
+            .unwrap();
+    update(model, Msg::Agent(Notification::ManualRequest(params)))
+}
+
+fn manual_diff() -> Value {
+    json!({ "files": [
+        { "path": "src/a.rs", "status": "modified", "additions": 2, "deletions": 1, "binary": false,
+          "patch": "diff --git a/src/a.rs b/src/a.rs\n@@ -1 +1,2 @@\n-a\n+b\n+c\n" },
+    ] })
+}
+
+/// The run's detail open, its job asking for a sign-off; the screen is up.
+fn signing_off() -> Model {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "running" }));
+    running(&mut model, "j1", "r1");
+    let cmds = ask(&mut model, sign_off());
+    let call = rpc(&cmds[..1]);
+    assert_eq!(call.then, Then::ManualDiff("j1".into()));
+    assert_eq!(*model.screen(), Route::Manual);
+    update(
+        &mut model,
+        Msg::Reply(Then::ManualDiff("j1".into()), Ok(manual_diff())),
+    );
+    model
+}
+
+#[test]
+fn a_request_for_the_run_on_screen_opens_over_it() {
+    let model = signing_off();
+    assert_eq!(model.route, [Route::Runs, Route::RunDetail, Route::Manual]);
+    let m = model.manual.as_ref().unwrap();
+    assert_eq!(m.files().len(), 1);
+    assert_eq!(m.request.step_id, "sign-off");
+}
+
+#[test]
+fn a_request_elsewhere_only_notifies_and_m_opens_it() {
+    let mut model = Model::new("/w".into(), 0.0);
+    runs(&mut model, json!([{ "runId": "r1", "status": "running" }]));
+    running(&mut model, "j1", "r1");
+    let cmds = ask(&mut model, sign_off());
+    assert_eq!(methods(&cmds), ["notify"]);
+    assert_eq!(*model.screen(), Route::Runs);
+    let cmds = update(&mut model, key('m'));
+    assert_eq!(methods(&cmds), ["getWorkingDiff"]);
+    assert_eq!(*model.screen(), Route::Manual);
+}
+
+#[test]
+fn sending_back_takes_the_feedback_and_the_file_comments() {
+    let mut model = signing_off();
+    // Feedback is required to send it back.
+    assert!(update(&mut model, key('b')).is_empty());
+    assert!(model.notice.as_deref().unwrap().contains("feedback"));
+    update(&mut model, key('i'));
+    typed(&mut model, "Handle the empty cart.");
+    update(&mut model, code(KeyCode::Esc));
+    // Down to the plan artifact, which Enter pages; then the file.
+    update(&mut model, key('j'));
+    assert_eq!(
+        update(&mut model, code(KeyCode::Enter)),
+        [Cmd::Suspend(External::Pager {
+            path: whiphand_core::path_form::to_native(".whiphand/runs/r1/plan.md", "/w")
+        })]
+    );
+    update(&mut model, key('j'));
+    update(&mut model, code(KeyCode::Enter));
+    typed(&mut model, "Split this.");
+    update(&mut model, code(KeyCode::Esc));
+    let cmds = update(&mut model, key('b'));
+    let call = rpc(&cmds);
+    assert_eq!(call.method, "resolveManual");
+    assert_eq!(
+        call.params,
+        json!({ "jobId": "j1", "stepId": "sign-off", "choice": "retry",
+                "note": "Handle the empty cart.",
+                "comments": [{ "path": "src/a.rs", "body": "Split this." }] })
+    );
+    assert!(update(&mut model, key('a')).is_empty(), "sent once");
+    // manualResolved closes the screen, back on the detail.
+    let resolved =
+        serde_json::from_value(json!({ "jobId": "j1", "stepId": "sign-off", "choice": "retry" }))
+            .unwrap();
+    update(
+        &mut model,
+        Msg::Agent(Notification::ManualResolved(resolved)),
+    );
+    assert_eq!(*model.screen(), Route::RunDetail);
+    assert!(model.manual.is_none());
+    assert!(model.toast.as_ref().unwrap().0.contains("sent back"));
+}
+
+#[test]
+fn abort_asks_first() {
+    let mut model = signing_off();
+    assert!(update(&mut model, key('X')).is_empty());
+    assert!(update(&mut model, key('n')).is_empty());
+    update(&mut model, key('X'));
+    let cmds = update(&mut model, key('y'));
+    assert_eq!(rpc(&cmds).params["choice"], "abort");
+}
+
+#[test]
+fn approve_needs_no_note() {
+    let mut model = signing_off();
+    let cmds = update(&mut model, key('a'));
+    let call = rpc(&cmds);
+    assert_eq!(
+        call.params,
+        json!({ "jobId": "j1", "stepId": "sign-off", "choice": "continue" })
+    );
+}
+
+#[test]
+fn a_foreign_runs_step_is_answered_where_it_started() {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "running" }));
+    assert!(update(&mut model, key('m')).is_empty());
+    assert!(
+        model
+            .notice
+            .as_deref()
+            .unwrap()
+            .contains("where the run was started")
+    );
+}

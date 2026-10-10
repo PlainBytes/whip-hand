@@ -173,11 +173,8 @@ pub fn edit_key(model: &mut Model, key: &KeyEvent) -> Vec<Cmd> {
 }
 
 /// `$EDITOR` came back with the field's new text.
-pub fn on_edited(model: &mut Model, text: String) {
+pub fn on_edited(model: &mut Model, text: &str) {
     if let Some(form) = model.new_run.as_mut().and_then(|n| n.form.as_mut()) {
-        // Editors end the file with a newline the field never had.
-        let text = text.strip_suffix('\n').unwrap_or(&text);
-        let text = text.strip_suffix('\r').unwrap_or(text);
         form.focused().input.set(text);
     }
 }
@@ -243,9 +240,15 @@ pub fn follow(model: &mut Model) -> Vec<Cmd> {
     match (&job.run_id, job.status) {
         (Some(run_id), _) => {
             let run_id = run_id.clone();
+            let waiting = job.manual.is_some();
             let workdir = model.new_run.take().map(|n| n.workdir).unwrap_or_default();
             model.route.retain(|r| *r != Route::NewRun);
-            detail::open(model, workdir, run_id)
+            let mut cmds = detail::open(model, workdir, run_id);
+            // It asked before the detail was up: the question opens over it.
+            if waiting {
+                cmds.extend(super::manual::open(model, &job_id));
+            }
+            cmds
         }
         (None, JobStatus::Running) => vec![],
         (None, _) => {

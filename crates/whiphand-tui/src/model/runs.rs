@@ -85,7 +85,8 @@ pub fn row(run: &Value, job: Option<&Job>, now_ms: f64) -> Row {
         status,
         step: current_step(run),
         elapsed: elapsed(run, live, now_ms),
-        waiting: job.is_some_and(|j| j.status == JobStatus::Running && (j.awaiting || j.manual)),
+        waiting: job
+            .is_some_and(|j| j.status == JobStatus::Running && (j.awaiting || j.manual.is_some())),
         foreign,
         locked: run.get("locked") == Some(&Value::Bool(true)),
         workspace: str_of(run, "workspace").map(str::to_string),

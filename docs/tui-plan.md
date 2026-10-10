@@ -9,7 +9,7 @@ one feature branch and one PR into `main`, with each step one or more commits.
 |---|---|---|
 | 0. Groundwork | Done | [#27](https://github.com/PlainBytes/whip-hand/pull/27) |
 | 1. Read-only MVP | Done | [#29](https://github.com/PlainBytes/whip-hand/pull/29) |
-| 2. Driving runs | Not started | |
+| 2. Driving runs | Done | |
 | 3. Workflows and settings | Not started | |
 | 4. Hardening and release | Not started | |
 | 5. Optional extras | Not started | |
@@ -73,9 +73,9 @@ These rules exist so the TUI never slows desktop work down.
 Phase 0 was expected to be the only phase touching shared crates. Phase 1 also
 did, under rule 2: the run tree and the `run.log` reader existed only in the
 desktop's TypeScript, so they moved to `whiphand-core` (additive, with their TS
-tests ported; the desktop keeps its TS until it chooses to switch). Other
-phases add code under `crates/whiphand-tui` and a few lines in
-`crates/whiphand-cli`. Any shared-crate change is called out in that phase's PR
+tests ported; the desktop keeps its TS until it chooses to switch). Phase 2
+did not: what it needed from core was already there. Other phases add code
+under `crates/whiphand-tui` and a few lines in `crates/whiphand-cli`. Any shared-crate change is called out in that phase's PR
 description.
 
 ## Branching and delivery
@@ -105,7 +105,8 @@ description.
 | Workflow editing | `$VISUAL`/`$EDITOR` round trip, then `validateWorkflow` | No YAML editor inside the TUI |
 | Artifacts | Markdown rendered as styled text (`pulldown-cmark` to ratatui `Text`); `o` opens `$PAGER` | Mermaid and pdf left with the file explorer |
 | Run detail data | The manifest (`getRun`) is the step tree's only source, re-read on step boundaries (coalesced 250 ms) and on `runStateChanged`. The log is `LogRow`s: live `whiphandEvent`s plus `getJobScrollback` for a local run, `run.log` via `readRunLog` + `parse_log_line` otherwise, merged on row identity | The journal writes the manifest live, so there is no live step reducer to port (`reduceJobEvent` stays in TS). Identity, not `seq`, because a resumed run's journal restarts `seq` while `run.log` keeps appending |
-| Diff | `getWorkingDiff` (files with `patch`) rendered in a pane; `D` hands off to `git diff` / `$GIT_PAGER` | Covers `show_diff` approvals and send-back comments |
+| Diff | `getWorkingDiff` (files with `patch`) rendered in a pane; `D` hands off to `git diff` / `$GIT_PAGER` | Covers `show_diff` approvals and send-back comments. An approval shows the run's working diff, as the desktop's review does; the request's `context.diff` only says that one is wanted |
+| Send-back comments | Per file (`FileComment { path, body }`), on the approval screen | The protocol has no line numbers |
 | Shared logic | Reuse `whiphand_core::log_rows` (with `parse_log_line`), `run_tree`, `path_form`, `execution_key`, `format` and `doctor::tools::doctor_report` | One implementation, already golden-tested. `run_tree` and `parse_log_line` were ported from the desktop's TS in Phase 1 |
 
 ## 2. Crate layout
@@ -128,30 +129,41 @@ crates/whiphand-tui/
                       the / filter and the ongoing view
       detail.rs       RunDetail: manifest, run_tree, collapsed nodes, tabs, log, artifacts, diff
       log.rs          LogEntry / LogBuf: live and run.log rows merged on identity, paged back by byte
+      input.rs        the text input: dialogs, form fields, notes and comments
+      new_run.rs      the workflow picker and its form; startRun's params
+      manual.rs       a ManualRequest and the screen answering it
+      pty.rs          a job's PTY ring; merge_scrollback (the desktop's mergeScrollback)
     update/
       mod.rs          fn update(&mut Model, Msg) -> Vec<Cmd>   (pure, unit-tested)
       detail.rs       the run detail screen: open, refetch, foreign polling, its keys
+      actions.rs      cancel, resume, rename, lock, delete, end session; the dialogs
+      new_run.rs      the new-run screen
+      manual.rs       the manual / approval screen
+      attach.rs       attach mode's state machine (pure; the runtime swaps the screen)
       tests.rs
-    msg.rs            Msg: Key, Resize, Tick, Agent(Notification), Reply(Then, Result), External, HostGone
-    cmd.rs            Cmd: Rpc(Call), Suspend(External), Notify(Notice), Quit; Then (what a reply is for)
+    msg.rs            Msg: Key, Resize, Tick, Agent(Notification), Reply(Then, Result), External, Edited,
+                      Stdin, PtySize, AttachFailed, HostGone
+    cmd.rs            Cmd: Rpc(Call), Suspend(External), Notify(Notice), Quit, Attach, Detach, Stdout;
+                      Then (what a reply is for)
     runtime/
       event_loop.rs   select! over terminal events, agent lines, the tick and the frame deadline
       terminal.rs     TerminalGuard (raw mode, alt-screen), panic hook
       stderr.rs       redirect fd 2 / STD_ERROR_HANDLE to a log file while the TUI owns the screen
       external.rs     suspend, run $PAGER / git, resume
       notify.rs       BEL, OSC 9, title (OSC 0); tmux passthrough wrapping
-      attach.rs       passthrough session (section 5)                       [Phase 2]
+      attach.rs       passthrough session (section 5): screen swap, raw stdin reader
     view/
       mod.rs          header, screen, footer, help overlay; NO_COLOR strips colour after drawing
       keymap.rs       the one binding table: dispatch, the ? overlay and footer hints
       theme.rs        colours and glyphs
       widgets/{tree,log,markdown,diff,help}.rs
-      screens/{workspaces,runs,detail,doctor}.rs
-  tests/              runs.rs (real Hosts), snapshots.rs (TestBackend + insta)
+      screens/{workspaces,runs,detail,doctor,new_run,manual}.rs
+  tests/              runs.rs and attach.rs (real Hosts, harness in common/), snapshots.rs (TestBackend + insta)
 ```
 
 The PTY ring and the `mergeScrollback` port (`apps/desktop/src/state/store.ts`)
-arrive with attach mode in Phase 2; Phase 1 needs neither.
+live in `model/pty.rs`. The port stays in the TUI: it is client buffer logic
+with no other Rust consumer, not behaviour the two UIs share.
 
 Rendering is a pure function `fn view(&Model, &mut Frame)`. Only `runtime/`
 does I/O. This Elm-style split (Model, Msg, update, Cmd, view) is what makes the
@@ -227,22 +239,26 @@ loop {
 
 State machine: `Ui → Attaching → Attached → Detaching → Ui`.
 
-1. **Enter** on an interactive step with a live PTY (`ptyStarted` seen, or
-   `listJobs` shows it).
-2. Leave the alt-screen, keep raw mode, disable mouse capture, clear the screen,
-   set the title.
+1. **Enter** on the step whose session is live, or **`t`** anywhere on the
+   run's detail (a live session: `ptyStarted` seen, or seeded by
+   `getJobScrollback` when the detail opened).
+2. Leave the alt-screen, keep raw mode, clear the screen. (The TUI never turns
+   mouse capture on.)
 3. Send `ptyResize{cols, rows}` with the real terminal size. The agent's PTY was
    sized for whoever attached last; `pty_sizes.rs` tracks it.
 4. Replay: write the model's PTY ring for the job (already seq-spliced with
    `getJobScrollback` on first view) raw to stdout, then stream later `ptyData`
    (base64-decoded) straight to stdout. Full-screen harnesses (claude, copilot,
    opencode) repaint after the resize, so a partial replay is only cosmetic.
-5. Input: crossterm's `EventStream` is paused, and a dedicated reader thread
-   forwards raw stdin bytes, batched per tick into one `ptyInput{data: base64}`.
+5. Input: crossterm's `EventStream` is dropped, and a reader thread forwards
+   raw stdin bytes, one `ptyInput{data: base64}` per read. It wakes every
+   50 ms (`poll` on fd 0) to check it should go on, so after a detach nothing
+   is left blocked on stdin to steal a key from crossterm. No resize events
+   arrive meanwhile, so the size is polled on the tick.
    - `Ctrl-]` (0x1d, configurable) detaches; `Ctrl-] Ctrl-]` sends a literal 0x1d.
-   - On Windows, read via `ReadConsoleInputW` with
-     `ENABLE_VIRTUAL_TERMINAL_INPUT`, so arrow keys arrive as VT sequences, which
-     is what ConPTY expects.
+   - On Windows, `WaitForSingleObject` on the console handle, then
+     `ReadConsoleInputW` with `ENABLE_VIRTUAL_TERMINAL_INPUT`, so arrow keys
+     arrive as VT sequences, which is what ConPTY expects.
 6. `ptyExit` for the job: print a one-line footer ("session ended, exit 0,
    returning"), wait for a key or 1 s, and return to the run's detail screen.
 7. While attached, other jobs' `ptyAwait` and `manualRequest` only ring BEL and
@@ -250,8 +266,9 @@ State machine: `Ui → Attaching → Attached → Detaching → Ui`.
    instant.
 8. `Ctrl-] e` sends `endSession`, the polite-quit path the agent implements.
 
-Optional setting `attach.auto = true`: a run started from this TUI attaches
-automatically when its interactive step starts, which gives a CLI-like flow.
+Optional setting `attach.auto = true` (Phase 3, with settings): a run started
+from this TUI attaches automatically when its interactive step starts, which
+gives a CLI-like flow.
 
 ## 6. Screens and the RPCs behind them
 
@@ -260,11 +277,11 @@ automatically when its interactive step starts, which gives a CLI-like flow.
 | Workspaces | Recent and pinned; open a path (`-C`, else the cwd if it has `.whiphand/`, else this screen); `init` if missing | `getAppState`, `touchRecentWorkspace`, `setWorkspacePinned`, `initWorkspace`, `appStateChanged` |
 | Runs (home) | Name/id, workflow, status, current step, elapsed, a "waiting" badge; filter `/`; ongoing toggle | `listRuns`, `listRecentRuns`, `listJobs`, `runStateChanged`, `ptyAwait`, `manualRequest` |
 | Run detail | Left: step tree (stages, cycles, iterations via the `execution_key` logic). Right tabs: Log, Events, Artifacts, Diff. Actions: cancel, resume (with extra iterations), rename, lock, delete, end session, attach | `getRun`, `readRunLog`, `getJobScrollback`, `stepLog`, `whiphandEvent`, `cancelRun`, `resumeRun`, `renameRun`, `setRunLocked`, `deleteRun`, `endSession`, `pty*` |
-| Approval / manual | Full screen: prompt, diff (if `show_diff`), choices; send-back comment editor (multi-line, per-file comments for `capture: review`) | `manualRequest`, `resolveManual{choice, note, comments}`, `manualResolved`, `getWorkingDiff` |
-| Diff | File list (status, +/-) and patch hunks; comment on a line for send-back | `getWorkingDiff` |
+| Approval / manual | Full screen: instructions, artifacts, the run's diff (if `show_diff`), choices; a note, and per-file comments for `capture: review` | `manualRequest`, `resolveManual{choice, note, comments}`, `manualResolved`, `getWorkingDiff` |
+| Diff | File list (status, +/-) and patch hunks | `getWorkingDiff` |
 | Artifact | Markdown render; `e` edits in `$EDITOR`, then `writeArtifact` | `readArtifact`, `statArtifact`, `writeArtifact` |
 | Workflows | List (source scope, shadowed); new, clone, delete; edit in `$EDITOR`; validate; run | `listWorkflows`, `getWorkflow`, `createWorkflow`, `cloneWorkflow`, `deleteWorkflow`, `updateWorkflow`, `validateWorkflow` |
-| New run | Form generated from the workflow's inputs; name; attachments (path input with completion); model overrides; prefilled from `lastInputs` in app state | `getWorkflow`, `listModels`, `startRun` |
+| New run | Workflow picker, then a form generated from its inputs; name; max iterations; attachments (paths, one per line); dry run; worktree; prefilled from `lastInputs` in app state. No model overrides: `startRun` has none | `listWorkflows` (it carries each workflow), `getAppState`, `startRun` |
 | Doctor | Harness and support tool groups: core's `doctor_report` text, the same as `whiphand doctor` prints | `doctor` |
 | Settings | Workspace config, run retention, prune, path of the TUI log | `configGet`, `configSet`, `pruneRuns`, `setUiState` |
 
@@ -275,25 +292,25 @@ Desktop-only by design: `remoteAccessGet`, `remoteAccessSet`,
 
 One table in `view/keymap.rs`. Dispatch, the `?` overlay and the footer hints
 are drawn from it, and a unit test rejects a key bound twice where it applies.
-Keys arrive with the phase that adds their action; Phase 1 binds: `?`, `q`/`Esc`,
-`Q`/`Ctrl-c`, `g w|r|d`, `j`/`k`, page keys, `Home`, `G`/`End`, `Enter`; runs `/`
-and `o` (ongoing); workspaces `p` (pin); run detail `Tab`, `1`-`4`, `h`/`l`
-(collapse, expand), `e` (errors only), `a` (every step), `o` (pager), `D`, `r`
-(reload the diff); doctor `r`. The plan's full set:
+Keys arrive with the phase that adds their action. Phase 1 bound: `?`,
+`q`/`Esc`, `Q`, `g w|r|d`, `j`/`k`, page keys, `Home`, `G`/`End`, `Enter`; runs
+`/` and `o` (ongoing); workspaces `p` (pin); run detail `Tab`, `1`-`4`, `h`/`l`
+(collapse, expand), `o` (pager), `D`. Phase 2 moved the detail's errors only
+to `f`, every step's rows to `A` and the diff reload to `Ctrl-r`, freeing `e`,
+`a` and `r`, and added: `Ctrl-c` (cancel the run in focus, else quit; both
+ask); runs and detail `c` cancel, `r` resume, `R` rename, `L` lock, `x`
+delete, `m` the step waiting on you; runs `n` new run; detail `t` attach, `E`
+end session; new run `s` start; the manual screen `a` continue, `b` send back,
+`X` abort, `i` the note. The plan's full set:
 
 - **Global:** `?` help, `q`/`Esc` back, `Q` quit, `:` command palette, `g w`
   workspaces, `g r` runs, `g f` workflows, `g d` doctor, `g s` settings,
   `Tab`/`Shift-Tab` panes.
-- **Runs and detail:** `/` filter, `n` new run, `Enter` open/attach, `c` cancel,
-  `r` resume, `R` rename, `L` lock, `x` delete, `e` edit, `o` pager, `D` external
-  diff, `a` approve, `b` send back, `1`-`4` tabs.
+- **Runs and detail:** `/` filter, `n` new run, `Enter` open/attach, `t`
+  attach, `c` cancel, `r` resume, `R` rename, `L` lock, `x` delete, `m` answer,
+  `e` edit, `o` pager, `D` external diff, `1`-`4` tabs.
+- **Manual:** `a` approve, `b` send back, `X` abort, `i` note.
 - **Attach:** `Ctrl-]` detach, `Ctrl-] e` end session.
-
-For Phase 2: the run detail's `e` (errors only), `a` (every step) and `r`
-(reload the diff) collide with the planned `e` edit, `a` approve and `r`
-resume, and `Ctrl-c` still quits (as in Phase 0) where section 7 wants a
-"cancel the focused run?" confirmation. The keymap test catches a double
-binding, so Phase 2 has to move one side of each pair.
 
 ## 7. Terminal hygiene
 
@@ -311,7 +328,8 @@ binding, so Phase 2 has to move one side of each pair.
   raw mode, the alt-screen, the cursor and mouse capture before a panic message
   prints.
 - **Ctrl-C in the UI** is a key (raw mode). It maps to a "cancel focused run?"
-  confirmation, not to process exit.
+  confirmation, not to process exit; with no live run in focus it asks the
+  quit question instead.
 - **External programs:** `external.rs` leaves raw mode and the alt-screen, gives
   stderr back to the terminal, runs the program with inherited stdio, waits,
   re-enters, redirects stderr again and forces a full redraw. crossterm's
@@ -354,10 +372,11 @@ changes for that:
    workspace behaves as it does today for two desktop windows, or the CLI plus
    the desktop.
 
-Note for Phase 2: `cancelRun` by `runId` (no `jobId`) is the agent's path for
-a run another process owns, and SIGTERMs the pid in the run's manifest; for a
-desktop-started run that pid is the desktop itself. Keeping cancel disabled on
-foreign runs is therefore required, not just tidy.
+`cancelRun` by `runId` (no `jobId`) is the agent's path for a run another
+process owns, and SIGTERMs the pid in the run's manifest; for a
+desktop-started run that pid is the desktop itself. The TUI therefore only
+cancels by `jobId`, and cancel, end session, attach and answering stay
+disabled on foreign runs, with the reason shown.
 
 Out of scope for this track: controlling foreign runs across processes, which
 would need an owner-side IPC channel. If the desktop users ask for it, it
@@ -377,9 +396,10 @@ becomes its own shared-crate project that both UIs use.
   into it) drives `examples/cycle.yaml --dry-run` through `AgentClient`; Msgs are
   fed into `update`, and the model and rendered frames are asserted. A dry run
   writes no `run.log`, so the test that reads a run back cold uses a real run
-  of command steps. The attach
-  test uses a fake interactive harness script, reusing the agent's PTY test
-  fixtures and the Windows exit helper.
+  of command steps. The attach test drives a real interactive step against a
+  stub `claude` on `PATH` (a `sh` script, so it runs on Unix only; the
+  Windows reader is type-checked and clippy-clean for
+  `x86_64-pc-windows-msvc`, not run).
 - **Cross-process:** two `Host`s on one app-state file and one workspace.
   Recents are not lost; a foreign run is detected and rendered read-only.
 - **CI:** all of the above run inside the existing `cargo test --workspace` job on
@@ -464,6 +484,66 @@ Exit: a `feature` workflow runs start to finish from the TUI alone, including
 attach, detach and reattach to the plan step, and a sign-off with diff and
 send-back.
 
+**Delivered** (branch `feature/tui-phase2-driving-runs`):
+
+- No shared-crate changes. The new-run form reads each workflow from
+  `listWorkflows`, whose JSON `whiphand_core::schema::parse_workflow` reads
+  back unchanged, so `consumes_attachments`, `dropped_refs` and the step
+  helpers are core's own.
+- Keys: the detail's errors only, every step and diff reload moved to `f`, `A`
+  and `Ctrl-r` (section 6). `Ctrl-c` asks to cancel the run in focus, else to
+  quit.
+- Run actions from the runs list or the detail: cancel, resume (plain, with a
+  fresh session, with more iterations), rename, lock, delete; end session from
+  the detail. What cannot be undone asks first in the footer; what does not
+  apply says why. A resumed run is local from then on and followed live.
+- New run: a workflow picker (the one this workspace ran last first; one
+  that does not parse says so), then a form generated from its inputs,
+  prefilled as the desktop does; name, max iterations (with a loop),
+  attachments (when a step reads them), dry run, worktree; a warning when
+  another run is going in the workspace, and for disabled steps. `Ctrl-e`
+  edits a field in `$VISUAL`/`$EDITOR`. Once the job knows its run id, the
+  run's detail opens.
+- Manual and approval steps: a full screen with the instructions (or the
+  focused file's patch), the note, the context's artifacts (paged), the run's
+  working diff and per-file comments; `a`, `b` and `X` (asks first). It opens
+  over its run's detail when that run is on screen or was just started here;
+  otherwise it notifies and `m` opens it.
+- Attach mode as section 5 describes, on a 2 MB PTY ring per job, spliced with
+  `getJobScrollback` by the `mergeScrollback` port.
+- Fixed on the way: a resumed run has two jobs here, and took the status of
+  whichever id sorted first; a run now has one job at a time.
+
+Followed end to end: in `whiphand tui` driven through a pseudo-terminal with a
+stub `claude` on `PATH`, a run started from the form, attached, detached,
+reattached, typed to, and came back when the session ended. That run found a
+panic the tests could not: `select!` builds a disabled branch's future, and
+the key branch unwrapped the event stream. The integration tests start runs
+from the form, drive cancel, resume, rename, lock and delete against a real
+host, send a sign-off back with feedback and a file comment (both land in
+the step's `feedback.md`) and approve the second round, and attach to a real
+interactive step.
+
+Not done, and why:
+
+- The exit check with real harnesses (`claude`, `copilot`) on a `feature`
+  workflow has not been run: it needs signed-in harnesses. Everything it
+  covers was run against the stub instead. The sign-off check uses the
+  `feature-development` template: `examples/feature.yaml` has no approval step.
+- Windows attach input is type-checked and clippy-clean, not run: CI has no
+  console to attach. A UTF-16 surrogate pair split across two console reads
+  would be lost. The attach test is Unix-only (its stub is `sh`).
+- tmux and SSH were not tried (Phase 4's manual matrix).
+- `attach.auto` waits for settings (Phase 3); `Ctrl-]` is not configurable yet.
+- No path completion or pasted images for attachments, and no model
+  overrides: `startRun` has no field for them.
+- `e` (edit an artifact, `writeArtifact`) is free now and lands with Phase 3.
+- The help overlay still does not scroll, and the detail's footer hints are
+  cut at 80 columns; Phase 2's keys make both longer.
+
+Verification notes: as in Phase 1, `npm run verify` fails the desktop's 26
+tests on Node 25's own `localStorage`; this branch does not touch `apps/`.
+
 ### Phase 3: Workflows and settings (1 to 2 weeks)
 
 Workflow CRUD, `$EDITOR` editing and validation, `init`, config, prune, models.
@@ -524,7 +604,8 @@ desktop work leaves.
    on `main` before each PR; no long-lived TUI branch.
 6. **Binary size.** ratatui, crossterm and pulldown-cmark add about 1 to 1.5 MB;
    dropping axum from the CLI path offsets part of it. Recorded in
-   `docs/benchmarks.md`: +1.05 MB in Phase 0, +0.56 MB in Phase 1.
+   `docs/benchmarks.md`: +1.05 MB in Phase 0, +0.56 MB in Phase 1, +0.61 MB in
+   Phase 2.
 
 ## 13. Verification
 

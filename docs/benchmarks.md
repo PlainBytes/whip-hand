@@ -202,4 +202,19 @@ workspace): the time from spawn until the runs list is on screen, then
 2 ms after spawn on both. The 104 ms on `main` was a bug, fixed in Phase 1: a
 change held back by the 16 ms frame limit was only drawn at the next 100 ms
 tick.
+
+### TUI Phase 2: driving runs
+
+`cargo build --release -p whiphand-cli` on Linux x86_64 (Ryzen 9 5900X),
+`main` at 7c66492 (after the Phase 1 merge) against the Phase 2 branch
+(docs/tui-plan.md, Phase 2). Measured as for Phase 1.
+
+| Metric | `main` after TUI Phase 1 | TUI Phase 2 | Change |
+|---|---:|---:|---:|
+| CLI binary | 5.07 MB | 5.68 MB | +0.61 MB |
+| `whiphand tui`: spawn to the populated runs list | 21 ms | 21 ms | 0 |
+| `whiphand tui`: peak RSS (VmHWM) | 7.8 MB | 8.1 MB | +0.3 MB |
+
+The new screens and attach mode account for the growth. Startup is
+unchanged: nothing new runs before the runs list is up.
 <!-- results:end -->

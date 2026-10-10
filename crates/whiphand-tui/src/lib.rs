@@ -15,13 +15,24 @@ pub mod update;
 pub mod view;
 
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use whiphand_agent::{Host, HostConfig};
 
 pub struct TuiOptions {
-    /// The workspace: `-C`, else the current directory.
-    pub dir: PathBuf,
+    /// `-C`; without it, the current directory if it is a workspace, else
+    /// the workspaces screen.
+    pub dir: Option<PathBuf>,
+}
+
+/// The workspace to open at start: `-C` as given, else the current
+/// directory when it has `.whiphand/`; `None` opens the workspaces screen.
+pub fn start_dir(dir: Option<PathBuf>, cwd: &Path) -> Option<PathBuf> {
+    match dir {
+        Some(d) => Some(d),
+        None if cwd.join(".whiphand").is_dir() => Some(cwd.to_path_buf()),
+        None => None,
+    }
 }
 
 /// Where stderr goes while the TUI owns the screen: beside the app state.
@@ -35,13 +46,23 @@ pub fn run(opts: TuiOptions) -> i32 {
         eprintln!("whiphand tui needs an interactive terminal");
         return 1;
     }
-    let workdir = match std::path::absolute(&opts.dir) {
-        Ok(p) if p.is_dir() => p.to_string_lossy().into_owned(),
-        _ => {
-            eprintln!("whiphand tui: not a directory: {}", opts.dir.display());
-            return 1;
-        }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let workdir = match start_dir(opts.dir, &cwd) {
+        None => None,
+        Some(dir) => match std::path::absolute(&dir) {
+            Ok(p) if p.is_dir() => Some(p.to_string_lossy().into_owned()),
+            _ => {
+                eprintln!("whiphand tui: not a directory: {}", dir.display());
+                return 1;
+            }
+        },
     };
+    let now = whiphand_core::time::now_ms();
+    let mut model = match workdir {
+        Some(w) => model::Model::new(w, now),
+        None => model::Model::without_workspace(now),
+    };
+    model.no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
     // Remote access off: the desktop may be running, with its port.
     let host = match Host::start(HostConfig {
         remote: false,
@@ -61,7 +82,7 @@ pub fn run(opts: TuiOptions) -> i32 {
         );
     }
     let result = runtime::terminal::TerminalGuard::enter()
-        .and_then(|mut guard| runtime::event_loop::run(&host, &mut guard.terminal, workdir));
+        .and_then(|mut guard| runtime::event_loop::run(&host, &mut guard.terminal, model, &log));
     // The screen is back (the guard dropped); runs get their grace period.
     host.shutdown();
     runtime::stderr::restore();

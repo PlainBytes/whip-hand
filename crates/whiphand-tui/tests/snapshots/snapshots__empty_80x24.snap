@@ -2,7 +2,7 @@
 source: crates/whiphand-tui/tests/snapshots.rs
 expression: "render(model, size)"
 ---
-"whiphand  /home/dev/shop  (experimental)                                        "
+"whiphand  /home/dev/shop  · Runs  (experimental)                                "
 "┌ Runs ────────────────────────────────────────────────────────────────────────┐"
 "│No runs in this workspace yet.                                                │"
 "│                                                                              │"
@@ -25,4 +25,4 @@ expression: "render(model, size)"
 "│                                                                              │"
 "│                                                                              │"
 "└──────────────────────────────────────────────────────────────────────────────┘"
-" j/k move  ·  q quit                                                            "
+" / filter  ·  o ongoing runs in every workspace  ·  ? help  ·  q back           "

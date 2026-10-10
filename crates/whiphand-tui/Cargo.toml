@@ -17,6 +17,8 @@ ratatui = { version = "0.29", default-features = false, features = ["crossterm"]
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+pulldown-cmark = { version = "0.13", default-features = false }
+ansi-to-tui = "7"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

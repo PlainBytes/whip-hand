@@ -22,9 +22,11 @@ pub struct Row {
     pub waiting: bool,
     pub foreign: bool,
     pub locked: bool,
+    /// The workspace, for a run from `listRecentRuns` (the ongoing view).
+    pub workspace: Option<String>,
 }
 
-fn job_status(status: JobStatus) -> &'static str {
+pub fn job_status(status: JobStatus) -> &'static str {
     match status {
         JobStatus::Running => "running",
         JobStatus::Succeeded => "succeeded",
@@ -86,24 +88,57 @@ pub fn row(run: &Value, job: Option<&Job>, now_ms: f64) -> Row {
         waiting: job.is_some_and(|j| j.status == JobStatus::Running && (j.awaiting || j.manual)),
         foreign,
         locked: run.get("locked") == Some(&Value::Bool(true)),
+        workspace: str_of(run, "workspace").map(str::to_string),
+    }
+}
+
+impl Row {
+    /// The `/` filter: a case-insensitive substring of id, name, workflow or status.
+    pub fn matches(&self, filter: &str) -> bool {
+        if filter.is_empty() {
+            return true;
+        }
+        let needle = filter.to_lowercase();
+        [
+            Some(self.run_id.as_str()),
+            self.name.as_deref(),
+            Some(self.workflow.as_str()),
+            Some(self.status.as_str()),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|h| h.to_lowercase().contains(&needle))
     }
 }
 
 impl Model {
-    fn job_for(&self, run_id: &str) -> Option<&Job> {
-        self.jobs
-            .values()
-            .find(|j| j.run_id.as_deref() == Some(run_id))
-    }
-
-    pub fn rows(&self) -> Vec<Row> {
-        self.runs
-            .iter()
+    fn rows_of(&self, runs: &[Value]) -> Vec<Row> {
+        runs.iter()
             .map(|run| {
-                let job = str_of(run, "runId").and_then(|id| self.job_for(id));
+                let job = str_of(run, "runId").and_then(|id| self.job_for(id).map(|(_, j)| j));
                 row(run, job, self.now_ms)
             })
             .collect()
+    }
+
+    /// This workspace's runs.
+    pub fn rows(&self) -> Vec<Row> {
+        self.rows_of(&self.runs)
+    }
+
+    /// What the runs screen lists: this workspace's runs, or every recent
+    /// workspace's running ones, through the `/` filter.
+    pub fn visible_rows(&self) -> Vec<Row> {
+        let ui = &self.runs_ui;
+        let rows = if ui.ongoing {
+            self.rows_of(&ui.recent)
+                .into_iter()
+                .filter(|r| r.status == "running")
+                .collect()
+        } else {
+            self.rows()
+        };
+        rows.into_iter().filter(|r| r.matches(&ui.filter)).collect()
     }
 
     pub fn any_foreign(&self) -> bool {
@@ -137,9 +172,8 @@ mod tests {
             "heartbeatAt": "2026-10-10T10:00:02.000Z" });
         let job = Job {
             run_id: Some("r1".into()),
-            status: JobStatus::Running,
             awaiting: true,
-            manual: false,
+            ..Job::new(JobStatus::Running)
         };
         let now = date_parse(T0).unwrap() + 9_000.0;
         let r = row(&run, Some(&job), now);
@@ -150,5 +184,15 @@ mod tests {
             ..job
         };
         assert_eq!(row(&run, Some(&done), now).status, "succeeded");
+    }
+
+    #[test]
+    fn the_filter_matches_any_column_ignoring_case() {
+        let run = json!({ "runId": "20261010-a1", "name": "Checkout", "workflow": "feature", "status": "failed" });
+        let r = row(&run, None, 0.0);
+        for hit in ["", "a1", "checkout", "FEAT", "fail"] {
+            assert!(r.matches(hit), "{hit}");
+        }
+        assert!(!r.matches("cycle"));
     }
 }

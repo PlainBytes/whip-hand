@@ -48,6 +48,15 @@ methods! {
     ListJobs = "listJobs" (p::ListJobsParams) -> p::ListJobsResult;
     GetAppState = "getAppState" (p::GetAppStateParams) -> p::GetAppStateResult;
     TouchRecentWorkspace = "touchRecentWorkspace" (p::TouchRecentWorkspaceParams) -> p::TouchRecentWorkspaceResult;
+    SetWorkspacePinned = "setWorkspacePinned" (p::SetWorkspacePinnedParams) -> p::SetWorkspacePinnedResult;
+    ListRecentRuns = "listRecentRuns" (p::ListRecentRunsParams) -> p::ListRecentRunsResult;
+    GetRun = "getRun" (p::GetRunParams) -> p::GetRunResult;
+    ReadRunLog = "readRunLog" (p::ReadRunLogParams) -> p::ReadRunLogResult;
+    GetJobScrollback = "getJobScrollback" (p::GetJobScrollbackParams) -> p::GetJobScrollbackResult;
+    GetWorkingDiff = "getWorkingDiff" (p::GetWorkingDiffParams) -> p::GetWorkingDiffResult;
+    ReadArtifact = "readArtifact" (p::ReadArtifactParams) -> p::ReadArtifactResult;
+    StatArtifact = "statArtifact" (p::StatArtifactParams) -> p::StatArtifactResult;
+    Doctor = "doctor" (p::DoctorParams) -> p::DoctorResult;
 }
 
 /// Methods the TUI leaves to the desktop. A desktop PR that adds a protocol
@@ -59,8 +68,9 @@ pub const DESKTOP_ONLY: &[&str] = &[
     "remoteAccessRotateToken",
 ];
 
-/// Methods a later TUI phase implements (docs/tui-plan.md, section 6). Each
-/// moves into `methods!` when its screen lands.
+/// Methods a later TUI phase implements (docs/tui-plan.md, section 6): the
+/// ones that change a run, a workflow or settings. Each moves into
+/// `methods!` when its screen lands.
 pub const LATER: &[&str] = &[
     "listWorkflows",
     "getWorkflow",
@@ -70,7 +80,6 @@ pub const LATER: &[&str] = &[
     "cloneWorkflow",
     "validateWorkflow",
     "initWorkspace",
-    "doctor",
     "listModels",
     "configGet",
     "configSet",
@@ -78,15 +87,8 @@ pub const LATER: &[&str] = &[
     "setRunLocked",
     "renameRun",
     "pruneRuns",
-    "getRun",
-    "readRunLog",
-    "getWorkingDiff",
-    "readArtifact",
     "writeArtifact",
-    "statArtifact",
-    "setWorkspacePinned",
     "setUiState",
-    "listRecentRuns",
     "startRun",
     "resumeRun",
     "cancelRun",
@@ -94,7 +96,6 @@ pub const LATER: &[&str] = &[
     "resolveManual",
     "ptyInput",
     "ptyResize",
-    "getJobScrollback",
 ];
 
 /// A request as `update` describes it: no id yet, and what to do with the

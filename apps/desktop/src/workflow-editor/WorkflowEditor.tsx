@@ -7,7 +7,7 @@ import { Add20Regular, Delete20Regular, Dismiss20Regular, Save20Regular } from '
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { DeleteWorkflowDialog } from '../components/DeleteWorkflowDialog.tsx';
 import { PageHeader } from '../components/PageHeader.tsx';
-import { PageFooter } from '../components/PageFooter.tsx';
+import { DangerButton } from '../components/DangerButton.tsx';
 import type { Scope, Workflow } from '../shared/types.ts';
 import { isContainerStep } from '../shared/steps.ts';
 import { untilTargetOf } from '../shared/enabled.ts';
@@ -125,7 +125,7 @@ export function WorkflowEditor({
   }, [showProblems, normalized]);
 
   // Keyed by the card's own committed id, so this reads as a problem on that
-  // card, and its message matches the `step '<id>': ...` shape the footer's
+  // card, and its message matches the `step '<id>': ...` shape the problem list's
   // other lines use.
   const idProblems = Object.entries(idFieldErrors)
     .filter((entry): entry is [string, string] => entry[1] !== null)
@@ -268,16 +268,43 @@ export function WorkflowEditor({
             Edit workflow: {name}
             {source === 'global' && <Badge appearance="tint" color="brand" style={{ marginLeft: 8 }}>Global</Badge>}
           </Text>
-          <Button
-            appearance="secondary"
-            icon={<Delete20Regular />}
-            aria-label={`Delete ${name}`}
-            disabled={saving}
-            onClick={() => setConfirmingDelete(true)}
-          >
-            Delete
-          </Button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <DangerButton
+              variant="filled"
+              icon={<Delete20Regular />}
+              aria-label={`Delete ${name}`}
+              disabled={saving}
+              onClick={() => setConfirmingDelete(true)}
+            >
+              Delete
+            </DangerButton>
+            <Button appearance="secondary" icon={<Dismiss20Regular />} onClick={onCancel}>Cancel</Button>
+            <Button
+              appearance="primary"
+              disabled={saving}
+              icon={saving ? <Spinner size="tiny" /> : <Save20Regular />}
+              onClick={() => void save()}
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </Button>
+          </div>
         </div>
+        {saveError && (
+          <MessageBar intent="error">
+            {/* A WorkflowError-style server message is several lines, joined with '\n  - '. */}
+            <MessageBarBody style={{ whiteSpace: 'pre-wrap' }}>{saveError}</MessageBarBody>
+          </MessageBar>
+        )}
+        {showProblems && allProblems.length > 0 && (
+          <MessageBar intent="error">
+            <MessageBarBody>
+              <div>{allProblems.length} problem{allProblems.length === 1 ? '' : 's'}:</div>
+              <ul style={{ margin: '4px 0 0', paddingLeft: 18, maxHeight: '30vh', overflowY: 'auto' }}>
+                {allProblems.map((problem, i) => <li key={`${i}:${problem}`}>{problem}</li>)}
+              </ul>
+            </MessageBarBody>
+          </MessageBar>
+        )}
       </PageHeader>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 16, paddingBottom: 16 }}>
@@ -342,36 +369,6 @@ export function WorkflowEditor({
           Add step
         </Button>
       </div>
-
-      <PageFooter>
-        {saveError && (
-          <MessageBar intent="error">
-            {/* A WorkflowError-style server message is several lines, joined with '\n  - '. */}
-            <MessageBarBody style={{ whiteSpace: 'pre-wrap' }}>{saveError}</MessageBarBody>
-          </MessageBar>
-        )}
-        {showProblems && allProblems.length > 0 && (
-          <MessageBar intent="error">
-            <MessageBarBody>
-              <div>{allProblems.length} problem{allProblems.length === 1 ? '' : 's'}:</div>
-              <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
-                {allProblems.map((problem, i) => <li key={`${i}:${problem}`}>{problem}</li>)}
-              </ul>
-            </MessageBarBody>
-          </MessageBar>
-        )}
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Button appearance="secondary" icon={<Dismiss20Regular />} onClick={onCancel}>Cancel</Button>
-          <Button
-            appearance="primary"
-            disabled={saving}
-            icon={saving ? <Spinner size="tiny" /> : <Save20Regular />}
-            onClick={() => void save()}
-          >
-            {saving ? 'Saving…' : 'Save'}
-          </Button>
-        </div>
-      </PageFooter>
     </div>
   );
 }

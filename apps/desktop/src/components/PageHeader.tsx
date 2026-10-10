@@ -60,6 +60,10 @@ export const PAGE_HEADER_HEIGHT_VAR = '--whiphand-page-header-height';
  *                                     that already means "refresh" here)
  *   End an interactive session  -> PlugDisconnected20Regular
  *
+ * Delete (and other destructive actions) is always a DangerButton: filled
+ * for page-header and confirm-dialog actions, subtle for list rows and
+ * icon-only buttons.
+ *
  * Sizing: 20px icons on default-size buttons, 16px icons on size="small"
  * buttons. A button whose label swaps while working (e.g. "Saving...")
  * swaps its icon slot to <Spinner size="tiny" /> for the duration instead

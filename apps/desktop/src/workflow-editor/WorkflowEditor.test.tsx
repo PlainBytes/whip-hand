@@ -8,6 +8,7 @@ import { AgentClientProvider } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
 import type { AgentStep, Step, Workflow } from '../shared/types.ts';
 import type { DoctorResult, ListModelsResult, ValidateWorkflowResult } from '../shared/protocol.gen.ts';
+import { hasInjectedStyle } from '../test/badge-style.ts';
 import { answerValidation, type Validator } from '../test/validation.ts';
 
 function flattenSteps(steps: Step[]): Step[] {
@@ -450,6 +451,21 @@ describe('WorkflowEditor: save', () => {
   });
 });
 
+describe('WorkflowEditor: header actions', () => {
+  it('Delete, Cancel and Save sit in the header with the title, in that order, and Delete is red', () => {
+    renderEditor(NESTED_WORKFLOW);
+    const title = screen.getByText(/Edit workflow:/);
+    const del = screen.getByRole('button', { name: 'Delete feature-development' });
+    const cancel = screen.getByRole('button', { name: /^cancel$/i });
+    const save = screen.getByRole('button', { name: /^save$/i });
+    const header = title.parentElement!.parentElement!;
+    for (const b of [del, cancel, save]) expect(header).toContainElement(b);
+    const order = Array.from(header.querySelectorAll('button')).filter(b => [del, cancel, save].includes(b));
+    expect(order).toEqual([del, cancel, save]);
+    expect(hasInjectedStyle(del, 'background-color', 'var(--colorPaletteRedBackground3)')).toBe(true);
+  });
+});
+
 describe('WorkflowEditor: delete', () => {
   it('the header Delete opens the confirmation, and confirming deletes and hands back', async () => {
     const { transport, onDeleted } = renderEditor(NESTED_WORKFLOW);
@@ -521,7 +537,7 @@ describe('WorkflowEditor: save-time validation', () => {
     expect('output' in step).toBe(false);
   });
 
-  it('Save with a blank Prompt: no request is sent, the card expands, the field itself is flagged, and the footer lists the problem', async () => {
+  it('Save with a blank Prompt: no request is sent, the card expands, the field itself is flagged, and the problem list names it', async () => {
     const { transport } = renderEditor(NESTED_WORKFLOW, { validator: NEW_STEP_PROBLEMS });
     fireEvent.click(screen.getByRole('button', { name: /add step/i }));
 
@@ -543,7 +559,7 @@ describe('WorkflowEditor: save-time validation', () => {
     await lastRequest(transport, 'updateWorkflow');
   });
 
-  it('a blank Prompt and Output filename on the same step both show up as separate footer lines', async () => {
+  it('a blank Prompt and Output filename on the same step both show up as separate problem-list lines', async () => {
     renderEditor(NESTED_WORKFLOW, { validator: NEW_STEP_PROBLEMS });
     fireEvent.click(screen.getByRole('button', { name: /add step/i }));
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
@@ -602,7 +618,7 @@ describe('WorkflowEditor: save-time validation', () => {
     expect(options).toEqual(['review']); // 'execute' has no verdict, so it is not offered
   });
 
-  it('Save reveals and badges a reader whose reference is broken, not just a footer line pointing nowhere', async () => {
+  it('Save reveals and badges a reader whose reference is broken, not just a problem-list line pointing nowhere', async () => {
     const refWorkflow: Workflow = {
       name: 'w',
       steps: [
@@ -632,7 +648,7 @@ describe('WorkflowEditor: save-time validation', () => {
 
     // The reference problem names 'b', not 'a' — Save must reveal and badge
     // b's card, and mark its Reads from field, not leave it collapsed with
-    // only the footer line to go on.
+    // only the problem-list line to go on.
     const readsFrom = within(screen.getByTestId('step-card-b')).getByRole('combobox', { name: 'Reads from' });
     expect(readsFrom).toHaveAttribute('aria-invalid', 'true');
     expect(within(screen.getByTestId('step-summary-b')).getByText(/1 problem/)).toBeInTheDocument();

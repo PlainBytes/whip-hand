@@ -2,6 +2,7 @@
 //! rather than two (invariant 7): ok, not a repository, or unavailable (git
 //! was expected to work and did not, which must never pass for "not a repo").
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::glob::matches_glob;
@@ -37,6 +38,14 @@ fn classify<T>(e: &ExecError) -> GitResult<T> {
 }
 
 async fn git(workdir: &Path, args: &[&str]) -> Result<String, ExecError> {
+    git_env(workdir, args, BTreeMap::new()).await
+}
+
+async fn git_env(
+    workdir: &Path,
+    args: &[&str],
+    env: BTreeMap<String, String>,
+) -> Result<String, ExecError> {
     let argv: Vec<String> = std::iter::once("git")
         .chain(args.iter().copied())
         .map(str::to_string)
@@ -45,6 +54,7 @@ async fn git(workdir: &Path, args: &[&str]) -> Result<String, ExecError> {
         &argv,
         ExecOptions {
             cwd: Some(workdir.to_path_buf()),
+            env,
             ..ExecOptions::default()
         },
     )
@@ -174,6 +184,79 @@ pub async fn current_branch(workdir: &Path) -> GitResult<Option<String>> {
     }
 }
 
+/// What a local branch tracks.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Upstream {
+    /// `branch.<name>.remote`, e.g. `origin`.
+    pub remote: String,
+    /// `branch.<name>.merge`, e.g. `refs/heads/main`.
+    pub merge_ref: String,
+    /// The remote-tracking ref, e.g. `refs/remotes/origin/main`.
+    pub tracking_ref: String,
+}
+
+/// One `branch.<branch>.<key>` setting; `None` when unset.
+async fn branch_config(workdir: &Path, branch: &str, key: &str) -> GitResult<Option<String>> {
+    let name = format!("branch.{branch}.{key}");
+    match git(workdir, &["config", "--get", &name]).await {
+        Ok(stdout) => GitResult::Ok(Some(trimmed(&stdout)).filter(|s| !s.is_empty())),
+        Err(e) if e.code == ExecCode::Exit(1) && e.stderr.trim().is_empty() => GitResult::Ok(None),
+        Err(e) => classify(&e),
+    }
+}
+
+/// The upstream of local branch `branch`; `None` unless `refs/heads/<branch>`
+/// exists and has both a remote and a merge ref configured, so `HEAD`, a SHA
+/// or a tag never has one.
+pub async fn upstream_of(workdir: &Path, branch: &str) -> GitResult<Option<Upstream>> {
+    match branch_exists(workdir, branch).await {
+        GitResult::Ok(true) => {}
+        GitResult::Ok(false) => return GitResult::Ok(None),
+        GitResult::NotARepo => return GitResult::NotARepo,
+        GitResult::Unavailable(m) => return GitResult::Unavailable(m),
+    }
+    let remote = match branch_config(workdir, branch, "remote").await {
+        GitResult::Ok(Some(v)) => v,
+        GitResult::Ok(None) => return GitResult::Ok(None),
+        GitResult::NotARepo => return GitResult::NotARepo,
+        GitResult::Unavailable(m) => return GitResult::Unavailable(m),
+    };
+    let merge_ref = match branch_config(workdir, branch, "merge").await {
+        GitResult::Ok(Some(v)) => v,
+        GitResult::Ok(None) => return GitResult::Ok(None),
+        GitResult::NotARepo => return GitResult::NotARepo,
+        GitResult::Unavailable(m) => return GitResult::Unavailable(m),
+    };
+    let spec = format!("{branch}@{{upstream}}");
+    match git(workdir, &["rev-parse", "--symbolic-full-name", &spec]).await {
+        Ok(stdout) => GitResult::Ok(Some(Upstream {
+            remote,
+            merge_ref,
+            tracking_ref: trimmed(&stdout),
+        })),
+        Err(e) => classify(&e),
+    }
+}
+
+/// `git fetch <remote> <merge_ref>`, which updates the remote-tracking ref
+/// and writes no local branch. A credential prompt fails instead of hanging.
+pub async fn fetch(workdir: &Path, remote: &str, merge_ref: &str) -> GitResult<()> {
+    let env = BTreeMap::from([("GIT_TERMINAL_PROMPT".to_string(), "0".to_string())]);
+    match git_env(workdir, &["fetch", "--", remote, merge_ref], env).await {
+        Ok(_) => GitResult::Ok(()),
+        Err(e) => classify(&e),
+    }
+}
+
+/// Whether `a` is an ancestor of `b` (or the same commit).
+pub async fn is_ancestor(workdir: &Path, a: &str, b: &str) -> GitResult<bool> {
+    match git(workdir, &["merge-base", "--is-ancestor", a, b]).await {
+        Ok(_) => GitResult::Ok(true),
+        Err(e) if e.code == ExecCode::Exit(1) && e.stderr.trim().is_empty() => GitResult::Ok(false),
+        Err(e) => classify(&e),
+    }
+}
+
 /// A porcelain v1 line (or a rename's `old -> new`) as the bare path(s) it names.
 pub fn paths_from_status_lines(lines: &[String]) -> Vec<String> {
     let mut out = Vec::new();
@@ -198,4 +281,132 @@ pub fn paths_outside(paths: &[String], globs: &[String]) -> Vec<String> {
         .filter(|p| !globs.iter().any(|g| matches_glob(p, g)))
         .cloned()
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    fn run(dir: &Path, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "init.defaultBranch=main",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn commit(dir: &Path, file: &str) -> String {
+        std::fs::write(dir.join(file), file).unwrap();
+        run(dir, &["add", file]);
+        run(dir, &["commit", "-m", file]);
+        run(dir, &["rev-parse", "HEAD"])
+    }
+
+    /// A bare `origin`, plus a clone of it on `main` with one commit pushed.
+    fn fixture() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = tmp.path().join("origin.git");
+        let clone = tmp.path().join("clone");
+        std::fs::create_dir_all(&origin).unwrap();
+        std::fs::create_dir_all(&clone).unwrap();
+        run(&origin, &["init", "--bare"]);
+        run(&clone, &["init"]);
+        run(
+            &clone,
+            &["remote", "add", "origin", origin.to_str().unwrap()],
+        );
+        commit(&clone, "a");
+        run(&clone, &["push", "-u", "origin", "main"]);
+        (tmp, origin, clone)
+    }
+
+    #[tokio::test]
+    async fn upstream_of_a_tracking_branch() {
+        let (_tmp, _origin, clone) = fixture();
+        assert_eq!(
+            upstream_of(&clone, "main").await,
+            GitResult::Ok(Some(Upstream {
+                remote: "origin".into(),
+                merge_ref: "refs/heads/main".into(),
+                tracking_ref: "refs/remotes/origin/main".into(),
+            }))
+        );
+    }
+
+    #[tokio::test]
+    async fn upstream_of_is_none_without_an_upstream() {
+        let (_tmp, _origin, clone) = fixture();
+        run(&clone, &["branch", "local"]);
+        run(&clone, &["tag", "v1"]);
+        let sha = run(&clone, &["rev-parse", "HEAD"]);
+        for name in ["local", "HEAD", sha.as_str(), "v1", "missing"] {
+            assert_eq!(
+                upstream_of(&clone, name).await,
+                GitResult::Ok(None),
+                "{name}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_moves_the_tracking_ref_only() {
+        let (tmp, origin, clone) = fixture();
+        let before = run(&clone, &["rev-parse", "refs/remotes/origin/main"]);
+        let other = tmp.path().join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        run(&other, &["clone", origin.to_str().unwrap(), "."]);
+        let newer = commit(&other, "b");
+        run(&other, &["push", "origin", "main"]);
+
+        assert_eq!(
+            fetch(&clone, "origin", "refs/heads/main").await,
+            GitResult::Ok(())
+        );
+        assert_eq!(
+            run(&clone, &["rev-parse", "refs/remotes/origin/main"]),
+            newer
+        );
+        assert_eq!(run(&clone, &["rev-parse", "refs/heads/main"]), before);
+        assert_eq!(
+            is_ancestor(&clone, &before, &newer).await,
+            GitResult::Ok(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_from_a_missing_remote_reports_git() {
+        let (tmp, _origin, clone) = fixture();
+        let missing = tmp.path().join("nope.git");
+        match fetch(&clone, missing.to_str().unwrap(), "refs/heads/main").await {
+            GitResult::Unavailable(m) => {
+                assert!(m.starts_with("git failed (exit 128): "), "{m}");
+                assert!(!m.contains('\n'), "{m}");
+            }
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn is_ancestor_orders_commits() {
+        let (_tmp, _origin, clone) = fixture();
+        let old = run(&clone, &["rev-parse", "HEAD"]);
+        let new = commit(&clone, "b");
+        assert_eq!(is_ancestor(&clone, &old, &new).await, GitResult::Ok(true));
+        assert_eq!(is_ancestor(&clone, &new, &old).await, GitResult::Ok(false));
+        assert_eq!(is_ancestor(&clone, &new, &new).await, GitResult::Ok(true));
+    }
 }

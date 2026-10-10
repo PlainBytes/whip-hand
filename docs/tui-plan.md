@@ -8,7 +8,7 @@ one feature branch and one PR into `main`, with each step one or more commits.
 | Phase | Status | PR |
 |---|---|---|
 | 0. Groundwork | Done | [#27](https://github.com/PlainBytes/whip-hand/pull/27) |
-| 1. Read-only MVP | Not started | |
+| 1. Read-only MVP | Done | Branch `feature/tui-phase1-read-only` (PR not opened yet) |
 | 2. Driving runs | Not started | |
 | 3. Workflows and settings | Not started | |
 | 4. Hardening and release | Not started | |
@@ -62,16 +62,21 @@ These rules exist so the TUI never slows desktop work down.
    the TUI's `DESKTOP_ONLY` list, a one-line change. The TUI track picks it up
    later if it is useful in a terminal.
 4. **TUI-motivated changes to shared crates keep the desktop identical.** The
-   two known ones are the `remote` feature gate and the `AppStateStore`
-   read-modify-write (both Phase 0). The desktop enables `remote` explicitly and
-   its tests must pass unchanged.
+   known ones are the `remote` feature gate and the `AppStateStore`
+   read-modify-write (both Phase 0), and the additive `log_rows::parse_log_line`
+   and `run_tree` module in `whiphand-core` (Phase 1). The desktop enables
+   `remote` explicitly and its tests must pass unchanged.
 5. **Gaps are written down.** `docs/design.md` gets a "Frontends" section with a
    short desktop-only list (file explorer, remote control, embedded terminal
    until Phase 5) so nobody files a parity bug by accident.
 
-Only Phase 0 is expected to touch shared crates. Phases 1 to 5 add code under
-`crates/whiphand-tui` and a few lines in `crates/whiphand-cli`. If a later phase
-needs a shared-crate change, it is called out in that phase's PR description.
+Phase 0 was expected to be the only phase touching shared crates. Phase 1 also
+did, under rule 2: the run tree and the `run.log` reader existed only in the
+desktop's TypeScript, so they moved to `whiphand-core` (additive, with their TS
+tests ported; the desktop keeps its TS until it chooses to switch). Other
+phases add code under `crates/whiphand-tui` and a few lines in
+`crates/whiphand-cli`. Any shared-crate change is called out in that phase's PR
+description.
 
 ## Branching and delivery
 
@@ -99,45 +104,54 @@ needs a shared-crate change, it is called out in that phase's PR description.
 | Embedded PTY pane | Deferred to Phase 5 (`vt100` + `tui-term`) | Needed only for a side-by-side log and session |
 | Workflow editing | `$VISUAL`/`$EDITOR` round trip, then `validateWorkflow` | No YAML editor inside the TUI |
 | Artifacts | Markdown rendered as styled text (`pulldown-cmark` to ratatui `Text`); `o` opens `$PAGER` | Mermaid and pdf left with the file explorer |
+| Run detail data | The manifest (`getRun`) is the step tree's only source, re-read on step boundaries (coalesced 250 ms) and on `runStateChanged`. The log is `LogRow`s: live `whiphandEvent`s plus `getJobScrollback` for a local run, `run.log` via `readRunLog` + `parse_log_line` otherwise, merged on row identity | The journal writes the manifest live, so there is no live step reducer to port (`reduceJobEvent` stays in TS). Identity, not `seq`, because a resumed run's journal restarts `seq` while `run.log` keeps appending |
 | Diff | `getWorkingDiff` (files with `patch`) rendered in a pane; `D` hands off to `git diff` / `$GIT_PAGER` | Covers `show_diff` approvals and send-back comments |
-| Shared logic | Reuse `whiphand_core::log_rows`, `path_form`, `segment`, `execution_key` and the CLI's `render.rs` | One implementation, already golden-tested |
+| Shared logic | Reuse `whiphand_core::log_rows` (with `parse_log_line`), `run_tree`, `path_form`, `execution_key`, `format` and `doctor::tools::doctor_report` | One implementation, already golden-tested. `run_tree` and `parse_log_line` were ported from the desktop's TS in Phase 1 |
 
 ## 2. Crate layout
 
 ```
 crates/whiphand-tui/
   Cargo.toml          whiphand-agent (default-features = false), whiphand-protocol, whiphand-core,
-                      ratatui, crossterm{event-stream}, tokio, futures-util, base64,
-                      pulldown-cmark, unicode-width, serde_json
+                      ratatui, crossterm{event-stream}, tokio, futures-util, serde_json,
+                      pulldown-cmark, ansi-to-tui
   src/
-    lib.rs            pub fn run(opts: TuiOptions) -> ExitCode
+    lib.rs            pub fn run(opts: TuiOptions) -> i32; picks the start workspace
     client/
-      mod.rs          AgentClient: typed request/response over Host::connect
+      mod.rs          AgentClient, the Method trait, IMPLEMENTED / LATER / DESKTOP_ONLY
       wire.rs         envelope parse: Response{id, result|error} | Notification{method, params}
-      notify.rs       enum Notification { WhiphandEvent, RunStateChanged, PtyStarted, PtyData,
-                      PtyExit, PtyAwait, StepLog, ManualRequest, ManualResolved,
-                      AppStateChanged }   (remoteAccessChanged ignored)
+      notify.rs       enum Notification (remoteAccessChanged ignored)
     model/
-      mod.rs          Model: workspaces, runs, jobs, workflows, ui (route stack, focus, toasts)
-      jobs.rs         JobState: status, steps, log rows, pty ring, await, pending manual
-      scrollback.rs   seq splice, a Rust port of the mergeScrollback / appendPty semantics in
-                      apps/desktop/src/state/store.ts (the one piece of client logic not in core)
-      runs.rs         run table rows from listRuns plus a live overlay from jobs; "foreign" runs
-    update.rs         fn update(&mut Model, Msg) -> Vec<Cmd>   (pure, unit-tested)
-    msg.rs            Msg: Key, Resize, Tick, Agent(Notification), Reply(ReqId, Result), External(Exit)
-    cmd.rs            Cmd: Rpc(Request), Attach(job), Suspend(ExternalProgram), Notify(..), Quit
+      mod.rs          Model: route stack, workspace, runs, jobs (with their live log rows),
+                      per-screen state, toasts
+      runs.rs         run table rows from listRuns plus a live overlay from jobs; "foreign" runs;
+                      the / filter and the ongoing view
+      detail.rs       RunDetail: manifest, run_tree, collapsed nodes, tabs, log, artifacts, diff
+      log.rs          LogEntry / LogBuf: live and run.log rows merged on identity, paged back by byte
+    update/
+      mod.rs          fn update(&mut Model, Msg) -> Vec<Cmd>   (pure, unit-tested)
+      detail.rs       the run detail screen: open, refetch, foreign polling, its keys
+      tests.rs
+    msg.rs            Msg: Key, Resize, Tick, Agent(Notification), Reply(Then, Result), External, HostGone
+    cmd.rs            Cmd: Rpc(Call), Suspend(External), Notify(Notice), Quit; Then (what a reply is for)
     runtime/
-      event_loop.rs   select! over terminal events, agent channel, replies, tick; render when dirty
-      terminal.rs     TerminalGuard (raw mode, alt-screen, mouse, bracketed paste), panic hook
+      event_loop.rs   select! over terminal events, agent lines, the tick and the frame deadline
+      terminal.rs     TerminalGuard (raw mode, alt-screen), panic hook
       stderr.rs       redirect fd 2 / STD_ERROR_HANDLE to a log file while the TUI owns the screen
-      attach.rs       passthrough session (section 5)
-      external.rs     suspend, run $EDITOR / $PAGER / git, resume
-      notify.rs       BEL, OSC 9 / OSC 777, title (OSC 0); tmux passthrough wrapping
+      external.rs     suspend, run $PAGER / git, resume
+      notify.rs       BEL, OSC 9, title (OSC 0); tmux passthrough wrapping
+      attach.rs       passthrough session (section 5)                       [Phase 2]
     view/
-      layout.rs, theme.rs, keymap.rs, widgets/{table,tree,log,markdown,diff,form,toast,help}.rs
-      screens/{workspaces,runs,run_detail,approval,diff,artifact,workflows,new_run,doctor,settings}.rs
-  tests/              snapshot and integration tests (section 9)
+      mod.rs          header, screen, footer, help overlay; NO_COLOR strips colour after drawing
+      keymap.rs       the one binding table: dispatch, the ? overlay and footer hints
+      theme.rs        colours and glyphs
+      widgets/{tree,log,markdown,diff,help}.rs
+      screens/{workspaces,runs,detail,doctor}.rs
+  tests/              runs.rs (real Hosts), snapshots.rs (TestBackend + insta)
 ```
+
+The PTY ring and the `mergeScrollback` port (`apps/desktop/src/state/store.ts`)
+arrive with attach mode in Phase 2; Phase 1 needs neither.
 
 Rendering is a pure function `fn view(&Model, &mut Frame)`. Only `runtime/`
 does I/O. This Elm-style split (Model, Msg, update, Cmd, view) is what makes the
@@ -191,6 +205,9 @@ loop {
 }
 ```
 
+- **Frame deadline:** a change held back by the 16 ms frame limit is drawn when
+  the frame ends: the loop also wakes on that deadline, not only on the next
+  tick (fixed in Phase 1; before, it waited up to 100 ms).
 - **Throughput:** `ptyData` and `stepLog` bursts are drained in batches and
   coalesced into one redraw per frame, mirroring the 100 ms window in
   `apps/desktop/src/agent/agent-context.tsx`. `ptyData` for jobs nobody is
@@ -248,7 +265,7 @@ automatically when its interactive step starts, which gives a CLI-like flow.
 | Artifact | Markdown render; `e` edits in `$EDITOR`, then `writeArtifact` | `readArtifact`, `statArtifact`, `writeArtifact` |
 | Workflows | List (source scope, shadowed); new, clone, delete; edit in `$EDITOR`; validate; run | `listWorkflows`, `getWorkflow`, `createWorkflow`, `cloneWorkflow`, `deleteWorkflow`, `updateWorkflow`, `validateWorkflow` |
 | New run | Form generated from the workflow's inputs; name; attachments (path input with completion); model overrides; prefilled from `lastInputs` in app state | `getWorkflow`, `listModels`, `startRun` |
-| Doctor | Harness and support tool groups, reusing the CLI's `render.rs` text | `doctor` |
+| Doctor | Harness and support tool groups: core's `doctor_report` text, the same as `whiphand doctor` prints | `doctor` |
 | Settings | Workspace config, run retention, prune, path of the TUI log | `configGet`, `configSet`, `pruneRuns`, `setUiState` |
 
 Desktop-only by design: `remoteAccessGet`, `remoteAccessSet`,
@@ -256,7 +273,13 @@ Desktop-only by design: `remoteAccessGet`, `remoteAccessSet`,
 
 ### Key bindings
 
-One table in `keymap.rs`. The `?` overlay and the docs are generated from it.
+One table in `view/keymap.rs`. Dispatch, the `?` overlay and the footer hints
+are drawn from it, and a unit test rejects a key bound twice where it applies.
+Keys arrive with the phase that adds their action; Phase 1 binds: `?`, `q`/`Esc`,
+`Q`/`Ctrl-c`, `g w|r|d`, `j`/`k`, page keys, `Home`, `G`/`End`, `Enter`; runs `/`
+and `o` (ongoing); workspaces `p` (pin); run detail `Tab`, `1`-`4`, `h`/`l`
+(collapse, expand), `e` (errors only), `a` (every step), `o` (pager), `D`, `r`
+(reload the diff); doctor `r`. The plan's full set:
 
 - **Global:** `?` help, `q`/`Esc` back, `Q` quit, `:` command palette, `g w`
   workspaces, `g r` runs, `g f` workflows, `g d` doctor, `g s` settings,
@@ -265,6 +288,12 @@ One table in `keymap.rs`. The `?` overlay and the docs are generated from it.
   `r` resume, `R` rename, `L` lock, `x` delete, `e` edit, `o` pager, `D` external
   diff, `a` approve, `b` send back, `1`-`4` tabs.
 - **Attach:** `Ctrl-]` detach, `Ctrl-] e` end session.
+
+For Phase 2: the run detail's `e` (errors only), `a` (every step) and `r`
+(reload the diff) collide with the planned `e` edit, `a` approve and `r`
+resume, and `Ctrl-c` still quits (as in Phase 0) where section 7 wants a
+"cancel the focused run?" confirmation. The keymap test catches a double
+binding, so Phase 2 has to move one side of each pair.
 
 ## 7. Terminal hygiene
 
@@ -283,8 +312,12 @@ One table in `keymap.rs`. The `?` overlay and the docs are generated from it.
   prints.
 - **Ctrl-C in the UI** is a key (raw mode). It maps to a "cancel focused run?"
   confirmation, not to process exit.
-- **External programs:** `external.rs` leaves raw mode and the alt-screen, runs
-  the program with inherited stdio, waits, re-enters, and forces a full redraw.
+- **External programs:** `external.rs` leaves raw mode and the alt-screen, gives
+  stderr back to the terminal, runs the program with inherited stdio, waits,
+  re-enters, redirects stderr again and forces a full redraw. crossterm's
+  `EventStream` is dropped for the duration so its reader does not race the
+  program for stdin. Agent lines queue in the channel meanwhile. Only absolute
+  paths reach the pager, after `--`.
 - **tmux/screen:** notifications are wrapped in tmux DCS passthrough when
   `$TMUX` is set. Colours degrade to 256/16 based on `COLORTERM` and terminfo.
   `NO_COLOR` is respected.
@@ -337,10 +370,14 @@ becomes its own shared-crate project that both UIs use.
   `apps/desktop/src/state/merge-scrollback.test.ts` and `attach.test.ts`; the
   keymap table has no conflicts; the `Method` coverage test.
 - **Snapshot:** each screen rendered on ratatui's `TestBackend` at 80×24 and
-  200×50, light and dark, compared with committed `.snap` files (`insta`).
+  200×50, compared with committed `.snap` files (`insta`). The snapshots are
+  text, so they do not see colour: light and dark variants are not worth
+  having until a styled snapshot format is (Phase 4).
 - **Integration:** a real `Host` in a tempdir (`WHIPHAND_APP_STATE_FILE` pointed
   into it) drives `examples/cycle.yaml --dry-run` through `AgentClient`; Msgs are
-  fed into `update`, and the model and rendered frames are asserted. The attach
+  fed into `update`, and the model and rendered frames are asserted. A dry run
+  writes no `run.log`, so the test that reads a run back cold uses a real run
+  of command steps. The attach
   test uses a fake interactive harness script, reusing the agent's PTY test
   fixtures and the Windows exit helper.
 - **Cross-process:** two `Host`s on one app-state file and one workspace.
@@ -373,6 +410,50 @@ Workspaces, runs, run detail (tree, log, events, artifacts, diff), doctor, help
 overlay, notifications, foreign-run polling.
 
 Exit: every screen has snapshots; a real run can be followed end to end.
+
+**Delivered** (branch `feature/tui-phase1-read-only`):
+
+- Shared, additive (track rule 2): `whiphand_core::log_rows::parse_log_line`
+  (the inverse of `format_log_line`) and `whiphand_core::run_tree`
+  (`build_run_tree`, `stage_rollup`, `current_step_index`, `focus_step_index`,
+  `stage_stop_sentence`), with the cases of `run-tree.test.ts` and
+  `stage-rollup.test.ts` ported. No parity fixture ties them to the TS: the
+  parity harness drives binaries, not pure TS functions.
+- Screens: workspaces (recents, pins; the start screen when there is no
+  workspace), runs (`/` filter, `o` ongoing across workspaces), run detail
+  (tree with collapsible loops and stages, stage rollups; Log, Events,
+  Artifacts with markdown, Diff), doctor, the `?` overlay.
+- Foreign runs: the detail polls `getRun` and `readRunLog` every second and
+  says it is read-only. A foreign run's end is noticed from the list poll.
+- Notifications: BEL, OSC 9 and the window title for a local run that waits or
+  ends, and for a foreign run that ends; tmux passthrough;
+  `WHIPHAND_TUI_NOTIFY=off|bell`. `NO_COLOR` is honoured.
+- Hand-offs: `o` to `$PAGER`, `D` to `git diff` in the run's worktree.
+- Fixed on the way: the frame-deadline wake-up (section 4). Startup to a
+  populated runs list went from 104 ms to 20 ms ([benchmarks](benchmarks.md)).
+
+Followed end to end: a real run of command steps from the CLI, watched in
+`whiphand tui` driven through a pseudo-terminal (tree, log with ANSI colour,
+diff, doctor, workspaces, help, the `git diff` hand-off and back). The
+integration tests follow a local run live and compare its log with a cold
+read of `run.log`; they match row for row.
+
+Not done, and why:
+
+- In daily use every run is foreign until Phase 2 adds `startRun`. The live
+  path (`getJobScrollback`, `whiphandEvent`) is built and covered by the
+  integration tests, but people will mostly see the polled path for now.
+- A foreign run's waiting state (`ptyAwait`, `manualRequest`) cannot be seen:
+  those notifications go to the owning process.
+- The help overlay does not scroll; at 80×24 its last lines are cut.
+- No path input on the workspaces screen; `-C` or a recent workspace opens one.
+  `initWorkspace` stays in Phase 3.
+
+Verification notes: `npm run test:parity` needs fresh release binaries
+(`cargo build --release -p whiphand-agent -p whiphand-cli`); stale ones fail
+the workflow and init scenarios. Under Node 25 the desktop's vitest suite fails
+26 tests on `localStorage.clear is not a function` (Node's own global
+`localStorage` shadows jsdom's); this branch does not touch `apps/`.
 
 ### Phase 2: Driving runs (about 2 weeks)
 
@@ -415,10 +496,12 @@ desktop work leaves.
   (`remoteAccess*`), `src/remote/**` for the feature gate;
   `crates/whiphand-agent/src/app_state.rs` for read-modify-write;
   `apps/desktop/src-tauri/Cargo.toml` to enable `remote` explicitly.
+- Phase 1, shared and additive: `crates/whiphand-core/src/log_rows.rs`
+  (`parse_log_line`), `crates/whiphand-core/src/run_tree.rs`.
 - Reused: `crates/whiphand-protocol/src/lib.rs` (types, `METHODS`,
   `NOTIFICATIONS`, `PROTOCOL_VERSION`), `crates/whiphand-core/src/log_rows.rs`,
-  `path_form.rs`, `segment.rs`, `execution_key.rs`,
-  `crates/whiphand-cli/src/render.rs`.
+  `run_tree.rs`, `path_form.rs`, `execution_key.rs`, `format.rs`,
+  `doctor/tools.rs` (`doctor_report`).
 - Reference only (behaviour to mirror): `apps/desktop/src/state/store.ts`
   (`mergeScrollback`, PTY append), `apps/desktop/src/agent/agent-context.tsx`
   (throttling), `apps/desktop/src/pages/RunDetailPage.tsx` (`mergeSteps`, tab
@@ -441,7 +524,7 @@ desktop work leaves.
    on `main` before each PR; no long-lived TUI branch.
 6. **Binary size.** ratatui, crossterm and pulldown-cmark add about 1 to 1.5 MB;
    dropping axum from the CLI path offsets part of it. Recorded in
-   `docs/benchmarks.md`.
+   `docs/benchmarks.md`: +1.05 MB in Phase 0, +0.56 MB in Phase 1.
 
 ## 13. Verification
 

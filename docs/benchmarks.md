@@ -181,4 +181,25 @@ ratatui, crossterm and the in-process agent account for the growth. The agent
 is linked without its `remote` feature, so axum is not in the binary. Startup
 time and RSS of `whiphand tui` are not measured yet: the harness drives
 programs over stdio, and the TUI needs a terminal.
+
+### TUI Phase 1: the read-only screens
+
+`cargo build --release -p whiphand-cli` on Linux x86_64 (Ryzen 9 5900X),
+`main` at the Phase 0 merge against the Phase 1 branch (docs/tui-plan.md,
+Phase 1).
+
+| Metric | `main` after TUI Phase 0 | TUI Phase 1 | Change |
+|---|---:|---:|---:|
+| CLI binary | 4.48 MB | 5.04 MB | +0.56 MB |
+| `whiphand tui`: spawn to the populated runs list | 104 ms | 20 ms | -84 ms |
+| `whiphand tui`: peak RSS (VmHWM) | 7.2 MB | 8.0 MB | +0.8 MB |
+
+pulldown-cmark, ansi-to-tui (with nom) and the new screens account for the
+growth. Startup is measured by driving the release binary in a 120×30
+pseudo-terminal from a script (median of 7, one finished run in the
+workspace): the time from spawn until the runs list is on screen, then
+`VmHWM` from `/proc` half a second later. The first frame ("Loading…") is up
+2 ms after spawn on both. The 104 ms on `main` was a bug, fixed in Phase 1: a
+change held back by the 16 ms frame limit was only drawn at the next 100 ms
+tick.
 <!-- results:end -->

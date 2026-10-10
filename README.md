@@ -36,12 +36,22 @@ whiphand rename-run 20260907-141233-a3f1 "Something better"                  # r
 whiphand run examples/feature.yaml --input feature=x --worktree              # run on a new branch in its own git worktree
 whiphand run develop --input feature=x --no-worktree                         # run in the working folder even if the workflow asks for a worktree
 whiphand worktree remove 20260907-141233-a3f1                                # remove a run's worktree (--force discards uncommitted changes); the branch stays
-whiphand tui                                                                 # experimental: follow this folder's runs in the terminal
+whiphand tui -C ~/src/shop                                                   # experimental: follow a workspace's runs in the terminal
 ```
 
 Workflows live in `.whiphand/workflows/<name>.yaml` (so `whiphand run iterate` works) or anywhere as a
 path. Artifacts land in `.whiphand/runs/<run-id>/` as plain markdown. Workspace defaults live in
 `.whiphand/config.yaml`.
+
+**Terminal UI (experimental).** `whiphand tui` is a keyboard-only front end for terminals, tmux and
+SSH, beside the desktop app. It opens `-C`, else the current folder if it has `.whiphand/`, else a
+list of recent workspaces. For now it is read-only: the runs list (`/` filters, `o` shows what is
+running in every recent workspace), a run's step tree beside its log, events, artifacts and diff
+(`1`-`4`), and `whiphand doctor`. `o` opens an artifact in `$PAGER`, `D` runs `git diff` in the run's
+worktree, and `?` lists every key. A run another whiphand process is driving (the desktop, the CLI)
+shows as *foreign*: you can follow it, and the process that started it answers its prompts. The
+terminal rings and sets its title when a run needs you or ends; `WHIPHAND_TUI_NOTIFY=off` (or
+`bell`) quiets that, and `NO_COLOR` is honoured.
 
 `whiphand init` ships three starter workflows. The two that build something end the same way: a
 human gate that can send the work back with comments for another cycle, not just ship it or kill

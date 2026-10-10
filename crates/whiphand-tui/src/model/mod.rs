@@ -1,7 +1,11 @@
 //! Everything the TUI knows. Only `update` changes it; `view` only reads it.
 
 pub mod detail;
+pub mod input;
 pub mod log;
+pub mod manual;
+pub mod new_run;
+pub mod pty;
 pub mod runs;
 
 use std::collections::{BTreeMap, VecDeque};
@@ -10,6 +14,7 @@ use serde_json::Value;
 use whiphand_protocol::{DoctorRow, JobStatus, RecentWorkspace};
 
 use self::detail::RunDetail;
+use self::input::Input;
 use self::log::LogEntry;
 
 /// Live rows kept per job, as the agent's own log scrollback caps them
@@ -23,10 +28,12 @@ pub struct Job {
     pub status: JobStatus,
     /// An interactive step is waiting on the human.
     pub awaiting: bool,
-    /// A manual or approval step is open.
-    pub manual: bool,
+    /// The open manual or approval step's request (`ManualRequest`).
+    pub manual: Option<Value>,
     /// Its events as log rows, newest last, capped at [`JOB_LOG_CAP`].
     pub log: VecDeque<LogEntry>,
+    /// Its interactive session's output, for attach mode.
+    pub pty: pty::PtyRing,
 }
 
 impl Job {
@@ -35,8 +42,9 @@ impl Job {
             run_id: None,
             status,
             awaiting: false,
-            manual: false,
+            manual: None,
             log: VecDeque::new(),
+            pty: pty::PtyRing::default(),
         }
     }
 }
@@ -48,6 +56,9 @@ pub enum Route {
     Runs,
     RunDetail,
     Doctor,
+    NewRun,
+    /// A job's open manual or approval step.
+    Manual,
 }
 
 impl Route {
@@ -57,8 +68,66 @@ impl Route {
             Route::Runs => "Runs",
             Route::RunDetail => "Run",
             Route::Doctor => "Doctor",
+            Route::NewRun => "New run",
+            Route::Manual => "Decision",
         }
     }
+}
+
+/// The terminal is handed to a job's interactive session.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Attach {
+    pub job_id: String,
+    /// `Ctrl-]` came last: the next key says what it meant.
+    pub escape: bool,
+    /// The session's output so far has been written; live output follows.
+    pub replayed: bool,
+    /// The session ended at this time; the TUI comes back shortly.
+    pub ended_at: Option<f64>,
+}
+
+/// A run an action is about: its workspace and id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunRef {
+    pub workdir: String,
+    pub run_id: String,
+}
+
+/// What answering a dialog goes on to do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Ask {
+    /// Quit, cancelling the runs in progress.
+    Quit,
+    Cancel {
+        job_id: String,
+        run_id: String,
+    },
+    Delete(RunRef),
+    EndSession {
+        job_id: String,
+        run_id: String,
+    },
+    /// `y` resumes, `f` with a fresh session, `+` asks how many more iterations.
+    Resume(RunRef),
+    /// The prompts: their text is the answer.
+    Rename(RunRef),
+    MoreIterations(RunRef),
+    /// Abort the manual step on screen.
+    AbortStep,
+}
+
+/// A question in the footer that takes the keys until it is answered.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Dialog {
+    /// The question, with its keys spelled out; `y` answers yes, `Esc` or
+    /// `n` drops it.
+    Confirm { question: String, ask: Ask },
+    /// One line of text: Enter answers, Esc drops it.
+    Prompt {
+        label: String,
+        input: Input,
+        ask: Ask,
+    },
 }
 
 /// The runs screen's own state.
@@ -119,14 +188,18 @@ pub struct Model {
     pub runs_ui: RunsUi,
     pub workspaces: WorkspacesUi,
     pub detail: Option<RunDetail>,
+    pub new_run: Option<new_run::NewRun>,
+    pub manual: Option<manual::Manual>,
+    /// Attached to a session: the screen is not the TUI's.
+    pub attach: Option<Attach>,
     pub doctor: DoctorUi,
     /// The `?` overlay is up.
     pub help: bool,
     /// `g` was pressed; the next key picks a screen.
     pub pending_g: bool,
     pub now_ms: f64,
-    /// Asked "quit and cancel N runs?"; waiting for y/n.
-    pub confirm_quit: bool,
+    /// A question waiting for its answer.
+    pub dialog: Option<Dialog>,
     /// The last error worth showing; cleared by the next key.
     pub notice: Option<String>,
     /// A passing message (a run finished) and when it goes.
@@ -179,15 +252,40 @@ impl Model {
     pub fn waiting_jobs(&self) -> usize {
         self.jobs
             .values()
-            .filter(|j| j.status == JobStatus::Running && (j.awaiting || j.manual))
+            .filter(|j| j.status == JobStatus::Running && (j.awaiting || j.manual.is_some()))
             .count()
     }
 
-    /// The job driving `run_id` in this process, if one is.
+    /// The job for `run_id` in this process, if there is one: the running
+    /// one when a resume has left an older, finished one behind.
     pub fn job_for(&self, run_id: &str) -> Option<(&String, &Job)> {
-        self.jobs
+        let mut jobs = self
+            .jobs
             .iter()
-            .find(|(_, j)| j.run_id.as_deref() == Some(run_id))
+            .filter(|(_, j)| j.run_id.as_deref() == Some(run_id));
+        let first = jobs.next()?;
+        if first.1.status == JobStatus::Running {
+            return Some(first);
+        }
+        Some(
+            jobs.find(|(_, j)| j.status == JobStatus::Running)
+                .unwrap_or(first),
+        )
+    }
+
+    /// Files job `job_id` (created running if new) under `run_id`. A run
+    /// has one job at a time: a finished one a resume replaced is dropped,
+    /// so it never speaks for the run again.
+    pub fn bind_job(&mut self, job_id: &str, run_id: &str) -> &mut Job {
+        self.jobs.retain(|id, j| {
+            id == job_id || j.run_id.as_deref() != Some(run_id) || j.status == JobStatus::Running
+        });
+        let job = self
+            .jobs
+            .entry(job_id.to_string())
+            .or_insert_with(|| Job::new(JobStatus::Running));
+        job.run_id = Some(run_id.to_string());
+        job
     }
 
     /// The terminal's title: what is waiting on the human, at a glance.

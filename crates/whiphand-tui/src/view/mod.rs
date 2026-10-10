@@ -9,7 +9,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::text::{Line, Span};
 
-use crate::model::{Model, Route};
+use crate::model::{Dialog, Model, Route};
 
 pub fn view(model: &Model, frame: &mut Frame) {
     let [header, body, footer] = Layout::vertical([
@@ -24,6 +24,8 @@ pub fn view(model: &Model, frame: &mut Frame) {
         Route::Runs => screens::runs::render(model, frame, body),
         Route::RunDetail => screens::detail::render(model, frame, body),
         Route::Doctor => screens::doctor::render(model, frame, body),
+        Route::NewRun => screens::new_run::render(model, frame, body),
+        Route::Manual => screens::manual::render(model, frame, body),
     }
     frame.render_widget(footer_line(model), footer);
     if model.help {
@@ -52,25 +54,37 @@ fn footer_line(model: &Model) -> Line<'_> {
     if let Some(fatal) = &model.fatal {
         return Line::styled(format!(" {fatal}  ·  q quit"), theme::fatal_bar());
     }
-    if model.confirm_quit {
-        let n = model.live_jobs();
-        let (runs, they) = if n == 1 {
-            ("run", "it")
-        } else {
-            ("runs", "they")
-        };
-        return Line::styled(
-            format!(
-                " {n} {runs} in progress will be cancelled; {they} can be resumed. Quit? (y/n)"
-            ),
-            theme::warning_bar(),
-        );
+    match &model.dialog {
+        Some(Dialog::Confirm { question, .. }) => {
+            return Line::styled(format!(" {question}"), theme::warning_bar());
+        }
+        Some(Dialog::Prompt { label, input, .. }) => {
+            let text = input.text();
+            let at = text
+                .char_indices()
+                .nth(input.cursor().1)
+                .map_or(text.len(), |(i, _)| i);
+            let (before, after) = text.split_at(at);
+            return Line::from(vec![
+                Span::styled(format!(" {label}: "), theme::warning_bar()),
+                Span::raw(before.to_string()),
+                Span::styled("▏", theme::bold()),
+                Span::raw(after.to_string()),
+                Span::styled("  Enter ok  ·  Esc cancel", theme::dim()),
+            ]);
+        }
+        None => {}
     }
     if let Some(notice) = &model.notice {
         return Line::styled(format!(" {notice}"), theme::error());
     }
     if let Some((toast, _)) = &model.toast {
         return Line::styled(format!(" {toast}"), theme::waiting());
+    }
+    if let Some(hints) =
+        screens::new_run::editing_hints(model).or_else(|| screens::manual::editing_hints(model))
+    {
+        return Line::styled(format!(" {hints}"), theme::dim());
     }
     if model.runs_ui.editing && *model.screen() == Route::Runs {
         return Line::styled(" type to filter  ·  Enter keep  ·  Esc clear", theme::dim());

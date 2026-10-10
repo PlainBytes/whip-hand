@@ -57,6 +57,17 @@ methods! {
     ReadArtifact = "readArtifact" (p::ReadArtifactParams) -> p::ReadArtifactResult;
     StatArtifact = "statArtifact" (p::StatArtifactParams) -> p::StatArtifactResult;
     Doctor = "doctor" (p::DoctorParams) -> p::DoctorResult;
+    CancelRun = "cancelRun" (p::CancelRunParams) -> p::CancelRunResult;
+    ResumeRun = "resumeRun" (p::ResumeRunParams) -> p::ResumeRunResult;
+    RenameRun = "renameRun" (p::RenameRunParams) -> p::RenameRunResult;
+    SetRunLocked = "setRunLocked" (p::SetRunLockedParams) -> p::SetRunLockedResult;
+    DeleteRun = "deleteRun" (p::DeleteRunParams) -> p::DeleteRunResult;
+    EndSession = "endSession" (p::EndSessionParams) -> p::EndSessionResult;
+    ListWorkflows = "listWorkflows" (p::ListWorkflowsParams) -> p::ListWorkflowsResult;
+    StartRun = "startRun" (p::StartRunParams) -> p::StartRunResult;
+    ResolveManual = "resolveManual" (p::ResolveManualParams) -> p::ResolveManualResult;
+    PtyInput = "ptyInput" (p::PtyInputParams) -> p::PtyInputResult;
+    PtyResize = "ptyResize" (p::PtyResizeParams) -> p::PtyResizeResult;
 }
 
 /// Methods the TUI leaves to the desktop. A desktop PR that adds a protocol
@@ -72,7 +83,6 @@ pub const DESKTOP_ONLY: &[&str] = &[
 /// ones that change a run, a workflow or settings. Each moves into
 /// `methods!` when its screen lands.
 pub const LATER: &[&str] = &[
-    "listWorkflows",
     "getWorkflow",
     "createWorkflow",
     "updateWorkflow",
@@ -83,19 +93,9 @@ pub const LATER: &[&str] = &[
     "listModels",
     "configGet",
     "configSet",
-    "deleteRun",
-    "setRunLocked",
-    "renameRun",
     "pruneRuns",
     "writeArtifact",
     "setUiState",
-    "startRun",
-    "resumeRun",
-    "cancelRun",
-    "endSession",
-    "resolveManual",
-    "ptyInput",
-    "ptyResize",
 ];
 
 /// A request as `update` describes it: no id yet, and what to do with the

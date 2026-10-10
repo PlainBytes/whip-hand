@@ -10,6 +10,10 @@ fn key(c: char) -> Msg {
     Msg::Key(KeyEvent::from(KeyCode::Char(c)))
 }
 
+fn ctrl(c: char) -> Msg {
+    Msg::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL))
+}
+
 fn code(c: KeyCode) -> Msg {
     Msg::Key(KeyEvent::from(c))
 }
@@ -21,6 +25,9 @@ fn methods(cmds: &[Cmd]) -> Vec<&'static str> {
             Cmd::Notify(_) => "notify",
             Cmd::Suspend(_) => "suspend",
             Cmd::Quit => "quit",
+            Cmd::Attach => "attach",
+            Cmd::Detach => "detach",
+            Cmd::Stdout(_) => "stdout",
         })
         .collect()
 }
@@ -86,9 +93,12 @@ fn quitting_with_a_live_run_asks_first() {
     assert_eq!(update(&mut model, key('q')), [Cmd::Quit]);
     running(&mut model, "j1", "r1");
     assert!(update(&mut model, key('q')).is_empty());
-    assert!(model.confirm_quit);
+    assert!(matches!(
+        model.dialog,
+        Some(Dialog::Confirm { ask: Ask::Quit, .. })
+    ));
     assert!(update(&mut model, key('n')).is_empty());
-    assert!(!model.confirm_quit);
+    assert!(model.dialog.is_none());
     update(&mut model, key('Q'));
     assert_eq!(update(&mut model, key('y')), [Cmd::Quit]);
 }
@@ -384,14 +394,14 @@ fn the_log_tail_loads_and_scrolling_up_pages_back() {
 }
 
 #[test]
-fn enter_on_a_step_filters_the_log_and_a_shows_all_again() {
+fn enter_on_a_step_filters_the_log_and_shift_a_shows_all_again() {
     let mut model = detail_on(json!({ "runId": "r1", "status": "succeeded",
         "steps": [{ "id": "plan", "status": "done" }, { "id": "build", "status": "done" }] }));
     update(&mut model, code(KeyCode::Enter));
     let d = model.detail.as_ref().unwrap();
     // The cursor starts on the last step of a finished run.
     assert_eq!(d.filter_step.as_deref(), Some("build"));
-    update(&mut model, key('a'));
+    update(&mut model, key('A'));
     assert_eq!(model.detail.as_ref().unwrap().filter_step, None);
 }
 
@@ -407,10 +417,10 @@ fn the_diff_loads_on_its_tab_and_d_hands_off_to_git() {
         ("getWorkingDiff", &json!("r1"))
     );
     assert_eq!(model.detail.as_ref().unwrap().tab, Tab::Diff);
-    // Switching back and forth does not reload; r does.
+    // Switching back and forth does not reload; Ctrl-r does.
     update(&mut model, key('1'));
     assert!(update(&mut model, key('4')).is_empty());
-    assert_eq!(methods(&update(&mut model, key('r'))), ["getWorkingDiff"]);
+    assert_eq!(methods(&update(&mut model, ctrl('r'))), ["getWorkingDiff"]);
     assert_eq!(
         update(&mut model, key('D')),
         [Cmd::Suspend(External::GitDiff { cwd: "/w".into() })]
@@ -527,4 +537,480 @@ fn only_an_absolute_path_goes_to_the_pager() {
     assert!(update(&mut model, key('o')).is_empty());
     update(&mut model, key('j'));
     assert!(update(&mut model, key('o')).is_empty());
+}
+
+// Run actions (update/actions.rs).
+
+fn rpc(cmds: &[Cmd]) -> &crate::client::Call {
+    match cmds {
+        [Cmd::Rpc(call)] => call,
+        other => panic!("expected one request, got {other:?}"),
+    }
+}
+
+fn typed(model: &mut Model, s: &str) {
+    for c in s.chars() {
+        update(model, key(c));
+    }
+}
+
+#[test]
+fn cancel_asks_first_and_cancels_the_local_job() {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "running" }));
+    running(&mut model, "j1", "r1");
+    assert!(update(&mut model, key('c')).is_empty());
+    assert!(update(&mut model, key('n')).is_empty());
+    assert!(model.dialog.is_none());
+    update(&mut model, key('c'));
+    let cmds = update(&mut model, key('y'));
+    let call = rpc(&cmds);
+    assert_eq!(
+        (call.method, &call.params),
+        ("cancelRun", &json!({ "jobId": "j1" }))
+    );
+    assert_eq!(call.then, Then::Cancelled("r1".into()));
+}
+
+#[test]
+fn ctrl_c_cancels_the_run_in_focus_else_quits() {
+    let mut model = Model::new("/w".into(), 0.0);
+    runs(
+        &mut model,
+        json!([{ "runId": "r1", "status": "succeeded" }]),
+    );
+    assert_eq!(update(&mut model, ctrl('c')), [Cmd::Quit]);
+    runs(&mut model, json!([{ "runId": "r1", "status": "running" }]));
+    running(&mut model, "j1", "r1");
+    update(&mut model, ctrl('c'));
+    assert!(matches!(
+        model.dialog,
+        Some(Dialog::Confirm {
+            ask: Ask::Cancel { .. },
+            ..
+        })
+    ));
+}
+
+#[test]
+fn a_foreign_run_cannot_be_cancelled_from_here() {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "running" }));
+    assert!(update(&mut model, key('c')).is_empty());
+    assert!(model.dialog.is_none());
+    assert!(
+        model
+            .notice
+            .as_deref()
+            .unwrap()
+            .contains("another whiphand process")
+    );
+    assert!(update(&mut model, key('E')).is_empty());
+    assert!(model.dialog.is_none());
+}
+
+#[test]
+fn resume_offers_a_fresh_session_and_more_iterations() {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "succeeded" }));
+    update(&mut model, key('r'));
+    assert!(model.dialog.is_none(), "a succeeded run does not resume");
+
+    let mut model = detail_on(json!({ "runId": "r1", "status": "failed" }));
+    update(&mut model, key('r'));
+    let call = rpc(&update(&mut model, key('y'))).params.clone();
+    assert_eq!(call, json!({ "workdir": "/w", "runId": "r1" }));
+
+    update(&mut model, key('r'));
+    let call = rpc(&update(&mut model, key('f'))).params.clone();
+    assert_eq!(call["freshSession"], json!(true));
+
+    update(&mut model, key('r'));
+    update(&mut model, key('+'));
+    typed(&mut model, "0");
+    assert!(update(&mut model, code(KeyCode::Enter)).is_empty());
+    assert!(model.dialog.is_some(), "0 is not accepted");
+    update(&mut model, code(KeyCode::Backspace));
+    typed(&mut model, "3");
+    let call = rpc(&update(&mut model, code(KeyCode::Enter)))
+        .params
+        .clone();
+    assert_eq!(call["extraIterations"], json!(3));
+}
+
+#[test]
+fn a_resumed_run_becomes_local() {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "failed" }));
+    let cmds = update(
+        &mut model,
+        Msg::Reply(Then::Resumed("r1".into()), Ok(json!({ "jobId": "j9" }))),
+    );
+    assert_eq!(model.job_for("r1").map(|(id, _)| id.as_str()), Some("j9"));
+    assert_eq!(methods(&cmds), ["listRuns", "getRun"]);
+}
+
+#[test]
+fn rename_is_a_prompt_prefilled_with_the_name() {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "succeeded", "name": "old" }));
+    update(&mut model, key('R'));
+    let Some(Dialog::Prompt { input, .. }) = &model.dialog else {
+        panic!()
+    };
+    assert_eq!(input.text(), "old");
+    typed(&mut model, "er");
+    let call = rpc(&update(&mut model, code(KeyCode::Enter)))
+        .params
+        .clone();
+    assert_eq!(
+        call,
+        json!({ "workdir": "/w", "runId": "r1", "name": "older" })
+    );
+
+    // Emptied, it clears the name; Esc drops the prompt.
+    update(&mut model, key('R'));
+    update(&mut model, ctrl('u'));
+    let call = rpc(&update(&mut model, code(KeyCode::Enter)))
+        .params
+        .clone();
+    assert_eq!(call["name"], Value::Null);
+    update(&mut model, key('R'));
+    assert!(update(&mut model, code(KeyCode::Esc)).is_empty());
+    assert!(model.dialog.is_none());
+}
+
+#[test]
+fn lock_toggles_and_delete_refuses_a_locked_run() {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "succeeded", "locked": true }));
+    let call = rpc(&update(&mut model, key('L'))).params.clone();
+    assert_eq!(call["locked"], json!(false));
+    assert!(update(&mut model, key('x')).is_empty());
+    assert!(model.dialog.is_none());
+    assert!(model.notice.as_deref().unwrap().contains("locked"));
+}
+
+#[test]
+fn delete_asks_then_leaves_the_detail() {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "succeeded" }));
+    update(&mut model, key('x'));
+    let cmds = update(&mut model, key('y'));
+    assert_eq!(rpc(&cmds).method, "deleteRun");
+    let reply = |deleted: Value| Msg::Reply(Then::Deleted("r1".into()), Ok(deleted));
+    update(
+        &mut model,
+        reply(json!({ "deleted": false, "reason": "worktree-dirty" })),
+    );
+    assert!(model.notice.as_deref().unwrap().contains("uncommitted"));
+    assert_eq!(*model.screen(), Route::RunDetail);
+    let cmds = update(&mut model, reply(json!({ "deleted": true })));
+    assert_eq!(methods(&cmds), ["listRuns"]);
+    assert_eq!(*model.screen(), Route::Runs);
+    assert!(model.detail.is_none());
+}
+
+#[test]
+fn end_session_asks_then_ends_the_jobs_session() {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "running" }));
+    running(&mut model, "j1", "r1");
+    update(&mut model, key('E'));
+    let cmds = update(&mut model, key('y'));
+    let call = rpc(&cmds);
+    assert_eq!(
+        (call.method, &call.params),
+        ("endSession", &json!({ "jobId": "j1" }))
+    );
+    update(
+        &mut model,
+        Msg::Reply(Then::SessionEnded("r1".into()), Ok(json!({ "ok": false }))),
+    );
+    assert_eq!(
+        model.notice.as_deref(),
+        Some("no interactive session to end")
+    );
+}
+
+#[test]
+fn run_actions_work_from_the_runs_list_too() {
+    let mut model = Model::new("/w".into(), 0.0);
+    runs(
+        &mut model,
+        json!([{ "runId": "r1", "status": "cancelled" }]),
+    );
+    update(&mut model, key('r'));
+    let call = rpc(&update(&mut model, key('y'))).params.clone();
+    assert_eq!(call, json!({ "workdir": "/w", "runId": "r1" }));
+}
+
+// The new-run screen (update/new_run.rs).
+
+fn workflows() -> Value {
+    json!([
+        { "name": "cycle", "path": "/w/.whiphand/workflows/cycle.yaml", "source": "project",
+          "workflow": { "name": "cycle", "steps": [{ "id": "a", "kind": "command", "run": "true" }] } },
+        { "name": "feature", "path": "/home/.whiphand/workflows/feature.yaml", "source": "global",
+          "workflow": { "name": "feature",
+            "inputs": { "feature": { "required": true, "remember": true } },
+            "steps": [{ "id": "a", "kind": "command", "run": "true" }] } },
+        { "name": "broken", "path": "/w/.whiphand/workflows/broken.yaml", "source": "project",
+          "error": "steps: required" },
+    ])
+}
+
+fn new_run_on(model: &mut Model) {
+    let cmds = update(model, key('n'));
+    assert_eq!(methods(&cmds), ["listWorkflows", "getAppState"]);
+    assert_eq!(*model.screen(), Route::NewRun);
+    update(model, Msg::Reply(Then::Workflows, Ok(workflows())));
+}
+
+#[test]
+fn the_picker_starts_on_the_last_workflow_and_skips_a_broken_one() {
+    let mut model = Model::new("/w".into(), 0.0);
+    new_run_on(&mut model);
+    let state = json!({ "schemaVersion": 1, "recentWorkspaces": [], "window": null, "lastPage": null,
+        "theme": "system", "runsRetention": { "maxPerWorkspace": 0 }, "showOngoingRuns": false,
+        "workspaces": { "/w": { "lastWorkflow": "global:feature",
+            "lastInputs": { "global:feature": { "feature": "search" } } } } });
+    update(&mut model, Msg::Reply(Then::AppState, Ok(state)));
+    let n = model.new_run.as_ref().unwrap();
+    assert_eq!(n.cursor, 1);
+    update(&mut model, key('j'));
+    update(&mut model, code(KeyCode::Enter));
+    assert!(model.new_run.as_ref().unwrap().form.is_none());
+    assert!(model.notice.as_deref().unwrap().contains("does not parse"));
+    update(&mut model, key('k'));
+    update(&mut model, code(KeyCode::Enter));
+    let form = model.new_run.as_ref().unwrap().form.as_ref().unwrap();
+    assert_eq!(form.fields[0].input.text(), "search");
+    // q goes back to the picker, then to the runs.
+    update(&mut model, key('q'));
+    assert!(model.new_run.as_ref().unwrap().form.is_none());
+    update(&mut model, key('q'));
+    assert_eq!(*model.screen(), Route::Runs);
+    assert!(model.new_run.is_none());
+}
+
+#[test]
+fn a_started_run_opens_its_detail_once_it_has_an_id() {
+    let mut model = Model::new("/w".into(), 0.0);
+    new_run_on(&mut model);
+    update(&mut model, key('j'));
+    update(&mut model, code(KeyCode::Enter));
+    // The required input is empty: s refuses, saying so.
+    assert!(update(&mut model, key('s')).is_empty());
+    let form = model.new_run.as_ref().unwrap().form.as_ref().unwrap();
+    assert_eq!(form.error.as_deref(), Some("feature is required"));
+    // Edit it: Enter starts editing, typing fills it, Enter moves on.
+    update(&mut model, code(KeyCode::Enter));
+    typed(&mut model, "search box");
+    update(&mut model, code(KeyCode::Enter));
+    let form = model.new_run.as_ref().unwrap().form.as_ref().unwrap();
+    assert!(!form.editing);
+    assert_eq!(form.focus, 1);
+    let cmds = update(&mut model, key('s'));
+    let call = rpc(&cmds);
+    assert_eq!(call.method, "startRun");
+    assert_eq!(call.params["workflow"], "global:feature");
+    assert_eq!(call.params["inputs"], json!({ "feature": "search box" }));
+    assert!(update(&mut model, key('s')).is_empty(), "no second start");
+    update(
+        &mut model,
+        Msg::Reply(Then::Started, Ok(json!({ "jobId": "j1" }))),
+    );
+    assert_eq!(*model.screen(), Route::NewRun);
+    let cmds = running(&mut model, "j1", "r1");
+    assert!(methods(&cmds).contains(&"getRun"));
+    assert_eq!(*model.screen(), Route::RunDetail);
+    assert_eq!(model.route, [Route::Runs, Route::RunDetail]);
+    assert!(model.new_run.is_none());
+}
+
+#[test]
+fn a_refused_start_stays_on_the_form() {
+    let mut model = Model::new("/w".into(), 0.0);
+    new_run_on(&mut model);
+    update(&mut model, code(KeyCode::Enter));
+    update(&mut model, key('s'));
+    let refused = RpcError {
+        code: -32000,
+        message: "workflow 'cycle' has a problem".into(),
+        data: None,
+    };
+    update(&mut model, Msg::Reply(Then::Started, Err(refused)));
+    let n = model.new_run.as_ref().unwrap();
+    assert!(!n.starting);
+    assert_eq!(
+        n.form.as_ref().unwrap().error.as_deref(),
+        Some("workflow 'cycle' has a problem")
+    );
+    assert!(model.notice.is_none());
+}
+
+#[test]
+fn ctrl_e_hands_the_field_to_the_editor() {
+    let mut model = Model::new("/w".into(), 0.0);
+    new_run_on(&mut model);
+    update(&mut model, key('j'));
+    update(&mut model, code(KeyCode::Enter));
+    update(&mut model, code(KeyCode::Enter));
+    typed(&mut model, "draft");
+    assert_eq!(
+        update(&mut model, ctrl('e')),
+        [Cmd::Suspend(External::Editor {
+            text: "draft".into()
+        })]
+    );
+    update(&mut model, Msg::Edited(Ok("line one\nline two\n".into())));
+    let form = model.new_run.as_ref().unwrap().form.as_ref().unwrap();
+    // A one-line input flattens what the editor gave it.
+    assert_eq!(form.fields[0].input.text(), "line one line two");
+}
+
+#[test]
+fn a_resumed_run_is_its_new_job_whichever_order_the_ids_sort_in() {
+    for (old, new) in [("j1", "j2"), ("j2", "j1")] {
+        let mut model = Model::new("/w".into(), 0.0);
+        state(&mut model, old, "r1", JobStatus::Cancelled);
+        running(&mut model, new, "r1");
+        assert_eq!(model.job_for("r1").map(|(id, _)| id.as_str()), Some(new));
+        assert!(!model.jobs.contains_key(old), "the replaced job is dropped");
+    }
+}
+
+// The manual screen (update/manual.rs).
+
+fn sign_off() -> Value {
+    json!({
+        "stepId": "sign-off", "kind": "approval", "title": "Ship it?",
+        "instructions": "Read the **diff**.", "choices": ["continue", "retry", "abort"],
+        "capture": { "kind": "review", "label": "Feedback", "requiredFor": ["retry"], "perFile": true },
+        "context": { "artifacts": [{ "id": "plan", "path": ".whiphand/runs/r1/plan.md" }],
+                     "diff": "diff --git a/src/a.rs b/src/a.rs\n" },
+        "defaultChoice": "continue",
+    })
+}
+
+fn ask(model: &mut Model, request: Value) -> Vec<Cmd> {
+    let params =
+        serde_json::from_value(json!({ "jobId": "j1", "runId": "r1", "request": request }))
+            .unwrap();
+    update(model, Msg::Agent(Notification::ManualRequest(params)))
+}
+
+fn manual_diff() -> Value {
+    json!({ "files": [
+        { "path": "src/a.rs", "status": "modified", "additions": 2, "deletions": 1, "binary": false,
+          "patch": "diff --git a/src/a.rs b/src/a.rs\n@@ -1 +1,2 @@\n-a\n+b\n+c\n" },
+    ] })
+}
+
+/// The run's detail open, its job asking for a sign-off; the screen is up.
+fn signing_off() -> Model {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "running" }));
+    running(&mut model, "j1", "r1");
+    let cmds = ask(&mut model, sign_off());
+    let call = rpc(&cmds[..1]);
+    assert_eq!(call.then, Then::ManualDiff("j1".into()));
+    assert_eq!(*model.screen(), Route::Manual);
+    update(
+        &mut model,
+        Msg::Reply(Then::ManualDiff("j1".into()), Ok(manual_diff())),
+    );
+    model
+}
+
+#[test]
+fn a_request_for_the_run_on_screen_opens_over_it() {
+    let model = signing_off();
+    assert_eq!(model.route, [Route::Runs, Route::RunDetail, Route::Manual]);
+    let m = model.manual.as_ref().unwrap();
+    assert_eq!(m.files().len(), 1);
+    assert_eq!(m.request.step_id, "sign-off");
+}
+
+#[test]
+fn a_request_elsewhere_only_notifies_and_m_opens_it() {
+    let mut model = Model::new("/w".into(), 0.0);
+    runs(&mut model, json!([{ "runId": "r1", "status": "running" }]));
+    running(&mut model, "j1", "r1");
+    let cmds = ask(&mut model, sign_off());
+    assert_eq!(methods(&cmds), ["notify"]);
+    assert_eq!(*model.screen(), Route::Runs);
+    let cmds = update(&mut model, key('m'));
+    assert_eq!(methods(&cmds), ["getWorkingDiff"]);
+    assert_eq!(*model.screen(), Route::Manual);
+}
+
+#[test]
+fn sending_back_takes_the_feedback_and_the_file_comments() {
+    let mut model = signing_off();
+    // Feedback is required to send it back.
+    assert!(update(&mut model, key('b')).is_empty());
+    assert!(model.notice.as_deref().unwrap().contains("feedback"));
+    update(&mut model, key('i'));
+    typed(&mut model, "Handle the empty cart.");
+    update(&mut model, code(KeyCode::Esc));
+    // Down to the plan artifact, which Enter pages; then the file.
+    update(&mut model, key('j'));
+    assert_eq!(
+        update(&mut model, code(KeyCode::Enter)),
+        [Cmd::Suspend(External::Pager {
+            path: whiphand_core::path_form::to_native(".whiphand/runs/r1/plan.md", "/w")
+        })]
+    );
+    update(&mut model, key('j'));
+    update(&mut model, code(KeyCode::Enter));
+    typed(&mut model, "Split this.");
+    update(&mut model, code(KeyCode::Esc));
+    let cmds = update(&mut model, key('b'));
+    let call = rpc(&cmds);
+    assert_eq!(call.method, "resolveManual");
+    assert_eq!(
+        call.params,
+        json!({ "jobId": "j1", "stepId": "sign-off", "choice": "retry",
+                "note": "Handle the empty cart.",
+                "comments": [{ "path": "src/a.rs", "body": "Split this." }] })
+    );
+    assert!(update(&mut model, key('a')).is_empty(), "sent once");
+    // manualResolved closes the screen, back on the detail.
+    let resolved =
+        serde_json::from_value(json!({ "jobId": "j1", "stepId": "sign-off", "choice": "retry" }))
+            .unwrap();
+    update(
+        &mut model,
+        Msg::Agent(Notification::ManualResolved(resolved)),
+    );
+    assert_eq!(*model.screen(), Route::RunDetail);
+    assert!(model.manual.is_none());
+    assert!(model.toast.as_ref().unwrap().0.contains("sent back"));
+}
+
+#[test]
+fn abort_asks_first() {
+    let mut model = signing_off();
+    assert!(update(&mut model, key('X')).is_empty());
+    assert!(update(&mut model, key('n')).is_empty());
+    update(&mut model, key('X'));
+    let cmds = update(&mut model, key('y'));
+    assert_eq!(rpc(&cmds).params["choice"], "abort");
+}
+
+#[test]
+fn approve_needs_no_note() {
+    let mut model = signing_off();
+    let cmds = update(&mut model, key('a'));
+    let call = rpc(&cmds);
+    assert_eq!(
+        call.params,
+        json!({ "jobId": "j1", "stepId": "sign-off", "choice": "continue" })
+    );
+}
+
+#[test]
+fn a_foreign_runs_step_is_answered_where_it_started() {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "running" }));
+    assert!(update(&mut model, key('m')).is_empty());
+    assert!(
+        model
+            .notice
+            .as_deref()
+            .unwrap()
+            .contains("where the run was started")
+    );
 }

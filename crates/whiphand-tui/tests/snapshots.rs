@@ -285,8 +285,19 @@ fn run_detail_events_errors_only() {
     key(&mut model, KeyCode::Char('2'));
     snapshot("detail_events", &model);
     key(&mut model, KeyCode::Char('1'));
-    key(&mut model, KeyCode::Char('e'));
+    key(&mut model, KeyCode::Char('f'));
     snapshot("detail_errors", &model);
+}
+
+#[test]
+fn run_detail_asks_before_cancelling_and_prompts_a_rename() {
+    let mut model = live_detail();
+    key(&mut model, KeyCode::Char('c'));
+    snapshot("detail_confirm_cancel", &model);
+    key(&mut model, KeyCode::Esc);
+    key(&mut model, KeyCode::Char('R'));
+    key(&mut model, KeyCode::Left);
+    snapshot("detail_rename", &model);
 }
 
 #[test]
@@ -395,4 +406,121 @@ fn a_failed_stages_run_says_where_it_stopped() {
         json!({ "lines": [], "startByte": 0, "atStart": true }),
     );
     snapshot("detail_stages_failed", &model);
+}
+
+// ------------------------------------------------------------------ new run
+
+fn agent_json(yaml: &str) -> Value {
+    let workflow = whiphand_core::schema::parse_workflow(yaml).unwrap();
+    whiphand_core::jsval::to_json(&whiphand_core::engine::workflow_js::workflow_to_js(
+        &workflow,
+    ))
+}
+
+fn new_run() -> Model {
+    let mut model = busy();
+    key(&mut model, KeyCode::Char('n'));
+    let feature = agent_json(
+        r#"
+name: feature
+description: Plan with me, build it, review it.
+inputs:
+  feature: { required: true, prompt: "What are we building?", multiline: true }
+  branch: { required: false, default: main, prompt: "Target branch", remember: true }
+steps:
+  - id: plan
+    runner: claude
+    mode: interactive
+    writes: false
+    inputs: [attachments]
+    output: plan.md
+    prompt: p
+  - id: fix
+    kind: loop
+    until: tests
+    max_iterations: 3
+    steps:
+      - id: tests
+        kind: command
+        run: npm test
+        verdict: true
+  - id: lint
+    kind: command
+    run: npm run lint
+    enabled: false
+"#,
+    );
+    let entries = json!([
+        { "name": "feature", "path": "/home/dev/shop/.whiphand/workflows/feature.yaml",
+          "source": "project", "workflow": feature },
+        { "name": "bugfix", "path": "/home/dev/.whiphand/workflows/bugfix.yaml",
+          "source": "global", "workflow": agent_json("name: bugfix\ndescription: Reproduce, fix, verify.\nsteps:\n  - id: a\n    kind: command\n    run: 'true'\n") },
+        { "name": "old", "path": "/home/dev/shop/.whiphand/workflows/old.yaml",
+          "source": "project", "error": "steps: required" },
+    ]);
+    reply(&mut model, Then::Workflows, entries);
+    model
+}
+
+#[test]
+fn new_run_picker() {
+    snapshot("new_run_picker", &new_run());
+}
+
+#[test]
+fn new_run_form() {
+    let mut model = new_run();
+    key(&mut model, KeyCode::Enter);
+    snapshot("new_run_form", &model);
+    // Start with the required input empty; then type into it.
+    chars(&mut model, "s");
+    key(&mut model, KeyCode::Enter);
+    chars(&mut model, "Checkout flow");
+    key(&mut model, KeyCode::Enter);
+    chars(&mut model, "with saved cards");
+    snapshot("new_run_editing", &model);
+}
+
+// ------------------------------------------------------------------ manual
+
+fn sign_off(model: &mut Model) {
+    let request = json!({
+        "stepId": "sign-off", "kind": "approval", "title": "Ship it?",
+        "instructions": "Review the diff and the findings before this goes any further.\n\n- tests pass\n- **no** new warnings",
+        "choices": ["continue", "retry", "abort"],
+        "capture": { "kind": "review", "label": "Feedback", "requiredFor": ["retry"], "perFile": true },
+        "context": { "artifacts": [{ "id": "review", "path": ".whiphand/runs/20261010-100000-a1b2/review.md" }],
+                     "diff": "diff --git a/src/cart.ts b/src/cart.ts\n" },
+        "defaultChoice": "continue",
+        "stage": { "stagesId": "build", "id": "two", "title": "Checkout", "index": 2, "total": 3, "attempt": 2, "maxAttempts": 3 },
+    });
+    let params =
+        serde_json::from_value(json!({ "jobId": "j1", "runId": RUN, "request": request })).unwrap();
+    update(model, Msg::Agent(Notification::ManualRequest(params)));
+    reply(
+        model,
+        Then::ManualDiff("j1".into()),
+        json!({ "files": [
+            { "path": "src/cart.ts", "status": "modified", "additions": 2, "deletions": 1, "binary": false,
+              "patch": "diff --git a/src/cart.ts b/src/cart.ts\n--- a/src/cart.ts\n+++ b/src/cart.ts\n@@ -10,3 +10,4 @@ export function total(items: Item[]) {\n   let sum = 0;\n-  for (const i of items) sum += i.price;\n+  for (const i of items) sum += i.price * i.qty;\n+  // quantities, not lines\n   return sum;\n" },
+            { "path": "src/cart.test.ts", "status": "added", "additions": 12, "deletions": 0, "binary": false },
+        ] }),
+    );
+    model.toast = None;
+}
+
+#[test]
+fn a_sign_off_over_the_run() {
+    let mut model = live_detail();
+    sign_off(&mut model);
+    snapshot("manual_sign_off", &model);
+    // Feedback written, the patch of the first file with a comment on it.
+    key(&mut model, KeyCode::Char('i'));
+    chars(&mut model, "Quantities need a test.");
+    key(&mut model, KeyCode::Esc);
+    key(&mut model, KeyCode::Char('j'));
+    key(&mut model, KeyCode::Char('j'));
+    key(&mut model, KeyCode::Enter);
+    chars(&mut model, "Name it lineTotal.");
+    snapshot("manual_commenting", &model);
 }

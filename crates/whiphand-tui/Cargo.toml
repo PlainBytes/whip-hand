@@ -19,6 +19,8 @@ serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 pulldown-cmark = { version = "0.13", default-features = false }
 ansi-to-tui = "7"
+base64 = "0.22"
+tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -28,8 +30,8 @@ windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
   "Win32_Storage_FileSystem",
   "Win32_System_Console",
+  "Win32_System_Threading",
 ] }
 
 [dev-dependencies]
 insta = "1"
-tempfile = "3"

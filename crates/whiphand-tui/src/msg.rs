@@ -19,6 +19,17 @@ pub enum Msg {
     Reply(Then, Result<Value, RpcError>),
     /// A program the screen was handed to has returned; why it failed, if it did.
     External(Result<(), String>),
+    /// `$EDITOR` is back: the field's new text, or why it is not.
+    Edited(Result<String, String>),
+    /// Attached: keys from the real terminal, raw.
+    Stdin(Vec<u8>),
+    /// Attached: the real terminal's size, on attaching and on a change.
+    PtySize {
+        cols: u16,
+        rows: u16,
+    },
+    /// The terminal could not be handed over; why.
+    AttachFailed(String),
     /// The agent's engine thread is gone: its channel closed.
     HostGone,
 }

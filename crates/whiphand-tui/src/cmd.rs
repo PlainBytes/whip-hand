@@ -12,6 +12,13 @@ pub enum Cmd {
     Notify(Notice),
     /// Shut the host down (cancelling live runs) and leave.
     Quit,
+    /// Hand the terminal to `model.attach`'s session; the runtime answers
+    /// with `Msg::PtySize`, then forwards stdin as `Msg::Stdin`.
+    Attach,
+    /// Take the terminal back from the session.
+    Detach,
+    /// Bytes for the real terminal while attached.
+    Stdout(Vec<u8>),
 }
 
 /// A program the screen is handed to. The runtime resolves `$PAGER` and
@@ -22,6 +29,8 @@ pub enum External {
     Pager { path: String },
     /// `git diff` in a directory: the run's worktree, else the workspace.
     GitDiff { cwd: String },
+    /// `$VISUAL`/`$EDITOR` on a field's text; it comes back as `Msg::Edited`.
+    Editor { text: String },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -52,10 +61,36 @@ pub enum Then {
     Pinned,
     RecentRuns,
     Run(String),
-    RunLog { run_id: String, page: LogPage },
-    Scrollback { run_id: String },
-    ArtifactStat { run_id: String, name: String },
-    Artifact { run_id: String, name: String },
+    RunLog {
+        run_id: String,
+        page: LogPage,
+    },
+    Scrollback {
+        run_id: String,
+    },
+    ArtifactStat {
+        run_id: String,
+        name: String,
+    },
+    Artifact {
+        run_id: String,
+        name: String,
+    },
     Diff(String),
     Doctor,
+    /// Run actions; each names the run it acted on.
+    Cancelled(String),
+    Resumed(String),
+    Renamed(String),
+    Locked(String),
+    Deleted(String),
+    SessionEnded(String),
+    Workflows,
+    Started,
+    /// `resolveManual` for a job.
+    Resolved(String),
+    /// `getWorkingDiff` for a job's manual step.
+    ManualDiff(String),
+    /// `ptyInput`, `ptyResize`: nothing to do with the answer.
+    PtyAck,
 }

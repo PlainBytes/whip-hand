@@ -16,6 +16,8 @@ pub enum Ctx {
     Runs,
     Detail,
     Doctor,
+    NewRun,
+    Manual,
 }
 
 impl Ctx {
@@ -25,6 +27,8 @@ impl Ctx {
             Route::Runs => Ctx::Runs,
             Route::RunDetail => Ctx::Detail,
             Route::Doctor => Ctx::Doctor,
+            Route::NewRun => Ctx::NewRun,
+            Route::Manual => Ctx::Manual,
         }
     }
 
@@ -36,6 +40,8 @@ impl Ctx {
             Ctx::Runs => "Runs",
             Ctx::Detail => "Run detail",
             Ctx::Doctor => "Doctor",
+            Ctx::NewRun => "New run",
+            Ctx::Manual => "Manual or approval step",
         }
     }
 }
@@ -68,6 +74,22 @@ pub enum Action {
     Pager,
     ExternalDiff,
     Refresh,
+    /// Ctrl-c: cancel the run in focus, else quit; both ask first.
+    Interrupt,
+    Cancel,
+    Resume,
+    Rename,
+    Lock,
+    Delete,
+    EndSession,
+    NewRun,
+    StartRun,
+    OpenManual,
+    Approve,
+    SendBack,
+    AbortStep,
+    EditNote,
+    Attach,
 }
 
 /// A key as the table spells it.
@@ -127,12 +149,13 @@ pub const BINDINGS: &[Binding] = &[
         A::Back,
         "back; quit from the first screen",
     ),
+    b(C::Global, &[Char('Q')], "Q", A::Quit, "quit"),
     b(
         C::Global,
-        &[Char('Q'), Ctrl('c')],
-        "Q Ctrl-c",
-        A::Quit,
-        "quit",
+        &[Ctrl('c')],
+        "Ctrl-c",
+        A::Interrupt,
+        "cancel the run in focus, else quit",
     ),
     b(
         C::Global,
@@ -183,6 +206,14 @@ pub const BINDINGS: &[Binding] = &[
     b(C::Goto, &[Char('d')], "g d", A::GoDoctor, "doctor"),
     b(C::Workspaces, &[Char('p')], "p", A::Pin, "pin or unpin"),
     b(C::Runs, &[Char('/')], "/", A::Filter, "filter"),
+    b(C::Runs, &[Char('n')], "n", A::NewRun, "new run"),
+    b(
+        C::Runs,
+        &[Char('m')],
+        "m",
+        A::OpenManual,
+        "answer the step waiting on you",
+    ),
     b(
         C::Runs,
         &[Char('o')],
@@ -190,6 +221,17 @@ pub const BINDINGS: &[Binding] = &[
         A::Ongoing,
         "ongoing runs in every workspace",
     ),
+    b(C::Runs, &[Char('c')], "c", A::Cancel, "cancel the run"),
+    b(C::Runs, &[Char('r')], "r", A::Resume, "resume the run"),
+    b(C::Runs, &[Char('R')], "R", A::Rename, "rename the run"),
+    b(
+        C::Runs,
+        &[Char('L')],
+        "L",
+        A::Lock,
+        "lock or unlock the run",
+    ),
+    b(C::Runs, &[Char('x')], "x", A::Delete, "delete the run"),
     b(
         C::Detail,
         &[Code(KeyCode::Tab), Code(KeyCode::BackTab)],
@@ -215,11 +257,11 @@ pub const BINDINGS: &[Binding] = &[
         A::Expand,
         "expand",
     ),
-    b(C::Detail, &[Char('e')], "e", A::ErrorsOnly, "errors only"),
+    b(C::Detail, &[Char('f')], "f", A::ErrorsOnly, "errors only"),
     b(
         C::Detail,
-        &[Char('a')],
-        "a",
+        &[Char('A')],
+        "A",
         A::AllSteps,
         "every step's rows",
     ),
@@ -237,8 +279,69 @@ pub const BINDINGS: &[Binding] = &[
         A::ExternalDiff,
         "git diff in a terminal",
     ),
-    b(C::Detail, &[Char('r')], "r", A::Refresh, "reload the diff"),
+    b(
+        C::Detail,
+        &[Ctrl('r')],
+        "Ctrl-r",
+        A::Refresh,
+        "reload the diff",
+    ),
+    b(C::Detail, &[Char('c')], "c", A::Cancel, "cancel the run"),
+    b(C::Detail, &[Char('r')], "r", A::Resume, "resume the run"),
+    b(C::Detail, &[Char('R')], "R", A::Rename, "rename the run"),
+    b(
+        C::Detail,
+        &[Char('L')],
+        "L",
+        A::Lock,
+        "lock or unlock the run",
+    ),
+    b(C::Detail, &[Char('x')], "x", A::Delete, "delete the run"),
+    b(
+        C::Detail,
+        &[Char('t')],
+        "t",
+        A::Attach,
+        "attach to the interactive session (Ctrl-] detaches)",
+    ),
+    b(
+        C::Detail,
+        &[Char('E')],
+        "E",
+        A::EndSession,
+        "end the interactive session",
+    ),
     b(C::Doctor, &[Char('r')], "r", A::Refresh, "check again"),
+    b(C::NewRun, &[Char('s')], "s", A::StartRun, "start the run"),
+    b(
+        C::Detail,
+        &[Char('m')],
+        "m",
+        A::OpenManual,
+        "answer the step waiting on you",
+    ),
+    b(
+        C::Manual,
+        &[Char('a')],
+        "a",
+        A::Approve,
+        "continue / approve",
+    ),
+    b(
+        C::Manual,
+        &[Char('b')],
+        "b",
+        A::SendBack,
+        "send back (retry) with the note and comments",
+    ),
+    b(C::Manual, &[Char('X')], "X", A::AbortStep, "abort the run"),
+    b(
+        C::Manual,
+        &[Char('i')],
+        "i",
+        A::EditNote,
+        "write the note (Ctrl-e: $EDITOR)",
+    ),
 ];
 
 /// What `key` does on `screen`; `goto` after a `g`.
@@ -290,7 +393,15 @@ mod tests {
     // screen never shadows a global key.
     #[test]
     fn no_key_is_bound_twice_where_it_applies() {
-        let ctxs = [C::Goto, C::Workspaces, C::Runs, C::Detail, C::Doctor];
+        let ctxs = [
+            C::Goto,
+            C::Workspaces,
+            C::Runs,
+            C::Detail,
+            C::Doctor,
+            C::NewRun,
+            C::Manual,
+        ];
         for ctx in ctxs.into_iter().chain([C::Global]) {
             let scope = BINDINGS
                 .iter()
@@ -316,7 +427,17 @@ mod tests {
         assert_eq!(action(&Route::Doctor, false, &q), Some(A::Back));
         let w = KeyEvent::from(KeyCode::Char('w'));
         assert_eq!(action(&Route::Runs, true, &w), Some(A::GoWorkspaces));
+        // Phase 2 moved these off e, a and r, which drive runs.
+        let f = KeyEvent::from(KeyCode::Char('f'));
+        assert_eq!(action(&Route::RunDetail, false, &f), Some(A::ErrorsOnly));
+        let all = KeyEvent::from(KeyCode::Char('A'));
+        assert_eq!(action(&Route::RunDetail, false, &all), Some(A::AllSteps));
+        let ctrl_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
+        assert_eq!(action(&Route::RunDetail, false, &ctrl_r), Some(A::Refresh));
         let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(action(&Route::Runs, false, &ctrl_c), Some(A::Quit));
+        assert_eq!(action(&Route::Runs, false, &ctrl_c), Some(A::Interrupt));
+        let r = KeyEvent::from(KeyCode::Char('r'));
+        assert_eq!(action(&Route::RunDetail, false, &r), Some(A::Resume));
+        assert_eq!(action(&Route::Doctor, false, &r), Some(A::Refresh));
     }
 }

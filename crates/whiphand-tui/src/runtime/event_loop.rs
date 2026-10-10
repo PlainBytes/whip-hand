@@ -14,7 +14,7 @@ use whiphand_core::time::now_ms;
 
 use crate::client::AgentClient;
 use crate::client::wire::{self, Inbound};
-use crate::cmd::Cmd;
+use crate::cmd::{Cmd, External};
 use crate::model::Model;
 use crate::msg::Msg;
 use crate::runtime::external;
@@ -68,9 +68,13 @@ pub fn run(host: &Host, terminal: &mut Term, mut model: Model, log: &Path) -> io
                     Cmd::Suspend(what) => {
                         // Crossterm's reader would race the program for stdin.
                         drop(events.take());
-                        let result = external::run(terminal, &what, log);
+                        back.push(match &what {
+                            External::Editor { text } => {
+                                Msg::Edited(external::edit(terminal, text, log))
+                            }
+                            _ => Msg::External(external::run(terminal, &what, log)),
+                        });
                         events = Some(EventStream::new());
-                        back.push(Msg::External(result));
                     }
                     Cmd::Quit => return Ok(()),
                 }

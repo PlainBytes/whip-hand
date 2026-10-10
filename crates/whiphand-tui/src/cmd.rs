@@ -22,6 +22,8 @@ pub enum External {
     Pager { path: String },
     /// `git diff` in a directory: the run's worktree, else the workspace.
     GitDiff { cwd: String },
+    /// `$VISUAL`/`$EDITOR` on a field's text; it comes back as `Msg::Edited`.
+    Editor { text: String },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -76,4 +78,6 @@ pub enum Then {
     Locked(String),
     Deleted(String),
     SessionEnded(String),
+    Workflows,
+    Started,
 }

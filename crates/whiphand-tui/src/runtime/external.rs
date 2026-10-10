@@ -57,15 +57,55 @@ pub fn command(what: &External) -> Command {
             cmd.arg("diff").current_dir(Path::new(cwd));
             cmd
         }
+        External::Editor { .. } => {
+            let (program, args) = editor();
+            let mut cmd = Command::new(program);
+            cmd.args(args);
+            cmd
+        }
     }
+}
+
+/// `$VISUAL`, else `$EDITOR`, else `vi` (`notepad` on Windows).
+fn editor() -> (String, Vec<String>) {
+    ["VISUAL", "EDITOR"]
+        .iter()
+        .filter_map(|v| std::env::var(v).ok())
+        .find_map(|cmd| split(&cmd))
+        .unwrap_or_else(|| {
+            let program = if cfg!(windows) { "notepad" } else { "vi" };
+            (program.into(), vec![])
+        })
+}
+
+/// Hands `text` to the editor in a temporary file and reads it back.
+pub fn edit(terminal: &mut Term, text: &str, log: &Path) -> Result<String, String> {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("whiphand-tui-{}-{n}.md", std::process::id()));
+    std::fs::write(&path, text).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+    let what = External::Editor {
+        text: String::new(),
+    };
+    let mut cmd = command(&what);
+    cmd.arg(&path);
+    let ran = hand_over(terminal, cmd, log);
+    let back = std::fs::read_to_string(&path);
+    let _ = std::fs::remove_file(&path);
+    ran?;
+    back.map_err(|e| format!("could not read {}: {e}", path.display()))
 }
 
 /// Runs `what` on the real terminal and comes back to the TUI.
 pub fn run(terminal: &mut Term, what: &External, log: &Path) -> Result<(), String> {
+    hand_over(terminal, command(what), log)
+}
+
+fn hand_over(terminal: &mut Term, mut cmd: Command, log: &Path) -> Result<(), String> {
     let _ = execute!(io::stdout(), LeaveAlternateScreen, Show);
     let _ = disable_raw_mode();
     super::stderr::restore();
-    let status = command(what).status();
+    let status = cmd.status();
     if let Err(e) = super::stderr::redirect(log) {
         eprintln!("whiphand tui: stderr stays on the terminal ({e})");
     }
@@ -78,7 +118,7 @@ pub fn run(terminal: &mut Term, what: &External, log: &Path) -> Result<(), Strin
     // A pager quit with q, or git with nothing to say, is still fine; only
     // a program that would not start is worth a word.
     status.map(|_| ()).map_err(|e| {
-        let program = command(what).get_program().to_string_lossy().into_owned();
+        let program = cmd.get_program().to_string_lossy().into_owned();
         format!("could not run {program}: {e}")
     })
 }

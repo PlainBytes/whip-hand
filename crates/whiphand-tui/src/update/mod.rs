@@ -4,6 +4,7 @@
 
 pub mod actions;
 pub mod detail;
+pub mod new_run;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use serde_json::Value;
@@ -109,13 +110,19 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             vec![]
         }
         Msg::Tick { now_ms } => on_tick(model, now_ms),
-        Msg::Agent(n) => on_notification(model, n),
+        Msg::Agent(n) => {
+            let mut cmds = on_notification(model, n);
+            cmds.extend(new_run::follow(model));
+            cmds
+        }
         Msg::Reply(then, result) => {
             model.dirty = true;
             match result {
                 Ok(value) => on_reply(model, then, value),
                 Err(e) => {
-                    if !detail::on_error(model, &then, &e.message) {
+                    if !detail::on_error(model, &then, &e.message)
+                        && !new_run::on_error(model, &then, &e.message)
+                    {
                         model.notice = Some(e.message);
                     }
                     vec![]
@@ -126,6 +133,14 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.dirty = true;
             if let Err(e) = result {
                 model.notice = Some(e);
+            }
+            vec![]
+        }
+        Msg::Edited(result) => {
+            model.dirty = true;
+            match result {
+                Ok(text) => new_run::on_edited(model, text),
+                Err(e) => model.notice = Some(e),
             }
             vec![]
         }
@@ -149,6 +164,9 @@ fn on_key(model: &mut Model, key: KeyEvent) -> Vec<Cmd> {
     if model.help {
         model.help = false;
         return vec![];
+    }
+    if new_run::editing(model) && *model.screen() == Route::NewRun {
+        return new_run::edit_key(model, &key);
     }
     if model.runs_ui.editing && *model.screen() == Route::Runs {
         edit_filter(model, key);
@@ -188,6 +206,11 @@ fn act(model: &mut Model, action: Action) -> Vec<Cmd> {
     {
         return cmds;
     }
+    if *model.screen() == Route::NewRun
+        && let Some(cmds) = new_run::act(model, action)
+    {
+        return cmds;
+    }
     if let Some(cmds) = actions::act(model, action) {
         return cmds;
     }
@@ -208,6 +231,7 @@ fn act(model: &mut Model, action: Action) -> Vec<Cmd> {
                 None => vec![Route::Workspaces],
             };
             model.detail = None;
+            model.new_run = None;
             vec![get_app_state()]
         }
         Action::GoRuns => {
@@ -217,12 +241,14 @@ fn act(model: &mut Model, action: Action) -> Vec<Cmd> {
             }
             model.route = vec![Route::Runs];
             model.detail = None;
+            model.new_run = None;
             refresh_runs(model)
         }
         Action::GoDoctor => {
             let root = model.route.first().cloned().unwrap_or(Route::Runs);
             model.route = vec![root, Route::Doctor];
             model.detail = None;
+            model.new_run = None;
             model.doctor.rows = None;
             vec![doctor(model)]
         }
@@ -233,6 +259,7 @@ fn act(model: &mut Model, action: Action) -> Vec<Cmd> {
         Action::Top => movement(model, i64::MIN / 2),
         Action::Bottom => movement(model, i64::MAX / 2),
         Action::Open => open(model),
+        Action::NewRun => new_run::open(model),
         Action::Filter => {
             model.runs_ui.editing = true;
             vec![]
@@ -270,9 +297,10 @@ fn back(model: &mut Model) -> Vec<Cmd> {
     if model.route.len() <= 1 {
         return quit(model);
     }
-    let left = model.route.pop();
-    if left == Some(Route::RunDetail) {
-        model.detail = None;
+    match model.route.pop() {
+        Some(Route::RunDetail) => model.detail = None,
+        Some(Route::NewRun) => model.new_run = None,
+        _ => {}
     }
     match model.screen() {
         Route::Runs => refresh_runs(model),
@@ -301,7 +329,7 @@ fn movement(model: &mut Model, delta: i64) -> Vec<Cmd> {
             let d = &mut model.doctor;
             d.scroll = (i64::from(d.scroll) + delta).clamp(0, i64::from(u16::MAX)) as u16;
         }
-        Route::RunDetail => {}
+        Route::RunDetail | Route::NewRun => {}
     }
     vec![]
 }
@@ -336,6 +364,7 @@ pub fn switch_workspace(model: &mut Model, path: String) -> Vec<Cmd> {
     model.runs.clear();
     model.runs_ui = Default::default();
     model.detail = None;
+    model.new_run = None;
     model.route = vec![Route::Runs];
     model.since_poll = 0;
     vec![touch(&path), list_runs(&path)]
@@ -424,14 +453,14 @@ fn on_notification(model: &mut Model, n: Notification) -> Vec<Cmd> {
                 .jobs
                 .get(&s.job_id)
                 .is_some_and(|j| j.status == JobStatus::Running);
-            let job = model
-                .jobs
-                .entry(s.job_id)
-                .or_insert_with(|| Job::new(s.status));
+            let job = match &s.run_id {
+                Some(run_id) => model.bind_job(&s.job_id, run_id),
+                None => model
+                    .jobs
+                    .entry(s.job_id)
+                    .or_insert_with(|| Job::new(s.status)),
+            };
             job.status = s.status;
-            if s.run_id.is_some() {
-                job.run_id = s.run_id;
-            }
             if s.status != JobStatus::Running {
                 job.awaiting = false;
                 job.manual = false;
@@ -493,13 +522,17 @@ fn on_notification(model: &mut Model, n: Notification) -> Vec<Cmd> {
             vec![]
         }
         Notification::WhiphandEvent(e) => {
-            let job = model
+            let known = model
                 .jobs
-                .entry(e.job_id.clone())
-                .or_insert_with(|| Job::new(JobStatus::Running));
-            if job.run_id.is_none() {
-                job.run_id = e.run_id.clone();
-            }
+                .get(&e.job_id)
+                .is_some_and(|j| j.run_id.is_some());
+            let job = match &e.run_id {
+                Some(run_id) if !known => model.bind_job(&e.job_id, run_id),
+                _ => model
+                    .jobs
+                    .entry(e.job_id.clone())
+                    .or_insert_with(|| Job::new(JobStatus::Running)),
+            };
             let Some(entry) = LogEntry::from_event(&e) else {
                 return vec![];
             };
@@ -513,6 +546,7 @@ fn on_notification(model: &mut Model, n: Notification) -> Vec<Cmd> {
             vec![]
         }
         Notification::AppStateChanged(state) => {
+            new_run::on_app_state(model, &state.workspaces);
             model.workspaces.set(state.recent_workspaces);
             model.dirty |= *model.screen() == Route::Workspaces;
             vec![]
@@ -544,7 +578,9 @@ pub fn doctor_text(rows: &[DoctorRow]) -> String {
 }
 
 fn on_reply(model: &mut Model, then: Then, value: Value) -> Vec<Cmd> {
-    let value = match actions::on_reply(model, &then, value) {
+    let value = match actions::on_reply(model, &then, value)
+        .or_else(|value| new_run::on_reply(model, &then, value))
+    {
         Ok(cmds) => return cmds,
         Err(value) => value,
     };
@@ -601,7 +637,10 @@ fn on_reply(model: &mut Model, then: Then, value: Value) -> Vec<Cmd> {
             Err(e) => model.notice = Some(e),
         },
         Then::AppState => match client::decode::<GetAppState>(value) {
-            Ok(state) => model.workspaces.set(state.recent_workspaces),
+            Ok(state) => {
+                new_run::on_app_state(model, &state.workspaces);
+                model.workspaces.set(state.recent_workspaces);
+            }
             Err(e) => model.notice = Some(e),
         },
         Then::Pinned => match client::decode::<SetWorkspacePinned>(value) {

@@ -10,6 +10,10 @@ fn key(c: char) -> Msg {
     Msg::Key(KeyEvent::from(KeyCode::Char(c)))
 }
 
+fn ctrl(c: char) -> Msg {
+    Msg::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL))
+}
+
 fn code(c: KeyCode) -> Msg {
     Msg::Key(KeyEvent::from(c))
 }
@@ -383,14 +387,14 @@ fn the_log_tail_loads_and_scrolling_up_pages_back() {
 }
 
 #[test]
-fn enter_on_a_step_filters_the_log_and_a_shows_all_again() {
+fn enter_on_a_step_filters_the_log_and_shift_a_shows_all_again() {
     let mut model = detail_on(json!({ "runId": "r1", "status": "succeeded",
         "steps": [{ "id": "plan", "status": "done" }, { "id": "build", "status": "done" }] }));
     update(&mut model, code(KeyCode::Enter));
     let d = model.detail.as_ref().unwrap();
     // The cursor starts on the last step of a finished run.
     assert_eq!(d.filter_step.as_deref(), Some("build"));
-    update(&mut model, key('a'));
+    update(&mut model, key('A'));
     assert_eq!(model.detail.as_ref().unwrap().filter_step, None);
 }
 
@@ -406,10 +410,10 @@ fn the_diff_loads_on_its_tab_and_d_hands_off_to_git() {
         ("getWorkingDiff", &json!("r1"))
     );
     assert_eq!(model.detail.as_ref().unwrap().tab, Tab::Diff);
-    // Switching back and forth does not reload; r does.
+    // Switching back and forth does not reload; Ctrl-r does.
     update(&mut model, key('1'));
     assert!(update(&mut model, key('4')).is_empty());
-    assert_eq!(methods(&update(&mut model, key('r'))), ["getWorkingDiff"]);
+    assert_eq!(methods(&update(&mut model, ctrl('r'))), ["getWorkingDiff"]);
     assert_eq!(
         update(&mut model, key('D')),
         [Cmd::Suspend(External::GitDiff { cwd: "/w".into() })]

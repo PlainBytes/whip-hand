@@ -102,6 +102,74 @@ describe('PreferencesPage', () => {
     expect(useAppStore.getState().appState?.theme).toBe('dark');
   });
 
+  it('shows Visual Studio Code by default and saves a preset editor via setUiState', async () => {
+    useAppStore.setState({ workspacePath: null, appState: EMPTY_APP_STATE, restoreDone: true });
+    const { transport } = renderPreferences();
+    await respondToGlobalConfigGet(transport);
+
+    const dropdown = await screen.findByRole('combobox', { name: /editor/i });
+    expect(dropdown).toHaveValue('Visual Studio Code');
+    fireEvent.click(dropdown);
+    fireEvent.click(await screen.findByRole('option', { name: 'Zed' }));
+
+    const req = await waitForRequest(transport, 'setUiState');
+    expect(req.params).toEqual({ editor: { kind: 'zed' } });
+    expect(useAppStore.getState().appState?.editor).toEqual({ kind: 'zed' });
+  });
+
+  it('reveals the command input for a custom editor and sends it on blur or Enter', async () => {
+    useAppStore.setState({ workspacePath: null, appState: EMPTY_APP_STATE, restoreDone: true });
+    const { transport } = renderPreferences();
+    await respondToGlobalConfigGet(transport);
+
+    expect(screen.queryByRole('textbox', { name: /editor command/i })).toBeNull();
+    fireEvent.click(await screen.findByRole('combobox', { name: /editor/i }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Custom command…' }));
+    const input = await screen.findByRole('textbox', { name: /editor command/i });
+    const sentSetUiState = () => transport.sent
+      .filter(line => (JSON.parse(line) as { method: string }).method === 'setUiState');
+
+    fireEvent.change(input, { target: { value: '/opt/bin/subl' } });
+    fireEvent.blur(input);
+    const req = await waitForRequest(transport, 'setUiState');
+    expect(req.params).toEqual({ editor: { kind: 'custom', command: '/opt/bin/subl' } });
+
+    fireEvent.change(input, { target: { value: 'code-oss' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(sentSetUiState()).toHaveLength(2));
+    expect(transport.sentRequest(transport.sent.length - 1).params)
+      .toEqual({ editor: { kind: 'custom', command: 'code-oss' } });
+  });
+
+  it('never sends a blank custom command', async () => {
+    useAppStore.setState({ workspacePath: null, appState: EMPTY_APP_STATE, restoreDone: true });
+    const { transport } = renderPreferences();
+    await respondToGlobalConfigGet(transport);
+
+    fireEvent.click(await screen.findByRole('combobox', { name: /editor/i }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Custom command…' }));
+    const input = await screen.findByRole('textbox', { name: /editor command/i });
+
+    fireEvent.change(input, { target: { value: '   ' } });
+    fireEvent.blur(input);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    const methods = transport.sent.map(line => (JSON.parse(line) as { method: string }).method);
+    expect(methods).not.toContain('setUiState');
+    expect(useAppStore.getState().appState?.editor).toEqual({ kind: 'vscode' });
+  });
+
+  it('seeds the command input from a stored custom editor', async () => {
+    useAppStore.setState({
+      workspacePath: null, restoreDone: true,
+      appState: { ...EMPTY_APP_STATE, editor: { kind: 'custom', command: 'subl' } },
+    });
+    const { transport } = renderPreferences();
+    await respondToGlobalConfigGet(transport);
+
+    expect(await screen.findByRole('textbox', { name: /editor command/i })).toHaveValue('subl');
+    expect(screen.getByRole('combobox', { name: /editor/i })).toHaveValue('Custom command…');
+  });
+
   it('saves the ongoing-runs preference via setUiState', async () => {
     useAppStore.setState({ workspacePath: null, appState: EMPTY_APP_STATE, restoreDone: true });
     const { transport } = renderPreferences();

@@ -17,7 +17,7 @@ function renderQuickSwitch(recentWorkspaces = RECENTS) {
   useAppStore.setState({
     appState: {
       schemaVersion: 1, window: null, lastPage: null, theme: 'system', workspaces: {},
-      runsRetention: { maxPerWorkspace: 0 }, showOngoingRuns: true,
+      runsRetention: { maxPerWorkspace: 0 }, showOngoingRuns: true, editor: { kind: 'vscode' },
       recentWorkspaces,
     },
   });

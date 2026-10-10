@@ -319,7 +319,10 @@
         "runsRetention": {
           "maxPerWorkspace": 0
         },
-        "showOngoingRuns": true
+        "showOngoingRuns": true,
+        "editor": {
+          "kind": "vscode"
+        }
       },
       {
         "schemaVersion": 1,
@@ -329,18 +332,21 @@
         "theme": "system",
         "workspaces": {
           "<WS>/ws": {
+            "identityKey": "/<WS>/ws",
+            "lastWorkflow": "slow",
             "lastInputs": {
               "gate": {},
               "slow": {}
-            },
-            "identityKey": "/<WS>/ws",
-            "lastWorkflow": "slow"
+            }
           }
         },
         "runsRetention": {
           "maxPerWorkspace": 0
         },
-        "showOngoingRuns": true
+        "showOngoingRuns": true,
+        "editor": {
+          "kind": "vscode"
+        }
       },
       {
         "schemaVersion": 1,
@@ -350,19 +356,22 @@
         "theme": "system",
         "workspaces": {
           "<WS>/ws": {
+            "identityKey": "/<WS>/ws",
+            "lastWorkflow": "flaky",
             "lastInputs": {
               "gate": {},
               "slow": {},
               "flaky": {}
-            },
-            "identityKey": "/<WS>/ws",
-            "lastWorkflow": "flaky"
+            }
           }
         },
         "runsRetention": {
           "maxPerWorkspace": 0
         },
-        "showOngoingRuns": true
+        "showOngoingRuns": true,
+        "editor": {
+          "kind": "vscode"
+        }
       }
     ],
     "whiphandEvent": [

@@ -13,7 +13,10 @@
           "runsRetention": {
             "maxPerWorkspace": 0
           },
-          "showOngoingRuns": true
+          "showOngoingRuns": true,
+          "editor": {
+            "kind": "vscode"
+          }
         }
       }
     },
@@ -140,7 +143,10 @@
           "runsRetention": {
             "maxPerWorkspace": 3
           },
-          "showOngoingRuns": false
+          "showOngoingRuns": false,
+          "editor": {
+            "kind": "vscode"
+          }
         }
       }
     },
@@ -194,7 +200,10 @@
         "runsRetention": {
           "maxPerWorkspace": 0
         },
-        "showOngoingRuns": true
+        "showOngoingRuns": true,
+        "editor": {
+          "kind": "vscode"
+        }
       },
       {
         "schemaVersion": 1,
@@ -217,7 +226,10 @@
         "runsRetention": {
           "maxPerWorkspace": 0
         },
-        "showOngoingRuns": true
+        "showOngoingRuns": true,
+        "editor": {
+          "kind": "vscode"
+        }
       },
       {
         "schemaVersion": 1,
@@ -241,7 +253,10 @@
         "runsRetention": {
           "maxPerWorkspace": 0
         },
-        "showOngoingRuns": true
+        "showOngoingRuns": true,
+        "editor": {
+          "kind": "vscode"
+        }
       },
       {
         "schemaVersion": 1,
@@ -265,7 +280,10 @@
         "runsRetention": {
           "maxPerWorkspace": 0
         },
-        "showOngoingRuns": true
+        "showOngoingRuns": true,
+        "editor": {
+          "kind": "vscode"
+        }
       },
       {
         "schemaVersion": 1,
@@ -294,7 +312,10 @@
         "runsRetention": {
           "maxPerWorkspace": 3
         },
-        "showOngoingRuns": false
+        "showOngoingRuns": false,
+        "editor": {
+          "kind": "vscode"
+        }
       },
       {
         "schemaVersion": 1,
@@ -318,7 +339,10 @@
         "runsRetention": {
           "maxPerWorkspace": 3
         },
-        "showOngoingRuns": false
+        "showOngoingRuns": false,
+        "editor": {
+          "kind": "vscode"
+        }
       },
       {
         "schemaVersion": 1,
@@ -341,7 +365,10 @@
         "runsRetention": {
           "maxPerWorkspace": 3
         },
-        "showOngoingRuns": false
+        "showOngoingRuns": false,
+        "editor": {
+          "kind": "vscode"
+        }
       }
     ]
   },

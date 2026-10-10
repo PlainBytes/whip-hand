@@ -101,6 +101,7 @@ fn declarations() -> Vec<String> {
         TouchRecentWorkspaceParams,
         RecentWorkspacesResult,
         SetWorkspacePinnedParams,
+        EditorPreference,
         SetUiStateParams,
         ListRecentRunsParams,
         ListRecentRunsResult,

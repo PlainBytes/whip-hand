@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import {
-  Checkbox, Dropdown, Field, MessageBar, MessageBarBody, Option, SpinButton,
+  Checkbox, Dropdown, Field, Input, MessageBar, MessageBarBody, Option, SpinButton,
 } from '@fluentui/react-components';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { RemoteAccessCard } from '../components/RemoteAccessCard.tsx';
 import { useAppStore } from '../state/store.ts';
 import { spinInteger } from '../lib/spin-value.ts';
-import type { ConfigGetResult } from '../shared/protocol.gen.ts';
+import type { ConfigGetResult, EditorPreference } from '../shared/protocol.gen.ts';
 import { errorMessage } from '../lib/error-message.ts';
 
 const THEME_OPTIONS = [
@@ -14,6 +14,19 @@ const THEME_OPTIONS = [
   { value: 'light', label: 'Light' },
   { value: 'dark', label: 'Dark' },
 ] as const;
+
+const CUSTOM_EDITOR = 'custom';
+
+const EDITOR_OPTIONS = [
+  { value: 'vscode', label: 'Visual Studio Code' },
+  { value: 'vscode-insiders', label: 'VS Code Insiders' },
+  { value: 'cursor', label: 'Cursor' },
+  { value: 'windsurf', label: 'Windsurf' },
+  { value: 'zed', label: 'Zed' },
+  { value: CUSTOM_EDITOR, label: 'Custom command…' },
+] as const;
+
+const VSCODE_EDITOR: EditorPreference = { kind: 'vscode' };
 
 /** Seeded when the checkbox first turns on from "no limit". */
 const DEFAULT_OVERRIDE_MAX_RETAINED = 10;
@@ -34,10 +47,15 @@ export function PreferencesPage() {
   const client = useAgentClient();
   const themePref = useAppStore(state => state.appState?.theme ?? 'system');
   const showOngoingRuns = useAppStore(state => state.appState?.showOngoingRuns ?? true);
+  const editorPref = useAppStore(state => state.appState?.editor ?? VSCODE_EDITOR);
   const patchAppState = useAppStore(state => state.patchAppState);
   const workspacePath = useAppStore(state => state.workspacePath);
 
   const [globalConfig, setGlobalConfig] = useState<ConfigGetResult | null>(null);
+  // Picking "Custom command…" reveals the input before any command is saved.
+  const [customChosen, setCustomChosen] = useState(false);
+  const storedCommand = editorPref.kind === 'custom' ? editorPref.command : '';
+  const [commandDraft, setCommandDraft] = useState(storedCommand);
   const [retentionError, setRetentionError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -53,6 +71,22 @@ export function PreferencesPage() {
       cancelled = true;
     };
   }, [client]);
+
+  const showCustom = customChosen || editorPref.kind === 'custom';
+  const editorValue = showCustom ? CUSTOM_EDITOR : editorPref.kind;
+
+  function saveEditor(editor: EditorPreference): void {
+    patchAppState({ editor });
+    void client.request('setUiState', { editor }).catch(() => {});
+  }
+
+  function commitCommand(): void {
+    const command = commandDraft.trim();
+    if (!command) return;
+    setCommandDraft(command);
+    if (command === storedCommand) return;
+    saveEditor({ kind: 'custom', command });
+  }
 
   const maxRetained = globalConfig?.config.runs.max_retained ?? null;
 
@@ -122,6 +156,42 @@ export function PreferencesPage() {
           ))}
         </Dropdown>
       </Field>
+
+      <Field label="Editor">
+        <Dropdown
+          aria-label="Editor"
+          value={EDITOR_OPTIONS.find(o => o.value === editorValue)?.label ?? 'Visual Studio Code'}
+          selectedOptions={[editorValue]}
+          onOptionSelect={(_e, data) => {
+            const kind = data.optionValue;
+            if (!kind) return;
+            if (kind === CUSTOM_EDITOR) {
+              setCustomChosen(true);
+              return;
+            }
+            setCustomChosen(false);
+            saveEditor({ kind } as EditorPreference);
+          }}
+        >
+          {EDITOR_OPTIONS.map(o => (
+            <Option key={o.value} value={o.value} text={o.label}>
+              {o.label}
+            </Option>
+          ))}
+        </Dropdown>
+      </Field>
+      {showCustom && (
+        <Field label="Editor command" hint="One executable name or path, no arguments. The folder is passed as its only argument.">
+          <Input
+            value={commandDraft}
+            onChange={(_e, data) => setCommandDraft(data.value)}
+            onBlur={commitCommand}
+            onKeyDown={e => {
+              if (e.key === 'Enter') commitCommand();
+            }}
+          />
+        </Field>
+      )}
 
       <Field
         label="Maximum runs kept"

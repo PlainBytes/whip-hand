@@ -27,6 +27,7 @@ pub fn empty_app_state() -> Value {
         "workspaces": {},
         "runsRetention": { "maxPerWorkspace": 0 },
         "showOngoingRuns": true,
+        "editor": { "kind": "vscode" },
     })
 }
 
@@ -321,6 +322,31 @@ mod tests {
         std::fs::write(&path, "{\"schemaVersion\": 2}").unwrap();
         let store = AppStateStore::new(path, Box::new(|_| {}));
         assert_eq!(store.get(), empty_app_state());
+    }
+
+    #[test]
+    fn a_state_file_without_an_editor_reads_the_vscode_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app-state.json");
+        let mut old = empty_app_state();
+        old.as_object_mut().unwrap().remove("editor");
+        std::fs::write(&path, serde_json::to_string(&old).unwrap()).unwrap();
+        let store = AppStateStore::new(path, Box::new(|_| {}));
+        assert_eq!(store.get()["editor"], json!({ "kind": "vscode" }));
+        assert_eq!(empty_app_state()["editor"], json!({ "kind": "vscode" }));
+    }
+
+    #[test]
+    fn a_saved_editor_is_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app-state.json");
+        let editor = json!({ "kind": "custom", "command": "/opt/bin/subl" });
+        let store = AppStateStore::new(path.clone(), Box::new(|_| {}));
+        store
+            .mutate(|state| state["editor"] = editor.clone())
+            .unwrap();
+        let fresh = AppStateStore::new(path, Box::new(|_| {}));
+        assert_eq!(fresh.get()["editor"], editor);
     }
 
     // The desktop and the TUI each keep a store on one file.

@@ -42,8 +42,14 @@ pub fn command(what: &External) -> Command {
     match what {
         External::Pager { path } => {
             let (program, args) = pager();
-            let mut cmd = Command::new(program);
-            cmd.args(args).arg(path);
+            let mut cmd = Command::new(&program);
+            cmd.args(args);
+            // `update` only sends absolute paths; `--` makes sure of it for
+            // the pagers that take it (Windows' `more` does not).
+            if program != "more" {
+                cmd.arg("--");
+            }
+            cmd.arg(path);
             cmd
         }
         External::GitDiff { cwd } => {
@@ -85,6 +91,13 @@ mod tests {
     fn a_pager_with_flags_splits_into_words() {
         assert_eq!(split("less -R"), Some(("less".into(), vec!["-R".into()])));
         assert_eq!(split("  "), None);
+        let pager = command(&External::Pager {
+            path: "/r/plan.md".into(),
+        });
+        let args: Vec<_> = pager.get_args().collect();
+        if pager.get_program() != "more" {
+            assert_eq!(args[args.len() - 2..], ["--", "/r/plan.md"]);
+        }
         let git = command(&External::GitDiff { cwd: ".".into() });
         assert_eq!(git.get_program(), "git");
         assert_eq!(git.get_args().collect::<Vec<_>>(), ["diff"]);

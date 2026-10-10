@@ -3,6 +3,7 @@
 //! foreign one), and its keys.
 
 use serde_json::Value;
+use whiphand_core::path_form::is_absolute_any_platform;
 use whiphand_protocol as p;
 
 use super::PAGE;
@@ -378,7 +379,9 @@ pub fn act(model: &mut Model, action: Action) -> Option<Vec<Cmd>> {
                 }
                 None => None,
             };
-            path.map(|path| Cmd::Suspend(External::Pager { path }))
+            // Only an absolute path: the pager must never read one as an option.
+            path.filter(|p| is_absolute_any_platform(p))
+                .map(|path| Cmd::Suspend(External::Pager { path }))
                 .into_iter()
                 .collect()
         }

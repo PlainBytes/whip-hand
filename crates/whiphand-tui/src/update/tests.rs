@@ -510,3 +510,20 @@ fn ctrl_c_quits_like_q() {
     let ctrl_c = Msg::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     assert_eq!(update(&mut model, ctrl_c), [Cmd::Quit]);
 }
+
+#[test]
+fn only_an_absolute_path_goes_to_the_pager() {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "succeeded" }));
+    update(
+        &mut model,
+        Msg::Reply(
+            Then::Run("r1".into()),
+            Ok(json!({ "runId": "r1", "status": "succeeded",
+                "artifacts": [{ "name": "x", "path": "+!sh" }, { "name": "y", "path": "-o/tmp/z" }] })),
+        ),
+    );
+    update(&mut model, key('3'));
+    assert!(update(&mut model, key('o')).is_empty());
+    update(&mut model, key('j'));
+    assert!(update(&mut model, key('o')).is_empty());
+}

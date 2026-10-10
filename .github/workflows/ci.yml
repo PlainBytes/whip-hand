@@ -16,7 +16,86 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Decides which of the jobs below a PR needs. Skipped at the job level (not
+  # with `on: paths:`) so a skipped job reports as "skipped", which counts as
+  # passing for a required check. On push to main the filter steps don't run
+  # and every gate falls through to its `push` clause: main runs everything.
+  # A PR diff goes through the API, so no checkout is needed.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      node: ${{ steps.node_filter.outputs.node }}
+      parity: ${{ steps.area_filter.outputs.parity }}
+      desktop: ${{ steps.area_filter.outputs.desktop }}
+      tauri: ${{ steps.area_filter.outputs.tauri }}
+      rust: ${{ steps.area_filter.outputs.rust }}
+    steps:
+      # Everything except docs and Markdown. `every` makes the negations
+      # subtract from `**`; it applies to the whole step, hence a step of its own.
+      - uses: dorny/paths-filter@v4
+        id: node_filter
+        if: github.event_name == 'pull_request'
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            node:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+      # CI edits and line-ending rules (.gitattributes feeds the Windows
+      # goldens) turn every area on.
+      - uses: dorny/paths-filter@v4
+        id: area_filter
+        if: github.event_name == 'pull_request'
+        with:
+          filters: |
+            parity:
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'parity/**'
+              - 'packages/test-support/**'
+              - 'examples/**'
+              - 'apps/desktop/src/parity/**'
+              - 'apps/desktop/src/shared/protocol.gen.ts'
+              - 'apps/desktop/src/shared/tool-groups.ts'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'tsconfig.json'
+              - '.github/workflows/**'
+              - '.gitattributes'
+            desktop:
+              - 'apps/desktop/src/**'
+              - 'apps/desktop/public/**'
+              - 'apps/desktop/*'
+              - 'packages/test-support/**'
+              - 'parity/fixtures/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - '.github/workflows/**'
+              - '.gitattributes'
+            tauri:
+              - 'apps/desktop/src-tauri/**'
+              - 'crates/**'
+              - '.github/workflows/**'
+              - '.gitattributes'
+            rust:
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'examples/**'
+              - 'parity/fixtures/**'
+              - 'apps/desktop/src/shared/protocol.gen.ts'
+              - '.github/workflows/**'
+              - '.gitattributes'
+
   test:
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.node == 'true'
     timeout-minutes: 20
     strategy:
       # One red leg should not hide the others: while CI is being brought up,
@@ -38,6 +117,8 @@ jobs:
       - run: npm test
 
   parity:
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.parity == 'true'
     # Real spawns end to end, on both platforms, through the Rust CLI and
     # agent. The Windows leg is the one that exercises the job object, the
     # ConPTY command line and the prompt path together. It also runs the one
@@ -81,6 +162,8 @@ jobs:
           if-no-files-found: ignore
 
   desktop:
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true'
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -98,6 +181,8 @@ jobs:
       - run: npm run build -w desktop
 
   tauri:
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.tauri == 'true'
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -135,6 +220,8 @@ jobs:
   # every Rust phase to all three platforms. The Tauri crate is not a member;
   # the job above checks it.
   rust:
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
     timeout-minutes: 20
     strategy:
       fail-fast: false

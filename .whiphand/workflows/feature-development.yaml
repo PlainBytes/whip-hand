@@ -42,6 +42,8 @@ steps:
       The artifact you write is the agreed plan as it now stands, not a transcript of our
       conversation. End it with a `## Verify` section: the exact command(s) that exercise
       this change, because the workflow's test command may not cover it.
+    inputs:
+      - attachments
 
   - kind: loop
     id: human-review

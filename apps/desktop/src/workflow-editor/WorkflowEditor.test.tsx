@@ -454,7 +454,10 @@ describe('WorkflowEditor: save', () => {
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
     const req = await lastRequest(transport, 'updateWorkflow');
     transport.emitLine({ id: req.id, error: { message: "invalid workflow:\n  - duplicate step id 'plan'" } });
-    expect(await screen.findByText(/duplicate step id/i)).toBeInTheDocument();
+    const bar = await screen.findByText(/duplicate step id/i);
+    // The error bar lives in the scrolling body, not the fixed-height header.
+    expect(screen.getByTestId('page-body')).toContainElement(bar);
+    expect(screen.getByTestId('page-header')).not.toContainElement(bar);
     expect(screen.getByRole('button', { name: /^save$/i })).toBeInTheDocument();
   });
 });
@@ -556,7 +559,9 @@ describe('WorkflowEditor: save-time validation', () => {
     const prompt = await screen.findByLabelText(/^Prompt/);
     expect(prompt).toBeInTheDocument();
     expect(prompt).toHaveAttribute('aria-invalid', 'true');
-    expect(screen.getByText(/step 'step-12': Prompt/)).toBeInTheDocument();
+    const problem = screen.getByText(/step 'step-12': Prompt/);
+    expect(screen.getByTestId('page-body')).toContainElement(problem);
+    expect(screen.getByTestId('page-header')).not.toContainElement(problem);
 
     fireEvent.change(prompt, { target: { value: 'do it' } });
     fireEvent.change(screen.getByLabelText(/^Output filename/), { target: { value: 'step-12.md' } });

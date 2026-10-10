@@ -77,6 +77,7 @@ export function WorkflowEditor({
   useHarnessCatalog();
 
   const [saving, setSaving] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   // A global workflow's save gets its own confirmation: every workspace on
   // the machine reads it, not just this one.
@@ -208,6 +209,9 @@ export function WorkflowEditor({
       setShowProblems(true);
       const firstStepId = stepProblemsOf(found)[0]?.stepId;
       if (firstStepId !== undefined) revealStep(firstStepId);
+      // Workflow-level problems only: the bar is the first thing in the body, so
+      // bring the body's top into view. jsdom (tests) does not implement scrollTo.
+      else bodyRef.current?.parentElement?.scrollTo?.({ top: 0, behavior: 'smooth' });
       return;
     }
     if (source === 'global' && !confirmingGlobalSave) {
@@ -277,22 +281,6 @@ export function WorkflowEditor({
             </Button>
           </div>
         </div>
-        {saveError && (
-          <MessageBar intent="error">
-            {/* A WorkflowError-style server message is several lines, joined with '\n  - '. */}
-            <MessageBarBody style={{ whiteSpace: 'pre-wrap' }}>{saveError}</MessageBarBody>
-          </MessageBar>
-        )}
-        {showProblems && allProblems.length > 0 && (
-          <MessageBar intent="error">
-            <MessageBarBody>
-              <div>{allProblems.length} problem{allProblems.length === 1 ? '' : 's'}:</div>
-              <ul style={{ margin: '4px 0 0', paddingLeft: 18, maxHeight: '30vh', overflowY: 'auto' }}>
-                {allProblems.map((problem, i) => <li key={`${i}:${problem}`}>{problem}</li>)}
-              </ul>
-            </MessageBarBody>
-          </MessageBar>
-        )}
     </>}>
       {globalSaveConfirmDialog}
       {confirmingDelete && (
@@ -305,7 +293,23 @@ export function WorkflowEditor({
           onDismiss={() => setConfirmingDelete(false)}
         />
       )}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div ref={bodyRef} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {saveError && (
+          <MessageBar intent="error">
+            {/* A WorkflowError-style server message is several lines, joined with '\n  - '. */}
+            <MessageBarBody style={{ whiteSpace: 'pre-wrap' }}>{saveError}</MessageBarBody>
+          </MessageBar>
+        )}
+        {showProblems && allProblems.length > 0 && (
+          <MessageBar intent="error">
+            <MessageBarBody>
+              <div>{allProblems.length} problem{allProblems.length === 1 ? '' : 's'}:</div>
+              <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                {allProblems.map((problem, i) => <li key={`${i}:${problem}`}>{problem}</li>)}
+              </ul>
+            </MessageBarBody>
+          </MessageBar>
+        )}
         <WorkflowSettingsCard
           workflow={draft}
           collapsed={draftApi.settingsCollapsed}

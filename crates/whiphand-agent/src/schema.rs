@@ -327,6 +327,16 @@ fn window_state() -> S {
     }
 }
 
+/// A preset, or a custom command that must be non-empty.
+fn editor_preference() -> S {
+    Union(
+        b(
+            object!(Strictness::Strict; "kind" => Enum(&["vscode", "vscode-insiders", "cursor", "windsurf", "zed"])),
+        ),
+        b(object!(Strictness::Strict; "kind" => Enum(&["custom"]), "command" => StrMin1)),
+    )
+}
+
 fn runs_retention() -> S {
     object! { "maxPerWorkspace" => Num(Num::NONNEGATIVE_INT) }
 }
@@ -359,6 +369,11 @@ pub fn app_state() -> S {
             Raw::Map(m)
         }),
         "showOngoingRuns" => Default(b(Bool), || Raw::Bool(true)),
+        "editor" => Default(b(editor_preference()), || {
+            let mut m = Record::new();
+            m.insert("kind".to_string(), Raw::Str("vscode".to_string()));
+            Raw::Map(m)
+        }),
     }
 }
 
@@ -500,6 +515,7 @@ pub fn params(method: &str) -> Option<S> {
             "theme" => o(THEME),
             "runsRetention" => o(runs_retention()),
             "showOngoingRuns" => o(Bool),
+            "editor" => o(editor_preference()),
         },
         "listRecentRuns" => Default(
             b(object! { "limit" => o(Num(Num { max: Some(100.0), ..Num::POSITIVE_INT })) }),
@@ -541,6 +557,41 @@ mod tests {
         assert_eq!(
             validate(&super::params("listWorkflows").unwrap(), None),
             Err("(root): Invalid input: expected object, received undefined".into())
+        );
+    }
+
+    #[test]
+    fn set_ui_state_accepts_presets_and_a_non_empty_custom_editor() {
+        for params in [
+            serde_json::json!({ "editor": { "kind": "zed" } }),
+            serde_json::json!({ "editor": { "kind": "custom", "command": "/opt/bin/subl" } }),
+        ] {
+            assert_eq!(check("setUiState", params.clone()), Ok(params));
+        }
+    }
+
+    #[test]
+    fn set_ui_state_rejects_an_empty_custom_editor_and_unknown_kinds() {
+        assert!(
+            check(
+                "setUiState",
+                serde_json::json!({ "editor": { "kind": "custom", "command": "" } })
+            )
+            .is_err()
+        );
+        assert!(
+            check(
+                "setUiState",
+                serde_json::json!({ "editor": { "kind": "emacs" } })
+            )
+            .is_err()
+        );
+        assert!(
+            check(
+                "setUiState",
+                serde_json::json!({ "editor": { "kind": "custom" } })
+            )
+            .is_err()
         );
     }
 

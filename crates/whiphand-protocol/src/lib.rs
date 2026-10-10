@@ -795,6 +795,23 @@ pub enum ThemePreference {
     Dark,
 }
 
+/// The editor "open in editor" launches; global to the app, not per workspace.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum EditorPreference {
+    #[default]
+    Vscode,
+    VscodeInsiders,
+    Cursor,
+    Windsurf,
+    Zed,
+    /// `command` is one executable name or path, no arguments; the folder is
+    /// passed as its only argument.
+    Custom {
+        command: String,
+    },
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RunsRetention {
@@ -828,6 +845,7 @@ pub struct AppState {
     pub workspaces: serde_json::Map<String, Value>,
     pub runs_retention: RunsRetention,
     pub show_ongoing_runs: bool,
+    pub editor: EditorPreference,
 }
 
 pub type GetAppStateParams = Empty;
@@ -879,6 +897,9 @@ pub struct SetUiStateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub show_ongoing_runs: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub editor: Option<EditorPreference>,
 }
 
 pub type SetUiStateResult = OkTrue;
@@ -1297,6 +1318,37 @@ mod tests {
         assert_eq!(p.window, Some(None));
         assert_eq!(p.last_page, None);
         assert_eq!(back, json!({ "window": null, "theme": "dark" }));
+    }
+
+    #[test]
+    fn an_editor_preference_is_a_tagged_union_on_kind() {
+        for kind in ["vscode", "vscode-insiders", "cursor", "windsurf", "zed"] {
+            let (_, back) = round::<EditorPreference>(json!({ "kind": kind }));
+            assert_eq!(back, json!({ "kind": kind }));
+        }
+        let (e, back) = round::<EditorPreference>(json!({ "kind": "custom", "command": "subl" }));
+        assert_eq!(
+            e,
+            EditorPreference::Custom {
+                command: "subl".into()
+            }
+        );
+        assert_eq!(back, json!({ "kind": "custom", "command": "subl" }));
+        assert!(serde_json::from_value::<EditorPreference>(json!({ "kind": "emacs" })).is_err());
+    }
+
+    #[test]
+    fn set_ui_state_carries_an_optional_editor() {
+        let v = json!({ "editor": { "kind": "custom", "command": "/opt/bin/subl" } });
+        let (p, back) = round::<SetUiStateParams>(v.clone());
+        assert_eq!(
+            p.editor,
+            Some(EditorPreference::Custom {
+                command: "/opt/bin/subl".into()
+            })
+        );
+        assert_eq!(back, v);
+        assert_eq!(round::<SetUiStateParams>(json!({})).0.editor, None);
     }
 
     #[test]

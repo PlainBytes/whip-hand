@@ -182,7 +182,7 @@ export type WorkspaceMemory = { identityKey?: string, lastWorkflow?: string,
  */
 lastInputs: Record<string, Record<string, string>>, };
 
-export type AppState = { schemaVersion: 1, recentWorkspaces: Array<RecentWorkspace>, window: WindowState | null, lastPage: string | null, theme: ThemePreference, workspaces: Record<string, WorkspaceMemory>, runsRetention: RunsRetention, showOngoingRuns: boolean, };
+export type AppState = { schemaVersion: 1, recentWorkspaces: Array<RecentWorkspace>, window: WindowState | null, lastPage: string | null, theme: ThemePreference, workspaces: Record<string, WorkspaceMemory>, runsRetention: RunsRetention, showOngoingRuns: boolean, editor: EditorPreference, };
 
 export type TouchRecentWorkspaceParams = { path: string, };
 
@@ -190,7 +190,9 @@ export type RecentWorkspacesResult = { recentWorkspaces: Array<RecentWorkspace>,
 
 export type SetWorkspacePinnedParams = { path: string, pinned: boolean, };
 
-export type SetUiStateParams = { window?: WindowState | null, lastPage?: string | null, theme?: ThemePreference, runsRetention?: RunsRetention, showOngoingRuns?: boolean, };
+export type EditorPreference = { "kind": "vscode" } | { "kind": "vscode-insiders" } | { "kind": "cursor" } | { "kind": "windsurf" } | { "kind": "zed" } | { "kind": "custom", command: string, };
+
+export type SetUiStateParams = { window?: WindowState | null, lastPage?: string | null, theme?: ThemePreference, runsRetention?: RunsRetention, showOngoingRuns?: boolean, editor?: EditorPreference, };
 
 export type ListRecentRunsParams = { limit?: number, };
 

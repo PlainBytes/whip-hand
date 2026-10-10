@@ -8,6 +8,8 @@ import {
   DataGridHeader,
   DataGridHeaderCell,
   DataGridRow,
+  MessageBar,
+  MessageBarBody,
   Spinner,
   Switch,
   Text,
@@ -24,6 +26,7 @@ import { NewRunDialog } from '../components/NewRunDialog.tsx';
 import { DeleteRunDialog } from '../components/DeleteRunDialog.tsx';
 import { errorMessage } from '../lib/error-message.ts';
 import { DangerButton } from '../components/DangerButton.tsx';
+import { OpenInEditorButton } from '../components/OpenInEditorButton.tsx';
 import { Page } from '../components/Page.tsx';
 
 export interface RunsPageProps {
@@ -54,6 +57,7 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
   /** The run awaiting delete confirmation; null when no dialog is open. */
   const [deleting, setDeleting] = useState<RunSummary | null>(null);
   const [lockingId, setLockingId] = useState<string | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
 
   // Hoisted out of the polling effect so row actions can trigger an immediate
   // re-poll on success, rather than mutating local state and risking drift
@@ -100,6 +104,15 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
     renderHeaderCell: () => 'Actions',
     renderCell: run => (
       <div style={{ display: 'flex', gap: 8 }}>
+        {run.worktree && workspacePath && (
+          <OpenInEditorButton
+            workdir={workspacePath}
+            worktree={run.worktree}
+            size="small"
+            iconOnly
+            onError={setOpenError}
+          />
+        )}
         <ToggleButton
           size="small"
           checked={!!run.locked}
@@ -179,6 +192,11 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
         />
       )}
       {error && <Text>Failed to load runs: {error}</Text>}
+      {openError && (
+        <MessageBar intent="error" data-testid="runs-open-error">
+          <MessageBarBody>{openError}</MessageBarBody>
+        </MessageBar>
+      )}
       {filtered.length === 0 ? (
         <Text>No runs match the current filters.</Text>
       ) : (

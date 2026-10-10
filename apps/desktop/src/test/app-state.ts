@@ -10,4 +10,5 @@ export const EMPTY_APP_STATE: AppState = {
   workspaces: {},
   runsRetention: { maxPerWorkspace: 0 },
   showOngoingRuns: true,
+  editor: { kind: 'vscode' },
 };

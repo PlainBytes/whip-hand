@@ -190,6 +190,7 @@ fn choosing_a_workspace_switches_to_its_runs() {
     let mut model = Model::without_workspace(0.0);
     let recents = json!({ "schemaVersion": 1, "window": null, "lastPage": null, "theme": "system",
         "workspaces": {}, "runsRetention": { "maxPerWorkspace": 50 }, "showOngoingRuns": false,
+        "editor": { "kind": "vscode" },
         "recentWorkspaces": [
             { "path": "/a", "lastOpenedAt": "2026-10-09T10:00:00.000Z" },
             { "path": "/b", "lastOpenedAt": "2026-10-01T10:00:00.000Z", "pinned": true },

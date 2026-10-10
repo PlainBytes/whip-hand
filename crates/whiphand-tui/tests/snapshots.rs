@@ -169,7 +169,7 @@ fn the_help_overlay() {
 
 fn app_state(recents: Value) -> Value {
     json!({ "schemaVersion": 1, "window": null, "lastPage": null, "theme": "system", "workspaces": {},
-        "runsRetention": { "maxPerWorkspace": 50 }, "showOngoingRuns": false, "recentWorkspaces": recents })
+        "runsRetention": { "maxPerWorkspace": 50 }, "showOngoingRuns": false, "editor": { "kind": "vscode" }, "recentWorkspaces": recents })
 }
 
 #[test]

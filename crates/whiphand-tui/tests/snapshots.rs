@@ -407,3 +407,76 @@ fn a_failed_stages_run_says_where_it_stopped() {
     );
     snapshot("detail_stages_failed", &model);
 }
+
+// ------------------------------------------------------------------ new run
+
+fn agent_json(yaml: &str) -> Value {
+    let workflow = whiphand_core::schema::parse_workflow(yaml).unwrap();
+    whiphand_core::jsval::to_json(&whiphand_core::engine::workflow_js::workflow_to_js(
+        &workflow,
+    ))
+}
+
+fn new_run() -> Model {
+    let mut model = busy();
+    key(&mut model, KeyCode::Char('n'));
+    let feature = agent_json(
+        r#"
+name: feature
+description: Plan with me, build it, review it.
+inputs:
+  feature: { required: true, prompt: "What are we building?", multiline: true }
+  branch: { required: false, default: main, prompt: "Target branch", remember: true }
+steps:
+  - id: plan
+    runner: claude
+    mode: interactive
+    writes: false
+    inputs: [attachments]
+    output: plan.md
+    prompt: p
+  - id: fix
+    kind: loop
+    until: tests
+    max_iterations: 3
+    steps:
+      - id: tests
+        kind: command
+        run: npm test
+        verdict: true
+  - id: lint
+    kind: command
+    run: npm run lint
+    enabled: false
+"#,
+    );
+    let entries = json!([
+        { "name": "feature", "path": "/home/dev/shop/.whiphand/workflows/feature.yaml",
+          "source": "project", "workflow": feature },
+        { "name": "bugfix", "path": "/home/dev/.whiphand/workflows/bugfix.yaml",
+          "source": "global", "workflow": agent_json("name: bugfix\ndescription: Reproduce, fix, verify.\nsteps:\n  - id: a\n    kind: command\n    run: 'true'\n") },
+        { "name": "old", "path": "/home/dev/shop/.whiphand/workflows/old.yaml",
+          "source": "project", "error": "steps: required" },
+    ]);
+    reply(&mut model, Then::Workflows, entries);
+    model
+}
+
+#[test]
+fn new_run_picker() {
+    snapshot("new_run_picker", &new_run());
+}
+
+#[test]
+fn new_run_form() {
+    let mut model = new_run();
+    key(&mut model, KeyCode::Enter);
+    snapshot("new_run_form", &model);
+    // Start with the required input empty; then type into it.
+    chars(&mut model, "s");
+    key(&mut model, KeyCode::Enter);
+    chars(&mut model, "Checkout flow");
+    key(&mut model, KeyCode::Enter);
+    chars(&mut model, "with saved cards");
+    snapshot("new_run_editing", &model);
+}

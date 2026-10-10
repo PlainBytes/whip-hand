@@ -10,7 +10,7 @@ use crate::client::{self, CancelRun, DeleteRun, EndSession, RenameRun, ResumeRun
 use crate::cmd::{Cmd, Then};
 use crate::model::input::{Edit, Input};
 use crate::model::runs::{Row, row};
-use crate::model::{Ask, Dialog, Job, Model, Route, RunRef};
+use crate::model::{Ask, Dialog, Model, Route, RunRef};
 use crate::view::keymap::Action;
 
 /// Cancelling by run id SIGTERMs the pid in the manifest, which for a run
@@ -311,11 +311,7 @@ pub fn on_reply(
         Then::Resumed(run_id) => match client::decode::<ResumeRun>(value) {
             Ok(r) => {
                 // Local from now on: the detail follows it live.
-                let job = model
-                    .jobs
-                    .entry(r.job_id)
-                    .or_insert_with(|| Job::new(JobStatus::Running));
-                job.run_id = Some(run_id.clone());
+                model.bind_job(&r.job_id, run_id);
                 reread(model, run_id)
             }
             Err(e) => refuse(model, &e),

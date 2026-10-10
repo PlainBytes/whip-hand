@@ -3,6 +3,7 @@
 pub mod detail;
 pub mod input;
 pub mod log;
+pub mod new_run;
 pub mod runs;
 
 use std::collections::{BTreeMap, VecDeque};
@@ -50,6 +51,7 @@ pub enum Route {
     Runs,
     RunDetail,
     Doctor,
+    NewRun,
 }
 
 impl Route {
@@ -59,6 +61,7 @@ impl Route {
             Route::Runs => "Runs",
             Route::RunDetail => "Run",
             Route::Doctor => "Doctor",
+            Route::NewRun => "New run",
         }
     }
 }
@@ -163,6 +166,7 @@ pub struct Model {
     pub runs_ui: RunsUi,
     pub workspaces: WorkspacesUi,
     pub detail: Option<RunDetail>,
+    pub new_run: Option<new_run::NewRun>,
     pub doctor: DoctorUi,
     /// The `?` overlay is up.
     pub help: bool,
@@ -227,11 +231,36 @@ impl Model {
             .count()
     }
 
-    /// The job driving `run_id` in this process, if one is.
+    /// The job for `run_id` in this process, if there is one: the running
+    /// one when a resume has left an older, finished one behind.
     pub fn job_for(&self, run_id: &str) -> Option<(&String, &Job)> {
-        self.jobs
+        let mut jobs = self
+            .jobs
             .iter()
-            .find(|(_, j)| j.run_id.as_deref() == Some(run_id))
+            .filter(|(_, j)| j.run_id.as_deref() == Some(run_id));
+        let first = jobs.next()?;
+        if first.1.status == JobStatus::Running {
+            return Some(first);
+        }
+        Some(
+            jobs.find(|(_, j)| j.status == JobStatus::Running)
+                .unwrap_or(first),
+        )
+    }
+
+    /// Files job `job_id` (created running if new) under `run_id`. A run
+    /// has one job at a time: a finished one a resume replaced is dropped,
+    /// so it never speaks for the run again.
+    pub fn bind_job(&mut self, job_id: &str, run_id: &str) -> &mut Job {
+        self.jobs.retain(|id, j| {
+            id == job_id || j.run_id.as_deref() != Some(run_id) || j.status == JobStatus::Running
+        });
+        let job = self
+            .jobs
+            .entry(job_id.to_string())
+            .or_insert_with(|| Job::new(JobStatus::Running));
+        job.run_id = Some(run_id.to_string());
+        job
     }
 
     /// The terminal's title: what is waiting on the human, at a glance.

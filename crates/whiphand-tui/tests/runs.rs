@@ -230,7 +230,44 @@ fn workspace() -> tempfile::TempDir {
         "name: wait\nsteps:\n  - id: ask\n    kind: manual\n    title: Wait\n    instructions: Nothing to do.\n",
     )
     .unwrap();
+    // The same two where the new-run screen lists them.
+    let workflows = ws.path().join(".whiphand").join("workflows");
+    std::fs::create_dir_all(&workflows).unwrap();
+    for name in ["echo.yaml", "wait.yaml"] {
+        std::fs::copy(ws.path().join(name), workflows.join(name)).unwrap();
+    }
     ws
+}
+
+impl Tui {
+    fn chr(&mut self, c: char) {
+        self.key(KeyCode::Char(c));
+    }
+
+    /// From the runs list: `n`, the workflow by name, Enter, `s`.
+    fn start_from_the_form(&mut self, workflow: &str) {
+        self.chr('n');
+        self.until("the workflows", |m| {
+            m.new_run.as_ref().is_some_and(|n| n.workflows.is_some())
+        });
+        let n = self.model.new_run.as_mut().unwrap();
+        n.cursor = n
+            .workflows
+            .as_ref()
+            .unwrap()
+            .iter()
+            .position(|e| e.name == workflow)
+            .expect("the workflow is listed");
+        self.key(KeyCode::Enter);
+        self.chr('s');
+    }
+
+    fn status(&self) -> String {
+        let run_id = &self.model.detail.as_ref().expect("a run is open").run_id;
+        let rows = self.model.rows();
+        let row = rows.iter().find(|r| r.run_id == *run_id).expect("listed");
+        row.status.clone()
+    }
 }
 
 #[test]
@@ -402,4 +439,89 @@ fn a_run_can_be_followed_in_its_detail_and_read_back_cold() {
     assert_eq!(cold.log(), live);
     drop(cold);
     host2.shutdown();
+}
+
+#[test]
+fn a_run_started_from_the_form_opens_and_is_followed() {
+    let (app, ws) = (tempfile::tempdir().unwrap(), workspace());
+    let host = host(app.path());
+    let mut tui = Tui::start(&host, ws.path());
+    tui.until("hello", |m| m.agent_version.is_some());
+    tui.start_from_the_form("echo");
+    tui.until("the run's detail", |m| *m.screen() == Route::RunDetail);
+    assert_eq!(tui.model.route, [Route::Runs, Route::RunDetail]);
+    tui.until_with("the run to finish", |t| {
+        t.model
+            .rows()
+            .first()
+            .is_some_and(|r| r.status == "succeeded")
+            && t.log().iter().any(|(_, _, _, text)| text == "bye")
+    });
+    drop(tui);
+    host.shutdown();
+}
+
+#[test]
+fn run_actions_drive_a_real_run() {
+    let (app, ws) = (tempfile::tempdir().unwrap(), workspace());
+    let host = host(app.path());
+    let mut tui = Tui::start(&host, ws.path());
+    tui.until("hello", |m| m.agent_version.is_some());
+    tui.start_from_the_form("wait");
+    tui.until("the manual step", |m| {
+        *m.screen() == Route::RunDetail && m.jobs.values().any(|j| j.manual)
+    });
+
+    tui.settle();
+    // Running: delete is refused before it asks.
+    tui.chr('x');
+    assert!(tui.model.dialog.is_none());
+    assert!(
+        tui.model
+            .notice
+            .as_deref()
+            .unwrap()
+            .contains("cancel it first")
+    );
+
+    tui.chr('c');
+    tui.chr('y');
+    tui.until_with("the cancel", |t| t.status() == "cancelled");
+
+    // Resumed, it is this process's again and waits on the same step.
+    tui.chr('r');
+    tui.chr('y');
+    tui.until_with("the resumed run to wait", |t| {
+        t.status() == "running" && t.model.jobs.values().any(|j| j.manual)
+    });
+    tui.chr('c');
+    tui.chr('y');
+    tui.until_with("the second cancel", |t| t.status() == "cancelled");
+
+    tui.chr('R');
+    for c in "keep me".chars() {
+        tui.chr(c);
+    }
+    tui.key(KeyCode::Enter);
+    tui.chr('L');
+    tui.until("the rename and the lock", |m| {
+        m.rows()
+            .first()
+            .is_some_and(|r| r.locked && r.name.as_deref() == Some("keep me"))
+    });
+    tui.settle();
+    tui.chr('x');
+    assert!(tui.model.notice.as_deref().unwrap().contains("locked"));
+    tui.chr('L');
+    tui.until("the unlock", |m| {
+        m.rows().first().is_some_and(|r| !r.locked)
+    });
+    tui.settle();
+    tui.chr('x');
+    tui.chr('y');
+    tui.until("the delete", |m| {
+        *m.screen() == Route::Runs && m.rows().is_empty()
+    });
+    drop(tui);
+    host.shutdown();
 }

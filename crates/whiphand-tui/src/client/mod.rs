@@ -63,6 +63,8 @@ methods! {
     SetRunLocked = "setRunLocked" (p::SetRunLockedParams) -> p::SetRunLockedResult;
     DeleteRun = "deleteRun" (p::DeleteRunParams) -> p::DeleteRunResult;
     EndSession = "endSession" (p::EndSessionParams) -> p::EndSessionResult;
+    ListWorkflows = "listWorkflows" (p::ListWorkflowsParams) -> p::ListWorkflowsResult;
+    StartRun = "startRun" (p::StartRunParams) -> p::StartRunResult;
 }
 
 /// Methods the TUI leaves to the desktop. A desktop PR that adds a protocol
@@ -78,7 +80,6 @@ pub const DESKTOP_ONLY: &[&str] = &[
 /// ones that change a run, a workflow or settings. Each moves into
 /// `methods!` when its screen lands.
 pub const LATER: &[&str] = &[
-    "listWorkflows",
     "getWorkflow",
     "createWorkflow",
     "updateWorkflow",
@@ -92,7 +93,6 @@ pub const LATER: &[&str] = &[
     "pruneRuns",
     "writeArtifact",
     "setUiState",
-    "startRun",
     "resolveManual",
     "ptyInput",
     "ptyResize",

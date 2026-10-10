@@ -19,6 +19,8 @@ pub enum Msg {
     Reply(Then, Result<Value, RpcError>),
     /// A program the screen was handed to has returned; why it failed, if it did.
     External(Result<(), String>),
+    /// `$EDITOR` is back: the field's new text, or why it is not.
+    Edited(Result<String, String>),
     /// The agent's engine thread is gone: its channel closed.
     HostGone,
 }

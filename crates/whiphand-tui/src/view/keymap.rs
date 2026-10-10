@@ -16,6 +16,7 @@ pub enum Ctx {
     Runs,
     Detail,
     Doctor,
+    NewRun,
 }
 
 impl Ctx {
@@ -25,6 +26,7 @@ impl Ctx {
             Route::Runs => Ctx::Runs,
             Route::RunDetail => Ctx::Detail,
             Route::Doctor => Ctx::Doctor,
+            Route::NewRun => Ctx::NewRun,
         }
     }
 
@@ -36,6 +38,7 @@ impl Ctx {
             Ctx::Runs => "Runs",
             Ctx::Detail => "Run detail",
             Ctx::Doctor => "Doctor",
+            Ctx::NewRun => "New run",
         }
     }
 }
@@ -76,6 +79,8 @@ pub enum Action {
     Lock,
     Delete,
     EndSession,
+    NewRun,
+    StartRun,
 }
 
 /// A key as the table spells it.
@@ -192,6 +197,7 @@ pub const BINDINGS: &[Binding] = &[
     b(C::Goto, &[Char('d')], "g d", A::GoDoctor, "doctor"),
     b(C::Workspaces, &[Char('p')], "p", A::Pin, "pin or unpin"),
     b(C::Runs, &[Char('/')], "/", A::Filter, "filter"),
+    b(C::Runs, &[Char('n')], "n", A::NewRun, "new run"),
     b(
         C::Runs,
         &[Char('o')],
@@ -283,6 +289,7 @@ pub const BINDINGS: &[Binding] = &[
         "end the interactive session",
     ),
     b(C::Doctor, &[Char('r')], "r", A::Refresh, "check again"),
+    b(C::NewRun, &[Char('s')], "s", A::StartRun, "start the run"),
 ];
 
 /// What `key` does on `screen`; `goto` after a `g`.
@@ -334,7 +341,14 @@ mod tests {
     // screen never shadows a global key.
     #[test]
     fn no_key_is_bound_twice_where_it_applies() {
-        let ctxs = [C::Goto, C::Workspaces, C::Runs, C::Detail, C::Doctor];
+        let ctxs = [
+            C::Goto,
+            C::Workspaces,
+            C::Runs,
+            C::Detail,
+            C::Doctor,
+            C::NewRun,
+        ];
         for ctx in ctxs.into_iter().chain([C::Global]) {
             let scope = BINDINGS
                 .iter()

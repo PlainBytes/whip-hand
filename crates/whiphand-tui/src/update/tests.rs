@@ -732,3 +732,139 @@ fn run_actions_work_from_the_runs_list_too() {
     let call = rpc(&update(&mut model, key('y'))).params.clone();
     assert_eq!(call, json!({ "workdir": "/w", "runId": "r1" }));
 }
+
+// The new-run screen (update/new_run.rs).
+
+fn workflows() -> Value {
+    json!([
+        { "name": "cycle", "path": "/w/.whiphand/workflows/cycle.yaml", "source": "project",
+          "workflow": { "name": "cycle", "steps": [{ "id": "a", "kind": "command", "run": "true" }] } },
+        { "name": "feature", "path": "/home/.whiphand/workflows/feature.yaml", "source": "global",
+          "workflow": { "name": "feature",
+            "inputs": { "feature": { "required": true, "remember": true } },
+            "steps": [{ "id": "a", "kind": "command", "run": "true" }] } },
+        { "name": "broken", "path": "/w/.whiphand/workflows/broken.yaml", "source": "project",
+          "error": "steps: required" },
+    ])
+}
+
+fn new_run_on(model: &mut Model) {
+    let cmds = update(model, key('n'));
+    assert_eq!(methods(&cmds), ["listWorkflows", "getAppState"]);
+    assert_eq!(*model.screen(), Route::NewRun);
+    update(model, Msg::Reply(Then::Workflows, Ok(workflows())));
+}
+
+#[test]
+fn the_picker_starts_on_the_last_workflow_and_skips_a_broken_one() {
+    let mut model = Model::new("/w".into(), 0.0);
+    new_run_on(&mut model);
+    let state = json!({ "schemaVersion": 1, "recentWorkspaces": [], "window": null, "lastPage": null,
+        "theme": "system", "runsRetention": { "maxPerWorkspace": 0 }, "showOngoingRuns": false,
+        "workspaces": { "/w": { "lastWorkflow": "global:feature",
+            "lastInputs": { "global:feature": { "feature": "search" } } } } });
+    update(&mut model, Msg::Reply(Then::AppState, Ok(state)));
+    let n = model.new_run.as_ref().unwrap();
+    assert_eq!(n.cursor, 1);
+    update(&mut model, key('j'));
+    update(&mut model, code(KeyCode::Enter));
+    assert!(model.new_run.as_ref().unwrap().form.is_none());
+    assert!(model.notice.as_deref().unwrap().contains("does not parse"));
+    update(&mut model, key('k'));
+    update(&mut model, code(KeyCode::Enter));
+    let form = model.new_run.as_ref().unwrap().form.as_ref().unwrap();
+    assert_eq!(form.fields[0].input.text(), "search");
+    // q goes back to the picker, then to the runs.
+    update(&mut model, key('q'));
+    assert!(model.new_run.as_ref().unwrap().form.is_none());
+    update(&mut model, key('q'));
+    assert_eq!(*model.screen(), Route::Runs);
+    assert!(model.new_run.is_none());
+}
+
+#[test]
+fn a_started_run_opens_its_detail_once_it_has_an_id() {
+    let mut model = Model::new("/w".into(), 0.0);
+    new_run_on(&mut model);
+    update(&mut model, key('j'));
+    update(&mut model, code(KeyCode::Enter));
+    // The required input is empty: s refuses, saying so.
+    assert!(update(&mut model, key('s')).is_empty());
+    let form = model.new_run.as_ref().unwrap().form.as_ref().unwrap();
+    assert_eq!(form.error.as_deref(), Some("feature is required"));
+    // Edit it: Enter starts editing, typing fills it, Enter moves on.
+    update(&mut model, code(KeyCode::Enter));
+    typed(&mut model, "search box");
+    update(&mut model, code(KeyCode::Enter));
+    let form = model.new_run.as_ref().unwrap().form.as_ref().unwrap();
+    assert!(!form.editing);
+    assert_eq!(form.focus, 1);
+    let cmds = update(&mut model, key('s'));
+    let call = rpc(&cmds);
+    assert_eq!(call.method, "startRun");
+    assert_eq!(call.params["workflow"], "global:feature");
+    assert_eq!(call.params["inputs"], json!({ "feature": "search box" }));
+    assert!(update(&mut model, key('s')).is_empty(), "no second start");
+    update(
+        &mut model,
+        Msg::Reply(Then::Started, Ok(json!({ "jobId": "j1" }))),
+    );
+    assert_eq!(*model.screen(), Route::NewRun);
+    let cmds = running(&mut model, "j1", "r1");
+    assert!(methods(&cmds).contains(&"getRun"));
+    assert_eq!(*model.screen(), Route::RunDetail);
+    assert_eq!(model.route, [Route::Runs, Route::RunDetail]);
+    assert!(model.new_run.is_none());
+}
+
+#[test]
+fn a_refused_start_stays_on_the_form() {
+    let mut model = Model::new("/w".into(), 0.0);
+    new_run_on(&mut model);
+    update(&mut model, code(KeyCode::Enter));
+    update(&mut model, key('s'));
+    let refused = RpcError {
+        code: -32000,
+        message: "workflow 'cycle' has a problem".into(),
+        data: None,
+    };
+    update(&mut model, Msg::Reply(Then::Started, Err(refused)));
+    let n = model.new_run.as_ref().unwrap();
+    assert!(!n.starting);
+    assert_eq!(
+        n.form.as_ref().unwrap().error.as_deref(),
+        Some("workflow 'cycle' has a problem")
+    );
+    assert!(model.notice.is_none());
+}
+
+#[test]
+fn ctrl_e_hands_the_field_to_the_editor() {
+    let mut model = Model::new("/w".into(), 0.0);
+    new_run_on(&mut model);
+    update(&mut model, key('j'));
+    update(&mut model, code(KeyCode::Enter));
+    update(&mut model, code(KeyCode::Enter));
+    typed(&mut model, "draft");
+    assert_eq!(
+        update(&mut model, ctrl('e')),
+        [Cmd::Suspend(External::Editor {
+            text: "draft".into()
+        })]
+    );
+    update(&mut model, Msg::Edited(Ok("line one\nline two\n".into())));
+    let form = model.new_run.as_ref().unwrap().form.as_ref().unwrap();
+    // A one-line input flattens what the editor gave it.
+    assert_eq!(form.fields[0].input.text(), "line one line two");
+}
+
+#[test]
+fn a_resumed_run_is_its_new_job_whichever_order_the_ids_sort_in() {
+    for (old, new) in [("j1", "j2"), ("j2", "j1")] {
+        let mut model = Model::new("/w".into(), 0.0);
+        state(&mut model, old, "r1", JobStatus::Cancelled);
+        running(&mut model, new, "r1");
+        assert_eq!(model.job_for("r1").map(|(id, _)| id.as_str()), Some(new));
+        assert!(!model.jobs.contains_key(old), "the replaced job is dropped");
+    }
+}

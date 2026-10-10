@@ -128,6 +128,10 @@ pub fn run_cli(args: Vec<OsString>) -> i32 {
         err_line(&message);
         return 1;
     }
+    // The TUI runs its own runtime (and a Host with its own engine thread).
+    if let Some(("tui", m)) = matches.subcommand() {
+        return whiphand_tui::run(whiphand_tui::TuiOptions { dir: dir(m).into() });
+    }
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

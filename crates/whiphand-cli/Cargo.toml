@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 whiphand-core = { path = "../whiphand-core" }
+whiphand-tui = { path = "../whiphand-tui" }
 clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "signal", "sync", "time"] }

@@ -105,4 +105,10 @@ export const uiActions: Record<string, Record<string, string>> = {
     '--global': 'preferences:globalConfigSection',
     '-C': 'sidebar:workspaceSwitcher',
   },
+  // `whiphand tui` is another front end on the same agent, not an action
+  // inside this one (docs/tui-plan.md); the window itself is its counterpart.
+  tui: {
+    _command: 'exempt:another-front-end',
+    '-C': 'sidebar:workspaceSwitcher',
+  },
 };

@@ -713,6 +713,7 @@ impl<F: Frontend> Run<'_, F> {
         let created = worktree::create(
             Path::new(&self.workspace),
             &self.run_id,
+            &scope.run_slug,
             &branch,
             &base,
             request.sync,

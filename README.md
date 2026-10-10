@@ -55,7 +55,7 @@ and commits them one at a time, then pushes the branch (leave the push command b
 `whiphand new-workflow` scaffolds from `iterate`.
 
 **Running workflows side by side.** `develop` declares `worktree:`, so each run gets its own checkout
-under `.whiphand/worktrees/<run-id>` on a new branch, and your main checkout is never touched: start
+under `.whiphand/worktrees/<run-id>-<slug>` (just `<run-id>` for an unnamed run) on a new branch, and your main checkout is never touched: start
 two features at once and they cannot collide.
 `--worktree` / `--no-worktree` (or the New Run dialog's switch) override the workflow's choice for one
 run; `--resume` always returns to the tree the run started in. Deleting a run removes its worktree

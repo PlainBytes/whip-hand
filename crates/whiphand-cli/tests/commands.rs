@@ -661,6 +661,36 @@ fn worktree_run_executes_on_a_new_branch_in_the_worktree() {
 }
 
 #[test]
+fn named_run_worktree_folder_carries_the_slug_and_resume_and_remove_use_it() {
+    let e = Env::new();
+    git_workspace(&e);
+    let flaky = concat!(
+        record_pwd!(),
+        " && test -f \"$WHIPHAND_RUN_DIR/ok\" || { touch \"$WHIPHAND_RUN_DIR/ok\"; exit 1; }"
+    );
+    worktree_workflow(&e, "worktree: true\n", flaky);
+    let out = e.run(&["run", "wt", "--name", "Fix login bug"]);
+    assert_eq!(out.code(), 1, "{}{}", out.stdout(), out.stderr());
+    let id = run_id(&e.only_run());
+    let tree = e
+        .ws()
+        .join(".whiphand/worktrees")
+        .join(format!("{id}-fix-login-bug"));
+    assert!(tree.is_dir(), "{}", out.stdout());
+    assert!(
+        out.stdout()
+            .contains(&format!(".whiphand/worktrees/{id}-fix-login-bug")),
+        "{}",
+        out.stdout()
+    );
+    let out = e.run(&["run", "--resume", &id]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    let out = e.run(&["worktree", "remove", &id]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    assert!(!tree.exists());
+}
+
+#[test]
 fn worktree_flag_creates_a_worktree_for_a_workflow_without_the_field() {
     let e = Env::new();
     git_workspace(&e);

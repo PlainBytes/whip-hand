@@ -57,7 +57,8 @@ pub const WORKTREES_DIR: &str = ".whiphand/worktrees";
 /// Recorded in run.json as `worktree`. `path` and `tree` are absolute, `/`-form (like `workdir`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct WorktreeRecord {
-    /// The worktree root: `<workspace>/.whiphand/worktrees/<run-id>`.
+    /// The worktree root: `<workspace>/.whiphand/worktrees/<run-id>-<slug>`, or `<run-id>` when the
+    /// run has no usable name. Always read from here, never rebuilt from the run id.
     pub path: String,
     /// Where steps run: `path` plus the workspace's prefix inside its repository.
     pub tree: String,
@@ -197,10 +198,21 @@ pub async fn preflight(workspace: &Path, base: &str) -> Result<Preflight, String
     Ok(Preflight { prefix })
 }
 
+/// The worktree folder: the run id first (chronological order, unique), then the run's slug
+/// when the run has a usable name (`run_slug_for` yields the run id otherwise).
+fn folder_name(run_id: &str, slug: &str) -> String {
+    if slug.is_empty() || slug == run_id {
+        run_id.to_string()
+    } else {
+        format!("{run_id}-{slug}")
+    }
+}
+
 /// After auto-naming, before `run:start`. `branch` and `base` are rendered with the final scope.
 pub async fn create(
     workspace: &Path,
     run_id: &str,
+    slug: &str,
     branch: &str,
     base: &str,
     sync: bool,
@@ -232,7 +244,7 @@ pub async fn create(
         std::fs::write(&ignore, "*\n")
             .map_err(|e| format!("worktree: cannot write {ignore}: {e}"))?;
     }
-    let path = node_path::join(&[&parent, run_id]);
+    let path = node_path::join(&[&parent, &folder_name(run_id, slug)]);
     match worktree_add(workspace, Path::new(&path), branch, &start.sha).await {
         GitResult::Ok(()) => {}
         GitResult::NotARepo => return Err(not_a_repo(workspace)),
@@ -688,6 +700,34 @@ mod tests {
         assert_eq!(preflight(r.path(), "HEAD").await.unwrap().prefix, "");
     }
 
+    #[test]
+    fn folder_name_puts_the_id_first_and_drops_a_slug_that_is_the_id() {
+        assert_eq!(
+            folder_name("20261009-1-ab", "fix-login"),
+            "20261009-1-ab-fix-login"
+        );
+        assert_eq!(
+            folder_name("20261009-1-ab", "20261009-1-ab"),
+            "20261009-1-ab"
+        );
+        assert_eq!(folder_name("20261009-1-ab", ""), "20261009-1-ab");
+    }
+
+    #[tokio::test]
+    async fn create_names_the_folder_after_the_slug() {
+        let r = repo();
+        let pf = preflight(r.path(), "HEAD").await.unwrap();
+        let created = create(r.path(), "r1", "fix-login", "b1", "HEAD", true, &pf)
+            .await
+            .unwrap();
+        assert!(
+            created.record.path.ends_with("/worktrees/r1-fix-login"),
+            "{}",
+            created.record.path
+        );
+        check(&created.record).await.unwrap();
+    }
+
     #[tokio::test]
     async fn create_checks_the_branch_then_adds_a_worktree_in_the_workspace_prefix() {
         let r = repo();
@@ -696,11 +736,11 @@ mod tests {
         let pf = preflight(&sub, "HEAD").await.unwrap();
         assert_eq!(pf.prefix, "sub/");
 
-        let e = create(&sub, "r1", "bad..name", "HEAD", true, &pf)
+        let e = create(&sub, "r1", "r1", "bad..name", "HEAD", true, &pf)
             .await
             .unwrap_err();
         assert!(e.contains("not a valid branch name"), "{e}");
-        let created = create(&sub, "r1", "master-or-main", "HEAD", true, &pf)
+        let created = create(&sub, "r1", "r1", "master-or-main", "HEAD", true, &pf)
             .await
             .unwrap();
         assert_eq!(created.fallback, None);
@@ -710,7 +750,7 @@ mod tests {
         assert!(Path::new(&rec.native_tree()).is_dir());
         check(&rec).await.unwrap();
 
-        let e = create(&sub, "r2", "master-or-main", "HEAD", true, &pf)
+        let e = create(&sub, "r2", "r2", "master-or-main", "HEAD", true, &pf)
             .await
             .unwrap_err();
         assert!(e.contains("already exists"), "{e}");

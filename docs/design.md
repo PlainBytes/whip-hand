@@ -1196,7 +1196,9 @@ They contradict each other, and neither applies to `--resume`: a resumed run ret
 it started in. The desktop's New Run dialog has the same choice as a switch, defaulting to what
 the workflow says.
 
-**Where it lives.** At `<workspace>/.whiphand/worktrees/<run-id>`. The engine writes a
+**Where it lives.** At `<workspace>/.whiphand/worktrees/<run-id>-<slug>`, where the slug comes from the run's name
+(just `<run-id>` for an unnamed run); the recorded `worktree.path` is what resume, remove and the
+diff read, so older runs keep their plain `<run-id>` folder. The engine writes a
 `.gitignore` containing `*` in `.whiphand/worktrees` itself, so the checkouts never show up as
 untracked in the main tree, whatever the repository's own ignore rules say.
 

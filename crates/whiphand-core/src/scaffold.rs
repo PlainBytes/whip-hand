@@ -291,6 +291,7 @@ mod tests {
             Some(WorktreeSetting::Enabled {
                 base: Some("{{ inputs.base }}".into()),
                 branch: Some("feature/{{ run.slug }}".into()),
+                sync: None,
             })
         );
         assert!(

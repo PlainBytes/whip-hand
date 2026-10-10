@@ -235,6 +235,7 @@ mod worktree_tests {
         Some(WorktreeSetting::Enabled {
             base: base.map(Into::into),
             branch: branch.map(Into::into),
+            sync: None,
         })
     }
 
@@ -244,6 +245,14 @@ mod worktree_tests {
         assert_eq!(parse("true"), enabled(None, None));
         assert_eq!(parse("false"), Some(WorktreeSetting::Disabled));
         assert_eq!(parse("{}"), enabled(None, None));
+        assert_eq!(
+            parse("{ sync: false }"),
+            Some(WorktreeSetting::Enabled {
+                base: None,
+                branch: None,
+                sync: Some(false),
+            })
+        );
         assert_eq!(
             parse("{ base: x, branch: y }"),
             enabled(Some("x"), Some("y"))
@@ -258,7 +267,14 @@ mod worktree_tests {
 
     #[test]
     fn malformed_values_name_the_key() {
-        for bad in ["3", "{ foo: 1 }", "{ base: '' }", "'yes'", "{ branch: 4 }"] {
+        for bad in [
+            "3",
+            "{ foo: 1 }",
+            "{ base: '' }",
+            "'yes'",
+            "{ branch: 4 }",
+            "{ sync: 'no' }",
+        ] {
             let found = problems(bad);
             assert!(
                 found.iter().all(|p| p.starts_with("workflow: worktree")),
@@ -266,9 +282,14 @@ mod worktree_tests {
             );
             assert!(!found.is_empty(), "{bad}");
         }
+        assert!(
+            problems("{ sync: 'no' }")[0].starts_with("workflow: worktree: sync "),
+            "{:?}",
+            problems("{ sync: 'no' }")
+        );
         assert_eq!(
             problems("{ foo: 1 }"),
-            vec!["workflow: worktree: unknown key 'foo'"]
+            vec!["workflow: worktree: unknown key 'foo' (allowed: base, branch, sync)"]
         );
     }
 

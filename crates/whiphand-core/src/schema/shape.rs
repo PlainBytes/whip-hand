@@ -316,19 +316,24 @@ fn workflow_input(cx: &mut Ctx, v: Option<&Raw>) -> Option<WorkflowInput> {
     })
 }
 
-/// `worktree:` — `true`, `false`, or a map of only `base` and `branch`.
+/// `worktree:` — `true`, `false`, or a map of only `base`, `branch` and `sync`.
 fn worktree_setting(cx: &mut Ctx, v: Option<&Raw>) -> Option<WorktreeSetting> {
     match v {
         Some(Raw::Bool(true)) => Some(WorktreeSetting::Enabled {
             base: None,
             branch: None,
+            sync: None,
         }),
         Some(Raw::Bool(false)) => Some(WorktreeSetting::Disabled),
         Some(Raw::Map(m)) => {
             let mut ok = true;
             for key in m.keys() {
-                if key != "base" && key != "branch" {
-                    cx.push(Code::Custom, format!("unknown key '{key}'"), true);
+                if key != "base" && key != "branch" && key != "sync" {
+                    cx.push(
+                        Code::Custom,
+                        format!("unknown key '{key}' (allowed: base, branch, sync)"),
+                        true,
+                    );
                     ok = false;
                 }
             }
@@ -342,12 +347,14 @@ fn worktree_setting(cx: &mut Ctx, v: Option<&Raw>) -> Option<WorktreeSetting> {
                 v,
                 zod::string_min1
             ));
+            let sync = field!(cx, m, "sync", opt_bool);
             if !ok {
                 return None;
             }
             Some(WorktreeSetting::Enabled {
                 base: base?,
                 branch: branch?,
+                sync: sync?,
             })
         }
         _ => {

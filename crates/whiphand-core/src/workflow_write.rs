@@ -803,6 +803,9 @@ mod tests {
             "false",
             "{ base: main, branch: 'f/{{ run.slug }}' }",
             "{ base: main }",
+            "{ sync: false }",
+            "{ sync: true }",
+            "{ base: main, sync: false }",
         ] {
             let text = format!(
                 "name: w\nworktree: {shape}\nsteps:\n  - id: a\n    kind: command\n    run: echo a\n"

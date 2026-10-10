@@ -156,13 +156,16 @@ pub fn step_to_js(step: &Step) -> JsValue {
 fn worktree_to_js(setting: &WorktreeSetting) -> JsValue {
     match setting {
         WorktreeSetting::Disabled => JsValue::from(false),
-        WorktreeSetting::Enabled { base, branch } if base.is_none() && branch.is_none() => {
+        WorktreeSetting::Enabled { base, branch, sync }
+            if base.is_none() && branch.is_none() && sync.is_none() =>
+        {
             JsValue::from(true)
         }
-        WorktreeSetting::Enabled { base, branch } => {
+        WorktreeSetting::Enabled { base, branch, sync } => {
             let mut o = JsObject::new();
             opt(&mut o, "base", base.clone());
             opt(&mut o, "branch", branch.clone());
+            opt(&mut o, "sync", *sync);
             JsValue::Obj(o)
         }
     }

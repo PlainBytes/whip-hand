@@ -21,15 +21,18 @@ pub struct WorktreeRequest {
     pub base: String,
     /// Raw template: the new branch's name.
     pub branch: String,
+    /// Start from the base's up-to-date upstream. On unless the workflow says `sync: false`.
+    pub sync: bool,
 }
 
 pub const DEFAULT_BASE: &str = "HEAD";
 pub const DEFAULT_BRANCH: &str = "whiphand/{{ run.slug }}";
 
-fn request(base: Option<&String>, branch: Option<&String>) -> WorktreeRequest {
+fn request(base: Option<&String>, branch: Option<&String>, sync: Option<bool>) -> WorktreeRequest {
     WorktreeRequest {
         base: base.map_or(DEFAULT_BASE, String::as_str).to_string(),
         branch: branch.map_or(DEFAULT_BRANCH, String::as_str).to_string(),
+        sync: sync.unwrap_or(true),
     }
 }
 
@@ -39,11 +42,11 @@ pub fn resolve_request(workflow: &Workflow, run_override: Option<bool>) -> Optio
         return None;
     }
     match &workflow.worktree {
-        Some(WorktreeSetting::Enabled { base, branch }) => {
-            Some(request(base.as_ref(), branch.as_ref()))
+        Some(WorktreeSetting::Enabled { base, branch, sync }) => {
+            Some(request(base.as_ref(), branch.as_ref(), *sync))
         }
         Some(WorktreeSetting::Disabled) | None => {
-            (run_override == Some(true)).then(|| request(None, None))
+            (run_override == Some(true)).then(|| request(None, None, None))
         }
     }
 }
@@ -337,6 +340,7 @@ mod tests {
         WorktreeRequest {
             base: DEFAULT_BASE.into(),
             branch: DEFAULT_BRANCH.into(),
+            sync: true,
         }
     }
 
@@ -344,6 +348,7 @@ mod tests {
         WorktreeSetting::Enabled {
             base: Some("main".into()),
             branch: Some("f/{{ run.slug }}".into()),
+            sync: None,
         }
     }
 
@@ -351,6 +356,7 @@ mod tests {
         WorktreeRequest {
             base: "main".into(),
             branch: "f/{{ run.slug }}".into(),
+            sync: true,
         }
     }
 
@@ -358,7 +364,35 @@ mod tests {
         WorktreeSetting::Enabled {
             base: None,
             branch: None,
+            sync: None,
         }
+    }
+
+    fn with_sync(sync: Option<bool>) -> WorktreeSetting {
+        WorktreeSetting::Enabled {
+            base: None,
+            branch: None,
+            sync,
+        }
+    }
+
+    #[test]
+    fn sync_follows_the_workflow_and_defaults_on() {
+        let sync = |s| {
+            resolve_request(&workflow(Some(with_sync(s))), None)
+                .unwrap()
+                .sync
+        };
+        assert!(sync(None));
+        assert!(sync(Some(true)));
+        assert!(!sync(Some(false)));
+        // The `--worktree` override on a workflow without the key gets the default.
+        assert!(resolve_request(&workflow(None), Some(true)).unwrap().sync);
+        assert!(
+            resolve_request(&workflow(Some(WorktreeSetting::Disabled)), Some(true))
+                .unwrap()
+                .sync
+        );
     }
 
     #[test]
@@ -413,12 +447,14 @@ mod tests {
         let setting = WorktreeSetting::Enabled {
             base: Some("dev".into()),
             branch: None,
+            sync: None,
         };
         assert_eq!(
             resolve_request(&workflow(Some(setting)), None),
             Some(WorktreeRequest {
                 base: "dev".into(),
-                branch: DEFAULT_BRANCH.into()
+                branch: DEFAULT_BRANCH.into(),
+                sync: true,
             })
         );
     }

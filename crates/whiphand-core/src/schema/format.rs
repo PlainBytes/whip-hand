@@ -232,7 +232,7 @@ fn classify_issue(
         };
     }
 
-    // The workflow's `worktree:` key, or one of its two fields.
+    // The workflow's `worktree:` key, or one of its fields.
     if path.first().and_then(PathSeg::as_key) == Some("worktree") {
         let phrase = phrase_for(issue, raw);
         let sub = path

@@ -11,7 +11,7 @@ import { PreferencesPage } from '../pages/PreferencesPage.tsx';
 import { ActivityPage } from '../pages/ActivityPage.tsx';
 import { RunDetailPage } from '../pages/RunDetailPage.tsx';
 import { WelcomePage } from '../pages/WelcomePage.tsx';
-import { PlainPage } from './Page.tsx';
+import { Page } from './Page.tsx';
 
 /** RunDetail is reached from a Runs row or a just-started run, not a tab of its own. */
 export interface RunDetailTarget {
@@ -34,14 +34,16 @@ export interface PageContentProps {
  */
 function LocalFilesUnavailable() {
   return (
-    <div style={{ padding: 24, maxWidth: 480 }}>
-      <Text size={400} weight="semibold">Files are only available in the desktop app</Text>
-      <br />
-      <Text>
-        Browsing the workspace reads the local disk directly, which a browser on another
-        machine cannot do. Run artifacts and diffs are still available from any run.
-      </Text>
-    </div>
+    <Page header={<Text weight="semibold" size={500}>Files</Text>}>
+      <div style={{ maxWidth: 480 }}>
+        <Text size={400} weight="semibold">Files are only available in the desktop app</Text>
+        <br />
+        <Text>
+          Browsing the workspace reads the local disk directly, which a browser on another
+          machine cannot do. Run artifacts and diffs are still available from any run.
+        </Text>
+      </div>
+    </Page>
   );
 }
 
@@ -54,7 +56,7 @@ export function PageContent({
 
   // Which pages survive without a workspace is nav.ts's `requiresWorkspace`
   // column, not a condition spelled out here.
-  if (requiresWorkspace(page) && !workspacePath) return restoreDone ? <PlainPage><WelcomePage /></PlainPage> : null;
+  if (requiresWorkspace(page) && !workspacePath) return restoreDone ? <WelcomePage /> : null;
 
   if (runDetailTarget) {
     return (
@@ -80,12 +82,10 @@ export function PageContent({
   return (
     <>
       {page === 'runs' && (
-        <PlainPage>
-          <RunsPage
-            onSelectRun={runId => onOpenRunDetail({ runId })}
-            onStarted={jobId => onOpenRunDetail({ jobId })}
-          />
-        </PlainPage>
+        <RunsPage
+          onSelectRun={runId => onOpenRunDetail({ runId })}
+          onStarted={jobId => onOpenRunDetail({ jobId })}
+        />
       )}
       {page === 'workflows' && (
         <WorkflowsPage
@@ -103,11 +103,11 @@ export function PageContent({
           }}
         />
       )}
-      {page === 'files' && (localFiles ? <FilesPage /> : <PlainPage><LocalFilesUnavailable /></PlainPage>)}
-      {page === 'workspace-settings' && <PlainPage><WorkspaceSettingsPage /></PlainPage>}
-      {page === 'activity' && <PlainPage><ActivityPage onSelectRun={runId => onOpenRunDetail({ runId })} /></PlainPage>}
+      {page === 'files' && (localFiles ? <FilesPage /> : <LocalFilesUnavailable />)}
+      {page === 'workspace-settings' && <WorkspaceSettingsPage />}
+      {page === 'activity' && <ActivityPage onSelectRun={runId => onOpenRunDetail({ runId })} />}
       {page === 'doctor' && <DoctorPage />}
-      {page === 'preferences' && <PlainPage><PreferencesPage /></PlainPage>}
+      {page === 'preferences' && <PreferencesPage />}
     </>
   );
 }

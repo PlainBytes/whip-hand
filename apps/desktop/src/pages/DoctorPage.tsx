@@ -17,7 +17,7 @@ import {
 } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useOpenExternal } from '../lib/open-external.tsx';
-import { Page, PlainPage } from '../components/Page.tsx';
+import { Page } from '../components/Page.tsx';
 import { useAppStore } from '../state/store.ts';
 import { errorMessage } from '../lib/error-message.ts';
 // tool-groups.ts, not tools.ts: the latter reaches for node:child_process to
@@ -137,7 +137,11 @@ export function DoctorPage() {
   }, [agentStatus, workspacePath]);
 
   if (agentStatus !== 'connected') {
-    return <PlainPage><Text>Waiting for the whiphand agent to connect…</Text></PlainPage>;
+    return (
+      <Page header={<Text weight="semibold" size={500}>Doctor</Text>}>
+        <Text>Waiting for the whiphand agent to connect…</Text>
+      </Page>
+    );
   }
 
   return (

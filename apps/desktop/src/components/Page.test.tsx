@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { Page, PlainPage } from './Page.tsx';
+import { Page } from './Page.tsx';
 
 describe('Page', () => {
   it('renders the header outside the body so it cannot scroll with it', () => {
@@ -39,13 +39,5 @@ describe('Page', () => {
     const body = screen.getByTestId('page-body');
     expect(body).toHaveStyle({ flex: '1', display: 'flex', flexDirection: 'column', padding: '16px' });
     expect(body).not.toHaveStyle({ overflow: 'auto' });
-  });
-});
-
-describe('PlainPage', () => {
-  it('scrolls its own overflow with the standard padding', () => {
-    const { container } = render(<PlainPage>x</PlainPage>);
-
-    expect(container.firstElementChild).toHaveStyle({ flex: '1', overflow: 'auto', padding: '16px' });
   });
 });

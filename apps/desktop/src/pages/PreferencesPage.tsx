@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import {
-  Checkbox, Dropdown, Field, MessageBar, MessageBarBody, Option, SpinButton,
+  Checkbox, Dropdown, Field, MessageBar, MessageBarBody, Option, SpinButton, Text,
 } from '@fluentui/react-components';
 import { useAgentClient } from '../agent/agent-context.tsx';
+import { Page } from '../components/Page.tsx';
 import { RemoteAccessCard } from '../components/RemoteAccessCard.tsx';
 import { useAppStore } from '../state/store.ts';
 import { spinInteger } from '../lib/spin-value.ts';
@@ -92,6 +93,7 @@ export function PreferencesPage() {
   }
 
   return (
+    <Page header={<Text weight="semibold" size={500}>Preferences</Text>}>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 480 }}>
       <Checkbox
         label="Show ongoing runs in the sidebar"
@@ -149,5 +151,6 @@ export function PreferencesPage() {
 
       <RemoteAccessCard />
     </div>
+    </Page>
   );
 }

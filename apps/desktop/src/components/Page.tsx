@@ -86,11 +86,3 @@ export function Page({
     </div>
   );
 }
-
-/**
- * The scrolling wrapper for a page that has no header (yet): fills <main>,
- * scrolls its own overflow, and keeps the standard 16px padding.
- */
-export function PlainPage({ children }: { children: ReactNode }) {
-  return <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 16 }}>{children}</div>;
-}

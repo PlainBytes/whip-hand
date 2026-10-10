@@ -24,6 +24,7 @@ import { NewRunDialog } from '../components/NewRunDialog.tsx';
 import { DeleteRunDialog } from '../components/DeleteRunDialog.tsx';
 import { errorMessage } from '../lib/error-message.ts';
 import { DangerButton } from '../components/DangerButton.tsx';
+import { Page } from '../components/Page.tsx';
 
 export interface RunsPageProps {
   onSelectRun: (runId: string) => void;
@@ -134,8 +135,10 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
     [waiting, stages, actionsColumn],
   );
 
+  const header = <Text weight="semibold" size={500}>Runs</Text>;
+
   if (!workspacePath) {
-    return <Text>Choose a workspace to see its runs.</Text>;
+    return <Page header={header}><Text>Choose a workspace to see its runs.</Text></Page>;
   }
 
   const matchesFilters = (run: RunSummary): boolean => {
@@ -146,6 +149,7 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
   const filtered = runs.filter(matchesFilters);
 
   return (
+    <Page header={header}>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', gap: 16 }}>
@@ -210,5 +214,6 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
         />
       )}
     </div>
+    </Page>
   );
 }

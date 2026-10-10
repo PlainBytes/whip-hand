@@ -40,7 +40,7 @@ import { summarizeEvent, parseLogLine, type LogRow } from '../shared/log-rows.ts
 import { StatusBadge } from '../components/StatusBadge.tsx';
 import { AttentionBadge } from '../components/AttentionBadge.tsx';
 import { DangerButton } from '../components/DangerButton.tsx';
-import { Page, PlainPage } from '../components/Page.tsx';
+import { Page } from '../components/Page.tsx';
 import { AWAIT_LABEL } from '../lib/await-copy.ts';
 import { TerminalPanel } from '../components/TerminalPanel.tsx';
 import { RunStepper } from '../components/RunStepper.tsx';
@@ -1073,11 +1073,11 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
 
   if (!effectiveJobId && !effectiveRunId) {
     return (
-      <PlainPage>
+      <Page header={<Text weight="semibold" size={500}>Run</Text>}>
         <EmptyState icon={<TextBulletListSquare48Regular />}>
           No run selected. Pick one from Runs to see how it went.
         </EmptyState>
-      </PlainPage>
+      </Page>
     );
   }
 

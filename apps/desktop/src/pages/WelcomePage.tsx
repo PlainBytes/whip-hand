@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { Badge, Button, Card, CardHeader, Text } from '@fluentui/react-components';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useCapabilities } from '../capabilities.tsx';
+import { Page } from '../components/Page.tsx';
 import { OpenPathField } from '../components/OpenPathField.tsx';
 import { useAppStore } from '../state/store.ts';
 import { openWorkspace } from '../lib/workspace-switch.ts';
@@ -38,19 +39,18 @@ export function WelcomePage() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 560, margin: '48px auto' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+    <Page header={
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         {/*
           * Decorative: the heading beside it already names the product, so a
           * repeated alt would just be read out twice.
           */}
-        <img src="/logo.png" alt="" width={64} height={64} style={{ flexShrink: 0 }} />
-        <div>
-          <Text size={600} weight="semibold">Welcome to Whiphand</Text>
-          <br />
-          <Text>Open a workspace to run workflows against it.</Text>
-        </div>
+        <img src="/logo.png" alt="" width={24} height={24} style={{ flexShrink: 0 }} />
+        <Text weight="semibold" size={500}>Welcome to Whiphand</Text>
       </div>
+    }>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 560, margin: '32px auto' }}>
+      <Text>Open a workspace to run workflows against it.</Text>
 
       {recents.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -93,5 +93,6 @@ export function WelcomePage() {
         ))}
       </div>
     </div>
+    </Page>
   );
 }

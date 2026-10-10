@@ -15,6 +15,7 @@ import {
 } from '@fluentui/react-components';
 import { Save20Regular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
+import { Page } from '../components/Page.tsx';
 import { useAppStore } from '../state/store.ts';
 import { spinInteger } from '../lib/spin-value.ts';
 import type { WorkspaceConfig, OnFindings } from '../shared/types.ts';
@@ -178,11 +179,15 @@ export function WorkspaceSettingsPage() {
 
   // No no-workspace branch: this page is workspace-scoped in nav.ts, so the
   // shell shows WelcomePage instead of ever mounting it without one.
+  const header = <Text weight="semibold" size={500}>Settings</Text>;
+
   if (!form) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 480 }}>
-        <Text>Loading configuration…</Text>
-      </div>
+      <Page header={header}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 480 }}>
+          <Text>Loading configuration…</Text>
+        </div>
+      </Page>
     );
   }
 
@@ -203,6 +208,7 @@ export function WorkspaceSettingsPage() {
   }
 
   return (
+    <Page header={header}>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 480 }}>
       <MessageBar intent="warning">
         <MessageBarBody>
@@ -378,5 +384,6 @@ export function WorkspaceSettingsPage() {
         {saving ? 'Saving…' : 'Save'}
       </Button>
     </div>
+    </Page>
   );
 }

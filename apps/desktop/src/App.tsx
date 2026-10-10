@@ -18,7 +18,6 @@ import { Sidebar } from './components/Sidebar.tsx';
 import { PageContent, type RunDetailTarget } from './components/PageContent.tsx';
 import { UnsavedChangesDialog } from './components/UnsavedChangesDialog.tsx';
 import { WorkspaceQuickSwitch } from './components/WorkspaceQuickSwitch.tsx';
-import { SCROLLPORT_PADDING, SCROLLPORT_PADDING_TOP } from './components/PageHeader.tsx';
 import type { PageId } from './nav.ts';
 
 /** The one window-level shortcut: everything else hangs off the control it acts on. */
@@ -115,10 +114,7 @@ export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
           <Sidebar page={page} onSelectPage={requestPage} onOpenRun={job => void openRun(job)} />
           <main
-            style={{
-              flex: 1, overflow: 'auto',
-              padding: SCROLLPORT_PADDING, paddingTop: SCROLLPORT_PADDING_TOP,
-            }}
+            style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
           >
             <PageContent
               page={page}

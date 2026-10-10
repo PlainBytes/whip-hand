@@ -6,7 +6,7 @@ import {
 import { Add20Regular, Delete20Regular, Dismiss20Regular, Save20Regular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { DeleteWorkflowDialog } from '../components/DeleteWorkflowDialog.tsx';
-import { PageHeader } from '../components/PageHeader.tsx';
+import { Page } from '../components/Page.tsx';
 import { DangerButton } from '../components/DangerButton.tsx';
 import type { Scope, Workflow } from '../shared/types.ts';
 import { isContainerStep } from '../shared/steps.ts';
@@ -77,6 +77,7 @@ export function WorkflowEditor({
   useHarnessCatalog();
 
   const [saving, setSaving] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   // A global workflow's save gets its own confirmation: every workspace on
   // the machine reads it, not just this one.
@@ -208,6 +209,9 @@ export function WorkflowEditor({
       setShowProblems(true);
       const firstStepId = stepProblemsOf(found)[0]?.stepId;
       if (firstStepId !== undefined) revealStep(firstStepId);
+      // Workflow-level problems only: the bar is the first thing in the body, so
+      // bring the body's top into view. jsdom (tests) does not implement scrollTo.
+      else bodyRef.current?.parentElement?.scrollTo?.({ top: 0, behavior: 'smooth' });
       return;
     }
     if (source === 'global' && !confirmingGlobalSave) {
@@ -250,19 +254,7 @@ export function WorkflowEditor({
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
-      {globalSaveConfirmDialog}
-      {confirmingDelete && (
-        <DeleteWorkflowDialog
-          name={name}
-          source={source}
-          workdir={workdir}
-          revealsGlobal={revealsGlobal}
-          onDeleted={onDeleted}
-          onDismiss={() => setConfirmingDelete(false)}
-        />
-      )}
-      <PageHeader>
+    <Page header={<>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Text weight="semibold" size={500}>
             Edit workflow: {name}
@@ -289,6 +281,19 @@ export function WorkflowEditor({
             </Button>
           </div>
         </div>
+    </>}>
+      {globalSaveConfirmDialog}
+      {confirmingDelete && (
+        <DeleteWorkflowDialog
+          name={name}
+          source={source}
+          workdir={workdir}
+          revealsGlobal={revealsGlobal}
+          onDeleted={onDeleted}
+          onDismiss={() => setConfirmingDelete(false)}
+        />
+      )}
+      <div ref={bodyRef} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {saveError && (
           <MessageBar intent="error">
             {/* A WorkflowError-style server message is several lines, joined with '\n  - '. */}
@@ -299,15 +304,12 @@ export function WorkflowEditor({
           <MessageBar intent="error">
             <MessageBarBody>
               <div>{allProblems.length} problem{allProblems.length === 1 ? '' : 's'}:</div>
-              <ul style={{ margin: '4px 0 0', paddingLeft: 18, maxHeight: '30vh', overflowY: 'auto' }}>
+              <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
                 {allProblems.map((problem, i) => <li key={`${i}:${problem}`}>{problem}</li>)}
               </ul>
             </MessageBarBody>
           </MessageBar>
         )}
-      </PageHeader>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 16, paddingBottom: 16 }}>
         <WorkflowSettingsCard
           workflow={draft}
           collapsed={draftApi.settingsCollapsed}
@@ -369,7 +371,7 @@ export function WorkflowEditor({
           Add step
         </Button>
       </div>
-    </div>
+    </Page>
   );
 }
 

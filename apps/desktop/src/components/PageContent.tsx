@@ -11,6 +11,7 @@ import { PreferencesPage } from '../pages/PreferencesPage.tsx';
 import { ActivityPage } from '../pages/ActivityPage.tsx';
 import { RunDetailPage } from '../pages/RunDetailPage.tsx';
 import { WelcomePage } from '../pages/WelcomePage.tsx';
+import { Page } from './Page.tsx';
 
 /** RunDetail is reached from a Runs row or a just-started run, not a tab of its own. */
 export interface RunDetailTarget {
@@ -33,14 +34,16 @@ export interface PageContentProps {
  */
 function LocalFilesUnavailable() {
   return (
-    <div style={{ padding: 24, maxWidth: 480 }}>
-      <Text size={400} weight="semibold">Files are only available in the desktop app</Text>
-      <br />
-      <Text>
-        Browsing the workspace reads the local disk directly, which a browser on another
-        machine cannot do. Run artifacts and diffs are still available from any run.
-      </Text>
-    </div>
+    <Page header={<Text weight="semibold" size={500}>Files</Text>}>
+      <div style={{ maxWidth: 480 }}>
+        <Text size={400} weight="semibold">Files are only available in the desktop app</Text>
+        <br />
+        <Text>
+          Browsing the workspace reads the local disk directly, which a browser on another
+          machine cannot do. Run artifacts and diffs are still available from any run.
+        </Text>
+      </div>
+    </Page>
   );
 }
 

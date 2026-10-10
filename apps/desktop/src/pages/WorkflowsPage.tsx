@@ -8,7 +8,7 @@ import {
 import { Add20Regular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
-import { PageHeader } from '../components/PageHeader.tsx';
+import { Page } from '../components/Page.tsx';
 import { WorkflowLane, isWorkflowFile } from '../components/workflow-lane/WorkflowLane.tsx';
 import { DeleteWorkflowDialog } from '../components/DeleteWorkflowDialog.tsx';
 import { CloneWorkflowDialog } from '../components/CloneWorkflowDialog.tsx';
@@ -177,8 +177,8 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
-      <PageHeader>
+    <Page
+      header={
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Text weight="semibold" size={500}>
             Workflows{workflows.length > 0 && ` — ${workflows.length} workflow${workflows.length === 1 ? '' : 's'}`}
@@ -187,8 +187,9 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
             New workflow
           </Button>
         </div>
-      </PageHeader>
-      <div style={{ marginTop: 16 }}>{body}</div>
+      }
+    >
+      {body}
       {newWorkflowOpen && (
         <NewWorkflowDialog
           workdir={workspacePath}
@@ -226,6 +227,6 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
           onDismiss={() => setCloning(null)}
         />
       )}
-    </div>
+    </Page>
   );
 }

@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import { useState } from 'react';
 import { Switch } from '@fluentui/react-components';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { FakeFileSystem } from '../files/fake-fs.ts';
 import { FileSystemProvider } from '../files/fs-context.tsx';
 import { useFileTree } from '../files/use-file-tree.ts';
 import { FileTree, type FileTreeActions } from './FileTree.tsx';
 import type { TreeNodes } from '../files/tree-model.ts';
-import { setVirtualViewportHeight, VIRTUAL_ROW_HEIGHT } from '../test/setup.ts';
+import { setVirtualViewportHeight, triggerResize, VIRTUAL_ROW_HEIGHT } from '../test/setup.ts';
 import { hasInjectedStyle } from '../test/badge-style.ts';
 
 /**
- * The "Show hidden files" Switch now lives in FilesPage's PageHeader, not in
+ * The "Show hidden files" Switch now lives in FilesPage's Page header, not in
  * FileTree, so the harness renders it here — the behaviour it drives (the
  * hook's filter) is still FileTree's to prove.
  */
@@ -324,6 +324,25 @@ describe('FileTree: a long listing', () => {
     expect(rows[0]).toHaveAttribute('aria-posinset', '1');
     expect(rows[0]).toHaveAttribute('aria-setsize', String(COUNT));
     expect(screen.queryByText(name(COUNT - 1))).toBeNull();
+  });
+
+  // A hidden Run Detail tab is display: none; the browser resets the scroll
+  // container's scrollTop to 0 without a scroll event, and showing it again is
+  // only a resize. The window must follow the real scrollTop, not the stale one.
+  it('resyncs the window when the container is shown again at scrollTop 0', () => {
+    setVirtualViewportHeight(300);
+    const { container } = renderBig();
+    const scroller = container.querySelector('[data-virtual-scroller]') as HTMLElement;
+    scroller.scrollTop = 5000;
+    fireEvent.scroll(scroller);
+    expect(screen.queryByText(name(0))).toBeNull();
+
+    scroller.scrollTop = 0; // silently, as display: none does
+    act(() => triggerResize(scroller));
+
+    expect(screen.getByText(name(0))).toBeInTheDocument();
+    const tree = scroller.querySelector('[role=tree]')!;
+    expect((tree.firstElementChild as HTMLElement).style.height).toMatch(/^0(px)?$|^$/);
   });
 
   // Home and ArrowLeft to a parent scrolled out of the window take the same

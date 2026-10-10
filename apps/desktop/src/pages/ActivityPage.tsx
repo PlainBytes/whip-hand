@@ -12,6 +12,7 @@ import { basename } from '../lib/workspace-identity.ts';
 import { WorkspaceDot } from '../components/WorkspaceDot.tsx';
 import { POLL_INTERVAL_MS, runColumns, type RecentRun, type StageProgress } from './run-columns.tsx';
 import { errorMessage } from '../lib/error-message.ts';
+import { Page } from '../components/Page.tsx';
 
 export interface ActivityPageProps {
   onSelectRun: (runId: string) => void;
@@ -97,6 +98,7 @@ export function ActivityPage({ onSelectRun }: ActivityPageProps) {
   }
 
   return (
+    <Page header={<Text weight="semibold" size={500}>Activity</Text>}>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {error && <Text>Failed to load activity: {error}</Text>}
       {runs.length === 0 ? (
@@ -122,5 +124,6 @@ export function ActivityPage({ onSelectRun }: ActivityPageProps) {
         </DataGrid>
       )}
     </div>
+    </Page>
   );
 }

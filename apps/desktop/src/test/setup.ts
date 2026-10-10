@@ -22,15 +22,38 @@ afterEach(() => {
 });
 
 // jsdom doesn't implement ResizeObserver; @fluentui/react-message-bar (and
-// other Fluent v9 components) need one just to mount. A no-op stub is enough
-// for tests, which never assert on resize-driven reflow.
+// other Fluent v9 components) need one just to mount. The stub never fires on
+// its own — jsdom has no layout to resize — but remembers who observes what,
+// so a test can call triggerResize(element) to stand in for the browser.
+const resizeObservers = new Set<ResizeObserverStub>();
 class ResizeObserverStub {
-  observe(): void {}
-  unobserve(): void {}
-  disconnect(): void {}
+  private targets = new Set<Element>();
+  constructor(private callback: ResizeObserverCallback) {
+    resizeObservers.add(this);
+  }
+  observe(target: Element): void {
+    this.targets.add(target);
+  }
+  unobserve(target: Element): void {
+    this.targets.delete(target);
+  }
+  disconnect(): void {
+    this.targets.clear();
+    resizeObservers.delete(this);
+  }
+  fire(target: Element): void {
+    if (this.targets.has(target)) {
+      this.callback([{ target, contentRect: target.getBoundingClientRect() } as ResizeObserverEntry], this as unknown as ResizeObserver);
+    }
+  }
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test polyfill, not worth typing precisely
 (globalThis as any).ResizeObserver ??= ResizeObserverStub;
+
+/** Run the callbacks of every ResizeObserver watching `element`. */
+export function triggerResize(element: Element): void {
+  for (const observer of [...resizeObservers]) observer.fire(element);
+}
 
 // jsdom lays nothing out, so every offsetHeight is 0 — and a windowed list
 // (lib/use-virtual-rows.ts) measures its scroll container and its rows that

@@ -17,7 +17,7 @@ import { DocumentAdd16Regular, FolderAdd16Regular } from '@fluentui/react-icons'
 import { FileTree } from '../components/FileTree.tsx';
 import { ResizablePane } from '../components/ResizablePane.tsx';
 import { FilePreview } from '../components/FilePreview.tsx';
-import { PageHeader } from '../components/PageHeader.tsx';
+import { Page } from '../components/Page.tsx';
 import { RECESSED_SURFACE } from '../components/recessed-surface.ts';
 import { basename } from '../lib/workspace-identity.ts';
 import { FileOpsDialog, type FileOpsMode } from '../components/FileOpsDialog.tsx';
@@ -260,8 +260,7 @@ export function FilesPage() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      <PageHeader>
+    <Page body="fill" header={<>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
           <div style={{ minWidth: 0 }}>
             <Text weight="semibold" size={500}>Files</Text>
@@ -294,9 +293,8 @@ export function FilesPage() {
             </Button>
           </div>
         </div>
-      </PageHeader>
-
-      <div style={{ display: 'flex', flex: 1, minHeight: 0, paddingTop: 8 }}>
+    </>}>
+      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <ResizablePane storageKey="whiphand.files.treeWidth">
           <FileTree
             root={workspacePath}
@@ -408,6 +406,6 @@ export function FilesPage() {
           </DialogSurface>
         </Dialog>
       )}
-    </div>
+    </Page>
   );
 }

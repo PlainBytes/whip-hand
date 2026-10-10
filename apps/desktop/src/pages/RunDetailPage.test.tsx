@@ -1,7 +1,7 @@
 import { Profiler, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { setVirtualViewportHeight, VIRTUAL_ROW_HEIGHT } from '../test/setup.ts';
+import { setVirtualViewportHeight, triggerResize, VIRTUAL_ROW_HEIGHT } from '../test/setup.ts';
 import { RunDetailPage } from './RunDetailPage.tsx';
 import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
@@ -2717,6 +2717,35 @@ describe('RunDetailPage: a long log', () => {
     await waitFor(() => expect(Math.min(...lineNumbers())).toBeGreaterThan(1500));
     expect(Math.max(...lineNumbers())).toBeLessThan(2600);
     expect(screen.getAllByTestId('log-row').length).toBeLessThan(100);
+  });
+
+  // Inactive tabs stay mounted under display: none, which resets the log's
+  // scrollTop to 0 without a scroll event; showing the tab again is a resize.
+  it('renders the top of the log again when its tab is shown after a silent scrollTop reset', async () => {
+    setVirtualViewportHeight(400);
+    const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'r-long');
+    await respondGetRun(transport, {
+      runId: 'r-long', runDir: '/ws/.whiphand/runs/r-long', status: 'succeeded',
+      workflow: 'w', inputs: {}, artifacts: [], steps: [],
+    });
+    const req = await waitFor(() => {
+      const i = transport.sent.findIndex(l => (JSON.parse(l) as { method?: string }).method === 'readRunLog');
+      if (i === -1) throw new Error('readRunLog not sent yet');
+      return transport.sentRequest(i);
+    });
+    const lines = Array.from({ length: 3000 }, (_, i) =>
+      `2026-01-01T00:00:00.000Z  ${i + 1}  step:log:stdout  a  output line ${i}`);
+    transport.emitLine({ id: req.id, result: { lines, startByte: 0, atStart: true } });
+    expect(await screen.findByText('output line 0')).toBeInTheDocument();
+
+    const logTail = screen.getByTestId('log-tail');
+    Object.defineProperty(logTail, 'scrollTop', { value: 2000 * VIRTUAL_ROW_HEIGHT, configurable: true, writable: true });
+    fireEvent.scroll(logTail);
+    await waitFor(() => expect(screen.queryByText('output line 0')).not.toBeInTheDocument());
+
+    logTail.scrollTop = 0;
+    act(() => triggerResize(logTail));
+    expect(await screen.findByText('output line 0')).toBeInTheDocument();
   });
 });
 

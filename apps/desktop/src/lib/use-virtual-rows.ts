@@ -12,7 +12,7 @@
  * positioned, so a list keeps its own layout (the Logs tab's flex rows, the
  * diff's CSS grid) and only gains the spacers.
  */
-import { useVirtualizer, type Virtualizer } from '@tanstack/react-virtual';
+import { observeElementOffset, useVirtualizer, type Virtualizer } from '@tanstack/react-virtual';
 import type { RefObject } from 'react';
 
 export const VIRTUAL_SCROLLER_PROPS = { 'data-virtual-scroller': '' } as const;
@@ -31,6 +31,27 @@ export interface VirtualRowsOptions {
   overscan?: number;
 }
 
+/**
+ * tanstack's offset observer plus a re-read on resize. A container hidden with
+ * display: none (Run Detail keeps its inactive tabs mounted) has its scrollTop
+ * reset to 0 by the browser with no scroll event, so the virtualizer would keep
+ * the old offset and render the window for it: a blank band where the top rows
+ * belong. Showing the container again is a resize from 0x0, so re-read then.
+ */
+const observeOffsetAndResize: typeof observeElementOffset<HTMLElement> = (instance, cb) => {
+  const stop = observeElementOffset(instance, cb);
+  const element = instance.scrollElement;
+  if (!element || typeof ResizeObserver === 'undefined') return stop;
+  const observer = new ResizeObserver(() => {
+    cb(instance.options.horizontal ? element.scrollLeft : element.scrollTop, false);
+  });
+  observer.observe(element);
+  return () => {
+    observer.disconnect();
+    stop?.();
+  };
+};
+
 export function useVirtualRows({ count, scrollRef, estimateSize, getItemKey, overscan = 12 }: VirtualRowsOptions) {
   return useVirtualizer<HTMLElement, HTMLElement>({
     count,
@@ -38,6 +59,7 @@ export function useVirtualRows({ count, scrollRef, estimateSize, getItemKey, ove
     estimateSize: () => estimateSize,
     ...(getItemKey === undefined ? {} : { getItemKey }),
     overscan,
+    observeElementOffset: observeOffsetAndResize,
   });
 }
 

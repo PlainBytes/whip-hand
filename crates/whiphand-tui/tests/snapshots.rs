@@ -285,7 +285,7 @@ fn run_detail_events_errors_only() {
     key(&mut model, KeyCode::Char('2'));
     snapshot("detail_events", &model);
     key(&mut model, KeyCode::Char('1'));
-    key(&mut model, KeyCode::Char('e'));
+    key(&mut model, KeyCode::Char('f'));
     snapshot("detail_errors", &model);
 }
 

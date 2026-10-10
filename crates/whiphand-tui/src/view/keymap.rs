@@ -215,11 +215,11 @@ pub const BINDINGS: &[Binding] = &[
         A::Expand,
         "expand",
     ),
-    b(C::Detail, &[Char('e')], "e", A::ErrorsOnly, "errors only"),
+    b(C::Detail, &[Char('f')], "f", A::ErrorsOnly, "errors only"),
     b(
         C::Detail,
-        &[Char('a')],
-        "a",
+        &[Char('A')],
+        "A",
         A::AllSteps,
         "every step's rows",
     ),
@@ -237,7 +237,13 @@ pub const BINDINGS: &[Binding] = &[
         A::ExternalDiff,
         "git diff in a terminal",
     ),
-    b(C::Detail, &[Char('r')], "r", A::Refresh, "reload the diff"),
+    b(
+        C::Detail,
+        &[Ctrl('r')],
+        "Ctrl-r",
+        A::Refresh,
+        "reload the diff",
+    ),
     b(C::Doctor, &[Char('r')], "r", A::Refresh, "check again"),
 ];
 
@@ -316,6 +322,13 @@ mod tests {
         assert_eq!(action(&Route::Doctor, false, &q), Some(A::Back));
         let w = KeyEvent::from(KeyCode::Char('w'));
         assert_eq!(action(&Route::Runs, true, &w), Some(A::GoWorkspaces));
+        // Phase 2 moved these off e, a and r, which drive runs.
+        let f = KeyEvent::from(KeyCode::Char('f'));
+        assert_eq!(action(&Route::RunDetail, false, &f), Some(A::ErrorsOnly));
+        let all = KeyEvent::from(KeyCode::Char('A'));
+        assert_eq!(action(&Route::RunDetail, false, &all), Some(A::AllSteps));
+        let ctrl_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
+        assert_eq!(action(&Route::RunDetail, false, &ctrl_r), Some(A::Refresh));
         let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(action(&Route::Runs, false, &ctrl_c), Some(A::Quit));
     }

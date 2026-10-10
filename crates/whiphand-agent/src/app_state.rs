@@ -7,7 +7,6 @@
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use serde_json::{Map, Value, json};
 use whiphand_core::durable_fs::write_file_atomic;
@@ -153,18 +152,14 @@ pub fn remember_run(
     workspaces.insert(key, Value::Object(memory));
 }
 
-/// What changes when the file does: its mtime, and its length, since two
-/// writes can land within one mtime tick.
-type Stamp = Option<(SystemTime, u64)>;
-
 /// Written atomically. Every mutation runs to completion on the engine
 /// thread, so two never interleave here; another process (the desktop beside
-/// the TUI) may write the same file, so a mutation re-reads it first and a
-/// read reloads it when it changed.
+/// the TUI) may write the same file, so a mutation holds a lock file across
+/// its read, change and write, and a read reloads when the text changed.
 pub struct AppStateStore {
     path: PathBuf,
-    /// The state and the file's [`Stamp`] when it was read.
-    state: RefCell<Option<(Value, Stamp)>>,
+    /// The file's text when it was read ("" when missing), and its state.
+    state: RefCell<Option<(String, Value)>>,
     /// Called after every write that landed: app state is shared by every
     /// client, and only the one that changed it would otherwise know.
     on_change: Box<dyn Fn(Value)>,
@@ -183,28 +178,49 @@ impl AppStateStore {
         &self.path
     }
 
+    /// Reads the file every time (it is small; mtimes miss same-size writes
+    /// within one tick), and parses only when the text changed.
     pub fn get(&self) -> Value {
-        let stamp = self.stamp();
-        if let Some((s, seen)) = self.state.borrow().as_ref()
-            && *seen == stamp
+        let text = self.read_text();
+        if let Some((seen, s)) = self.state.borrow().as_ref()
+            && *seen == text
         {
             return s.clone();
         }
-        let loaded = self.load();
-        *self.state.borrow_mut() = Some((loaded.clone(), stamp));
+        let loaded = self.parse(&text);
+        *self.state.borrow_mut() = Some((text, loaded.clone()));
         loaded
     }
 
-    fn stamp(&self) -> Stamp {
-        let meta = std::fs::metadata(&self.path).ok()?;
-        Some((meta.modified().ok()?, meta.len()))
+    /// The file's text; "" when it cannot be read.
+    fn read_text(&self) -> String {
+        std::fs::read_to_string(&self.path).unwrap_or_default()
     }
 
-    fn load(&self) -> Value {
-        let Ok(text) = std::fs::read_to_string(&self.path) else {
+    /// Held across a mutation's read, change and write, so two processes'
+    /// mutations queue instead of one dropping the other's. A file beside the
+    /// state, since the state itself is replaced by rename.
+    fn lock(&self) -> Result<std::fs::File, String> {
+        if let Some(dir) = self.path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        let mut name = self.path.clone().into_os_string();
+        name.push(".lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(PathBuf::from(name))
+            .map_err(|e| e.to_string())?;
+        file.lock().map_err(|e| e.to_string())?;
+        Ok(file)
+    }
+
+    fn parse(&self, text: &str) -> Value {
+        if text.is_empty() {
             return empty_app_state();
-        };
-        let parsed = serde_json::from_str::<Value>(&text).ok().and_then(|v| {
+        }
+        let parsed = serde_json::from_str::<Value>(text).ok().and_then(|v| {
             crate::schema::validate(&crate::schema::app_state(), Some(&Raw::from_json(&v))).ok()
         });
         match parsed {
@@ -222,14 +238,14 @@ impl AppStateStore {
     /// Applies `f` to the file as it is now, writes the result, then tells
     /// the listener.
     pub fn mutate(&self, f: impl FnOnce(&mut Value)) -> Result<Value, String> {
-        let mut next = self.load();
+        let lock = self.lock()?;
+        let mut next = self.parse(&self.read_text());
         f(&mut next);
-        if let Some(dir) = self.path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        }
         let text = jsval::stringify(&jsval::from_json(&next), Some(2)).unwrap_or_default();
-        write_file_atomic(&self.path, format!("{text}\n").as_bytes()).map_err(|e| e.to_string())?;
-        *self.state.borrow_mut() = Some((next.clone(), self.stamp()));
+        let text = format!("{text}\n");
+        write_file_atomic(&self.path, text.as_bytes()).map_err(|e| e.to_string())?;
+        drop(lock);
+        *self.state.borrow_mut() = Some((text, next.clone()));
         (self.on_change)(next.clone());
         Ok(next)
     }
@@ -336,5 +352,59 @@ mod tests {
         };
         assert_eq!(paths(b.get()), ["/b", "/a"]);
         assert_eq!(paths(a.get()), ["/b", "/a"]);
+    }
+
+    // Two processes mutating at once queue on the lock; neither loses a write.
+    #[test]
+    fn concurrent_mutations_from_two_stores_all_land() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app-state.json");
+        let start = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let writers: Vec<_> = ["a", "b"]
+            .into_iter()
+            .map(|who| {
+                let (path, start) = (path.clone(), start.clone());
+                std::thread::spawn(move || {
+                    let store = AppStateStore::new(path, Box::new(|_| {}));
+                    start.wait();
+                    for i in 0..50 {
+                        store
+                            .mutate(|s| {
+                                remember_run(s, &format!("/{who}{i}"), "w", &Map::new(), None)
+                            })
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for w in writers {
+            w.join().unwrap();
+        }
+        let store = AppStateStore::new(path, Box::new(|_| {}));
+        assert_eq!(store.get()["workspaces"].as_object().unwrap().len(), 100);
+    }
+
+    // Same length, same mtime: only the text tells the change apart.
+    #[test]
+    fn a_same_size_rewrite_within_one_mtime_tick_is_seen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app-state.json");
+        let store = AppStateStore::new(path.clone(), Box::new(|_| {}));
+        let write = |page: &str| {
+            let mut s = empty_app_state();
+            s["lastPage"] = json!(page);
+            std::fs::write(&path, s.to_string()).unwrap();
+        };
+        write("runs");
+        let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(store.get()["lastPage"], "runs");
+        write("jobs");
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        assert_eq!(store.get()["lastPage"], "jobs");
     }
 }

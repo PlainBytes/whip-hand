@@ -1,5 +1,7 @@
 //! Raw mode and the alternate screen, and the promise to undo both: on
-//! drop, and before a panic message prints.
+//! drop, and before a panic message prints when the UI thread panics. A
+//! panic elsewhere (an agent request, which the host catches) leaves the
+//! screen alone; its message goes to the log.
 
 use std::io::{self, Stdout};
 use std::sync::Once;
@@ -47,14 +49,17 @@ pub fn restore() {
     let _ = execute!(io::stdout(), LeaveAlternateScreen, Show);
 }
 
-/// The message goes to the real stderr, on a usable screen.
+/// A UI-thread panic's message goes to the real stderr, on a usable screen.
 fn install_panic_hook() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
+        let ui = std::thread::current().id();
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            restore();
-            super::stderr::restore();
+            if std::thread::current().id() == ui {
+                restore();
+                super::stderr::restore();
+            }
             previous(info);
         }));
     });

@@ -20,6 +20,7 @@ tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 pulldown-cmark = { version = "0.13", default-features = false }
 ansi-to-tui = "7"
 base64 = "0.22"
+tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -34,4 +35,3 @@ windows-sys = { version = "0.59", features = [
 
 [dev-dependencies]
 insta = "1"
-tempfile = "3"

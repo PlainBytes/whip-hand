@@ -45,6 +45,11 @@ pub struct HostConfig {
     /// Where the host keeps the built web UI (the Tauri resources), if anywhere.
     pub web_root: Option<PathBuf>,
     pub timings: crate::frontend::SessionTimings,
+    /// Whether this host runs remote access at all. A second front end in
+    /// another process (the TUI) turns it off, so it never binds the port the
+    /// desktop's `remote-access.json` names. Ignored without the `remote`
+    /// feature, which leaves it out entirely.
+    pub remote: bool,
 }
 
 impl HostConfig {
@@ -52,9 +57,10 @@ impl HostConfig {
     pub fn from_env() -> Self {
         Self {
             app_state_path: crate::app_state::resolve_app_state_path(),
-            remote_config_path: crate::remote::config::resolve_remote_config_path(),
+            remote_config_path: crate::app_state::resolve_remote_config_path(),
             web_root: None,
             timings: crate::frontend::SessionTimings::default(),
+            remote: true,
         }
     }
 }
@@ -74,6 +80,7 @@ pub(crate) enum Msg {
     },
     Shutdown(oneshot::Sender<()>),
     /// The remote server's listening state or client count changed.
+    #[cfg_attr(not(feature = "remote"), allow(dead_code))]
     RemoteStatusChanged,
 }
 
@@ -180,7 +187,9 @@ pub struct Agent {
     pub scrollback: RefCell<crate::scrollback::Scrollback>,
     pub pty_sizes: RefCell<crate::pty_sizes::PtySizes>,
     pub timings: crate::frontend::SessionTimings,
-    pub remote: crate::remote::RemoteController,
+    /// None when the host was started with remote access off.
+    #[cfg(feature = "remote")]
+    pub remote: Option<crate::remote::RemoteController>,
 }
 
 /// The request's origin, as a handler sees it.
@@ -191,11 +200,31 @@ pub struct RequestCtx {
 }
 
 impl Agent {
+    /// Whether this agent answers `method`: the `remoteAccess*` methods
+    /// exist only while remote access is built in and switched on.
+    pub fn serves(&self, method: &str) -> bool {
+        crate::handlers::exists(method)
+            && (self.has_remote() || !method.starts_with("remoteAccess"))
+    }
+
+    #[cfg(feature = "remote")]
+    fn has_remote(&self) -> bool {
+        self.remote.is_some()
+    }
+
+    #[cfg(not(feature = "remote"))]
+    fn has_remote(&self) -> bool {
+        false
+    }
+
     pub(crate) fn new(
         config: HostConfig,
         inbox: mpsc::UnboundedSender<Msg>,
         next_id: Arc<AtomicU64>,
     ) -> Rc<Agent> {
+        // Only the remote server numbers clients or writes to the inbox.
+        #[cfg(not(feature = "remote"))]
+        let _ = (inbox, next_id);
         Rc::new_cyclic(|weak: &std::rc::Weak<Agent>| {
             let weak = weak.clone();
             Agent {
@@ -213,11 +242,14 @@ impl Agent {
                 scrollback: RefCell::new(crate::scrollback::Scrollback::default()),
                 pty_sizes: RefCell::new(crate::pty_sizes::PtySizes::default()),
                 timings: config.timings,
-                remote: crate::remote::RemoteController::new(
-                    crate::remote::config::RemoteAccessStore::new(config.remote_config_path),
-                    crate::remote::server::RemoteServer::new(inbox, next_id),
-                    config.web_root,
-                ),
+                #[cfg(feature = "remote")]
+                remote: config.remote.then(|| {
+                    crate::remote::RemoteController::new(
+                        crate::remote::config::RemoteAccessStore::new(config.remote_config_path),
+                        crate::remote::server::RemoteServer::new(inbox, next_id),
+                        config.web_root,
+                    )
+                }),
             }
         })
     }
@@ -269,8 +301,15 @@ fn run(
         let agent = Agent::new(config, inbox, next_id);
         // Off unless enabled in an earlier session; a failure is reported
         // through remoteAccessGet, never fatal.
-        let starting = agent.clone();
-        tokio::task::spawn_local(async move { starting.remote.apply_config().await });
+        #[cfg(feature = "remote")]
+        if agent.remote.is_some() {
+            let starting = agent.clone();
+            tokio::task::spawn_local(async move {
+                if let Some(remote) = &starting.remote {
+                    remote.apply_config().await;
+                }
+            });
+        }
         let mut requests = tokio::task::JoinSet::new();
         loop {
             let msg = tokio::select! {
@@ -323,11 +362,14 @@ fn run(
                     });
                 }
                 Msg::RemoteStatusChanged => {
-                    if agent.remote.should_publish() {
+                    #[cfg(feature = "remote")]
+                    if agent.remote.as_ref().is_some_and(|r| r.should_publish()) {
                         let agent = agent.clone();
                         tokio::task::spawn_local(async move {
-                            let state = agent.remote.public_state().await;
-                            agent.notify("remoteAccessChanged", state);
+                            if let Some(remote) = &agent.remote {
+                                let state = remote.public_state().await;
+                                agent.notify("remoteAccessChanged", state);
+                            }
                         });
                     }
                 }
@@ -352,7 +394,10 @@ fn run(
                         }
                     };
                     let _ = tokio::time::timeout(SHUTDOWN_GRACE, drain).await;
-                    agent.remote.stop().await;
+                    #[cfg(feature = "remote")]
+                    if let Some(remote) = &agent.remote {
+                        remote.stop().await;
+                    }
                     let _ = done.send(());
                     break;
                 }
@@ -381,6 +426,7 @@ mod tests {
             remote_config_path: dir.join("remote-access.json"),
             web_root: None,
             timings: crate::frontend::SessionTimings::default(),
+            remote: true,
         }
     }
 
@@ -406,5 +452,49 @@ mod tests {
         assert!(!dropped.load(Ordering::SeqCst));
         host.shutdown();
         assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    // A second front end beside the desktop shares its remote-access.json,
+    // and must neither bind that port nor offer the methods.
+    #[test]
+    fn with_remote_off_the_port_stays_free_and_remote_methods_are_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        std::fs::write(
+            dir.path().join("remote-access.json"),
+            format!(
+                r#"{{"schemaVersion":1,"enabled":true,"port":{port},"token":"{}"}}"#,
+                "t".repeat(43)
+            ),
+        )
+        .unwrap();
+        let host = Host::start(HostConfig {
+            remote: false,
+            ..config(dir.path())
+        })
+        .unwrap();
+        let (tx, rx) = std_mpsc::channel();
+        let client = host.connect(
+            ClientKind::Desktop,
+            Box::new(move |line| {
+                let _ = tx.send(line);
+            }),
+        );
+        client.send(r#"{"id":1,"method":"remoteAccessGet","params":{}}"#.into());
+        let answer = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        assert_eq!(
+            answer,
+            r#"{"id":1,"error":{"code":-32601,"message":"method not found: remoteAccessGet"}}"#
+        );
+        // hello answered means startup (where apply_config would run) is done.
+        client.send(r#"{"id":2,"method":"hello","params":{}}"#.into());
+        rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        std::net::TcpListener::bind(("0.0.0.0", port)).expect("the port is still free");
+        drop(client);
+        host.shutdown();
     }
 }

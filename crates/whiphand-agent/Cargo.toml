@@ -5,13 +5,19 @@ edition = "2024"
 description = "The desktop's agent: the RPC the webview speaks, served in-process over whiphand-core"
 publish = false
 
+[features]
+default = ["remote"]
+# Remote access: the LAN server a browser drives the agent through. The desktop
+# enables it; the TUI, a second process beside the desktop, leaves it out.
+remote = ["dep:axum", "dep:getrandom", "dep:if-addrs"]
+
 [dependencies]
 whiphand-core = { path = "../whiphand-core" }
 whiphand-protocol = { path = "../whiphand-protocol" }
-axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws"], optional = true }
 base64 = "0.22"
-getrandom = "0.3"
-if-addrs = "0.13"
+getrandom = { version = "0.3", optional = true }
+if-addrs = { version = "0.13", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt", "signal", "sync", "time"] }

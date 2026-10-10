@@ -119,7 +119,7 @@ pub async fn handle_line(agent: &Rc<Agent>, ctx: RequestCtx, text: &str) -> Stri
         ClientKind::Desktop => crate::schema::params(method),
         ClientKind::Remote => crate::schema::remote_params(method).filter(|_| allowed),
     };
-    let Some(schema) = schema.filter(|_| crate::handlers::exists(method)) else {
+    let Some(schema) = schema.filter(|_| agent.serves(method)) else {
         return error(
             id,
             error_code::METHOD_NOT_FOUND,

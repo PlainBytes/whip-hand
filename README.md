@@ -36,6 +36,7 @@ whiphand rename-run 20260907-141233-a3f1 "Something better"                  # r
 whiphand run examples/feature.yaml --input feature=x --worktree              # run on a new branch in its own git worktree
 whiphand run develop --input feature=x --no-worktree                         # run in the working folder even if the workflow asks for a worktree
 whiphand worktree remove 20260907-141233-a3f1                                # remove a run's worktree (--force discards uncommitted changes); the branch stays
+whiphand tui                                                                 # experimental: follow this folder's runs in the terminal
 ```
 
 Workflows live in `.whiphand/workflows/<name>.yaml` (so `whiphand run iterate` works) or anywhere as a

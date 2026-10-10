@@ -1,6 +1,7 @@
 //! The remote channel over real sockets (`remote/server.test.ts`): a `Host`
 //! with remote access enabled, a desktop client on its own channel, and
 //! browsers played by a WebSocket client.
+#![cfg(feature = "remote")]
 
 use std::path::Path;
 use std::sync::mpsc;
@@ -59,6 +60,7 @@ impl Harness {
             remote_config_path: remote,
             web_root: Some(web_root.map_or(empty, Path::to_path_buf)),
             timings: SessionTimings::default(),
+            remote: true,
         })
         .unwrap();
         let (tx, lines) = mpsc::channel();

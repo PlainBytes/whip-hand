@@ -138,43 +138,54 @@ pub async fn call(agent: &Rc<Agent>, ctx: RequestCtx, method: &str, p: &Value) -
                 })
                 .collect(),
         )),
-        "remoteAccessGet" => Ok(agent.remote.state().await),
-        "remoteAccessSet" => remote_access_set(agent, p).await,
-        "remoteAccessRotateToken" => {
-            let rotated = agent.remote.store.mutate(|c| c.token = crate::remote::auth::generate_token());
-            if let Err(e) = rotated {
-                return Some(Err(e));
-            }
-            agent.remote.server.lock().await.drop_clients("token rotated");
-            let state = agent.remote.sync().await;
-            agent.notify("remoteAccessChanged", agent.remote.public_state().await);
-            Ok(state)
+        #[cfg(feature = "remote")]
+        "remoteAccessGet" | "remoteAccessSet" | "remoteAccessRotateToken" => {
+            // rpc.rs answers METHOD_NOT_FOUND before this when remote is off.
+            let remote = agent.remote.as_ref()?;
+            remote_access(agent, remote, method, p).await
         }
         "getJobScrollback" => Ok(agent.scrollback.borrow().snapshot(s(p, "jobId")).unwrap_or(Value::Null)),
         _ => return None,
     })
 }
 
-async fn remote_access_set(agent: &Rc<Agent>, p: &Value) -> R {
-    let enabled = p["enabled"].as_bool();
-    let port = p["port"].as_f64().map(|n| n as u16);
-    agent.remote.store.mutate(|c| {
-        if let Some(e) = enabled {
-            c.enabled = e;
+#[cfg(feature = "remote")]
+async fn remote_access(
+    agent: &Rc<Agent>,
+    remote: &crate::remote::RemoteController,
+    method: &str,
+    p: &Value,
+) -> R {
+    match method {
+        "remoteAccessGet" => return Ok(remote.state().await),
+        "remoteAccessRotateToken" => {
+            remote
+                .store
+                .mutate(|c| c.token = crate::remote::auth::generate_token())?;
+            remote.server.lock().await.drop_clients("token rotated");
         }
-        if let Some(port) = port {
-            c.port = port;
-        }
-    })?;
-    // A new port means a rebind.
-    if port.is_some() {
-        let mut server = agent.remote.server.lock().await;
-        if server.status().listening {
-            server.stop().await;
+        _ => {
+            let enabled = p["enabled"].as_bool();
+            let port = p["port"].as_f64().map(|n| n as u16);
+            remote.store.mutate(|c| {
+                if let Some(e) = enabled {
+                    c.enabled = e;
+                }
+                if let Some(port) = port {
+                    c.port = port;
+                }
+            })?;
+            // A new port means a rebind.
+            if port.is_some() {
+                let mut server = remote.server.lock().await;
+                if server.status().listening {
+                    server.stop().await;
+                }
+            }
         }
     }
-    let state = agent.remote.sync().await;
-    agent.notify("remoteAccessChanged", agent.remote.public_state().await);
+    let state = remote.sync().await;
+    agent.notify("remoteAccessChanged", remote.public_state().await);
     Ok(state)
 }
 

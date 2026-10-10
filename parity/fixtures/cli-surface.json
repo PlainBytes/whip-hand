@@ -229,6 +229,18 @@
           "short": "-C"
         }
       ]
+    },
+    {
+      "name": "tui",
+      "args": [],
+      "options": [
+        {
+          "flags": "-C <dir>",
+          "required": true,
+          "hasDefault": true,
+          "short": "-C"
+        }
+      ]
     }
   ]
 }

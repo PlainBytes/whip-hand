@@ -167,4 +167,18 @@ The `main` column is a run of the UI section on the last commit before Phase 3, 
 - The long tasks while a run floods are not explained yet. Frame times are unchanged (p50 16.7 ms, p95 16.8 ms, one frame over 33 ms).
 
 These are Chromium against the web build. The desktop webview gets the same messages through a `Channel` rather than a WebSocket; the manual check above has not been redone for Phase 3.
+
+### TUI Phase 0: `whiphand tui`
+
+`cargo build --release -p whiphand-cli` on Linux x86_64, before and after the
+TUI crate (docs/tui-plan.md, Phase 0).
+
+| Metric | `main` before TUI Phase 0 | TUI Phase 0 | Change |
+|---|---:|---:|---:|
+| CLI binary | 3.46 MB | 4.51 MB | +1.05 MB |
+
+ratatui, crossterm and the in-process agent account for the growth. The agent
+is linked without its `remote` feature, so axum is not in the binary. Startup
+time and RSS of `whiphand tui` are not measured yet: the harness drives
+programs over stdio, and the TUI needs a terminal.
 <!-- results:end -->

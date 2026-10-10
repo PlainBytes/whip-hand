@@ -104,6 +104,21 @@ resumes control only after the frontend reports the interactive process has exit
 proceeds to harvest (below). Getting this seam right now costs nothing extra; deferring it
 until the Tauri app exists would mean rewriting the run engine's control flow later.
 
+### Frontends
+
+Three front ends drive the same engine. The CLI inherits the terminal for an
+interactive step; the desktop app and the experimental `whiphand tui`
+(`crates/whiphand-tui`, docs/tui-plan.md) are both in-process clients of the
+agent's `Host`, so they share its jobs, PTYs and scrollback, and behave alike
+by construction. Feature parity between the two UIs is not a goal. Desktop-only
+by design, so not a TUI bug:
+
+- the file explorer and its pdf, mermaid and image viewers;
+- remote access (the TUI's agent runs without it, so it never binds the
+  desktop's port);
+- the embedded terminal pane (the TUI attaches to a session full screen
+  instead, from its Phase 2).
+
 ### Adapter interface
 
 `RunnerAdapter` (`crates/whiphand-core/src/adapters/mod.rs`) is `id`, a `capabilities` map

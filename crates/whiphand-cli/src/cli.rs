@@ -264,6 +264,14 @@ pub fn build_cli() -> Command {
                     .arg(extra()),
                 ),
         )
+        .subcommand(
+            sub(
+                "tui",
+                "[experimental] open the terminal UI: follow the working folder's runs",
+            )
+            .arg(dir_option("working folder"))
+            .arg(extra()),
+        )
 }
 
 /// The flags string commander prints for an option: `-C <dir>`, `--input <pair...>`.

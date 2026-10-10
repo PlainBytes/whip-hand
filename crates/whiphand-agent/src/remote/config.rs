@@ -37,15 +37,7 @@ impl RemoteAccessConfig {
     }
 }
 
-/// `WHIPHAND_REMOTE_CONFIG_FILE`, else beside the app state.
-pub fn resolve_remote_config_path() -> PathBuf {
-    if let Ok(v) = std::env::var("WHIPHAND_REMOTE_CONFIG_FILE")
-        && !v.is_empty()
-    {
-        return PathBuf::from(v);
-    }
-    crate::app_state::resolve_app_state_path().with_file_name("remote-access.json")
-}
+pub use crate::app_state::resolve_remote_config_path;
 
 /// Atomic, and readable by its owner only (where the OS can enforce it).
 fn write_private(target: &Path, data: &[u8]) -> std::io::Result<()> {

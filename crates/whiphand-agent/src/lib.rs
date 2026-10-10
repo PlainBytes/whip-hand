@@ -17,6 +17,7 @@ pub mod job_handlers;
 pub mod jobs;
 pub mod pty;
 pub mod pty_sizes;
+#[cfg(feature = "remote")]
 pub mod remote;
 pub mod rpc;
 pub mod runs;

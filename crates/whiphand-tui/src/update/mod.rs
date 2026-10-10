@@ -4,6 +4,7 @@
 
 pub mod actions;
 pub mod detail;
+pub mod manual;
 pub mod new_run;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
@@ -122,6 +123,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                 Err(e) => {
                     if !detail::on_error(model, &then, &e.message)
                         && !new_run::on_error(model, &then, &e.message)
+                        && !manual::on_error(model, &then, &e.message)
                     {
                         model.notice = Some(e.message);
                     }
@@ -139,7 +141,14 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         Msg::Edited(result) => {
             model.dirty = true;
             match result {
-                Ok(text) => new_run::on_edited(model, text),
+                Ok(text) => {
+                    // Editors end the file with a newline the field never had.
+                    let text = text.strip_suffix('\n').unwrap_or(&text);
+                    let text = text.strip_suffix('\r').unwrap_or(text);
+                    if !manual::on_edited(model, text) {
+                        new_run::on_edited(model, text);
+                    }
+                }
                 Err(e) => model.notice = Some(e),
             }
             vec![]
@@ -164,6 +173,9 @@ fn on_key(model: &mut Model, key: KeyEvent) -> Vec<Cmd> {
     if model.help {
         model.help = false;
         return vec![];
+    }
+    if manual::editing(model) && *model.screen() == Route::Manual {
+        return manual::edit_key(model, &key);
     }
     if new_run::editing(model) && *model.screen() == Route::NewRun {
         return new_run::edit_key(model, &key);
@@ -211,6 +223,11 @@ fn act(model: &mut Model, action: Action) -> Vec<Cmd> {
     {
         return cmds;
     }
+    if *model.screen() == Route::Manual
+        && let Some(cmds) = manual::act(model, action)
+    {
+        return cmds;
+    }
     if let Some(cmds) = actions::act(model, action) {
         return cmds;
     }
@@ -232,6 +249,7 @@ fn act(model: &mut Model, action: Action) -> Vec<Cmd> {
             };
             model.detail = None;
             model.new_run = None;
+            model.manual = None;
             vec![get_app_state()]
         }
         Action::GoRuns => {
@@ -242,6 +260,7 @@ fn act(model: &mut Model, action: Action) -> Vec<Cmd> {
             model.route = vec![Route::Runs];
             model.detail = None;
             model.new_run = None;
+            model.manual = None;
             refresh_runs(model)
         }
         Action::GoDoctor => {
@@ -249,6 +268,7 @@ fn act(model: &mut Model, action: Action) -> Vec<Cmd> {
             model.route = vec![root, Route::Doctor];
             model.detail = None;
             model.new_run = None;
+            model.manual = None;
             model.doctor.rows = None;
             vec![doctor(model)]
         }
@@ -260,6 +280,7 @@ fn act(model: &mut Model, action: Action) -> Vec<Cmd> {
         Action::Bottom => movement(model, i64::MAX / 2),
         Action::Open => open(model),
         Action::NewRun => new_run::open(model),
+        Action::OpenManual => manual::open_for_focus(model),
         Action::Filter => {
             model.runs_ui.editing = true;
             vec![]
@@ -300,6 +321,7 @@ fn back(model: &mut Model) -> Vec<Cmd> {
     match model.route.pop() {
         Some(Route::RunDetail) => model.detail = None,
         Some(Route::NewRun) => model.new_run = None,
+        Some(Route::Manual) => model.manual = None,
         _ => {}
     }
     match model.screen() {
@@ -329,7 +351,7 @@ fn movement(model: &mut Model, delta: i64) -> Vec<Cmd> {
             let d = &mut model.doctor;
             d.scroll = (i64::from(d.scroll) + delta).clamp(0, i64::from(u16::MAX)) as u16;
         }
-        Route::RunDetail | Route::NewRun => {}
+        Route::RunDetail | Route::NewRun | Route::Manual => {}
     }
     vec![]
 }
@@ -365,6 +387,7 @@ pub fn switch_workspace(model: &mut Model, path: String) -> Vec<Cmd> {
     model.runs_ui = Default::default();
     model.detail = None;
     model.new_run = None;
+    model.manual = None;
     model.route = vec![Route::Runs];
     model.since_poll = 0;
     vec![touch(&path), list_runs(&path)]
@@ -463,7 +486,7 @@ fn on_notification(model: &mut Model, n: Notification) -> Vec<Cmd> {
             job.status = s.status;
             if s.status != JobStatus::Running {
                 job.awaiting = false;
-                job.manual = false;
+                job.manual = None;
             }
             let run_id = job.run_id.clone();
             model.dirty = true;
@@ -496,15 +519,26 @@ fn on_notification(model: &mut Model, n: Notification) -> Vec<Cmd> {
             vec![notify(model, "waiting on you".into(), body)]
         }
         Notification::ManualRequest(m) => {
+            let unbound = model
+                .jobs
+                .get(&m.job_id)
+                .is_some_and(|j| j.run_id.is_none());
+            if let (true, Some(run_id)) = (unbound, &m.run_id) {
+                model.bind_job(&m.job_id, run_id);
+            }
             let Some(job) = model.jobs.get_mut(&m.job_id) else {
                 return vec![];
             };
-            let rising = !job.manual;
-            job.manual = true;
+            let rising = job.manual.is_none();
+            job.manual = Some(m.request.clone());
             let run_id = job.run_id.clone().or(m.run_id);
             model.dirty = true;
             if !rising {
                 return vec![];
+            }
+            // Its run is on screen: the request opens over it.
+            if let Some(cmds) = manual::open_over_detail(model, &m.job_id) {
+                return cmds;
             }
             let step = m
                 .request
@@ -516,9 +550,10 @@ fn on_notification(model: &mut Model, n: Notification) -> Vec<Cmd> {
         }
         Notification::ManualResolved(m) => {
             if let Some(job) = model.jobs.get_mut(&m.job_id) {
-                job.manual = false;
+                job.manual = None;
                 model.dirty = true;
             }
+            manual::on_resolved(model, &m.job_id);
             vec![]
         }
         Notification::WhiphandEvent(e) => {
@@ -580,6 +615,7 @@ pub fn doctor_text(rows: &[DoctorRow]) -> String {
 fn on_reply(model: &mut Model, then: Then, value: Value) -> Vec<Cmd> {
     let value = match actions::on_reply(model, &then, value)
         .or_else(|value| new_run::on_reply(model, &then, value))
+        .or_else(|value| manual::on_reply(model, &then, value))
     {
         Ok(cmds) => return cmds,
         Err(value) => value,
@@ -628,7 +664,7 @@ fn on_reply(model: &mut Model, then: Then, value: Value) -> Vec<Cmd> {
                 for j in jobs {
                     let job = Job {
                         run_id: j.run_id,
-                        manual: j.pending_manual.is_some(),
+                        manual: j.pending_manual,
                         ..Job::new(j.status)
                     };
                     model.jobs.insert(j.job_id, job);

@@ -25,6 +25,7 @@ pub fn view(model: &Model, frame: &mut Frame) {
         Route::RunDetail => screens::detail::render(model, frame, body),
         Route::Doctor => screens::doctor::render(model, frame, body),
         Route::NewRun => screens::new_run::render(model, frame, body),
+        Route::Manual => screens::manual::render(model, frame, body),
     }
     frame.render_widget(footer_line(model), footer);
     if model.help {
@@ -80,7 +81,9 @@ fn footer_line(model: &Model) -> Line<'_> {
     if let Some((toast, _)) = &model.toast {
         return Line::styled(format!(" {toast}"), theme::waiting());
     }
-    if let Some(hints) = screens::new_run::editing_hints(model) {
+    if let Some(hints) =
+        screens::new_run::editing_hints(model).or_else(|| screens::manual::editing_hints(model))
+    {
         return Line::styled(format!(" {hints}"), theme::dim());
     }
     if model.runs_ui.editing && *model.screen() == Route::Runs {

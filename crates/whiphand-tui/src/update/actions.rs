@@ -190,6 +190,13 @@ pub fn on_dialog_key(model: &mut Model, key: &KeyEvent) -> Vec<Cmd> {
             }
             _ => vec![],
         },
+        Dialog::Confirm {
+            ask: Ask::AbortStep,
+            ..
+        } => match key.code {
+            KeyCode::Char('y' | 'Y') => super::manual::abort(model),
+            _ => vec![],
+        },
         Dialog::Confirm { ask, .. } => match key.code {
             KeyCode::Char('y' | 'Y') => answer(ask),
             _ => vec![],
@@ -267,6 +274,8 @@ fn answer(ask: Ask) -> Vec<Cmd> {
             Then::SessionEnded(run_id),
         )),
         Ask::Resume(run) => resume(run, None, None),
+        // The manual screen sends it, with its note and comments.
+        Ask::AbortStep => return vec![],
         // Prompts answer through `submit`.
         Ask::Rename(_) | Ask::MoreIterations(_) => return vec![],
     }]

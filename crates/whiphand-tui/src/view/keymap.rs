@@ -17,6 +17,7 @@ pub enum Ctx {
     Detail,
     Doctor,
     NewRun,
+    Manual,
 }
 
 impl Ctx {
@@ -27,6 +28,7 @@ impl Ctx {
             Route::RunDetail => Ctx::Detail,
             Route::Doctor => Ctx::Doctor,
             Route::NewRun => Ctx::NewRun,
+            Route::Manual => Ctx::Manual,
         }
     }
 
@@ -39,6 +41,7 @@ impl Ctx {
             Ctx::Detail => "Run detail",
             Ctx::Doctor => "Doctor",
             Ctx::NewRun => "New run",
+            Ctx::Manual => "Manual or approval step",
         }
     }
 }
@@ -81,6 +84,11 @@ pub enum Action {
     EndSession,
     NewRun,
     StartRun,
+    OpenManual,
+    Approve,
+    SendBack,
+    AbortStep,
+    EditNote,
 }
 
 /// A key as the table spells it.
@@ -200,6 +208,13 @@ pub const BINDINGS: &[Binding] = &[
     b(C::Runs, &[Char('n')], "n", A::NewRun, "new run"),
     b(
         C::Runs,
+        &[Char('m')],
+        "m",
+        A::OpenManual,
+        "answer the step waiting on you",
+    ),
+    b(
+        C::Runs,
         &[Char('o')],
         "o",
         A::Ongoing,
@@ -290,6 +305,35 @@ pub const BINDINGS: &[Binding] = &[
     ),
     b(C::Doctor, &[Char('r')], "r", A::Refresh, "check again"),
     b(C::NewRun, &[Char('s')], "s", A::StartRun, "start the run"),
+    b(
+        C::Detail,
+        &[Char('m')],
+        "m",
+        A::OpenManual,
+        "answer the step waiting on you",
+    ),
+    b(
+        C::Manual,
+        &[Char('a')],
+        "a",
+        A::Approve,
+        "continue / approve",
+    ),
+    b(
+        C::Manual,
+        &[Char('b')],
+        "b",
+        A::SendBack,
+        "send back (retry) with the note and comments",
+    ),
+    b(C::Manual, &[Char('X')], "X", A::AbortStep, "abort the run"),
+    b(
+        C::Manual,
+        &[Char('i')],
+        "i",
+        A::EditNote,
+        "write the note (Ctrl-e: $EDITOR)",
+    ),
 ];
 
 /// What `key` does on `screen`; `goto` after a `g`.
@@ -348,6 +392,7 @@ mod tests {
             C::Detail,
             C::Doctor,
             C::NewRun,
+            C::Manual,
         ];
         for ctx in ctxs.into_iter().chain([C::Global]) {
             let scope = BINDINGS

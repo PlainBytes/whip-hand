@@ -3,6 +3,7 @@
 pub mod detail;
 pub mod input;
 pub mod log;
+pub mod manual;
 pub mod new_run;
 pub mod runs;
 
@@ -26,8 +27,8 @@ pub struct Job {
     pub status: JobStatus,
     /// An interactive step is waiting on the human.
     pub awaiting: bool,
-    /// A manual or approval step is open.
-    pub manual: bool,
+    /// The open manual or approval step's request (`ManualRequest`).
+    pub manual: Option<Value>,
     /// Its events as log rows, newest last, capped at [`JOB_LOG_CAP`].
     pub log: VecDeque<LogEntry>,
 }
@@ -38,7 +39,7 @@ impl Job {
             run_id: None,
             status,
             awaiting: false,
-            manual: false,
+            manual: None,
             log: VecDeque::new(),
         }
     }
@@ -52,6 +53,8 @@ pub enum Route {
     RunDetail,
     Doctor,
     NewRun,
+    /// A job's open manual or approval step.
+    Manual,
 }
 
 impl Route {
@@ -62,6 +65,7 @@ impl Route {
             Route::RunDetail => "Run",
             Route::Doctor => "Doctor",
             Route::NewRun => "New run",
+            Route::Manual => "Decision",
         }
     }
 }
@@ -92,6 +96,8 @@ pub enum Ask {
     /// The prompts: their text is the answer.
     Rename(RunRef),
     MoreIterations(RunRef),
+    /// Abort the manual step on screen.
+    AbortStep,
 }
 
 /// A question in the footer that takes the keys until it is answered.
@@ -167,6 +173,7 @@ pub struct Model {
     pub workspaces: WorkspacesUi,
     pub detail: Option<RunDetail>,
     pub new_run: Option<new_run::NewRun>,
+    pub manual: Option<manual::Manual>,
     pub doctor: DoctorUi,
     /// The `?` overlay is up.
     pub help: bool,
@@ -227,7 +234,7 @@ impl Model {
     pub fn waiting_jobs(&self) -> usize {
         self.jobs
             .values()
-            .filter(|j| j.status == JobStatus::Running && (j.awaiting || j.manual))
+            .filter(|j| j.status == JobStatus::Running && (j.awaiting || j.manual.is_some()))
             .count()
     }
 

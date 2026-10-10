@@ -65,6 +65,7 @@ methods! {
     EndSession = "endSession" (p::EndSessionParams) -> p::EndSessionResult;
     ListWorkflows = "listWorkflows" (p::ListWorkflowsParams) -> p::ListWorkflowsResult;
     StartRun = "startRun" (p::StartRunParams) -> p::StartRunResult;
+    ResolveManual = "resolveManual" (p::ResolveManualParams) -> p::ResolveManualResult;
 }
 
 /// Methods the TUI leaves to the desktop. A desktop PR that adds a protocol
@@ -93,7 +94,6 @@ pub const LATER: &[&str] = &[
     "pruneRuns",
     "writeArtifact",
     "setUiState",
-    "resolveManual",
     "ptyInput",
     "ptyResize",
 ];

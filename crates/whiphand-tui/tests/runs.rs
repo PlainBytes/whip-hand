@@ -469,8 +469,10 @@ fn run_actions_drive_a_real_run() {
     tui.until("hello", |m| m.agent_version.is_some());
     tui.start_from_the_form("wait");
     tui.until("the manual step", |m| {
-        *m.screen() == Route::RunDetail && m.jobs.values().any(|j| j.manual)
+        *m.screen() == Route::Manual && m.jobs.values().any(|j| j.manual.is_some())
     });
+    // It opened over the detail; back to the detail for the run's actions.
+    tui.chr('q');
 
     tui.settle();
     // Running: delete is refused before it asks.
@@ -492,8 +494,9 @@ fn run_actions_drive_a_real_run() {
     tui.chr('r');
     tui.chr('y');
     tui.until_with("the resumed run to wait", |t| {
-        t.status() == "running" && t.model.jobs.values().any(|j| j.manual)
+        t.status() == "running" && *t.model.screen() == Route::Manual
     });
+    tui.chr('q');
     tui.chr('c');
     tui.chr('y');
     tui.until_with("the second cancel", |t| t.status() == "cancelled");
@@ -522,6 +525,91 @@ fn run_actions_drive_a_real_run() {
     tui.until("the delete", |m| {
         *m.screen() == Route::Runs && m.rows().is_empty()
     });
+    drop(tui);
+    host.shutdown();
+}
+
+/// A git workspace with one uncommitted change, and a sign-off that loops.
+fn gated_workspace() -> tempfile::TempDir {
+    let ws = workspace();
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .args(args)
+            .current_dir(ws.path())
+            .output()
+            .expect("git runs")
+            .status
+            .success();
+        assert!(ok, "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "tui@example.com"]);
+    git(&["config", "user.name", "tui"]);
+    std::fs::write(ws.path().join("cart.txt"), "empty\n").unwrap();
+    git(&["add", "cart.txt"]);
+    git(&["commit", "-q", "-m", "cart"]);
+    std::fs::write(ws.path().join("cart.txt"), "one item\n").unwrap();
+    std::fs::write(
+        ws.path().join(".whiphand/workflows/gate.yaml"),
+        "name: gate\nsteps:\n  - kind: loop\n    id: round\n    until: sign-off\n    max_iterations: 2\n    steps:\n      - id: sign-off\n        kind: approval\n        verdict: true\n        title: Ship it?\n        instructions: Look it over.\n        show_diff: true\n        capture: review\n        output: feedback.md\n",
+    )
+    .unwrap();
+    ws
+}
+
+#[test]
+fn a_sign_off_is_sent_back_with_comments_then_approved() {
+    let (app, ws) = (tempfile::tempdir().unwrap(), gated_workspace());
+    let host = host(app.path());
+    let mut tui = Tui::start(&host, ws.path());
+    tui.until("hello", |m| m.agent_version.is_some());
+    tui.start_from_the_form("gate");
+    // The run's working diff, as the desktop's review shows it: the change,
+    // and the untracked workflow files beside it.
+    tui.until("the sign-off and its diff", |m| {
+        m.manual.as_ref().is_some_and(|m| !m.files().is_empty())
+    });
+    assert_eq!(
+        tui.model.manual.as_ref().unwrap().files()[0].path,
+        "cart.txt"
+    );
+
+    // Feedback first, then a comment on the changed file.
+    tui.chr('i');
+    for c in "Two items, please.".chars() {
+        tui.chr(c);
+    }
+    tui.key(KeyCode::Esc);
+    tui.chr('j');
+    tui.key(KeyCode::Enter);
+    for c in "Off by one.".chars() {
+        tui.chr(c);
+    }
+    tui.key(KeyCode::Esc);
+    tui.chr('b');
+    // Round two asks again, over the run's detail.
+    tui.until("the second round", |m| {
+        m.manual.as_ref().is_some_and(|m| m.sent.is_none())
+            && m.toast
+                .as_ref()
+                .is_some_and(|(t, _)| t.contains("sent back"))
+    });
+    tui.chr('a');
+    tui.until("the run to succeed", |m| {
+        m.rows().first().is_some_and(|r| r.status == "succeeded")
+    });
+    assert!(tui.model.manual.is_none());
+    assert_eq!(*tui.model.screen(), Route::RunDetail);
+    // Round one's feedback was kept as the step's artifact, comments and all.
+    let run_id = tui.model.rows()[0].run_id.clone();
+    let feedback = ws
+        .path()
+        .join(".whiphand/runs")
+        .join(&run_id)
+        .join("round/iter-1/feedback.md");
+    let feedback = std::fs::read_to_string(feedback).unwrap();
+    assert!(feedback.contains("Two items, please."), "{feedback}");
+    assert!(feedback.contains("Off by one."), "{feedback}");
     drop(tui);
     host.shutdown();
 }

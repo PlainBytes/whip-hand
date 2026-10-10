@@ -7,7 +7,7 @@ one feature branch and one PR into `main`, with each step one or more commits.
 
 | Phase | Status | PR |
 |---|---|---|
-| 0. Groundwork | Not started | |
+| 0. Groundwork | In progress | |
 | 1. Read-only MVP | Not started | |
 | 2. Driving runs | Not started | |
 | 3. Workflows and settings | Not started | |
@@ -92,7 +92,7 @@ needs a shared-crate change, it is called out in that phase's PR description.
 |---|---|---|
 | Packaging | `whiphand tui [-C dir]` subcommand of the existing `whiphand` binary. Code lives in a new library crate `crates/whiphand-tui` | One artifact and the existing CLI release path. The crate split keeps the clap surface (pinned by `parity/fixtures/cli-surface.json`) small |
 | Backend | `whiphand_agent::Host::start` plus `connect(ClientKind::Desktop, sink)` | Same jobs, PTY, scrollback and await code the desktop uses |
-| Remote | Cargo feature `remote` on `whiphand-agent`, on by default. Tauri and the stdio bin keep it. The TUI depends with `default-features = false` | `Host::run` calls `remote.apply_config()` at start; with a shared `remote-access.json` the TUI would otherwise try to bind the desktop's port. It also keeps axum out of the CLI binary |
+| Remote | Cargo feature `remote` on `whiphand-agent`, on by default. Tauri and the stdio bin keep it. The TUI depends with `default-features = false`, **and** starts its `Host` with `HostConfig { remote: false, .. }` | `Host::run` calls `remote.apply_config()` at start; with a shared `remote-access.json` the TUI would otherwise try to bind the desktop's port. Cargo unifies features across a workspace build, so the feature alone does not keep remote out of a `cargo build`/`cargo test --workspace` TUI; the runtime switch does. The feature keeps axum out of a `cargo build -p whiphand-cli` release binary |
 | Toolkit | `ratatui` 0.29 + `crossterm` 0.28 (`event-stream` feature) | Works on the Windows console/ConPTY, macOS and Linux. `TestBackend` gives snapshot tests |
 | Async | One current-thread tokio runtime on the UI thread. The `Host` keeps its own engine thread | `Host` is `Send`; the engine's `!Send` futures never touch the UI thread |
 | Interactive steps | **Attach mode**: leave the alt-screen and pass the job's PTY straight through to the real terminal. Detach key `Ctrl-]` | Real terminal fidelity with no emulation. The agent owns the PTY, so the run continues while detached |
@@ -306,8 +306,8 @@ changes for that:
 2. **Remote server port clash.** Solved by building the TUI's agent without the
    `remote` feature (section 1). The `remote` module, `RemoteController`,
    `ClientKind::Remote` handling and the three `remoteAccess*` handlers go behind
-   `#[cfg(feature = "remote")]`; without it those methods answer
-   `METHOD_NOT_FOUND`. The desktop is unaffected.
+   `#[cfg(feature = "remote")]` and `HostConfig.remote`; without either, those
+   methods answer `METHOD_NOT_FOUND`. The desktop is unaffected.
 3. **Runs driven by the other process ("foreign runs").** Run directories are
    already safe across processes (journal lease, fence and stale-lease repair in
    `crates/whiphand-core/src/store/`, covered by the parity store tests). Live
@@ -320,6 +320,11 @@ changes for that:
 4. **Same workspace, same time** is allowed. Starting a second run in one
    workspace behaves as it does today for two desktop windows, or the CLI plus
    the desktop.
+
+Note for Phase 2: `cancelRun` by `runId` (no `jobId`) is the agent's path for
+a run another process owns, and SIGTERMs the pid in the run's manifest; for a
+desktop-started run that pid is the desktop itself. Keeping cancel disabled on
+foreign runs is therefore required, not just tidy.
 
 Out of scope for this track: controlling foreign runs across processes, which
 would need an owner-side IPC channel. If the desktop users ask for it, it

@@ -1713,6 +1713,7 @@ name = "whiphand-tui"
 version = "0.4.0"
 dependencies = [
  "ansi-to-tui",
+ "base64",
  "crossterm",
  "futures-util",
  "insta",

@@ -17,9 +17,9 @@ use crate::client::wire::{self, Inbound};
 use crate::cmd::{Cmd, External};
 use crate::model::Model;
 use crate::msg::Msg;
-use crate::runtime::external;
 use crate::runtime::notify::{self, Mode};
 use crate::runtime::terminal::Term;
+use crate::runtime::{attach, external};
 use crate::update::{init, update};
 use crate::view::view;
 
@@ -57,6 +57,9 @@ pub fn run(host: &Host, terminal: &mut Term, mut model: Model, log: &Path) -> io
         let mut host_gone = false;
         let mut last_draw: Option<Instant> = None;
         let mut title = String::new();
+        // The session the terminal is handed to, and the size it was given.
+        let mut attached: Option<attach::Session> = None;
+        let mut pty_size = (0, 0);
         loop {
             let mut back = Vec::new();
             for cmd in cmds.drain(..) {
@@ -77,6 +80,35 @@ pub fn run(host: &Host, terminal: &mut Term, mut model: Model, log: &Path) -> io
                         events = Some(EventStream::new());
                     }
                     Cmd::Quit => return Ok(()),
+                    Cmd::Attach => {
+                        drop(events.take());
+                        match attach::enter() {
+                            Ok((session, size)) => {
+                                attached = Some(session);
+                                pty_size = size;
+                                back.push(Msg::PtySize {
+                                    cols: size.0,
+                                    rows: size.1,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = terminal.clear();
+                                events = Some(EventStream::new());
+                                back.push(Msg::AttachFailed(e.to_string()));
+                            }
+                        }
+                    }
+                    Cmd::Detach => {
+                        if let Some(session) = attached.take() {
+                            session.leave(terminal)?;
+                            events = Some(EventStream::new());
+                        }
+                    }
+                    Cmd::Stdout(bytes) => {
+                        if attached.is_some() {
+                            attach::write(&bytes);
+                        }
+                    }
                 }
             }
             for msg in back {
@@ -86,7 +118,8 @@ pub fn run(host: &Host, terminal: &mut Term, mut model: Model, log: &Path) -> io
                 title = model.title();
                 notify::emit(&notify::title_bytes(&title));
             }
-            if model.dirty && last_draw.is_none_or(|t| t.elapsed() >= FRAME) {
+            // Attached, the screen is the session's.
+            if attached.is_none() && model.dirty && last_draw.is_none_or(|t| t.elapsed() >= FRAME) {
                 terminal.draw(|f| view(&model, f))?;
                 model.dirty = false;
                 last_draw = Some(Instant::now());
@@ -95,7 +128,18 @@ pub fn run(host: &Host, terminal: &mut Term, mut model: Model, log: &Path) -> io
             // ends, not at the next tick.
             let next_frame = last_draw.map_or_else(Instant::now, |t| t + FRAME);
             let msgs: Vec<Msg> = tokio::select! {
-                ev = events.as_mut().expect("the terminal is ours").next() => match ev {
+                keys = recv_keys(&mut attached), if attached.is_some() => match keys {
+                    Some(bytes) => vec![Msg::Stdin(bytes)],
+                    // The reader stopped (stdin closed): the TUI takes the screen back.
+                    None => {
+                        if let Some(session) = attached.take() {
+                            session.leave(terminal)?;
+                        }
+                        events = Some(EventStream::new());
+                        vec![Msg::AttachFailed("the terminal stopped sending keys".into())]
+                    }
+                },
+                ev = next_event(&mut events) => match ev {
                     Some(Ok(Event::Key(key))) => vec![Msg::Key(key)],
                     Some(Ok(Event::Resize(..))) => vec![Msg::Resize],
                     Some(Ok(_)) => vec![],
@@ -118,7 +162,18 @@ pub fn run(host: &Host, terminal: &mut Term, mut model: Model, log: &Path) -> io
                         msgs
                     }
                 },
-                _ = tick.tick() => vec![Msg::Tick { now_ms: now_ms() }],
+                _ = tick.tick() => {
+                    let mut msgs = vec![Msg::Tick { now_ms: now_ms() }];
+                    // No resize events while crossterm is not reading: ask.
+                    if attached.is_some()
+                        && let Ok(size) = crossterm::terminal::size()
+                        && size != pty_size
+                    {
+                        pty_size = size;
+                        msgs.push(Msg::PtySize { cols: size.0, rows: size.1 });
+                    }
+                    msgs
+                }
                 () = tokio::time::sleep_until(next_frame.into()), if model.dirty => vec![],
             };
             for msg in msgs {
@@ -126,4 +181,21 @@ pub fn run(host: &Host, terminal: &mut Term, mut model: Model, log: &Path) -> io
             }
         }
     })
+}
+
+/// Terminal events; none while another program or a session has the
+/// terminal. (`select!` builds every branch's future, so this cannot be a
+/// precondition on `events.is_some()`.)
+async fn next_event(events: &mut Option<EventStream>) -> Option<io::Result<Event>> {
+    match events {
+        Some(events) => events.next().await,
+        None => std::future::pending().await,
+    }
+}
+
+async fn recv_keys(attached: &mut Option<attach::Session>) -> Option<Vec<u8>> {
+    match attached {
+        Some(session) => session.keys.recv().await,
+        None => std::future::pending().await,
+    }
 }

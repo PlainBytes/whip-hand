@@ -5,6 +5,7 @@ pub mod input;
 pub mod log;
 pub mod manual;
 pub mod new_run;
+pub mod pty;
 pub mod runs;
 
 use std::collections::{BTreeMap, VecDeque};
@@ -31,6 +32,8 @@ pub struct Job {
     pub manual: Option<Value>,
     /// Its events as log rows, newest last, capped at [`JOB_LOG_CAP`].
     pub log: VecDeque<LogEntry>,
+    /// Its interactive session's output, for attach mode.
+    pub pty: pty::PtyRing,
 }
 
 impl Job {
@@ -41,6 +44,7 @@ impl Job {
             awaiting: false,
             manual: None,
             log: VecDeque::new(),
+            pty: pty::PtyRing::default(),
         }
     }
 }
@@ -68,6 +72,18 @@ impl Route {
             Route::Manual => "Decision",
         }
     }
+}
+
+/// The terminal is handed to a job's interactive session.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Attach {
+    pub job_id: String,
+    /// `Ctrl-]` came last: the next key says what it meant.
+    pub escape: bool,
+    /// The session's output so far has been written; live output follows.
+    pub replayed: bool,
+    /// The session ended at this time; the TUI comes back shortly.
+    pub ended_at: Option<f64>,
 }
 
 /// A run an action is about: its workspace and id.
@@ -174,6 +190,8 @@ pub struct Model {
     pub detail: Option<RunDetail>,
     pub new_run: Option<new_run::NewRun>,
     pub manual: Option<manual::Manual>,
+    /// Attached to a session: the screen is not the TUI's.
+    pub attach: Option<Attach>,
     pub doctor: DoctorUi,
     /// The `?` overlay is up.
     pub help: bool,

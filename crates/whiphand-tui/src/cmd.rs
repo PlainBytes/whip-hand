@@ -52,10 +52,28 @@ pub enum Then {
     Pinned,
     RecentRuns,
     Run(String),
-    RunLog { run_id: String, page: LogPage },
-    Scrollback { run_id: String },
-    ArtifactStat { run_id: String, name: String },
-    Artifact { run_id: String, name: String },
+    RunLog {
+        run_id: String,
+        page: LogPage,
+    },
+    Scrollback {
+        run_id: String,
+    },
+    ArtifactStat {
+        run_id: String,
+        name: String,
+    },
+    Artifact {
+        run_id: String,
+        name: String,
+    },
     Diff(String),
     Doctor,
+    /// Run actions; each names the run it acted on.
+    Cancelled(String),
+    Resumed(String),
+    Renamed(String),
+    Locked(String),
+    Deleted(String),
+    SessionEnded(String),
 }

@@ -290,6 +290,17 @@ fn run_detail_events_errors_only() {
 }
 
 #[test]
+fn run_detail_asks_before_cancelling_and_prompts_a_rename() {
+    let mut model = live_detail();
+    key(&mut model, KeyCode::Char('c'));
+    snapshot("detail_confirm_cancel", &model);
+    key(&mut model, KeyCode::Esc);
+    key(&mut model, KeyCode::Char('R'));
+    key(&mut model, KeyCode::Left);
+    snapshot("detail_rename", &model);
+}
+
+#[test]
 fn run_detail_one_steps_log_with_a_collapsed_loop() {
     let mut model = live_detail();
     // The cursor sits on the running execute; filter to it, fold the loop.

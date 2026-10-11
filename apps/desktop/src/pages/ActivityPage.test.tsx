@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ActivityPage } from './ActivityPage.tsx';
 import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
@@ -41,6 +41,30 @@ describe('ActivityPage', () => {
     expect(await screen.findByText('r-a')).toBeInTheDocument();
     expect(screen.getByText('r-b')).toBeInTheDocument();
     expect(screen.getByText('other')).toBeInTheDocument();
+  });
+
+  it('shows the Worktree and Locked columns after the Workspace and Run ones', async () => {
+    const { transport } = renderActivity();
+    await respond(transport, 'listRecentRuns', [
+      {
+        runId: 'r-wt', runDir: '/ws/.whiphand/runs/r-wt', status: 'succeeded', workflow: 'demo', workspace: '/ws',
+        locked: true, worktree: { path: '.whiphand/worktrees/r-wt', branch: 'whiphand/r-wt' },
+      },
+      { runId: 'r-plain', runDir: '/ws/.whiphand/runs/r-plain', status: 'succeeded', workflow: 'demo', workspace: '/ws' },
+    ]);
+
+    await screen.findByText('r-wt');
+    expect(screen.getAllByRole('columnheader').map(h => h.textContent).slice(0, 5))
+      .toEqual(['Workspace', 'Workflow', 'Run', '', '']);
+    expect(screen.getByLabelText('Worktree')).toBeInTheDocument();
+    expect(screen.getByLabelText('Locked')).toBeInTheDocument();
+    expect(screen.getAllByLabelText('worktree')).toHaveLength(1);
+    const glyph = screen.getByLabelText('worktree');
+    const cells = within(glyph.closest('[role="row"]') as HTMLElement).getAllByRole('gridcell');
+    expect(cells[3]).toContainElement(glyph);
+    expect(cells[3]).toHaveStyle({ maxWidth: '48px' });
+    expect(cells[0]).not.toHaveStyle({ maxWidth: '48px' });
+    expect(cells[4]).toContainElement(screen.getByLabelText('locked'));
   });
 
   it('opens a run in its own workspace, switching there first', async () => {

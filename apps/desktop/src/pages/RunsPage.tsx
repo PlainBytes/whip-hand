@@ -13,7 +13,6 @@ import {
   Spinner,
   Switch,
   Text,
-  ToggleButton,
   Tooltip,
   type TableColumnDefinition,
 } from '@fluentui/react-components';
@@ -22,7 +21,7 @@ import { useAgentClient } from '../agent/agent-context.tsx';
 import { liveStageProgress, useAppStore, waitingRunIds } from '../state/store.ts';
 import { sameSet, sameStageProgress, useAppStoreStable } from '../state/use-stable-selector.ts';
 import type { RunSummary } from '../agent/client.ts';
-import { POLL_INTERVAL_MS, runColumns, runLabel } from './run-columns.tsx';
+import { POLL_INTERVAL_MS, runColumns, runColumnStyle, runLabel } from './run-columns.tsx';
 import { DeleteRunDialog } from '../components/DeleteRunDialog.tsx';
 import { errorMessage } from '../lib/error-message.ts';
 import { DangerButton } from '../components/DangerButton.tsx';
@@ -103,37 +102,35 @@ export function RunsPage({ onSelectRun, onNewRun }: RunsPageProps) {
     renderHeaderCell: () => 'Actions',
     renderCell: run => (
       <div style={{ display: 'flex', gap: 8 }}>
-        {run.worktree && workspacePath && (
+        {workspacePath && (
           <OpenInEditorButton
             workdir={workspacePath}
-            worktree={run.worktree}
+            worktree={run.worktree ?? undefined}
             size="small"
             iconOnly
             onError={setOpenError}
           />
         )}
-        <ToggleButton
-          size="small"
-          checked={!!run.locked}
-          disabled={lockingId === run.runId}
-          icon={
-            lockingId === run.runId ? <Spinner size="tiny" />
-              : run.locked ? <LockClosed16Regular /> : <LockOpen16Regular />
-          }
-          aria-label={run.locked ? `Unlock ${runLabel(run)}` : `Lock ${runLabel(run)}`}
-          onClick={event => { event.stopPropagation(); void handleToggleLock(run); }}
-        >
-          {run.locked ? 'Locked' : 'Lock'}
-        </ToggleButton>
-        <DangerButton
-          variant="subtle"
-          size="small"
-          icon={<Delete16Regular />}
-          aria-label={`Delete ${runLabel(run)}`}
-          onClick={event => { event.stopPropagation(); setDeleting(run); }}
-        >
-          Delete
-        </DangerButton>
+        <Tooltip content={run.locked ? `Unlock ${runLabel(run)}` : `Lock ${runLabel(run)}`} relationship="label">
+          <Button
+            size="small"
+            appearance="secondary"
+            disabled={lockingId === run.runId}
+            icon={
+              lockingId === run.runId ? <Spinner size="tiny" />
+                : run.locked ? <LockClosed16Regular /> : <LockOpen16Regular />
+            }
+            onClick={event => { event.stopPropagation(); void handleToggleLock(run); }}
+          />
+        </Tooltip>
+        <Tooltip content={`Delete ${runLabel(run)}`} relationship="label">
+          <DangerButton
+            variant="subtle"
+            size="small"
+            icon={<Delete16Regular />}
+            onClick={event => { event.stopPropagation(); setDeleting(run); }}
+          />
+        </Tooltip>
       </div>
     ),
     // handleToggleLock isn't memoized (it closes over poll, which already
@@ -147,10 +144,10 @@ export function RunsPage({ onSelectRun, onNewRun }: RunsPageProps) {
     [waiting, stages, actionsColumn],
   );
 
-  const header = <Text weight="semibold" size={500}>Runs</Text>;
+  const title = <Text weight="semibold" size={500}>Runs</Text>;
 
   if (!workspacePath) {
-    return <Page header={header}><Text>Choose a workspace to see its runs.</Text></Page>;
+    return <Page header={title}><Text>Choose a workspace to see its runs.</Text></Page>;
   }
 
   const matchesFilters = (run: RunSummary): boolean => {
@@ -160,28 +157,32 @@ export function RunsPage({ onSelectRun, onNewRun }: RunsPageProps) {
   };
   const filtered = runs.filter(matchesFilters);
 
-  return (
-    <Page header={header}>
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ display: 'flex', gap: 16 }}>
-          <Switch
-            label="Show dry runs"
-            checked={showDryRuns}
-            onChange={(_e, data) => setShowDryRuns(data.checked)}
-          />
-          <Switch
-            label="Show interrupted"
-            checked={showInterrupted}
-            onChange={(_e, data) => setShowInterrupted(data.checked)}
-          />
-        </div>
+  const header = (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+      {title}
+      <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexShrink: 0 }}>
+        <Switch
+          label="Show dry runs"
+          checked={showDryRuns}
+          onChange={(_e, data) => setShowDryRuns(data.checked)}
+        />
+        <Switch
+          label="Show interrupted"
+          checked={showInterrupted}
+          onChange={(_e, data) => setShowInterrupted(data.checked)}
+        />
         <Tooltip content={`New run (${shortcutLabel(NEW_RUN_TAB)})`} relationship="description">
           <Button appearance="primary" icon={<Add20Regular />} onClick={onNewRun}>
             New run
           </Button>
         </Tooltip>
       </div>
+    </div>
+  );
+
+  return (
+    <Page header={header}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {error && <Text>Failed to load runs: {error}</Text>}
       {openError && (
         <MessageBar intent="error" data-testid="runs-open-error">
@@ -194,7 +195,9 @@ export function RunsPage({ onSelectRun, onNewRun }: RunsPageProps) {
         <DataGrid items={filtered} columns={columns} getRowId={run => run.runId} sortable={false}>
           <DataGridHeader>
             <DataGridRow>
-              {({ renderHeaderCell }) => <DataGridHeaderCell>{renderHeaderCell()}</DataGridHeaderCell>}
+              {({ columnId, renderHeaderCell }) => (
+                <DataGridHeaderCell style={runColumnStyle(columnId)}>{renderHeaderCell()}</DataGridHeaderCell>
+              )}
             </DataGridRow>
           </DataGridHeader>
           <DataGridBody<RunSummary>>
@@ -205,7 +208,9 @@ export function RunsPage({ onSelectRun, onNewRun }: RunsPageProps) {
                 onDoubleClick={() => rowClick.doubleClick(item.runId)}
                 style={{ cursor: 'pointer' }}
               >
-                {({ renderCell }) => <DataGridCell>{renderCell(item)}</DataGridCell>}
+                {({ columnId, renderCell }) => (
+                  <DataGridCell style={runColumnStyle(columnId)}>{renderCell(item)}</DataGridCell>
+                )}
               </DataGridRow>
             )}
           </DataGridBody>

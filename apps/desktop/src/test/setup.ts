@@ -2,6 +2,18 @@ import { afterEach } from 'vitest';
 import { cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 
+// Node 25 ships its own global localStorage/sessionStorage, and without
+// `--localstorage-file` they're stubs with no methods. Vitest's jsdom
+// environment leaves Node's getters in place, so they shadow jsdom's working
+// storage. Put jsdom's back.
+const { jsdom } = globalThis as unknown as { jsdom?: { window: Window } };
+for (const name of ['localStorage', 'sessionStorage'] as const) {
+  const storage = jsdom?.window[name];
+  if (storage && typeof globalThis[name]?.clear !== 'function') {
+    Object.defineProperty(globalThis, name, { configurable: true, enumerable: true, get: () => storage });
+  }
+}
+
 // We don't run with vitest's `globals: true`, so @testing-library/react's
 // auto-cleanup (which only self-registers when it detects a global test
 // framework) never kicks in — do it explicitly, or DOM from one test leaks

@@ -108,6 +108,18 @@ describe('RunsPage', () => {
     expect(hasInjectedStyle(confirm, 'background-color', 'var(--colorPaletteRedBackground3)')).toBe(true);
   });
 
+  it('renders lock and delete as icon-only buttons, and lock has no pressed state', async () => {
+    const { transport } = renderRunsPage();
+    await respondListRuns(transport, [
+      { runId: 'r1', runDir: '/ws/.whiphand/runs/r1', status: 'succeeded', workflow: 'demo', locked: true },
+    ]);
+
+    const lock = await screen.findByRole('button', { name: 'Unlock r1' });
+    const del = screen.getByRole('button', { name: 'Delete r1' });
+    for (const button of [lock, del]) expect(button.textContent).toBe('');
+    expect(lock).not.toHaveAttribute('aria-pressed');
+  });
+
   it('shows a run blocked on the human as waiting, not merely running', async () => {
     // The run row comes off disk, where it just says 'running'; only the live
     // job knows anyone is waiting, so the two are bridged by runId.
@@ -252,6 +264,26 @@ describe('RunsPage', () => {
     expect(await screen.findByText('r2')).toBeInTheDocument();
   });
 
+  it('puts the filter switches and New run in the page header, not the body', () => {
+    renderRunsPage();
+
+    const header = screen.getByTestId('page-header');
+    expect(within(header).getByText('Runs')).toBeInTheDocument();
+    expect(within(header).getByRole('switch', { name: 'Show dry runs' })).not.toBeChecked();
+    expect(within(header).getByRole('switch', { name: 'Show interrupted' })).toBeChecked();
+    expect(within(header).getByRole('button', { name: 'New run' })).toBeInTheDocument();
+  });
+
+  it('shows only the title in the header when no workspace is selected', () => {
+    useAppStore.setState({ workspacePath: null });
+    renderRunsPage();
+
+    const header = screen.getByTestId('page-header');
+    expect(within(header).getByText('Runs')).toBeInTheDocument();
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New run' })).not.toBeInTheDocument();
+  });
+
   it('calls onSelectRun un-pinned with the runId when a row is clicked', async () => {
     const { transport, onSelectRun } = renderRunsPage();
 
@@ -281,12 +313,21 @@ describe('RunsPage', () => {
     expect(onSelectRun).toHaveBeenCalledTimes(1);
   });
 
-  it('shows a lock glyph for a locked run', async () => {
+  it('shows a lock glyph for a locked run in the Locked column, with a Locked tooltip', async () => {
     const { transport } = renderRunsPage();
     await respondListRuns(transport, [
       { runId: 'r1', runDir: '/ws/.whiphand/runs/r1', status: 'succeeded', workflow: 'demo', locked: true },
     ]);
-    expect(await screen.findByRole('img', { name: 'locked' })).toBeInTheDocument();
+    const glyph = await screen.findByRole('img', { name: 'locked' });
+    const row = glyph.closest('[role="row"]') as HTMLElement;
+    expect(glyph.closest('[role="gridcell"]')).toBe(within(row).getAllByRole('gridcell')[3]);
+    const trigger = glyph.parentElement as HTMLElement;
+    fireEvent.mouseEnter(trigger);
+    // Other description tooltips (New run) stay mounted, so find this one by its id.
+    await waitFor(() => {
+      const id = trigger.getAttribute('aria-describedby');
+      expect(id && document.getElementById(id)).toHaveTextContent('Locked');
+    });
   });
 
   it('lock toggle sends setRunLocked without following the row link, and re-polls on success', async () => {
@@ -423,28 +464,51 @@ describe('RunsPage', () => {
       useAppStore.setState({ appState: null });
     });
 
-    it('marks a worktree run with a glyph naming its branch and path, and a plain run with none', async () => {
+    it('marks a worktree run in the Worktree column, naming its branch and path on hover, and a plain run with none', async () => {
       const { transport } = renderRunsPage();
       await respondListRuns(transport, [WORKTREE_RUN, PLAIN_RUN]);
 
       await screen.findByText('wt1');
       const glyphs = screen.getAllByLabelText('worktree');
       expect(glyphs).toHaveLength(1);
-      expect(glyphs[0].parentElement).toHaveAttribute(
-        'title', 'Worktree on branch whiphand/wt1\n.whiphand/worktrees/wt1',
+      expect(glyphs[0].closest('[role="gridcell"]')).toBe(
+        within(screen.getByText('wt1').closest('[role="row"]') as HTMLElement).getAllByRole('gridcell')[2],
       );
+      fireEvent.mouseEnter(glyphs[0].parentElement as HTMLElement);
+      expect(await screen.findByText('Worktree on branch whiphand/wt1')).toBeInTheDocument();
+      expect(screen.getByText('.whiphand/worktrees/wt1')).toBeInTheDocument();
     });
 
-    it('offers no open button without the capability, but keeps the glyph', async () => {
+    it('keeps glyphs out of the Run cell so names line up', async () => {
       const { transport } = renderRunsPage();
-      await respondListRuns(transport, [WORKTREE_RUN]);
+      await respondListRuns(transport, [{ ...WORKTREE_RUN, locked: true }]);
+
+      const row = (await screen.findByText('wt1')).closest('[role="row"]') as HTMLElement;
+      // Cells: workflow, run, worktree, locked, ...
+      const nameCell = within(row).getAllByRole('gridcell')[1];
+      expect(nameCell).toHaveTextContent('wt1');
+      expect(nameCell.querySelector('svg')).toBeNull();
+    });
+
+    it('disables every open button without the capability, with a desktop-only tooltip, and keeps the glyph', async () => {
+      const onSelectRun = vi.fn();
+      const { transport } = renderRunsPage(onSelectRun);
+      await respondListRuns(transport, [WORKTREE_RUN, PLAIN_RUN]);
 
       await screen.findByText('wt1');
       expect(screen.getByLabelText('worktree')).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: /Open in/ })).not.toBeInTheDocument();
+      const buttons = screen.getAllByRole('button', { name: /Open (worktree|repository) in/ });
+      expect(buttons).toHaveLength(2);
+      for (const button of buttons) expect(button).toHaveAttribute('aria-disabled', 'true');
+
+      fireEvent.mouseEnter(buttons[0]);
+      expect(await screen.findAllByText(/only available in the desktop app/)).not.toHaveLength(0);
+      fireEvent.click(buttons[0]);
+      fireEvent.click(buttons[1]);
+      expect(onSelectRun).not.toHaveBeenCalled();
     });
 
-    it('opens the worktree in the chosen editor without opening the run', async () => {
+    it('opens the worktree or the repository per row, without opening the run', async () => {
       const openInEditor = vi.fn().mockResolvedValue(undefined);
       useAppStore.setState({ appState: { editor: { kind: 'cursor' } } as never });
       const onSelectRun = vi.fn();
@@ -453,26 +517,30 @@ describe('RunsPage', () => {
       );
       await respondListRuns(transport, [WORKTREE_RUN, PLAIN_RUN]);
 
-      const buttons = await screen.findAllByRole('button', { name: 'Open in Cursor' });
-      expect(buttons).toHaveLength(1);
-      fireEvent.click(buttons[0]);
-
+      const worktreeButtons = await screen.findAllByRole('button', { name: 'Open worktree in Cursor' });
+      expect(worktreeButtons).toHaveLength(1);
+      fireEvent.click(worktreeButtons[0]);
       await waitFor(() => expect(openInEditor).toHaveBeenCalledWith(
         '/ws', '.whiphand/worktrees/wt1', { kind: 'cursor' },
       ));
+
+      const repoButtons = screen.getAllByRole('button', { name: 'Open repository in Cursor' });
+      expect(repoButtons).toHaveLength(1);
+      fireEvent.click(repoButtons[0]);
+      await waitFor(() => expect(openInEditor).toHaveBeenCalledWith('/ws', '', { kind: 'cursor' }));
       expect(onSelectRun).not.toHaveBeenCalled();
     });
 
     it('shows the launcher error above the grid', async () => {
-      const openInEditor = vi.fn().mockRejectedValue(new Error('worktree no longer exists'));
+      const openInEditor = vi.fn().mockRejectedValue(new Error('Folder no longer exists: /ws'));
       const { transport } = renderRunsPage(
         vi.fn(), vi.fn(), { host: 'desktop', localFiles: true, openInEditor },
       );
       await respondListRuns(transport, [WORKTREE_RUN]);
 
-      fireEvent.click(await screen.findByRole('button', { name: 'Open in Visual Studio Code' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Open worktree in Visual Studio Code' }));
 
-      expect(await screen.findByTestId('runs-open-error')).toHaveTextContent('worktree no longer exists');
+      expect(await screen.findByTestId('runs-open-error')).toHaveTextContent('Folder no longer exists');
       expect(screen.getByText('wt1')).toBeInTheDocument();
     });
   });

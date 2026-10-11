@@ -42,7 +42,7 @@ fn resolve_dir(workdir: &str, rel_path: &str) -> Result<PathBuf, String> {
     match std::fs::canonicalize(&joined) {
         Ok(dir) if dir.is_dir() => Ok(dir),
         _ => Err(format!(
-            "This run's worktree no longer exists: {}",
+            "Folder no longer exists: {}",
             joined.display()
         )),
     }
@@ -130,11 +130,19 @@ mod tests {
     }
 
     #[test]
+    fn empty_rel_path_resolves_to_the_workdir() {
+        let tmp = tempdir("empty");
+        let dir = resolve_dir(tmp.to_str().unwrap(), "").unwrap();
+        assert_eq!(dir, std::fs::canonicalize(&tmp).unwrap());
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
     fn missing_directory_names_the_path() {
         let tmp = tempdir("missing");
         let err = resolve_dir(tmp.to_str().unwrap(), "gone").unwrap_err();
         assert!(
-            err.starts_with("This run's worktree no longer exists: "),
+            err.starts_with("Folder no longer exists: "),
             "{err}"
         );
         assert!(err.contains("gone"), "{err}");

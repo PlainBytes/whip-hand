@@ -1,14 +1,17 @@
 import { useState } from 'react';
-import { Button, Spinner, Text } from '@fluentui/react-components';
+import { Button, Spinner, Text, Tooltip } from '@fluentui/react-components';
 import { Open16Regular, Open20Regular } from '@fluentui/react-icons';
 import { useCapabilities } from '../capabilities.tsx';
 import { useAppStore } from '../state/store.ts';
 import { DEFAULT_EDITOR, editorLabel } from '../lib/editor.ts';
 import { errorMessage } from '../lib/error-message.ts';
 
+const DESKTOP_ONLY = 'Opening in an editor is only available in the desktop app';
+
 export interface OpenInEditorButtonProps {
   workdir: string;
-  worktree: { path: string; branch: string };
+  /** Without one the button opens `workdir` itself. */
+  worktree?: { path: string; branch: string };
   size: 'small' | 'medium';
   iconOnly?: boolean;
   /**
@@ -19,8 +22,9 @@ export interface OpenInEditorButtonProps {
 }
 
 /**
- * Opens a run's worktree in the editor chosen in Preferences. Renders nothing
- * on a host without the `openInEditor` capability (the browser).
+ * Opens a run's worktree, or the repository when it has none, in the editor
+ * chosen in Preferences. On a host without the `openInEditor` capability (the
+ * browser) it stays visible but disabled, with a tooltip saying why.
  */
 export function OpenInEditorButton({ workdir, worktree, size, iconOnly, onError }: OpenInEditorButtonProps) {
   const { openInEditor } = useCapabilities();
@@ -28,18 +32,22 @@ export function OpenInEditorButton({ workdir, worktree, size, iconOnly, onError 
   const [pending, setPending] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
-  if (openInEditor === undefined) return null;
+  const label = `Open ${worktree ? 'worktree' : 'repository'} in ${editorLabel(editor)}`;
+  const unavailable = openInEditor === undefined;
 
-  const label = `Open in ${editorLabel(editor)}`;
+  // Fluent swallows clicks on a disabledFocusable button before our onClick
+  // runs, so they would still bubble up and open the enclosing row's run.
+  const onDisabledClickCapture = unavailable ? (event: React.MouseEvent) => event.stopPropagation() : undefined;
 
   async function handleClick(event: React.MouseEvent): Promise<void> {
     // Inside a grid row: the click must not also open the run.
     event.stopPropagation();
+    if (openInEditor === undefined) return;
     setPending(true);
     setLocalError(null);
     onError?.(null);
     try {
-      await openInEditor!(workdir, worktree.path, editor);
+      await openInEditor(workdir, worktree?.path ?? '', editor);
     } catch (err) {
       const message = errorMessage(err);
       if (onError) onError(message);
@@ -55,17 +63,37 @@ export function OpenInEditorButton({ workdir, worktree, size, iconOnly, onError 
 
   return (
     <>
-      <Button
-        appearance={iconOnly ? 'subtle' : 'secondary'}
-        size={size}
-        icon={icon}
-        disabled={pending}
-        aria-label={label}
-        title={label}
-        onClick={event => void handleClick(event)}
-      >
-        {iconOnly ? undefined : label}
-      </Button>
+      {iconOnly ? (
+        <Tooltip
+          content={unavailable ? DESKTOP_ONLY : label}
+          relationship={unavailable ? 'description' : 'label'}
+        >
+          <Button
+            appearance="secondary"
+            size={size}
+            icon={icon}
+            {...(unavailable ? { 'aria-label': label } : {})}
+            disabled={pending}
+            disabledFocusable={unavailable}
+            onClick={event => void handleClick(event)}
+            onClickCapture={onDisabledClickCapture}
+          />
+        </Tooltip>
+      ) : (
+        <Tooltip content={DESKTOP_ONLY} relationship="description" visible={unavailable ? undefined : false}>
+          <Button
+            appearance="secondary"
+            size={size}
+            icon={icon}
+            disabled={pending}
+            disabledFocusable={unavailable}
+            onClick={event => void handleClick(event)}
+            onClickCapture={onDisabledClickCapture}
+          >
+            {label}
+          </Button>
+        </Tooltip>
+      )}
       {localError !== null && <Text role="alert" onClick={e => e.stopPropagation()}>{localError}</Text>}
     </>
   );

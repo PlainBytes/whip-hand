@@ -322,6 +322,11 @@
         "showOngoingRuns": true,
         "editor": {
           "kind": "vscode"
+        },
+        "runDrafts": [],
+        "runTabs": {
+          "tabs": [],
+          "active": null
         }
       },
       {
@@ -346,6 +351,11 @@
         "showOngoingRuns": true,
         "editor": {
           "kind": "vscode"
+        },
+        "runDrafts": [],
+        "runTabs": {
+          "tabs": [],
+          "active": null
         }
       },
       {
@@ -371,6 +381,11 @@
         "showOngoingRuns": true,
         "editor": {
           "kind": "vscode"
+        },
+        "runDrafts": [],
+        "runTabs": {
+          "tabs": [],
+          "active": null
         }
       }
     ],

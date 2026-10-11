@@ -16,6 +16,11 @@
           "showOngoingRuns": true,
           "editor": {
             "kind": "vscode"
+          },
+          "runDrafts": [],
+          "runTabs": {
+            "tabs": [],
+            "active": null
           }
         }
       }
@@ -146,6 +151,11 @@
           "showOngoingRuns": false,
           "editor": {
             "kind": "vscode"
+          },
+          "runDrafts": [],
+          "runTabs": {
+            "tabs": [],
+            "active": null
           }
         }
       }
@@ -203,6 +213,11 @@
         "showOngoingRuns": true,
         "editor": {
           "kind": "vscode"
+        },
+        "runDrafts": [],
+        "runTabs": {
+          "tabs": [],
+          "active": null
         }
       },
       {
@@ -229,6 +244,11 @@
         "showOngoingRuns": true,
         "editor": {
           "kind": "vscode"
+        },
+        "runDrafts": [],
+        "runTabs": {
+          "tabs": [],
+          "active": null
         }
       },
       {
@@ -256,6 +276,11 @@
         "showOngoingRuns": true,
         "editor": {
           "kind": "vscode"
+        },
+        "runDrafts": [],
+        "runTabs": {
+          "tabs": [],
+          "active": null
         }
       },
       {
@@ -283,6 +308,11 @@
         "showOngoingRuns": true,
         "editor": {
           "kind": "vscode"
+        },
+        "runDrafts": [],
+        "runTabs": {
+          "tabs": [],
+          "active": null
         }
       },
       {
@@ -315,6 +345,11 @@
         "showOngoingRuns": false,
         "editor": {
           "kind": "vscode"
+        },
+        "runDrafts": [],
+        "runTabs": {
+          "tabs": [],
+          "active": null
         }
       },
       {
@@ -342,6 +377,11 @@
         "showOngoingRuns": false,
         "editor": {
           "kind": "vscode"
+        },
+        "runDrafts": [],
+        "runTabs": {
+          "tabs": [],
+          "active": null
         }
       },
       {
@@ -368,6 +408,11 @@
         "showOngoingRuns": false,
         "editor": {
           "kind": "vscode"
+        },
+        "runDrafts": [],
+        "runTabs": {
+          "tabs": [],
+          "active": null
         }
       }
     ]

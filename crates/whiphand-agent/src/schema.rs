@@ -350,6 +350,40 @@ fn recent_workspace() -> S {
     }
 }
 
+fn run_draft() -> S {
+    object! {
+        "id" => StrMin1,
+        "workdir" => StrMin1,
+        "identityKey" => o(Str),
+        "workflow" => o(Str),
+        "inputs" => Rec(b(Str)),
+        "name" => o(Str),
+        "dryRun" => Bool,
+        "worktree" => o(Bool),
+        "maxIterations" => o(Str),
+        "attachments" => Arr(b(object! { "path" => StrMin1, "pasted" => o(Bool) })),
+        "createdAt" => Str,
+        "updatedAt" => Str,
+    }
+}
+
+fn run_tab_ref() -> S {
+    Union(
+        b(object! {
+            "kind" => Enum(&["run"]),
+            "workdir" => StrMin1,
+            "identityKey" => o(Str),
+            "runId" => StrMin1,
+            "preview" => Bool,
+        }),
+        b(object! { "kind" => Enum(&["draft"]), "draftId" => StrMin1 }),
+    )
+}
+
+fn run_tabs_state() -> S {
+    object! { "tabs" => Arr(b(run_tab_ref())), "active" => Nullable(b(Str)) }
+}
+
 /// The agent's `app-state.json`, which is validated the same way on load.
 pub fn app_state() -> S {
     object! {
@@ -372,6 +406,13 @@ pub fn app_state() -> S {
         "editor" => Default(b(editor_preference()), || {
             let mut m = Record::new();
             m.insert("kind".to_string(), Raw::Str("vscode".to_string()));
+            Raw::Map(m)
+        }),
+        "runDrafts" => Default(b(Arr(b(run_draft()))), || Raw::Seq(Vec::new())),
+        "runTabs" => Default(b(run_tabs_state()), || {
+            let mut m = Record::new();
+            m.insert("tabs".to_string(), Raw::Seq(Vec::new()));
+            m.insert("active".to_string(), Raw::Null);
             Raw::Map(m)
         }),
     }
@@ -516,6 +557,12 @@ pub fn params(method: &str) -> Option<S> {
             "runsRetention" => o(runs_retention()),
             "showOngoingRuns" => o(Bool),
             "editor" => o(editor_preference()),
+        },
+        "saveRunDraft" => object! { "draft" => run_draft() },
+        "deleteRunDraft" => object! { "id" => StrMin1 },
+        "setRunTabs" => object! { "runTabs" => run_tabs_state() },
+        "stashDraftAttachment" => object! {
+            "draftId" => StrMin1, "name" => StrMin1, "base64" => Str,
         },
         "listRecentRuns" => Default(
             b(object! { "limit" => o(Num(Num { max: Some(100.0), ..Num::POSITIVE_INT })) }),

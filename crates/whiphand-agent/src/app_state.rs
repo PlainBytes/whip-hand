@@ -28,7 +28,59 @@ pub fn empty_app_state() -> Value {
         "runsRetention": { "maxPerWorkspace": 0 },
         "showOngoingRuns": true,
         "editor": { "kind": "vscode" },
+        "runDrafts": [],
+        "runTabs": { "tabs": [], "active": null },
     })
+}
+
+/// `Ok` when `s` is one path segment: a stash write built from it cannot
+/// leave its directory.
+pub fn single_segment(s: &str) -> Result<(), String> {
+    if s.is_empty() || s == "." || s == ".." || s.contains(['/', '\\', '\0']) {
+        return Err(format!("not a single path segment: {s:?}"));
+    }
+    Ok(())
+}
+
+/// Whether `path` is a file under `dir`, with no `..` to climb out again.
+/// Lexical: nothing here creates symlinks inside a stash.
+pub fn is_inside(dir: &Path, path: &Path) -> bool {
+    use std::path::Component;
+    path.starts_with(dir) && path != dir && !path.components().any(|c| c == Component::ParentDir)
+}
+
+/// `dir/name`, or `dir/stem-2.ext`, `-3`, … when that exists.
+pub fn free_name(dir: &Path, name: &str) -> PathBuf {
+    let first = dir.join(name);
+    if !first.exists() {
+        return first;
+    }
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if i > 0 => name.split_at(i),
+        _ => (name, ""),
+    };
+    (2..)
+        .map(|n| dir.join(format!("{stem}-{n}{ext}")))
+        .find(|p| !p.exists())
+        .expect("a free name")
+}
+
+/// Upserts by id: a saved draft keeps its place in the list.
+pub fn save_draft(state: &mut Value, draft: Value) {
+    let drafts = state["runDrafts"].as_array_mut().expect("validated state");
+    match drafts.iter_mut().find(|d| d["id"] == draft["id"]) {
+        Some(existing) => *existing = draft,
+        None => drafts.push(draft),
+    }
+}
+
+pub fn delete_draft(state: &mut Value, id: &str) {
+    let drafts = state["runDrafts"].as_array_mut().expect("validated state");
+    drafts.retain(|d| d["id"] != id);
+}
+
+pub fn set_tabs(state: &mut Value, tabs: Value) {
+    state["runTabs"] = tabs;
 }
 
 /// `WHIPHAND_APP_STATE_FILE`, else the platform's app-data directory.
@@ -217,15 +269,58 @@ impl AppStateStore {
         Ok(file)
     }
 
+    /// The state in `text`; None when it is not a valid state file.
+    fn valid(text: &str) -> Option<Value> {
+        let v = serde_json::from_str::<Value>(text).ok()?;
+        crate::schema::validate(&crate::schema::app_state(), Some(&Raw::from_json(&v)))
+            .ok()
+            .map(|raw| raw.to_json())
+    }
+
+    /// Where pasted draft images live: `drafts/` beside the state file, one
+    /// directory per draft id.
+    pub fn drafts_dir(&self) -> PathBuf {
+        let dir = self.path.with_file_name("drafts");
+        std::path::absolute(&dir).unwrap_or(dir)
+    }
+
+    /// Removes the stash directory of every draft the state does not hold
+    /// (a crash between starting a run and deleting its draft leaves one).
+    /// An unreadable state file removes nothing: it reads as empty, and that
+    /// must not cost the stashes of drafts it may still hold.
+    pub fn sweep_orphan_drafts(&self) {
+        let text = self.read_text();
+        let state = if text.is_empty() {
+            empty_app_state()
+        } else if let Some(state) = Self::valid(&text) {
+            state
+        } else {
+            return;
+        };
+        let kept: Vec<&str> = state["runDrafts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|d| d["id"].as_str())
+            .collect();
+        let Ok(entries) = std::fs::read_dir(self.drafts_dir()) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
+            if is_dir && !kept.contains(&name.to_string_lossy().as_ref()) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+
     fn parse(&self, text: &str) -> Value {
         if text.is_empty() {
             return empty_app_state();
         }
-        let parsed = serde_json::from_str::<Value>(text).ok().and_then(|v| {
-            crate::schema::validate(&crate::schema::app_state(), Some(&Raw::from_json(&v))).ok()
-        });
-        match parsed {
-            Some(raw) => raw.to_json(),
+        match Self::valid(text) {
+            Some(state) => state,
             None => {
                 eprintln!(
                     "[whiphand-agent] ignoring invalid app state at {}",

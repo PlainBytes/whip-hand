@@ -29,6 +29,11 @@ import {
 import type { AppState as AppStateData } from '../shared/protocol.gen.ts';
 import type { LogRow } from '../shared/log-rows.ts';
 import { mergeUsage, progressActionText, summarizeEvent } from '../shared/log-rows.ts';
+import { preselect, type PendingAttachment, type RunAgain } from '../lib/new-run-draft.ts';
+import { releaseThumbnail } from '../lib/draft-thumbnails.ts';
+import {
+  activateTab, adoptRunIds, closeTab, convertDraftTab, openDraftTab, openTab, pinTab, retargetTab, type AnyTab, type RunTabTarget,
+} from '../lib/run-tabs.ts';
 
 /**
  * Workflows, the runs list, per-job live state, doctor results, config, the
@@ -814,6 +819,54 @@ export function reduceJobEvent(job: JobState, params: WhiphandEventParams): JobS
   return job;
 }
 
+/** A new run being filled in: everything the form holds that is worth keeping. */
+export interface RunDraft {
+  id: string;
+  workdir: string;
+  identityKey?: string;
+  /** `refFor` form — `global:<name>` or bare `<name>`; null until a workflow is chosen. */
+  workflowRef: string | null;
+  values: Record<string, string>;
+  name: string;
+  dryRun: boolean;
+  /** The person's choice for the selected workflow; null follows the workflow's default. */
+  worktreeChoice: boolean | null;
+  maxIterationsRaw: string;
+  attachments: PendingAttachment[];
+  /**
+   * The inputs the form filled in by itself (a workflow's remembered values and
+   * defaults, or a run-again's), so "has the person typed anything" can tell
+   * their edits from the starting point.
+   */
+  baselineValues: Record<string, string>;
+  /** A run-again request that found no workflow list yet; the form applies it when the list arrives. */
+  runAgain?: RunAgain | undefined;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type RunDraftPatch = Partial<Omit<RunDraft, 'id' | 'createdAt'>>;
+
+export interface RunDraftInit {
+  workdir: string;
+  identityKey?: string;
+  /** Wins over the workspace's remembered workflow when it names a usable one. */
+  runAgain?: RunAgain;
+}
+
+/** Whether closing the draft would lose something typed: an input edit, a name or an attachment. */
+export function draftHasContent(draft: RunDraft): boolean {
+  if (draft.name.trim() !== '' || draft.attachments.length > 0) return true;
+  const keys = new Set([...Object.keys(draft.values), ...Object.keys(draft.baselineValues)]);
+  for (const key of keys) {
+    if ((draft.values[key] ?? '') !== (draft.baselineValues[key] ?? '')) return true;
+  }
+  return false;
+}
+
+/** Selector for one draft: `useAppStore(selectDraft(id))`. */
+export const selectDraft = (id: string) => (state: Pick<AppState, 'drafts'>): RunDraft | undefined => state.drafts[id];
+
 export interface AppState {
   workspacePath: string | null;
   /** The open workspace's identity key from the agent, when it sent one. */
@@ -927,11 +980,32 @@ export interface AppState {
   ) => void;
 
   /**
-   * Set by RunDetailPage's "Run again" button, consumed by NewRunPage on
-   * mount to pre-select the workflow and override its inputs — cleared once applied.
+   * Run tabs on the Runs page; lib/draft-sync.ts saves them to the agent.
+   * `activeTabKey` null is the fixed Runs list tab. The rules live in lib/run-tabs.ts.
    */
-  pendingRunAgain: { workflow: string; inputs: Record<string, string> } | null;
-  setPendingRunAgain: (v: { workflow: string; inputs: Record<string, string> } | null) => void;
+  tabs: AnyTab[];
+  activeTabKey: string | null;
+  openRunTab: (target: RunTabTarget, opts: { pin: boolean }) => void;
+  pinTab: (key: string) => void;
+  closeTab: (key: string) => void;
+  activateTab: (key: string | null) => void;
+  /** Re-points a tab at another job or run — a job learning its runId, or a resume. */
+  retargetTab: (key: string, target: RunTabTarget) => void;
+
+  /** New runs being filled in, by id. Saved to the agent by lib/draft-sync.ts. */
+  drafts: Record<string, RunDraft>;
+  /** Preselects from `init.runAgain`, then the workspace's memory; no workflow while the list is not loaded. */
+  createDraft: (init: RunDraftInit) => string;
+  /** The patch may be a function of the current draft, for updates that build on it (attachments). */
+  updateDraft: (id: string, patch: RunDraftPatch | ((draft: RunDraft) => RunDraftPatch)) => void;
+  /** Releases the pasted-image thumbnails the draft holds. */
+  deleteDraft: (id: string) => void;
+  /** Opens the draft's tab, right of the active one, and activates it. */
+  openDraftTab: (draftId: string) => void;
+  /** Turns the draft's tab into the pinned tab of the run it started, and deletes the draft. */
+  convertDraftTab: (draftId: string, target: RunTabTarget) => void;
+  /** Closes the draft's tab and deletes the draft. */
+  discardDraft: (draftId: string) => void;
 
   /**
    * True while the Files page holds an unsaved draft. It lives here rather
@@ -1089,7 +1163,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       runs: [],
       workflows: [],
       config: null,
-      pendingRunAgain: null,
+      // The tabs stay open across workspaces, but the list of the workspace
+      // just opened is what should show.
+      activeTabKey: null,
     };
   }),
 
@@ -1376,8 +1452,71 @@ export const useAppStore = create<AppState>((set, get) => ({
     };
   }),
 
-  pendingRunAgain: null,
-  setPendingRunAgain: pendingRunAgain => set({ pendingRunAgain }),
+  drafts: {},
+  createDraft: init => {
+    const { workflows, appState } = get();
+    const memory = findWorkspaceMemory(appState, { path: init.workdir, identityKey: init.identityKey });
+    const chosen = preselect(workflows, memory, init.runAgain);
+    const now = Date.now();
+    const id = crypto.randomUUID();
+    const draft: RunDraft = {
+      id,
+      workdir: init.workdir,
+      ...(init.identityKey === undefined ? {} : { identityKey: init.identityKey }),
+      workflowRef: chosen?.workflowRef ?? null,
+      values: chosen?.values ?? {},
+      name: '',
+      dryRun: false,
+      worktreeChoice: null,
+      maxIterationsRaw: '',
+      attachments: [],
+      baselineValues: chosen?.values ?? {},
+      // Kept for the form to apply once the list arrives, when it was not there to consider now.
+      ...(init.runAgain && !chosen && workflows.length === 0 ? { runAgain: init.runAgain } : {}),
+      createdAt: now,
+      updatedAt: now,
+    };
+    set(state => ({ drafts: { ...state.drafts, [id]: draft } }));
+    return id;
+  },
+  updateDraft: (id, patch) => set(state => {
+    const draft = state.drafts[id];
+    if (!draft) return {};
+    const changes = typeof patch === 'function' ? patch(draft) : patch;
+    return { drafts: { ...state.drafts, [id]: { ...draft, ...changes, updatedAt: Date.now() } } };
+  }),
+  deleteDraft: id => {
+    const draft = get().drafts[id];
+    if (!draft) return;
+    for (const item of draft.attachments) {
+      if (item.pasted) releaseThumbnail(item.path);
+    }
+    set(state => {
+      const { [id]: _removed, ...rest } = state.drafts;
+      return { drafts: rest };
+    });
+  },
+
+  discardDraft: id => {
+    set(state => closeTab({ tabs: state.tabs, activeTabKey: state.activeTabKey }, id));
+    get().deleteDraft(id);
+  },
+  openDraftTab: draftId => set(state => openDraftTab({ tabs: state.tabs, activeTabKey: state.activeTabKey }, draftId)),
+  convertDraftTab: (draftId, target) => {
+    set(state => convertDraftTab({ tabs: state.tabs, activeTabKey: state.activeTabKey }, draftId, target));
+    get().deleteDraft(draftId);
+  },
+
+  tabs: [],
+  activeTabKey: null,
+  openRunTab: (target, opts) => set(state => {
+    const adopted = adoptRunIds({ tabs: state.tabs, activeTabKey: state.activeTabKey }, state.jobs);
+    return openTab(adopted, target, opts);
+  }),
+  pinTab: key => set(state => pinTab({ tabs: state.tabs, activeTabKey: state.activeTabKey }, key)),
+  closeTab: key => set(state => closeTab({ tabs: state.tabs, activeTabKey: state.activeTabKey }, key)),
+  activateTab: key => set(state => activateTab({ tabs: state.tabs, activeTabKey: state.activeTabKey }, key)),
+  retargetTab: (key, target) => set(state => retargetTab({ tabs: state.tabs, activeTabKey: state.activeTabKey }, key, target)),
 
   filesDirty: false,
   setFilesDirty: filesDirty => set({ filesDirty }),

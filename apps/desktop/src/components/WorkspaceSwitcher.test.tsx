@@ -56,6 +56,7 @@ describe('WorkspaceSwitcher', () => {
       appState: {
         schemaVersion: 1, window: null, lastPage: null, theme: 'system', workspaces: {},
       runsRetention: { maxPerWorkspace: 0 }, showOngoingRuns: true, editor: { kind: 'vscode' },
+      runDrafts: [], runTabs: { tabs: [], active: null },
         recentWorkspaces: [
           { path: '/ws/recent', lastOpenedAt: '3' },
           { path: '/ws/pinned', lastOpenedAt: '1', pinned: true },
@@ -76,6 +77,7 @@ describe('WorkspaceSwitcher', () => {
       appState: {
         schemaVersion: 1, window: null, lastPage: null, theme: 'system', workspaces: {},
       runsRetention: { maxPerWorkspace: 0 }, showOngoingRuns: true, editor: { kind: 'vscode' },
+      runDrafts: [], runTabs: { tabs: [], active: null },
         recentWorkspaces: [{ path: '/ws/a', lastOpenedAt: '1' }],
       },
     });
@@ -99,6 +101,7 @@ describe('WorkspaceSwitcher', () => {
       appState: {
         schemaVersion: 1, window: null, lastPage: null, theme: 'system', workspaces: {},
       runsRetention: { maxPerWorkspace: 0 }, showOngoingRuns: true, editor: { kind: 'vscode' },
+      runDrafts: [], runTabs: { tabs: [], active: null },
         recentWorkspaces: [{ path: '/ws/unmounted', lastOpenedAt: '1', pinned: true }],
       },
     });

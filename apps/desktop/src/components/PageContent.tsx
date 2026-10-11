@@ -9,21 +9,15 @@ import { DoctorPage } from '../pages/DoctorPage.tsx';
 import { WorkspaceSettingsPage } from '../pages/WorkspaceSettingsPage.tsx';
 import { PreferencesPage } from '../pages/PreferencesPage.tsx';
 import { ActivityPage } from '../pages/ActivityPage.tsx';
+import { RunTabStrip } from './RunTabStrip.tsx';
+import { NewRunForm } from './NewRunForm.tsx';
+import type { RunAgain } from '../lib/new-run-draft.ts';
 import { RunDetailPage } from '../pages/RunDetailPage.tsx';
 import { WelcomePage } from '../pages/WelcomePage.tsx';
 import { Page } from './Page.tsx';
 
-/** RunDetail is reached from a Runs row or a just-started run, not a tab of its own. */
-export interface RunDetailTarget {
-  jobId?: string;
-  runId?: string;
-}
-
 export interface PageContentProps {
   page: PageId;
-  runDetailTarget: RunDetailTarget | null;
-  onOpenRunDetail: (target: RunDetailTarget) => void;
-  onCloseRunDetail: () => void;
   onNavigate: (next: PageId) => void;
 }
 
@@ -47,67 +41,124 @@ function LocalFilesUnavailable() {
   );
 }
 
-export function PageContent({
-  page, runDetailTarget, onOpenRunDetail, onCloseRunDetail, onNavigate,
-}: PageContentProps) {
+/**
+ * Every open draft's form, mounted on every page and shown only for the active
+ * draft tab on the Runs page. Staying mounted keeps what the form holds
+ * locally (a start in flight, an error) through a switch of tab or page; the
+ * rest lives in the store's draft.
+ */
+function DraftForms({ shown }: { shown: boolean }) {
+  const tabs = useAppStore(state => state.tabs);
+  const activeTabKey = useAppStore(state => state.activeTabKey);
+  const drafts = tabs.filter(tab => tab.kind === 'draft');
+  return (
+    <>
+      {drafts.map(tab => {
+        const visible = shown && tab.key === activeTabKey;
+        return (
+          <div key={tab.key} style={{ display: visible ? 'block' : 'none', flex: 1, minHeight: 0 }}>
+            <NewRunForm draftId={tab.key} visible={visible} />
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+function PageBody({ page, onNavigate }: PageContentProps) {
   const workspacePath = useAppStore(state => state.workspacePath);
   const restoreDone = useAppStore(state => state.restoreDone);
+  const tabs = useAppStore(state => state.tabs);
+  const activeTabKey = useAppStore(state => state.activeTabKey);
   const { localFiles } = useCapabilities();
 
   // Which pages survive without a workspace is nav.ts's `requiresWorkspace`
   // column, not a condition spelled out here.
   if (requiresWorkspace(page) && !workspacePath) return restoreDone ? <WelcomePage /> : null;
 
-  if (runDetailTarget) {
+  /**
+   * A run in the open workspace: the Runs list and Activity both open runs
+   * this way. Read from the store, not the render's closure — Activity calls
+   * this right after switching workspace, before this component re-renders.
+   */
+  function openRun(target: { runId?: string; jobId?: string }, pin: boolean): void {
+    const { workspacePath: workdir, workspaceIdentityKey } = useAppStore.getState();
+    if (!workdir) return;
+    useAppStore.getState().openRunTab({ workdir, identityKey: workspaceIdentityKey ?? undefined, ...target }, { pin });
+    onNavigate('runs');
+  }
+
+  /** A new draft tab in the open workspace, active, on the Runs page. Every call makes another. */
+  function newDraft(runAgain?: RunAgain): void {
+    const { workspacePath: workdir, workspaceIdentityKey, createDraft, openDraftTab } = useAppStore.getState();
+    if (!workdir) return;
+    openDraftTab(createDraft({ workdir, identityKey: workspaceIdentityKey ?? undefined, runAgain }));
+    onNavigate('runs');
+  }
+
+  if (page === 'runs') {
+    const active = tabs.find(tab => tab.key === activeTabKey);
     return (
-      <RunDetailPage
-        jobId={runDetailTarget.jobId}
-        runId={runDetailTarget.runId}
-        onBack={onCloseRunDetail}
-        // A resume runs under a job of its own; re-point the page at it, which
-        // is exactly what opening a run detail target already means.
-        onResumed={onOpenRunDetail}
-        onRunAgain={(workflow, inputs, source) => {
-          // Same scoping as the WorkflowsPage `onRunWorkflow` callback below:
-          // a global run must not preselect a same-named project workflow.
-          const ref = source === 'global' ? `global:${workflow}` : workflow;
-          useAppStore.getState().setPendingRunAgain({ workflow: ref, inputs });
-          onCloseRunDetail();
-          onNavigate('runs');
-        }}
-      />
+      <>
+        <RunTabStrip />
+        {active?.kind === 'draft' ? null : active ? (
+          <RunDetailPage
+            // A resume's new job is a fresh page, as the re-pointed page was before tabs.
+            key={active.jobId ?? active.key}
+            jobId={active.jobId}
+            runId={active.runId}
+            onBack={() => useAppStore.getState().activateTab(null)}
+            // A resume runs under a job of its own; re-point this tab at it
+            // rather than opening another.
+            onResumed={target => useAppStore.getState().retargetTab(active.key, { ...active, ...target })}
+            onRunAgain={(workflow, inputs, source) => {
+              // Same scoping as the WorkflowsPage `onRunWorkflow` callback below:
+              // a global run must not preselect a same-named project workflow.
+              const ref = source === 'global' ? `global:${workflow}` : workflow;
+              newDraft({ workflow: ref, inputs });
+            }}
+          />
+        ) : (
+          <RunsPage
+            onSelectRun={(runId, pin) => openRun({ runId }, pin)}
+            onNewRun={() => newDraft()}
+          />
+        )}
+      </>
     );
   }
 
   return (
     <>
-      {page === 'runs' && (
-        <RunsPage
-          onSelectRun={runId => onOpenRunDetail({ runId })}
-          onStarted={jobId => onOpenRunDetail({ jobId })}
-        />
-      )}
       {page === 'workflows' && (
         <WorkflowsPage
           onRunWorkflow={(workflow, source) => {
-            // Same path "Run again" takes: RunsPage opens NewRunDialog as soon
-            // as pendingRunAgain is set, and the dialog preselects this workflow.
-            // Remembered values only apply to inputs the workflow marks
+            // Same path "Run again" takes: a new draft with this workflow
+            // selected. Remembered values only apply to inputs the workflow marks
             // `remember: true`; everything else fills from `default` or blank.
-            // A global entry is scoped explicitly so NewRunDialog preselects
+            // A global entry is scoped explicitly so the draft preselects
             // the card that was actually clicked, not a project workflow that
             // happens to share its name.
             const ref = source === 'global' ? `global:${workflow}` : workflow;
-            useAppStore.getState().setPendingRunAgain({ workflow: ref, inputs: {} });
-            onNavigate('runs');
+            newDraft({ workflow: ref, inputs: {} });
           }}
         />
       )}
       {page === 'files' && (localFiles ? <FilesPage /> : <LocalFilesUnavailable />)}
       {page === 'workspace-settings' && <WorkspaceSettingsPage />}
-      {page === 'activity' && <ActivityPage onSelectRun={runId => onOpenRunDetail({ runId })} />}
+      {page === 'activity' && <ActivityPage onSelectRun={runId => openRun({ runId }, false)} />}
       {page === 'doctor' && <DoctorPage />}
       {page === 'preferences' && <PreferencesPage />}
+    </>
+  );
+}
+
+export function PageContent({ page, onNavigate }: PageContentProps) {
+  const workspacePath = useAppStore(state => state.workspacePath);
+  return (
+    <>
+      <PageBody page={page} onNavigate={onNavigate} />
+      {workspacePath && <DraftForms shown={page === 'runs'} />}
     </>
   );
 }

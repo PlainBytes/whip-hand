@@ -18,6 +18,7 @@ function renderQuickSwitch(recentWorkspaces = RECENTS) {
     appState: {
       schemaVersion: 1, window: null, lastPage: null, theme: 'system', workspaces: {},
       runsRetention: { maxPerWorkspace: 0 }, showOngoingRuns: true, editor: { kind: 'vscode' },
+      runDrafts: [], runTabs: { tabs: [], active: null },
       recentWorkspaces,
     },
   });

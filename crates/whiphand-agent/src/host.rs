@@ -225,7 +225,7 @@ impl Agent {
         // Only the remote server numbers clients or writes to the inbox.
         #[cfg(not(feature = "remote"))]
         let _ = (inbox, next_id);
-        Rc::new_cyclic(|weak: &std::rc::Weak<Agent>| {
+        let agent = Rc::new_cyclic(|weak: &std::rc::Weak<Agent>| {
             let weak = weak.clone();
             Agent {
                 clients: RefCell::new(BTreeMap::new()),
@@ -251,7 +251,9 @@ impl Agent {
                     )
                 }),
             }
-        })
+        });
+        agent.app_state.sweep_orphan_drafts();
+        agent
     }
 
     /// Sends a notification to every client, through the scrollback first,

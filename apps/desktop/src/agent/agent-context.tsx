@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import type { AgentClient } from './client.ts';
 import { useAppStore, type HighRateNotification } from '../state/store.ts';
+import { applyRemoteDrafts } from '../lib/draft-sync.ts';
 
 const AgentClientContext = createContext<AgentClient | null>(null);
 
@@ -104,7 +105,10 @@ export function AgentClientProvider({ client, children }: { client: AgentClient;
       // Emitted on every app-state write, whoever made it, so a desktop and a
       // browser converge instead of drifting until one restarts. Re-applying
       // one's own change is a no-op.
-      client.onNotification('appStateChanged', setAppState),
+      client.onNotification('appStateChanged', params => {
+        setAppState(params);
+        applyRemoteDrafts(params);
+      }),
     ];
     void client.connect();
     return () => {

@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { NewRunDialog } from './NewRunDialog.tsx';
+import { NewRunForm } from './NewRunForm.tsx';
 import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
 import { AgentClientProvider } from '../agent/agent-context.tsx';
 import { CapabilitiesProvider, DESKTOP_DEFAULT_CAPABILITIES, type AppCapabilities, type FileDropEvent } from '../capabilities.tsx';
 import { useAppStore } from '../state/store.ts';
+import type { RunAgain } from '../lib/new-run-draft.ts';
 import { EMPTY_APP_STATE } from '../test/app-state.ts';
+import { startDraftSync } from '../lib/draft-sync.ts';
+import { releaseThumbnail } from '../lib/draft-thumbnails.ts';
+import { FakeFileSystem } from '../files/fake-fs.ts';
+import { FileSystemProvider } from '../files/fs-context.tsx';
 
 const SCRIPTED_WORKFLOW = {
   name: 'ship-feature',
@@ -55,7 +60,7 @@ const MULTILINE_WORKFLOW = {
   },
 };
 
-// NewRunDialog fires listWorkflows and listRuns from separate effects on mount,
+// NewRunForm fires listWorkflows and listRuns from separate effects on mount,
 // so their relative arrival order in transport.sent isn't guaranteed —
 // search by method instead of assuming position.
 async function respond(transport: MockTransport, method: string, result: unknown) {
@@ -67,15 +72,28 @@ async function respond(transport: MockTransport, method: string, result: unknown
   transport.emitLine({ id: req.id, result });
 }
 
-function renderNewRunDialog(onStarted = vi.fn()) {
+/** A draft in `/ws` with its tab open and active, as New run leaves it. */
+function openDraft(init: { runAgain?: RunAgain; workdir?: string } = {}): string {
+  const { createDraft, openDraftTab } = useAppStore.getState();
+  const draftId = createDraft({ workdir: init.workdir ?? '/ws', ...(init.runAgain ? { runAgain: init.runAgain } : {}) });
+  openDraftTab(draftId);
+  return draftId;
+}
+
+function renderNewRunForm(draftId = openDraft()) {
   const transport = new MockTransport();
   const client = new AgentClient(transport);
   render(
     <AgentClientProvider client={client}>
-      <NewRunDialog open onOpenChange={() => {}} onStarted={onStarted} />
+      <NewRunForm draftId={draftId} />
     </AgentClientProvider>,
   );
-  return { transport, client, onStarted };
+  return { transport, client, draftId };
+}
+
+/** The tab the draft became, once its start has come back. */
+async function expectStartedTab(jobId: string) {
+  await waitFor(() => expect(useAppStore.getState().tabs).toMatchObject([{ kind: 'run', jobId, preview: false }]));
 }
 
 async function selectWorkflow(transport: MockTransport, name: string) {
@@ -83,17 +101,17 @@ async function selectWorkflow(transport: MockTransport, name: string) {
   fireEvent.click(await screen.findByRole('option', { name }));
 }
 
-describe('NewRunDialog', () => {
+describe('NewRunForm', () => {
   beforeEach(() => {
-    useAppStore.setState({ workspacePath: '/ws', workflows: [], appState: null, pendingRunAgain: null });
+    useAppStore.setState({ workspacePath: '/ws', workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null });
   });
 
   afterEach(() => {
-    useAppStore.setState({ workspacePath: null, workflows: [], appState: null, pendingRunAgain: null });
+    useAppStore.setState({ workspacePath: null, workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null });
   });
 
   it('generates a Field per workflow input using prompt-as-label, default prefill, and required-ness', async () => {
-    const { transport } = renderNewRunDialog();
+    const { transport } = renderNewRunForm();
     await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
     await respond(transport, 'listRuns', []);
 
@@ -106,7 +124,7 @@ describe('NewRunDialog', () => {
   });
 
   it('disables Start until every required input is non-empty, regardless of defaults', async () => {
-    const { transport } = renderNewRunDialog();
+    const { transport } = renderNewRunForm();
     await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     await selectWorkflow(transport, 'ship-feature');
@@ -121,8 +139,8 @@ describe('NewRunDialog', () => {
     expect(screen.getByRole('button', { name: 'Start' })).toBeDisabled();
   });
 
-  it('calls startRun with the filled inputs and dryRun, then reports the returned jobId', async () => {
-    const { transport, onStarted } = renderNewRunDialog();
+  it('calls startRun with the filled inputs and dryRun, then turns the draft tab into a run tab', async () => {
+    const { transport } = renderNewRunForm();
     await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     await selectWorkflow(transport, 'ship-feature');
@@ -145,11 +163,11 @@ describe('NewRunDialog', () => {
     });
 
     transport.emitLine({ id: req.id, result: { jobId: 'job-42' } });
-    await waitFor(() => expect(onStarted).toHaveBeenCalledWith('job-42'));
+    await expectStartedTab('job-42');
   });
 
   it('sends a typed name, and omits it entirely when the field is left blank', async () => {
-    const { transport } = renderNewRunDialog();
+    const { transport } = renderNewRunForm();
     await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     await selectWorkflow(transport, 'ship-feature');
@@ -167,7 +185,7 @@ describe('NewRunDialog', () => {
   });
 
   it('omits name entirely when the field is untouched, so it matches a bare whiphand run', async () => {
-    const { transport } = renderNewRunDialog();
+    const { transport } = renderNewRunForm();
     await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     await selectWorkflow(transport, 'ship-feature');
@@ -190,7 +208,7 @@ describe('NewRunDialog', () => {
         workspaces: { '/ws': { lastWorkflow: 'ship-feature', lastInputs: { 'ship-feature': { ticket: 'T-9', gone: 'x' } } } },
       },
     });
-    const { transport } = renderNewRunDialog();
+    const { transport } = renderNewRunForm();
     await respond(transport, 'listWorkflows', [MEMORY_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     // lastWorkflow auto-selected — no manual dropdown interaction
@@ -206,44 +224,42 @@ describe('NewRunDialog', () => {
         workspaces: { '/ws': { lastWorkflow: 'ship-feature', lastInputs: { 'ship-feature': { env: 'staging' } } } },
       },
     });
-    const { transport } = renderNewRunDialog();
+    const { transport } = renderNewRunForm();
     await respond(transport, 'listWorkflows', [MEMORY_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     expect(await screen.findByLabelText('Environment', { exact: false })).toHaveValue('staging');
   });
 
-  it('applies a pending run-again request over everything else and clears it', async () => {
-    useAppStore.setState({
-      appState: EMPTY_APP_STATE,
-      pendingRunAgain: { workflow: 'ship-feature', inputs: { ticket: 'T-42', branch: 'hotfix' } },
-    });
-    const { transport } = renderNewRunDialog();
+  it('applies a run-again the draft was created with before the list loaded, and drops it', async () => {
+    useAppStore.setState({ appState: EMPTY_APP_STATE });
+    const draftId = openDraft({ runAgain: { workflow: 'ship-feature', inputs: { ticket: 'T-42', branch: 'hotfix' } } });
+    const { transport } = renderNewRunForm(draftId);
     await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     expect(await screen.findByLabelText('Ticket ID', { exact: false })).toHaveValue('T-42');
     expect(screen.getByLabelText('branch', { exact: false })).toHaveValue('hotfix');
-    expect(useAppStore.getState().pendingRunAgain).toBeNull();
+    expect(useAppStore.getState().drafts[draftId]!.runAgain).toBeUndefined();
   });
 
-  it('clears a stale pending run-again that names a missing workflow, falling back to memory', async () => {
+  it('drops a stale run-again that names a missing workflow, falling back to memory', async () => {
     useAppStore.setState({
       appState: {
         ...EMPTY_APP_STATE,
         workspaces: { '/ws': { lastWorkflow: 'ship-feature', lastInputs: {} } },
       },
-      pendingRunAgain: { workflow: 'deleted-workflow', inputs: { ticket: 'T-1' } },
     });
-    const { transport } = renderNewRunDialog();
+    const draftId = openDraft({ runAgain: { workflow: 'deleted-workflow', inputs: { ticket: 'T-1' } } });
+    const { transport } = renderNewRunForm(draftId);
     await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
     await respond(transport, 'listRuns', []);
-    // falls back to memory.lastWorkflow since pendingRunAgain's target doesn't exist
+    // falls back to memory.lastWorkflow since the run-again's target doesn't exist
     expect(await screen.findByLabelText('Ticket ID', { exact: false })).toHaveValue('');
-    // stale request is cleared regardless, so it can't wrongly reapply on a later mount
-    expect(useAppStore.getState().pendingRunAgain).toBeNull();
+    // the request is dropped regardless, so it can't wrongly reapply later
+    expect(useAppStore.getState().drafts[draftId]!.runAgain).toBeUndefined();
   });
 
   it('preserves newlines in input values through to startRun', async () => {
-    const { transport } = renderNewRunDialog();
+    const { transport } = renderNewRunForm();
     await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     await selectWorkflow(transport, 'ship-feature');
@@ -264,7 +280,7 @@ describe('NewRunDialog', () => {
   });
 
   it('renders a multiline: false input as a one-line box and reaches startRun', async () => {
-    const { transport } = renderNewRunDialog();
+    const { transport } = renderNewRunForm();
     await respond(transport, 'listWorkflows', [MULTILINE_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     await selectWorkflow(transport, 'ship-feature');
@@ -287,7 +303,7 @@ describe('NewRunDialog', () => {
   });
 
   it('starts the run on Ctrl+Enter', async () => {
-    const { transport } = renderNewRunDialog();
+    const { transport } = renderNewRunForm();
     await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     await selectWorkflow(transport, 'ship-feature');
@@ -305,7 +321,7 @@ describe('NewRunDialog', () => {
   });
 
   it('ignores Ctrl+Enter while a required input is empty', async () => {
-    const { transport } = renderNewRunDialog();
+    const { transport } = renderNewRunForm();
     await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     await selectWorkflow(transport, 'ship-feature');
@@ -338,7 +354,7 @@ describe('NewRunDialog', () => {
         steps: [{ id: 'plan', kind: 'agent', runner: 'claude', mode: 'headless', writes: false, prompt: 'plan', output: 'plan.md' }],
       },
     };
-    const { transport } = renderNewRunDialog();
+    const { transport } = renderNewRunForm();
     await respond(transport, 'listWorkflows', [PROJECT_WORKFLOW, GLOBAL_WORKFLOW]);
     await respond(transport, 'listRuns', []);
 
@@ -388,7 +404,7 @@ describe('NewRunDialog', () => {
         },
       },
     });
-    const { transport } = renderNewRunDialog();
+    const { transport } = renderNewRunForm();
     await respond(transport, 'listWorkflows', [PROJECT_MEMORY_WORKFLOW, GLOBAL_MEMORY_WORKFLOW]);
     await respond(transport, 'listRuns', []);
 
@@ -412,7 +428,7 @@ describe('NewRunDialog', () => {
   });
 
   it('disables a workflow with a parse error and shows its error as a tooltip', async () => {
-    const { transport } = renderNewRunDialog();
+    const { transport } = renderNewRunForm();
     await respond(transport, 'listWorkflows', [
       { name: 'broken', path: '/ws/.whiphand/workflows/broken.yaml', error: 'invalid step: missing runner' },
     ]);
@@ -439,17 +455,17 @@ const LOOPING_WORKFLOW = {
   },
 };
 
-describe('NewRunDialog max iterations', () => {
+describe('NewRunForm max iterations', () => {
   beforeEach(() => {
-    useAppStore.setState({ workspacePath: '/ws', workflows: [], appState: null, pendingRunAgain: null });
+    useAppStore.setState({ workspacePath: '/ws', workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null });
   });
 
   afterEach(() => {
-    useAppStore.setState({ workspacePath: null, workflows: [], appState: null, pendingRunAgain: null });
+    useAppStore.setState({ workspacePath: null, workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null });
   });
 
   it('is offered only for a workflow that actually has a loop', async () => {
-    const { transport } = renderNewRunDialog();
+    const { transport } = renderNewRunForm();
     await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW, LOOPING_WORKFLOW]);
     await respond(transport, 'listRuns', []);
 
@@ -459,7 +475,7 @@ describe('NewRunDialog max iterations', () => {
   });
 
   it('sends the override to startRun, and omits it when left blank', async () => {
-    const { transport } = renderNewRunDialog();
+    const { transport } = renderNewRunForm();
     await respond(transport, 'listWorkflows', [LOOPING_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     await selectWorkflow(transport, 'cycle');
@@ -477,7 +493,7 @@ describe('NewRunDialog max iterations', () => {
   });
 
   it('rejects a value that is not a positive whole number', async () => {
-    const { transport } = renderNewRunDialog();
+    const { transport } = renderNewRunForm();
     await respond(transport, 'listWorkflows', [LOOPING_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     await selectWorkflow(transport, 'cycle');
@@ -516,17 +532,17 @@ const DISABLED_LOOP_WORKFLOW = {
   },
 };
 
-describe('NewRunDialog disabled steps', () => {
+describe('NewRunForm disabled steps', () => {
   beforeEach(() => {
-    useAppStore.setState({ workspacePath: '/ws', workflows: [], appState: null, pendingRunAgain: null });
+    useAppStore.setState({ workspacePath: '/ws', workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null });
   });
 
   afterEach(() => {
-    useAppStore.setState({ workspacePath: null, workflows: [], appState: null, pendingRunAgain: null });
+    useAppStore.setState({ workspacePath: null, workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null });
   });
 
   it('names a disabled loop as one entry naming its size, not one per body step', async () => {
-    const { transport } = renderNewRunDialog();
+    const { transport } = renderNewRunForm();
     await respond(transport, 'listWorkflows', [DISABLED_LOOP_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     await selectWorkflow(transport, 'feature-development');
@@ -536,7 +552,7 @@ describe('NewRunDialog disabled steps', () => {
   });
 
   it('names the consequence for a reader outside the disabled loop, one sentence per lost id', async () => {
-    const { transport } = renderNewRunDialog();
+    const { transport } = renderNewRunForm();
     await respond(transport, 'listWorkflows', [DISABLED_LOOP_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     await selectWorkflow(transport, 'feature-development');
@@ -550,7 +566,7 @@ describe('NewRunDialog disabled steps', () => {
   });
 
   it('shows no warning at all when nothing is disabled', async () => {
-    const { transport } = renderNewRunDialog();
+    const { transport } = renderNewRunForm();
     await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     await selectWorkflow(transport, 'ship-feature');
@@ -583,18 +599,18 @@ const NON_READING_WORKFLOW = {
 /** A PNG signature and then some: bytes past 0x7f are what a text round trip would mangle. */
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff, 0xfe]);
 
-function renderWithCapabilities(capabilities: Partial<AppCapabilities>) {
+function renderWithCapabilities(capabilities: Partial<AppCapabilities>, draftId = openDraft()) {
   const transport = new MockTransport();
   const client = new AgentClient(transport);
-  const onStarted = vi.fn();
-  render(
+  const ui = (visible: boolean) => (
     <CapabilitiesProvider value={{ ...DESKTOP_DEFAULT_CAPABILITIES, ...capabilities }}>
       <AgentClientProvider client={client}>
-        <NewRunDialog open onOpenChange={() => {}} onStarted={onStarted} />
+        <NewRunForm draftId={draftId} visible={visible} />
       </AgentClientProvider>
-    </CapabilitiesProvider>,
+    </CapabilitiesProvider>
   );
-  return { transport, onStarted };
+  const rendered = render(ui(true));
+  return { transport, client, draftId, rerenderVisible: (visible: boolean) => rendered.rerender(ui(visible)) };
 }
 
 /**
@@ -617,6 +633,25 @@ function paste(target: Element, clipboard: { files?: File[]; text?: string }): b
 
 const pngFile = () => new File([PNG], 'image.png', { type: 'image/png' });
 
+/** Where the agent would put a stashed paste. */
+const stashPath = (draftId: string, name: string) => `/data/whiphand/drafts/${draftId}/${name}`;
+
+/** Pastes an image and answers the agent's stash request the way it would. */
+async function pasteAndStash(transport: MockTransport, target: Element, draftId: string) {
+  const before = transport.sent.filter(line => (JSON.parse(line) as { method: string }).method === 'stashDraftAttachment').length;
+  paste(target, { files: [pngFile()] });
+  const req = await waitFor(() => {
+    const lines = transport.sent
+      .map((line, index) => ({ index, method: (JSON.parse(line) as { method: string }).method }))
+      .filter(entry => entry.method === 'stashDraftAttachment');
+    if (lines.length <= before) throw new Error('stashDraftAttachment not sent yet');
+    return transport.sentRequest(lines[before]!.index);
+  });
+  const { name } = req.params as { name: string };
+  transport.emitLine({ id: req.id, result: { path: stashPath(draftId, name) } });
+  return req;
+}
+
 async function startRunRequest(transport: MockTransport) {
   return waitFor(() => {
     const index = transport.sent.findIndex(line => (JSON.parse(line) as { method: string }).method === 'startRun');
@@ -625,13 +660,13 @@ async function startRunRequest(transport: MockTransport) {
   });
 }
 
-describe('NewRunDialog attachments', () => {
+describe('NewRunForm attachments', () => {
   const originalCreate = URL.createObjectURL;
   const originalRevoke = URL.revokeObjectURL;
   let revoked: string[];
 
   beforeEach(() => {
-    useAppStore.setState({ workspacePath: '/ws', workflows: [], appState: null, pendingRunAgain: null });
+    useAppStore.setState({ workspacePath: '/ws', workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null });
     // jsdom has no object URLs; the thumbnails only need a distinct string each.
     let n = 0;
     revoked = [];
@@ -640,13 +675,13 @@ describe('NewRunDialog attachments', () => {
   });
 
   afterEach(() => {
-    useAppStore.setState({ workspacePath: null, workflows: [], appState: null, pendingRunAgain: null });
+    useAppStore.setState({ workspacePath: null, workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null });
     URL.createObjectURL = originalCreate;
     URL.revokeObjectURL = originalRevoke;
   });
 
   it('has no attach field without a file picker, and ignores a pasted image there', async () => {
-    const { transport } = renderNewRunDialog(); // the default capabilities: no pickFiles
+    const { transport } = renderNewRunForm(); // the default capabilities: no pickFiles
     await respond(transport, 'listWorkflows', [ATTACHING_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     await selectWorkflow(transport, 'triage');
@@ -673,16 +708,28 @@ describe('NewRunDialog attachments', () => {
   });
 
   it('turns a pasted image into a chip with a thumbnail, and removes it again', async () => {
-    const { transport } = renderWithCapabilities({ pickFiles: vi.fn(async () => []) });
+    const { transport, draftId } = renderWithCapabilities({ pickFiles: vi.fn(async () => []) });
     await respond(transport, 'listWorkflows', [ATTACHING_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     await selectWorkflow(transport, 'triage');
 
     const nameInput = await screen.findByTestId('run-name-input');
     expect(paste(nameInput, { files: [pngFile()] })).toBe(false); // taken, not pasted as text
+    const stash = await waitFor(() => {
+      const index = transport.sent.findIndex(line => (JSON.parse(line) as { method: string }).method === 'stashDraftAttachment');
+      if (index === -1) throw new Error('not sent yet');
+      return transport.sentRequest(index);
+    });
+    // Stashed at once, under the name core will give it, as base64 of the bytes.
+    expect(stash.params).toEqual({ draftId, name: 'pasted-1.png', base64: btoa(String.fromCharCode(...PNG)) });
+    transport.emitLine({ id: stash.id, result: { path: stashPath(draftId, 'pasted-1.png') } });
 
     expect(await screen.findByText('pasted-1.png')).toBeInTheDocument();
     expect(screen.getByTestId('attachment-thumbnail')).toHaveAttribute('src', 'blob:thumb-1');
+    // The draft holds the path alone, flagged as a paste.
+    expect(useAppStore.getState().drafts[draftId]!.attachments).toEqual([
+      { key: 0, path: stashPath(draftId, 'pasted-1.png'), pasted: true },
+    ]);
 
     fireEvent.click(screen.getByRole('button', { name: 'pasted-1.png Remove' }));
     await waitFor(() => expect(screen.queryByText('pasted-1.png')).not.toBeInTheDocument());
@@ -702,11 +749,11 @@ describe('NewRunDialog attachments', () => {
     expect(screen.queryByRole('button', { name: / Remove$/ })).not.toBeInTheDocument();
   });
 
-  it('sends picked paths and pasted bytes to startRun, in list order, ignoring a path picked twice', async () => {
+  it('sends picked paths and a pasted image\'s stash path to startRun, in list order, ignoring a path picked twice', async () => {
     const pickFiles = vi.fn()
       .mockResolvedValueOnce(['/home/me/bug.png', '/home/me/logs/server.log'])
       .mockResolvedValueOnce(['/home/me/bug.png']);
-    const { transport, onStarted } = renderWithCapabilities({ pickFiles });
+    const { transport, draftId } = renderWithCapabilities({ pickFiles });
     await respond(transport, 'listWorkflows', [ATTACHING_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     await selectWorkflow(transport, 'triage');
@@ -717,7 +764,7 @@ describe('NewRunDialog attachments', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add files…' }));
     await waitFor(() => expect(pickFiles).toHaveBeenCalledTimes(2));
 
-    paste(screen.getByTestId('run-name-input'), { files: [pngFile()] });
+    await pasteAndStash(transport, screen.getByTestId('run-name-input'), draftId);
     await screen.findByText('pasted-1.png');
     expect(screen.getAllByRole('button', { name: / Remove$/ })).toHaveLength(3);
 
@@ -726,11 +773,69 @@ describe('NewRunDialog attachments', () => {
     expect((req.params as { attachments?: unknown }).attachments).toEqual([
       { path: '/home/me/bug.png' },
       { path: '/home/me/logs/server.log' },
-      { name: 'pasted-1.png', base64: btoa(String.fromCharCode(...PNG)) },
+      { path: stashPath(draftId, 'pasted-1.png') },
     ]);
 
     transport.emitLine({ id: req.id, result: { jobId: 'job-7' } });
-    await waitFor(() => expect(onStarted).toHaveBeenCalledWith('job-7'));
+    await expectStartedTab('job-7');
+  });
+
+  it('numbers a second paste after the first and never reuses a removed number', async () => {
+    const { transport, draftId } = renderWithCapabilities({ pickFiles: vi.fn(async () => []) });
+    await respond(transport, 'listWorkflows', [ATTACHING_WORKFLOW]);
+    await respond(transport, 'listRuns', []);
+    await selectWorkflow(transport, 'triage');
+    const nameInput = await screen.findByTestId('run-name-input');
+
+    await pasteAndStash(transport, nameInput, draftId);
+    await screen.findByText('pasted-1.png');
+    await pasteAndStash(transport, nameInput, draftId);
+    await screen.findByText('pasted-2.png');
+    fireEvent.click(screen.getByRole('button', { name: 'pasted-1.png Remove' }));
+    await waitFor(() => expect(screen.queryByText('pasted-1.png')).not.toBeInTheDocument());
+    // pasted-2 keeps its name, which is what its stash file is called.
+    expect(screen.getByText('pasted-2.png')).toBeInTheDocument();
+    await pasteAndStash(transport, nameInput, draftId);
+    await screen.findByText('pasted-3.png');
+  });
+
+  it('shows the stash error and adds no chip when the agent refuses a paste', async () => {
+    const { transport } = renderWithCapabilities({ pickFiles: vi.fn(async () => []) });
+    await respond(transport, 'listWorkflows', [ATTACHING_WORKFLOW]);
+    await respond(transport, 'listRuns', []);
+    await selectWorkflow(transport, 'triage');
+    paste(await screen.findByTestId('run-name-input'), { files: [pngFile()] });
+    const req = await waitFor(() => {
+      const index = transport.sent.findIndex(line => (JSON.parse(line) as { method: string }).method === 'stashDraftAttachment');
+      if (index === -1) throw new Error('not sent yet');
+      return transport.sentRequest(index);
+    });
+    transport.emitLine({ id: req.id, error: { code: -32000, message: 'attachment is larger than 64 MB' } });
+    expect(await screen.findByText(/larger than 64 MB/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: / Remove$/ })).not.toBeInTheDocument();
+    expect(revoked).toEqual(['blob:thumb-1']);
+  });
+
+  it('saves the draft to the agent when Start is pressed, before startRun, not waiting out the debounce', async () => {
+    const { transport, draftId, client } = renderWithCapabilities({ pickFiles: vi.fn(async () => []) });
+    const sync = startDraftSync(client);
+    try {
+      await respond(transport, 'listWorkflows', [ATTACHING_WORKFLOW]);
+      await respond(transport, 'listRuns', []);
+      await selectWorkflow(transport, 'triage');
+      fireEvent.change(await screen.findByTestId('run-name-input'), { target: { value: 'my run' } });
+      expect(transport.sent.some(line => line.includes('saveRunDraft'))).toBe(false);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+      await startRunRequest(transport);
+      const methods = transport.sent.map(line => (JSON.parse(line) as { method: string }).method);
+      expect(methods.indexOf('saveRunDraft')).toBeGreaterThanOrEqual(0);
+      expect(methods.indexOf('saveRunDraft')).toBeLessThan(methods.indexOf('startRun'));
+      const save = transport.sentRequest(methods.indexOf('saveRunDraft'));
+      expect(save.params).toMatchObject({ draft: { id: draftId, name: 'my run', workflow: 'triage' } });
+    } finally {
+      sync.dispose();
+    }
   });
 
   it('omits attachments entirely from a run started without any', async () => {
@@ -791,7 +896,7 @@ describe('NewRunDialog attachments', () => {
     const WARNING = 'Another run is already in progress in this workspace.';
 
     async function open(workflows: unknown[], runs: unknown[], pick: string) {
-      const rendered = renderNewRunDialog();
+      const rendered = renderNewRunForm();
       await respond(rendered.transport, 'listWorkflows', workflows);
       await respond(rendered.transport, 'listRuns', runs);
       await selectWorkflow(rendered.transport, pick);
@@ -860,6 +965,364 @@ describe('NewRunDialog attachments', () => {
       );
       await new Promise(resolve => setTimeout(resolve, 20));
       expect(screen.queryByText(WARNING)).not.toBeInTheDocument();
+    });
+  });
+});
+
+describe('NewRunForm restored paste chips', () => {
+  const originalCreate = URL.createObjectURL;
+  const originalRevoke = URL.revokeObjectURL;
+  const path = '/data/whiphand/drafts/d1/pasted-1.png';
+
+  function renderRestored(capabilities: Partial<AppCapabilities>, fs?: FakeFileSystem) {
+    useAppStore.setState({
+      workspacePath: '/ws', workflows: [ATTACHING_WORKFLOW] as never, appState: null, drafts: {}, tabs: [], activeTabKey: null,
+    });
+    const draftId = openDraft();
+    useAppStore.getState().updateDraft(draftId, {
+      workflowRef: 'triage', attachments: [{ key: 0, path, pasted: true }],
+    });
+    const client = new AgentClient(new MockTransport());
+    const body = (
+      <CapabilitiesProvider value={{ ...DESKTOP_DEFAULT_CAPABILITIES, pickFiles: async () => [], ...capabilities }}>
+        <AgentClientProvider client={client}><NewRunForm draftId={draftId} /></AgentClientProvider>
+      </CapabilitiesProvider>
+    );
+    render(fs ? <FileSystemProvider fs={fs}>{body}</FileSystemProvider> : body);
+  }
+
+  beforeEach(() => {
+    URL.createObjectURL = () => 'blob:from-stash';
+    URL.revokeObjectURL = () => {};
+  });
+
+  afterEach(() => {
+    useAppStore.setState({ workspacePath: null, workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null });
+    URL.createObjectURL = originalCreate;
+    URL.revokeObjectURL = originalRevoke;
+    releaseThumbnail(path);
+  });
+
+  it('loads the thumbnail from the stashed file where local files are reachable', async () => {
+    const fs = new FakeFileSystem();
+    fs.setFile(path, 'png-bytes');
+    renderRestored({ localFiles: true }, fs);
+    expect(await screen.findByTestId('attachment-thumbnail')).toHaveAttribute('src', 'blob:from-stash');
+    expect(screen.getByText('pasted-1.png')).toBeInTheDocument();
+  });
+
+  it('shows a file icon instead where they are not (a browser client)', async () => {
+    renderRestored({ host: 'browser', localFiles: false });
+    expect(await screen.findByText('pasted-1.png')).toBeInTheDocument();
+    expect(screen.queryByTestId('attachment-thumbnail')).not.toBeInTheDocument();
+  });
+
+  it('keeps the file icon when the stashed file cannot be read', async () => {
+    renderRestored({ localFiles: true }, new FakeFileSystem());
+    expect(await screen.findByText('pasted-1.png')).toBeInTheDocument();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(screen.queryByTestId('attachment-thumbnail')).not.toBeInTheDocument();
+  });
+});
+
+describe('NewRunForm draft lifecycle', () => {
+  const originalCreate = URL.createObjectURL;
+  const originalRevoke = URL.revokeObjectURL;
+  let revoked: string[];
+
+  beforeEach(() => {
+    useAppStore.setState({ workspacePath: '/ws', workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null });
+    let n = 0;
+    revoked = [];
+    URL.createObjectURL = () => `blob:thumb-${++n}`;
+    URL.revokeObjectURL = (url: string) => { revoked.push(url); };
+  });
+
+  afterEach(() => {
+    useAppStore.setState({ workspacePath: null, workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null });
+    URL.createObjectURL = originalCreate;
+    URL.revokeObjectURL = originalRevoke;
+  });
+
+  it('holds one draft while open, with the form fields written through to it', async () => {
+    const { transport } = renderNewRunForm();
+    await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
+    await respond(transport, 'listRuns', []);
+    await selectWorkflow(transport, 'ship-feature');
+    fireEvent.change(await screen.findByLabelText('Ticket ID', { exact: false }), { target: { value: 'TICK-1' } });
+    fireEvent.change(screen.getByTestId('run-name-input'), { target: { value: 'my run' } });
+
+    const drafts = Object.values(useAppStore.getState().drafts);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      workdir: '/ws', workflowRef: 'ship-feature', name: 'my run', values: { ticket: 'TICK-1', branch: 'main' },
+    });
+  });
+
+  it('deletes the draft and closes its tab on Discard, when nothing was typed', async () => {
+    const { transport, draftId } = renderNewRunForm();
+    await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(useAppStore.getState().drafts[draftId]).toBeUndefined();
+    expect(useAppStore.getState().tabs).toEqual([]);
+  });
+
+  it('hands focus to a neighbour from another workspace through openWorkspace on Discard', async () => {
+    const draftId = openDraft();
+    useAppStore.setState({
+      tabs: [{ kind: 'draft', key: draftId }, { kind: 'run', key: 'r2', runId: 'r2', workdir: '/ws/b', preview: false }],
+      activeTabKey: draftId,
+    });
+    const { transport } = renderNewRunForm(draftId);
+    await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+
+    // The neighbour is not shown while the workspace is still /ws.
+    expect(useAppStore.getState().activeTabKey).toBeNull();
+    expect(useAppStore.getState().workspacePath).toBe('/ws');
+    const req = await waitFor(() => {
+      const index = transport.sent.findIndex(line => (JSON.parse(line) as { method: string }).method === 'touchRecentWorkspace');
+      if (index === -1) throw new Error('touchRecentWorkspace not sent yet');
+      return transport.sentRequest(index);
+    });
+    expect(req).toMatchObject({ params: { path: '/ws/b' } });
+    transport.emitLine({ id: req.id, result: { recentWorkspaces: [{ path: '/ws/b', lastOpenedAt: 'now' }] } });
+    await waitFor(() => expect(useAppStore.getState().activeTabKey).toBe('r2'));
+    expect(useAppStore.getState().workspacePath).toBe('/ws/b');
+  });
+
+  it('turns the draft\'s tab into the run\'s after a successful start, and deletes the draft', async () => {
+    const { transport } = renderNewRunForm();
+    await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
+    await respond(transport, 'listRuns', []);
+    await selectWorkflow(transport, 'ship-feature');
+    fireEvent.change(await screen.findByLabelText('Ticket ID', { exact: false }), { target: { value: 'TICK-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    await respond(transport, 'startRun', { jobId: 'job-9' });
+    await expectStartedTab('job-9');
+    expect(useAppStore.getState().drafts).toEqual({});
+    expect(useAppStore.getState().activeTabKey).toBe('job-9');
+  });
+
+  it('keeps a pasted thumbnail until the draft is deleted, not when the form is hidden', async () => {
+    const { transport, draftId, rerenderVisible } = renderWithCapabilities({ pickFiles: vi.fn(async () => []) });
+    await respond(transport, 'listWorkflows', [ATTACHING_WORKFLOW]);
+    await respond(transport, 'listRuns', []);
+    await selectWorkflow(transport, 'triage');
+    await pasteAndStash(transport, await screen.findByTestId('run-name-input'), draftId);
+    expect(await screen.findByText('pasted-1.png')).toBeInTheDocument();
+
+    rerenderVisible(false);
+    expect(revoked).toEqual([]);
+    expect(screen.getByTestId('attachment-thumbnail')).toHaveAttribute('src', 'blob:thumb-1');
+
+    act(() => useAppStore.getState().deleteDraft(draftId));
+    expect(revoked).toEqual(['blob:thumb-1']);
+    expect(useAppStore.getState().drafts).toEqual({});
+  });
+});
+
+describe('NewRunForm as a draft tab', () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      workspacePath: '/ws', workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null,
+    });
+  });
+
+  afterEach(() => {
+    useAppStore.setState({ workspacePath: null, workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null });
+  });
+
+  it('is laid out as a page titled New run, with Start and Discard, and no dialog', async () => {
+    const { transport } = renderNewRunForm();
+    await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByTestId('page-header')).toHaveTextContent('New run');
+    expect(screen.getByRole('button', { name: 'Start' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Discard' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+  });
+
+  it('starts on Ctrl+Enter', async () => {
+    const { transport } = renderNewRunForm();
+    await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
+    await respond(transport, 'listRuns', []);
+    await selectWorkflow(transport, 'ship-feature');
+    const ticket = await screen.findByLabelText('Ticket ID', { exact: false });
+    fireEvent.change(ticket, { target: { value: 'TICK-1' } });
+    fireEvent.keyDown(ticket, { key: 'Enter', ctrlKey: true });
+    expect((await startRunRequest(transport)).method).toBe('startRun');
+  });
+
+  it('says to drop files here', async () => {
+    const { transport } = renderWithCapabilities({ pickFiles: vi.fn(async () => []) });
+    await respond(transport, 'listWorkflows', [ATTACHING_WORKFLOW]);
+    await respond(transport, 'listRuns', []);
+    await selectWorkflow(transport, 'triage');
+    expect(await screen.findByText('Drop files here, or paste an image.')).toBeInTheDocument();
+  });
+
+  it('keeps the draft and its tab on a failed start, and shows the error', async () => {
+    const { transport, draftId } = renderNewRunForm();
+    await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
+    await respond(transport, 'listRuns', []);
+    await selectWorkflow(transport, 'ship-feature');
+    fireEvent.change(await screen.findByLabelText('Ticket ID', { exact: false }), { target: { value: 'TICK-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    const req = await startRunRequest(transport);
+    transport.emitLine({ id: req.id, error: { code: -32000, message: 'no runner available' } });
+
+    expect(await screen.findByText(/no runner available/)).toBeInTheDocument();
+    expect(useAppStore.getState().drafts[draftId]).toBeDefined();
+    expect(useAppStore.getState().tabs).toMatchObject([{ kind: 'draft', key: draftId }]);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start' })).toBeEnabled());
+  });
+
+  it('keeps every field and the error through hiding and showing the form', async () => {
+    const { transport, rerenderVisible } = renderWithCapabilities({ pickFiles: vi.fn(async () => ['/home/me/bug.png']) });
+    await respond(transport, 'listWorkflows', [ATTACHING_WORKFLOW]);
+    await respond(transport, 'listRuns', []);
+    await selectWorkflow(transport, 'triage');
+    fireEvent.change(await screen.findByTestId('run-name-input'), { target: { value: 'my run' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Add files…' }));
+    await screen.findByText('bug.png');
+
+    rerenderVisible(false);
+    rerenderVisible(true);
+    expect(screen.getByTestId('run-name-input')).toHaveValue('my run');
+    expect(screen.getByText('bug.png')).toBeInTheDocument();
+  });
+
+  it('lets two drafts start back to back, each into its own run tab', async () => {
+    const a = openDraft();
+    const b = openDraft();
+    const first = renderNewRunForm(a);
+    const second = renderNewRunForm(b);
+    for (const { transport } of [first, second]) await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
+    useAppStore.setState({ workflows: [SCRIPTED_WORKFLOW] as never });
+    act(() => {
+      for (const id of [a, b]) {
+        useAppStore.getState().updateDraft(id, {
+          workflowRef: 'ship-feature', values: { ticket: 'T', branch: 'main', notes: '' },
+        });
+      }
+    });
+    const starts = screen.getAllByRole('button', { name: 'Start' });
+    expect(starts).toHaveLength(2);
+    await waitFor(() => starts.forEach(start => expect(start).toBeEnabled()));
+    fireEvent.click(starts[0]!);
+    fireEvent.click(starts[1]!);
+    const reqA = await startRunRequest(first.transport);
+    const reqB = await startRunRequest(second.transport);
+    second.transport.emitLine({ id: reqB.id, result: { jobId: 'job-b' } });
+    first.transport.emitLine({ id: reqA.id, result: { jobId: 'job-a' } });
+    // Each draft's tab became its own run's, in its own position, though b's start landed first.
+    await waitFor(() => expect(useAppStore.getState().tabs.map(tab => tab.key)).toEqual(['job-a', 'job-b']));
+    expect(useAppStore.getState().tabs.every(tab => tab.kind === 'run')).toBe(true);
+    expect(useAppStore.getState().drafts).toEqual({});
+  });
+
+  it('starts in the draft\'s own workspace, whatever the current one is', async () => {
+    const draftId = openDraft({ workdir: '/ws/x' });
+    useAppStore.setState({ workspacePath: '/ws/y' });
+    const { transport } = renderNewRunForm(draftId);
+    await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
+    await respond(transport, 'listRuns', []);
+    await selectWorkflow(transport, 'ship-feature');
+    fireEvent.change(await screen.findByLabelText('Ticket ID', { exact: false }), { target: { value: 'T-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    const req = await startRunRequest(transport);
+    expect(req.params).toMatchObject({ workdir: '/ws/x' });
+    transport.emitLine({ id: req.id, result: { jobId: 'job-x' } });
+    await waitFor(() => expect(useAppStore.getState().tabs).toMatchObject([{ key: 'job-x', workdir: '/ws/x' }]));
+  });
+
+  describe('Discard with content', () => {
+    it('asks first when a name was typed, and keeps the draft on Keep editing', async () => {
+      const { transport, draftId } = renderNewRunForm();
+      await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
+      await respond(transport, 'listRuns', []);
+      await selectWorkflow(transport, 'ship-feature');
+      fireEvent.change(await screen.findByTestId('run-name-input'), { target: { value: 'my run' } });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+      expect(await screen.findByRole('dialog')).toBeInTheDocument();
+      expect(useAppStore.getState().drafts[draftId]).toBeDefined();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(useAppStore.getState().drafts[draftId]).toBeDefined();
+      expect(useAppStore.getState().tabs).toHaveLength(1);
+    });
+
+    it('deletes the draft and its tab once confirmed', async () => {
+      const { transport, draftId } = renderNewRunForm();
+      await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
+      await respond(transport, 'listRuns', []);
+      await selectWorkflow(transport, 'ship-feature');
+      fireEvent.change(await screen.findByLabelText('Ticket ID', { exact: false }), { target: { value: 'TICK-1' } });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Discard changes' }));
+      expect(useAppStore.getState().drafts[draftId]).toBeUndefined();
+      expect(useAppStore.getState().tabs).toEqual([]);
+    });
+
+    it('does not ask when the inputs are just what the form filled in', async () => {
+      const { transport, draftId } = renderNewRunForm();
+      await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
+      await respond(transport, 'listRuns', []);
+      await selectWorkflow(transport, 'ship-feature');
+      await screen.findByLabelText('Ticket ID', { exact: false });
+      fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(useAppStore.getState().drafts[draftId]).toBeUndefined();
+    });
+  });
+
+  describe('file drop', () => {
+    function dropHost() {
+      const handlers: Array<(event: FileDropEvent) => void> = [];
+      const unlisteners: Array<ReturnType<typeof vi.fn>> = [];
+      const onFileDrop = vi.fn(async (handler: (event: FileDropEvent) => void) => {
+        handlers.push(handler);
+        const unlisten = vi.fn(() => { handlers.splice(handlers.indexOf(handler), 1); });
+        unlisteners.push(unlisten);
+        return unlisten;
+      });
+      return { handlers, onFileDrop };
+    }
+
+    it('lands on the visible draft only, never on a hidden one', async () => {
+      const { handlers, onFileDrop } = dropHost();
+      const a = openDraft();
+      const b = openDraft();
+      const transport = new MockTransport();
+      const client = new AgentClient(transport);
+      const ui = (activeId: string) => (
+        <CapabilitiesProvider value={{ ...DESKTOP_DEFAULT_CAPABILITIES, pickFiles: vi.fn(async () => []), onFileDrop }}>
+          <AgentClientProvider client={client}>
+            <NewRunForm draftId={a} visible={activeId === a} />
+            <NewRunForm draftId={b} visible={activeId === b} />
+          </AgentClientProvider>
+        </CapabilitiesProvider>
+      );
+      useAppStore.setState({ workflows: [ATTACHING_WORKFLOW] as never });
+      for (const id of [a, b]) {
+        useAppStore.getState().updateDraft(id, { workflowRef: 'triage', values: {} });
+      }
+      const { rerender } = render(ui(a));
+      await waitFor(() => expect(handlers).toHaveLength(1));
+      // Switch to B: A's listener goes, B's arrives.
+      rerender(ui(b));
+      await waitFor(() => expect(onFileDrop).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(handlers).toHaveLength(1));
+
+      act(() => handlers[0]!({ type: 'drop', paths: ['/home/me/trace.har'] }));
+      const { drafts } = useAppStore.getState();
+      expect(drafts[b]!.attachments).toMatchObject([{ path: '/home/me/trace.har' }]);
+      expect(drafts[a]!.attachments).toEqual([]);
     });
   });
 });

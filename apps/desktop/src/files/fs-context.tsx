@@ -17,3 +17,8 @@ export function useFileSystem(): FileSystemPort {
   if (!fs) throw new Error('useFileSystem() must be used within a FileSystemProvider');
   return fs;
 }
+
+/** For a component that can do without a filesystem (a thumbnail falls back to an icon). */
+export function useOptionalFileSystem(): FileSystemPort | null {
+  return useContext(FileSystemContext);
+}

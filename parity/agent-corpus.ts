@@ -15,6 +15,15 @@ import type { Ctx, Message, Scenario } from './agent-transcript.ts';
 
 const isWin = process.platform === 'win32';
 
+/** A New-run draft `d1` (or `d2` when `name` is "two"), holding `attachments`. */
+function draftOf(c: Ctx, name: string, attachments: Array<{ path: string; pasted?: boolean }>) {
+  return {
+    id: name === 'two' ? 'd2' : 'd1', workdir: c.ws, workflow: 'feature', inputs: { goal: 'x' },
+    name, dryRun: false, attachments,
+    createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+}
+
 /**
  * A command step's shell line that runs `js` under node, on every platform.
  * `node` from PATH (agent-transcript.ts puts this node first), not its
@@ -62,6 +71,10 @@ const BAD_PARAMS: Array<[string, unknown]> = [
   ['ptyInput', { jobId: 'j' }], ['ptyResize', { jobId: 'j', cols: 0, rows: 2.5 }],
   ['getAppState', []], ['touchRecentWorkspace', { path: '' }], ['setWorkspacePinned', { path: 'p' }],
   ['setUiState', { window: { width: 0, height: 1, x: 0.5, y: 'a' }, theme: 'blue' }],
+  ['saveRunDraft', { draft: { id: '', workdir: 'w', inputs: { a: 1 }, dryRun: 'no', attachments: [{ path: '' }] } }],
+  ['saveRunDraft', {}], ['deleteRunDraft', { id: '' }],
+  ['setRunTabs', { runTabs: { tabs: [{ kind: 'other' }], active: 1 } }],
+  ['stashDraftAttachment', { draftId: '', name: 'n' }],
   ['listRecentRuns', { limit: 101 }], ['listJobs', 'x'], ['getJobScrollback', {}],
   ['remoteAccessGet', 1], ['remoteAccessSet', { port: 80 }], ['remoteAccessSet', { port: 70000, enabled: 1 }],
   ['remoteAccessRotateToken', false],
@@ -359,6 +372,48 @@ export const SCENARIOS: Scenario[] = [
       { call: 'listRecentRuns' },
       { call: 'listRecentRuns', params: { limit: 1 }, label: 'listRecentRuns limit' },
       { call: 'setWorkspacePinned', params: (c: Ctx) => ({ path: c.ws, pinned: false }), label: 'unpin' },
+    ],
+  },
+  {
+    name: 'run drafts and tabs',
+    steps: [
+      { call: 'getAppState' },
+      { call: 'saveRunDraft', params: (c: Ctx) => ({ draft: draftOf(c, 'one', []) }) },
+      { call: 'saveRunDraft', params: (c: Ctx) => ({ draft: draftOf(c, 'two', []) }), label: 'saveRunDraft second' },
+      {
+        call: 'stashDraftAttachment',
+        params: { draftId: 'd1', name: 'shot.png', base64: Buffer.from('png').toString('base64') },
+        keep: (r: any, c: Ctx) => { c.vars.stash = r.path; },
+      },
+      {
+        call: 'stashDraftAttachment',
+        params: { draftId: 'd1', name: 'shot.png', base64: Buffer.from('again').toString('base64') },
+        label: 'stash same name',
+      },
+      { call: 'stashDraftAttachment', params: { draftId: 'd1', name: '../escape.png', base64: '' }, label: 'stash escaping name' },
+      { call: 'stashDraftAttachment', params: { draftId: '..', name: 'a.png', base64: '' }, label: 'stash escaping draft id' },
+      {
+        call: 'saveRunDraft',
+        params: (c: Ctx) => ({ draft: draftOf(c, 'one again', [{ path: c.vars.stash, pasted: true }]) }),
+        label: 'saveRunDraft replaces by id',
+      },
+      {
+        call: 'setRunTabs',
+        params: (c: Ctx) => ({
+          runTabs: {
+            tabs: [
+              { kind: 'run', workdir: c.ws, runId: 'r1', preview: true },
+              { kind: 'draft', draftId: 'd1' },
+            ],
+            active: 'draft:d1',
+          },
+        }),
+      },
+      { call: 'getAppState', label: 'getAppState with drafts' },
+      { call: 'deleteRunDraft', params: { id: 'd1' } },
+      { call: 'deleteRunDraft', params: { id: 'unknown' }, label: 'deleteRunDraft unknown' },
+      { call: 'deleteRunDraft', params: { id: '..' }, label: 'deleteRunDraft escaping id' },
+      { call: 'getAppState', label: 'getAppState after delete' },
     ],
   },
   {

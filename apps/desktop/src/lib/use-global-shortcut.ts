@@ -11,17 +11,29 @@ export interface Shortcut {
   /** Ctrl on Linux/Windows, Cmd on macOS — one branch covers both. */
   mod?: boolean;
   shift?: boolean;
+  alt?: boolean;
+  /**
+   * Match KeyboardEvent.code (the physical key) instead of `key`. Needed for
+   * Alt chords: Option on macOS and AltGr elsewhere turn `key` into another
+   * character, so `key` no longer says which letter was pressed.
+   */
+  code?: string;
 }
 
 interface KeyLike {
   key: string;
+  code?: string;
   ctrlKey: boolean;
   metaKey: boolean;
   shiftKey: boolean;
+  altKey?: boolean;
 }
 
 export function matchesShortcut(event: KeyLike, shortcut: Shortcut): boolean {
-  if (event.key.toLowerCase() !== shortcut.key.toLowerCase()) return false;
+  if (shortcut.code !== undefined) {
+    if (event.code !== shortcut.code) return false;
+  } else if (event.key.toLowerCase() !== shortcut.key.toLowerCase()) return false;
+  if (Boolean(shortcut.alt) !== Boolean(event.altKey)) return false;
   if (Boolean(shortcut.mod) !== (event.ctrlKey || event.metaKey)) return false;
   if (Boolean(shortcut.shift) !== event.shiftKey) return false;
   return true;
@@ -48,17 +60,17 @@ export function isTypingTarget(target: EventTarget | null): boolean {
  *   match — a shortcut that cannot act on a keypress must not consume it.
  */
 export function useGlobalShortcut(shortcut: Shortcut, handler: () => void, enabled = true): void {
-  const { key, mod, shift } = shortcut;
+  const { key, mod, shift, alt, code } = shortcut;
   useEffect(() => {
     if (!enabled) return;
     function onKeyDown(event: KeyboardEvent): void {
       if (event.defaultPrevented || event.isComposing) return;
       if (isTypingTarget(event.target)) return;
-      if (!matchesShortcut(event, { key, mod, shift })) return;
+      if (!matchesShortcut(event, { key, mod, shift, alt, code })) return;
       event.preventDefault();
       handler();
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [key, mod, shift, handler, enabled]);
+  }, [key, mod, shift, alt, code, handler, enabled]);
 }

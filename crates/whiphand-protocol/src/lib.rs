@@ -846,6 +846,111 @@ pub struct AppState {
     pub runs_retention: RunsRetention,
     pub show_ongoing_runs: bool,
     pub editor: EditorPreference,
+    /// Unstarted New-run forms, kept so they survive a restart.
+    #[serde(default)]
+    pub run_drafts: Vec<RunDraft>,
+    #[serde(default)]
+    pub run_tabs: RunTabsState,
+}
+
+/// A New-run form that has not been started.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RunDraft {
+    pub id: String,
+    pub workdir: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub identity_key: Option<String>,
+    /// The workflow's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub workflow: Option<String>,
+    #[ts(type = "Record<string, string>")]
+    pub inputs: serde_json::Map<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub name: Option<String>,
+    pub dry_run: bool,
+    /// Absent means the workflow's own default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub worktree: Option<bool>,
+    /// As typed, not yet a number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub max_iterations: Option<String>,
+    pub attachments: Vec<DraftAttachment>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct DraftAttachment {
+    pub path: String,
+    /// A pasted image the agent stashed, as opposed to a file the user picked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pasted: Option<bool>,
+}
+
+/// One open tab on the Runs page, other than the Runs tab itself.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RunTabRef {
+    #[serde(rename_all = "camelCase")]
+    Run {
+        workdir: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        identity_key: Option<String>,
+        run_id: String,
+        preview: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    Draft { draft_id: String },
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
+pub struct RunTabsState {
+    pub tabs: Vec<RunTabRef>,
+    /// A tab key; null means the Runs tab.
+    pub active: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct SaveRunDraftParams {
+    pub draft: RunDraft,
+}
+
+pub type SaveRunDraftResult = OkTrue;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct DeleteRunDraftParams {
+    pub id: String,
+}
+
+pub type DeleteRunDraftResult = OkTrue;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SetRunTabsParams {
+    pub run_tabs: RunTabsState,
+}
+
+pub type SetRunTabsResult = OkTrue;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StashDraftAttachmentParams {
+    pub draft_id: String,
+    pub name: String,
+    pub base64: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct StashDraftAttachmentResult {
+    pub path: String,
 }
 
 pub type GetAppStateParams = Empty;
@@ -1258,6 +1363,18 @@ pub const METHODS: &[(&str, &str, &str)] = &[
         "SetWorkspacePinnedResult",
     ),
     ("setUiState", "SetUiStateParams", "SetUiStateResult"),
+    ("saveRunDraft", "SaveRunDraftParams", "SaveRunDraftResult"),
+    (
+        "deleteRunDraft",
+        "DeleteRunDraftParams",
+        "DeleteRunDraftResult",
+    ),
+    ("setRunTabs", "SetRunTabsParams", "SetRunTabsResult"),
+    (
+        "stashDraftAttachment",
+        "StashDraftAttachmentParams",
+        "StashDraftAttachmentResult",
+    ),
     (
         "listRecentRuns",
         "ListRecentRunsParams",
@@ -1352,6 +1469,28 @@ mod tests {
     }
 
     #[test]
+    fn a_run_tab_is_a_run_or_a_draft() {
+        let run = json!({ "kind": "run", "workdir": "/w", "runId": "r", "preview": true });
+        let (t, back) = round::<RunTabRef>(run.clone());
+        assert!(matches!(t, RunTabRef::Run { preview: true, .. }));
+        assert_eq!(back, run);
+        let draft = json!({ "kind": "draft", "draftId": "d1" });
+        assert_eq!(round::<RunTabRef>(draft.clone()).1, draft);
+    }
+
+    #[test]
+    fn an_app_state_without_drafts_or_tabs_reads_them_as_empty() {
+        let v = json!({
+            "schemaVersion": 1, "recentWorkspaces": [], "window": null, "lastPage": null,
+            "theme": "system", "workspaces": {}, "runsRetention": { "maxPerWorkspace": 0 },
+            "showOngoingRuns": true, "editor": { "kind": "vscode" },
+        });
+        let (s, back) = round::<AppState>(v);
+        assert!(s.run_drafts.is_empty() && s.run_tabs.tabs.is_empty());
+        assert_eq!(back["runTabs"], json!({ "tabs": [], "active": null }));
+    }
+
+    #[test]
     fn an_attachment_is_a_path_or_bytes_never_both() {
         let (p, _) = round::<AttachmentSource>(json!({ "path": "/a" }));
         assert!(matches!(p, AttachmentSource::Path(_)));
@@ -1386,7 +1525,7 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), METHODS.len());
-        assert_eq!(METHODS.len(), 41);
+        assert_eq!(METHODS.len(), 45);
         assert_eq!(NOTIFICATIONS.len(), 11);
     }
 }

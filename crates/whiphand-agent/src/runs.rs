@@ -32,6 +32,7 @@ pub struct StartParams {
     pub name: Option<String>,
     pub attachments: Vec<AttachmentSource>,
     pub worktree: Option<bool>,
+    pub continue_in: Option<String>,
 }
 
 /// What `resumeRun` hands it.
@@ -160,7 +161,7 @@ pub async fn run_job(agent: Rc<Agent>, job: Rc<Job>, params: StartParams, opened
             attachments: params.attachments,
             cancel: job.cancel.clone(),
             worktree: params.worktree,
-            continue_in: None,
+            continue_in: params.continue_in,
             degradations: opened.degradations.clone(),
         };
         let result = run_workflow(&opts, &frontend)

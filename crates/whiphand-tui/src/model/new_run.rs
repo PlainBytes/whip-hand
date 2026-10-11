@@ -266,6 +266,7 @@ impl Form {
             max_iterations,
             name,
             attachments: (!attachments.is_empty()).then_some(attachments),
+            continue_in: None,
             worktree: Some(self.worktree),
         })
     }

@@ -360,6 +360,7 @@ fn run_draft() -> S {
         "name" => o(Str),
         "dryRun" => Bool,
         "worktree" => o(Bool),
+        "continueIn" => o(Str),
         "maxIterations" => o(Str),
         "attachments" => Arr(b(object! { "path" => StrMin1, "pasted" => o(Bool) })),
         "createdAt" => Str,
@@ -455,6 +456,7 @@ pub fn remote_params(method: &str) -> Option<S> {
         "name" => o(Str),
         "attachments" => o(Arr(b(object!(Strictness::Strict; "name" => StrMin1, "base64" => Str)))),
         "worktree" => o(Bool),
+        "continueIn" => o(StrMin1),
     })
 }
 
@@ -500,6 +502,7 @@ pub fn params(method: &str) -> Option<S> {
                 b(object!(Strictness::Strict; "name" => StrMin1, "base64" => Str)),
             )))),
             "worktree" => o(Bool),
+            "continueIn" => o(StrMin1),
         },
         "resumeRun" => object! {
             "workdir" => StrMin1,

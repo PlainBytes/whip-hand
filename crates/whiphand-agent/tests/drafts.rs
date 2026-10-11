@@ -193,6 +193,23 @@ fn tabs_round_trip_and_survive_a_restart() {
 }
 
 #[test]
+fn a_draft_keeps_continue_in_across_a_reload_and_omits_it_otherwise() {
+    let mut h = Harness::new(ClientKind::Desktop);
+    let mut with = draft("a", "one", json!([]));
+    with["continueIn"] = json!("20260101-000000-abcd");
+    h.ok("saveRunDraft", json!({ "draft": with }));
+    h.ok(
+        "saveRunDraft",
+        json!({ "draft": draft("b", "two", json!([])) }),
+    );
+    let dir = h.shutdown();
+    let mut again = Harness::start(dir, ClientKind::Desktop);
+    let drafts = again.state()["runDrafts"].clone();
+    assert_eq!(drafts[0]["continueIn"], "20260101-000000-abcd");
+    assert!(drafts[1].get("continueIn").is_none());
+}
+
+#[test]
 fn every_mutation_broadcasts_app_state_changed() {
     let mut h = Harness::new(ClientKind::Desktop);
     h.ok(

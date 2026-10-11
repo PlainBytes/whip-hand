@@ -763,10 +763,10 @@ fn new_run_on(model: &mut Model) {
 fn the_picker_starts_on_the_last_workflow_and_skips_a_broken_one() {
     let mut model = Model::new("/w".into(), 0.0);
     new_run_on(&mut model);
-    let state = json!({ "schemaVersion": 1, "recentWorkspaces": [], "window": null, "lastPage": null,
-        "theme": "system", "runsRetention": { "maxPerWorkspace": 0 }, "showOngoingRuns": false,
-        "workspaces": { "/w": { "lastWorkflow": "global:feature",
-            "lastInputs": { "global:feature": { "feature": "search" } } } } });
+    // The agent's own empty state, so the test follows its shape.
+    let mut state = whiphand_agent::app_state::empty_app_state();
+    state["workspaces"] = json!({ "/w": { "lastWorkflow": "global:feature",
+        "lastInputs": { "global:feature": { "feature": "search" } } } });
     update(&mut model, Msg::Reply(Then::AppState, Ok(state)));
     let n = model.new_run.as_ref().unwrap();
     assert_eq!(n.cursor, 1);

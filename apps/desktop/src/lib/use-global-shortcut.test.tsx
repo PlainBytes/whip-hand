@@ -22,6 +22,20 @@ describe('matchesShortcut', () => {
   });
 });
 
+describe('matchesShortcut with alt and code', () => {
+  it('requires alt exactly when the shortcut asks for it', () => {
+    expect(matchesShortcut(key({ key: 'w', ctrlKey: true, altKey: true } as never), { key: 'w', mod: true, alt: true })).toBe(true);
+    expect(matchesShortcut(key({ key: 'w', ctrlKey: true }), { key: 'w', mod: true, alt: true })).toBe(false);
+    expect(matchesShortcut(key({ key: 'w', ctrlKey: true, altKey: true } as never), { key: 'w', mod: true })).toBe(false);
+  });
+
+  it('matches by physical key when a code is given, whatever character Alt produced', () => {
+    const event = { key: '∑', code: 'KeyW', ctrlKey: true, metaKey: false, shiftKey: false, altKey: true };
+    expect(matchesShortcut(event, { key: 'w', code: 'KeyW', mod: true, alt: true })).toBe(true);
+    expect(matchesShortcut({ ...event, code: 'KeyQ' }, { key: 'w', code: 'KeyW', mod: true, alt: true })).toBe(false);
+  });
+});
+
 describe('isTypingTarget', () => {
   it('recognises form fields and contenteditable, and nothing else', () => {
     const input = document.createElement('input');

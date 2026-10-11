@@ -14,6 +14,7 @@ import {
   Switch,
   Text,
   ToggleButton,
+  Tooltip,
   type TableColumnDefinition,
 } from '@fluentui/react-components';
 import { Add20Regular, Delete16Regular, LockClosed16Regular, LockOpen16Regular } from '@fluentui/react-icons';
@@ -28,6 +29,7 @@ import { DangerButton } from '../components/DangerButton.tsx';
 import { OpenInEditorButton } from '../components/OpenInEditorButton.tsx';
 import { useClickOrDoubleClick } from '../lib/use-click-or-double-click.ts';
 import { Page } from '../components/Page.tsx';
+import { NEW_RUN_TAB, shortcutLabel } from '../lib/tab-shortcuts.ts';
 
 export interface RunsPageProps {
   /** A single click opens a preview tab; a double click (`pin`) a pinned one. */
@@ -174,9 +176,11 @@ export function RunsPage({ onSelectRun, onNewRun }: RunsPageProps) {
             onChange={(_e, data) => setShowInterrupted(data.checked)}
           />
         </div>
-        <Button appearance="primary" icon={<Add20Regular />} onClick={onNewRun}>
-          New run
-        </Button>
+        <Tooltip content={`New run (${shortcutLabel(NEW_RUN_TAB)})`} relationship="description">
+          <Button appearance="primary" icon={<Add20Regular />} onClick={onNewRun}>
+            New run
+          </Button>
+        </Tooltip>
       </div>
       {error && <Text>Failed to load runs: {error}</Text>}
       {openError && (

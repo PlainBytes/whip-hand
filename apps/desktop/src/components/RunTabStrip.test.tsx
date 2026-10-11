@@ -200,6 +200,109 @@ describe('RunTabStrip', () => {
     expect(req).toMatchObject({ method: 'touchRecentWorkspace', params: { path: '/ws/b' } });
   });
 
+  describe('middle-click, shortcuts and overflow', () => {
+    const press = (init: KeyboardEventInit, target: Element = document.body) => fireEvent.keyDown(target, init);
+    const NEXT = { key: 'PageDown', code: 'PageDown', ctrlKey: true };
+    const PREV = { key: 'PageUp', code: 'PageUp', ctrlKey: true };
+    const ALT = (code: string, key: string) => ({ key, code, ctrlKey: true, altKey: true });
+
+    it('closes a run tab on middle-click, and ignores other buttons', () => {
+      seed([tab('r1'), tab('r2')], 'r1');
+      renderStrip();
+      fireEvent(screen.getByRole('tab', { name: /r2/ }), new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 2 }));
+      expect(useAppStore.getState().tabs).toHaveLength(2);
+      fireEvent(screen.getByRole('tab', { name: /r2/ }), new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 }));
+      expect(useAppStore.getState().tabs.map(t => t.key)).toEqual(['r1']);
+    });
+
+    it('asks before middle-click closes a draft with content', async () => {
+      const id = useAppStore.getState().createDraft({ workdir: '/ws/a' });
+      useAppStore.getState().openDraftTab(id);
+      useAppStore.getState().updateDraft(id, { name: 'work' });
+      renderStrip();
+      fireEvent(screen.getByRole('tab', { name: /work/ }), new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 }));
+      expect(await screen.findByRole('dialog')).toBeInTheDocument();
+      expect(useAppStore.getState().drafts[id]).toBeDefined();
+    });
+
+    it('cycles through the Runs tab and every tab, wrapping at both ends', () => {
+      seed([tab('r1'), tab('r2')], null);
+      renderStrip();
+      const active = () => useAppStore.getState().activeTabKey;
+      press(NEXT); expect(active()).toBe('r1');
+      press(NEXT); expect(active()).toBe('r2');
+      press(NEXT); expect(active()).toBeNull();
+      press(PREV); expect(active()).toBe('r2');
+      press(PREV); expect(active()).toBe('r1');
+      press(PREV); expect(active()).toBeNull();
+      press(PREV); expect(active()).toBe('r2');
+    });
+
+    it('closes the active tab with Ctrl+Alt+W, and ignores it on the Runs tab', () => {
+      seed([tab('r1'), tab('r2')], 'r1');
+      renderStrip();
+      press(ALT('KeyW', '∑'));
+      expect(useAppStore.getState().tabs.map(t => t.key)).toEqual(['r2']);
+      act(() => useAppStore.getState().activateTab(null));
+      press(ALT('KeyW', '∑'));
+      expect(useAppStore.getState().tabs).toHaveLength(1);
+    });
+
+    it('opens a draft with Ctrl+Alt+N and shows the Runs list with Ctrl+Alt+1', () => {
+      seed([tab('r1')], 'r1');
+      renderStrip();
+      press(ALT('KeyN', 'Dead'));
+      const state = useAppStore.getState();
+      expect(state.tabs.map(t => t.kind)).toEqual(['run', 'draft']);
+      expect(state.activeTabKey).toBe(state.tabs[1]!.key);
+      press(ALT('Digit1', '¡'));
+      expect(useAppStore.getState().activeTabKey).toBeNull();
+    });
+
+    it('leaves the shortcuts alone while a dialog is open or a terminal-like field has focus', async () => {
+      const id = useAppStore.getState().createDraft({ workdir: '/ws/a' });
+      useAppStore.getState().openDraftTab(id);
+      useAppStore.getState().updateDraft(id, { name: 'work' });
+      seed([tab('r1')], 'r1');
+      useAppStore.setState({ tabs: [tab('r1'), { kind: 'draft', key: id, preview: false } as never] });
+      renderStrip();
+      press(NEXT, document.body);
+      expect(useAppStore.getState().activeTabKey).toBe(id);
+
+      // xterm focuses a hidden textarea, which is a typing target.
+      const textarea = document.createElement('textarea');
+      document.body.appendChild(textarea);
+      press(NEXT, textarea);
+      expect(useAppStore.getState().activeTabKey).toBe(id);
+      textarea.remove();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Close work' }));
+      expect(await screen.findByRole('dialog')).toBeInTheDocument();
+      press(PREV);
+      press(ALT('KeyN', 'Dead'));
+      expect(useAppStore.getState().activeTabKey).toBe(id);
+      expect(useAppStore.getState().tabs).toHaveLength(2);
+    });
+
+    it('lists every tab in the overflow menu and activates the picked one', async () => {
+      seed([tab('r1'), tab('r2'), tab('r3')], 'r1');
+      renderStrip();
+      fireEvent.click(screen.getByRole('button', { name: /All tabs/ }));
+      const items = await screen.findAllByRole('menuitem');
+      expect(items.map(item => item.textContent)).toEqual(['Runs', 'r1', 'r2', 'r3']);
+      fireEvent.click(items[3]!);
+      await waitFor(() => expect(useAppStore.getState().activeTabKey).toBe('r3'));
+    });
+
+    it('gives each tab a tooltip with its title, state and workspace', async () => {
+      seed([tab('r1', { jobId: 'j1' })], 'r1');
+      useAppStore.setState({ jobs: { j1: job('j1', { runId: 'r1', pendingManual: { kind: 'x' } as never }) } });
+      renderStrip();
+      fireEvent.mouseEnter(screen.getByRole('tab', { name: /r1/ }));
+      expect(await screen.findByText(/^r1 — .* · a$/)).toBeInTheDocument();
+    });
+  });
+
   describe('draft tabs', () => {
     function seedDraft(init: Parameters<ReturnType<typeof useAppStore.getState>['createDraft']>[0] = { workdir: '/ws/a' }): string {
       const id = useAppStore.getState().createDraft(init);

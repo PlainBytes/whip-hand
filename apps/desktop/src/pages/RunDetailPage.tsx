@@ -29,7 +29,7 @@ import {
   Tooltip,
 } from '@fluentui/react-components';
 import {
-  ArrowDown20Regular, BranchFork16Regular, Copy20Regular, Delete20Regular, DocumentFolder48Regular,
+  ArrowDown20Regular, Copy20Regular, Delete20Regular, DocumentFolder48Regular,
   LockClosed20Regular, LockOpen20Regular,
   PlayCircle20Regular, PlugDisconnected20Regular, PlugDisconnected48Regular, Prompt48Regular,
   Rename20Regular, Stop20Regular, Replay20Regular, TextBulletListSquare48Regular,
@@ -41,6 +41,7 @@ import { summarizeEvent, parseLogLine, type LogRow } from '../shared/log-rows.ts
 import { AttentionBadge } from '../components/AttentionBadge.tsx';
 import { DangerButton } from '../components/DangerButton.tsx';
 import { OpenInEditorButton } from '../components/OpenInEditorButton.tsx';
+import { WorktreeInfoButton } from '../components/WorktreeInfoButton.tsx';
 import { Page } from '../components/Page.tsx';
 import { AWAIT_LABEL } from '../lib/await-copy.ts';
 import { TerminalPanel } from '../components/TerminalPanel.tsx';
@@ -1122,6 +1123,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
               {runElapsed}
             </Text>
           )}
+          {manifest?.worktree && <WorktreeInfoButton worktree={manifest.worktree} />}
           <div style={{ display: 'flex', gap: 8, marginLeft: 'auto', flexShrink: 0 }}>
             {job?.ptyActive && effectiveJobId && (
               <Tooltip
@@ -1346,19 +1348,6 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
             )}
           </div>
         </div>
-        {manifest?.worktree && (
-          <div
-            data-testid="run-detail-worktree"
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              color: 'var(--colorNeutralForeground3)',
-            }}
-          >
-            <BranchFork16Regular aria-hidden />
-            <Text>branch {manifest.worktree.branch}</Text>
-            <Text style={{ fontFamily: 'monospace' }}>{manifest.worktree.path}</Text>
-          </div>
-        )}
     </>}>
 
       {/*

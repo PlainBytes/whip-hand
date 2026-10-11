@@ -140,12 +140,13 @@ describe('RunDetailPage', () => {
       useAppStore.setState({ appState: null });
     });
 
-    it('shows the branch and path line for a worktree run, and nothing for a plain run', async () => {
+    it('shows a worktree button for a worktree run, and nothing for a plain run', async () => {
       const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1');
       await respondGetRun(transport, { ...base, worktree: WORKTREE });
-      const line = await screen.findByTestId('run-detail-worktree');
-      expect(line).toHaveTextContent('branch whiphand/run-1');
-      expect(line).toHaveTextContent('.whiphand/worktrees/run-1');
+      const button = await screen.findByTestId('run-detail-worktree');
+      expect(button.tagName).toBe('BUTTON');
+      expect(screen.queryByText('whiphand/run-1')).not.toBeInTheDocument();
+      expect(screen.queryByText('.whiphand/worktrees/run-1')).not.toBeInTheDocument();
       cleanup();
 
       const plain = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1');
@@ -154,7 +155,52 @@ describe('RunDetailPage', () => {
       expect(screen.queryByTestId('run-detail-worktree')).not.toBeInTheDocument();
     });
 
-    it('shows a disabled open button without the capability, and still shows the line', async () => {
+    it('opens a popover with the branch and path on click', async () => {
+      const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1');
+      await respondGetRun(transport, { ...base, worktree: WORKTREE });
+      fireEvent.click(await screen.findByTestId('run-detail-worktree'));
+      expect(await screen.findByTestId('run-detail-worktree-branch')).toHaveTextContent('whiphand/run-1');
+      expect(screen.getByTestId('run-detail-worktree-path')).toHaveTextContent('.whiphand/worktrees/run-1');
+    });
+
+    describe('copying', () => {
+      const original = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+      afterEach(() => {
+        if (original) Object.defineProperty(navigator, 'clipboard', original);
+        else delete (navigator as { clipboard?: unknown }).clipboard;
+      });
+
+      async function openPopover(writeText: ReturnType<typeof vi.fn>) {
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+        const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1');
+        await respondGetRun(transport, { ...base, worktree: WORKTREE });
+        fireEvent.click(await screen.findByTestId('run-detail-worktree'));
+        await screen.findByTestId('run-detail-worktree-branch');
+      }
+
+      it('copies the branch and the path, acknowledging each', async () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        await openPopover(writeText);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Copy branch' }));
+        await waitFor(() => expect(writeText).toHaveBeenCalledWith('whiphand/run-1'));
+        expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Copy path' }));
+        await waitFor(() => expect(writeText).toHaveBeenCalledWith('.whiphand/worktrees/run-1'));
+      });
+
+      it('shows a failure, not "Copied", when the clipboard rejects', async () => {
+        const writeText = vi.fn().mockRejectedValue(new Error('denied'));
+        await openPopover(writeText);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Copy path' }));
+        expect(await screen.findByRole('button', { name: 'Copy failed' })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Copied' })).not.toBeInTheDocument();
+      });
+    });
+
+    it('shows a disabled open button without the capability', async () => {
       const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1');
       await respondGetRun(transport, { ...base, worktree: WORKTREE });
       await screen.findByTestId('run-detail-worktree');

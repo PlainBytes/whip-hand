@@ -73,9 +73,11 @@ async function respond(transport: MockTransport, method: string, result: unknown
 }
 
 /** A draft in `/ws` with its tab open and active, as New run leaves it. */
-function openDraft(init: { runAgain?: RunAgain; workdir?: string } = {}): string {
+function openDraft(init: { runAgain?: RunAgain; workdir?: string; continueIn?: string } = {}): string {
   const { createDraft, openDraftTab } = useAppStore.getState();
-  const draftId = createDraft({ workdir: init.workdir ?? '/ws', ...(init.runAgain ? { runAgain: init.runAgain } : {}) });
+  const draftId = createDraft({ workdir: init.workdir ?? '/ws', ...(init.runAgain ? { runAgain: init.runAgain } : {}),
+    ...(init.continueIn ? { continueIn: init.continueIn } : {}),
+  });
   openDraftTab(draftId);
   return draftId;
 }
@@ -955,6 +957,66 @@ describe('NewRunForm attachments', () => {
       expect(screen.queryByText(WARNING)).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole('switch', { name: /separate worktree/i }));
       expect(screen.getByText(WARNING)).toBeInTheDocument();
+    });
+
+    describe('continuing in an earlier run\'s worktree', () => {
+      const SOURCE = {
+        runId: 'r1', runDir: '/r1', status: 'succeeded', name: 'first',
+        worktree: { path: '.whiphand/worktrees/r1', branch: 'whiphand/r1' },
+      };
+
+      async function openContinuing(runs: unknown[] = [SOURCE]) {
+        const rendered = renderNewRunForm(openDraft({ continueIn: 'r1' }));
+        await respond(rendered.transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
+        await respond(rendered.transport, 'listRuns', runs);
+        await selectWorkflow(rendered.transport, 'ship-feature');
+        await screen.findByLabelText('Ticket ID', { exact: false });
+        fireEvent.change(screen.getByLabelText('Ticket ID', { exact: false }), { target: { value: 'T-1' } });
+        return rendered;
+      }
+
+      it('shows the source run\'s branch and path instead of the switch', async () => {
+        await openContinuing();
+        const field = await screen.findByTestId('continue-in-field');
+        expect(field).toHaveTextContent('Runs in the worktree of run first on branch whiphand/r1');
+        expect(field).toHaveTextContent('.whiphand/worktrees/r1');
+        expect(screen.queryByRole('switch', { name: /separate worktree/i })).not.toBeInTheDocument();
+      });
+
+      it('sends continueIn and no worktree key, and keeps it across a change of workflow', async () => {
+        const { transport } = await openContinuing();
+        await selectWorkflow(transport, 'ship-feature');
+        fireEvent.change(screen.getByLabelText('Ticket ID', { exact: false }), { target: { value: 'T-1' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+        const req = await startRunRequest(transport);
+        expect(req.params).toMatchObject({ continueIn: 'r1' });
+        expect(req.params).not.toHaveProperty('worktree');
+      });
+
+      it('goes back to the switch, and sends no continueIn, after "Use a new worktree instead"', async () => {
+        const { transport } = await openContinuing();
+        fireEvent.click(await screen.findByTestId('use-new-worktree-link'));
+        expect(screen.getByRole('switch', { name: /separate worktree/i })).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+        const req = await startRunRequest(transport);
+        expect(req.params).not.toHaveProperty('continueIn');
+        expect(req.params).toHaveProperty('worktree');
+      });
+
+      it('warns when the source run is still running, and not about the workspace', async () => {
+        await openContinuing([{ ...SOURCE, status: 'running' }]);
+        expect(await screen.findByTestId('continue-in-running-warning')).toBeInTheDocument();
+        expect(screen.queryByText(WARNING)).not.toBeInTheDocument();
+      });
+
+      it('shows core\'s refusal as the start error and keeps the draft', async () => {
+        const { transport, draftId } = await openContinuing();
+        fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+        const req = await startRunRequest(transport);
+        transport.emitLine({ id: req.id, error: { code: -32000, message: 'worktree is gone' } });
+        expect(await screen.findByText(/worktree is gone/)).toBeInTheDocument();
+        expect(useAppStore.getState().drafts[draftId]?.continueIn).toBe('r1');
+      });
     });
 
     it('does not warn when the only running run has its own worktree', async () => {

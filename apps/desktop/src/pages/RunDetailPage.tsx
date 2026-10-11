@@ -28,7 +28,7 @@ import {
   ToggleButton,
 } from '@fluentui/react-components';
 import {
-  ArrowDown20Regular, ArrowLeft20Regular, BranchFork16Regular, Copy20Regular, Delete20Regular, DocumentFolder48Regular,
+  ArrowDown20Regular, ArrowLeft20Regular, BranchFork16Regular, BranchFork20Regular, Copy20Regular, Delete20Regular, DocumentFolder48Regular,
   LockClosed20Regular, LockOpen20Regular,
   PlayCircle20Regular, PlugDisconnected20Regular, PlugDisconnected48Regular, Prompt48Regular,
   Rename20Regular, Stop20Regular, Replay20Regular, TextBulletListSquare48Regular,
@@ -81,6 +81,11 @@ export interface RunDetailPageProps {
    * ref so a global run doesn't preselect a same-named project workflow.
    */
   onRunAgain: (workflow: string, inputs: Record<string, string>, source?: Scope) => void;
+  /**
+   * "Continue in worktree": opens New Run to run in this run's worktree. The
+   * workflow is preselected like "Run again"; the person may change it.
+   */
+  onContinueInWorktree: (runId: string, workflow?: string, source?: Scope) => void;
   /**
    * The resume this page starts gets a job of its own, so the page has to be
    * re-pointed at it or it keeps rendering the attempt that failed. Same
@@ -287,7 +292,7 @@ function logRowKey(row: LogRow): string {
   return `${row.seq} ${row.ts} ${row.kind} ${row.text}`;
 }
 
-export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: RunDetailPageProps) {
+export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWorktree, onResumed }: RunDetailPageProps) {
   const client = useAgentClient();
   const workspacePath = useAppStore(state => state.workspacePath);
   const boundJob = useAppStore(state => {
@@ -1255,6 +1260,20 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
                 Run again
               </Button>
             )}
+            {!isRunning && manifest?.worktree && effectiveRunId && (
+              <Button
+                appearance="secondary"
+                icon={<BranchFork20Regular />}
+                data-testid="continue-in-worktree-button"
+                onClick={() => onContinueInWorktree(
+                  effectiveRunId,
+                  typeof manifest.workflow === 'string' ? manifest.workflow : undefined,
+                  manifest.workflowSource as Scope | undefined,
+                )}
+              >
+                Continue in worktree
+              </Button>
+            )}
             {manifest?.worktree && workspacePath && (
               <OpenInEditorButton
                 workdir={workspacePath}
@@ -1332,6 +1351,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
                 workdir={workspacePath}
                 runId={effectiveRunId}
                 name={runName}
+                {...(manifest?.worktree ? { worktreePath: manifest.worktree.path } : {})}
                 onDeleted={() => {
                   setDeleteOpen(false);
                   onBack();

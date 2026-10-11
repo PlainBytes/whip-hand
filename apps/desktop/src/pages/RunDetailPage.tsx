@@ -26,9 +26,10 @@ import {
   TabList,
   Text,
   ToggleButton,
+  Tooltip,
 } from '@fluentui/react-components';
 import {
-  ArrowDown20Regular, ArrowLeft20Regular, BranchFork16Regular, Copy20Regular, Delete20Regular, DocumentFolder48Regular,
+  ArrowDown20Regular, Copy20Regular, Delete20Regular, DocumentFolder48Regular,
   LockClosed20Regular, LockOpen20Regular,
   PlayCircle20Regular, PlugDisconnected20Regular, PlugDisconnected48Regular, Prompt48Regular,
   Rename20Regular, Stop20Regular, Replay20Regular, TextBulletListSquare48Regular,
@@ -37,10 +38,10 @@ import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore, executionKey, type JobState, type StepState } from '../state/store.ts';
 import type { RunDetail as RunDetailResult } from '../agent/client.ts';
 import { summarizeEvent, parseLogLine, type LogRow } from '../shared/log-rows.ts';
-import { StatusBadge } from '../components/StatusBadge.tsx';
 import { AttentionBadge } from '../components/AttentionBadge.tsx';
 import { DangerButton } from '../components/DangerButton.tsx';
 import { OpenInEditorButton } from '../components/OpenInEditorButton.tsx';
+import { WorktreeInfoButton } from '../components/WorktreeInfoButton.tsx';
 import { Page } from '../components/Page.tsx';
 import { AWAIT_LABEL } from '../lib/await-copy.ts';
 import { TerminalPanel } from '../components/TerminalPanel.tsx';
@@ -1083,73 +1084,75 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
     );
   }
 
+  const titleStyle = {
+    minWidth: 0, flexShrink: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  } as const;
+
   return (
     <Page body="fill" header={<>
         {/*
-          One row: title, status and actions all fit on a line, and this is the
-          screen where every pixel above the fold belongs to the run itself.
+          One row, kept on one line: title, elapsed time and actions. The run's
+          tab already shows its status and a back button has nothing to go back
+          to, so the left side carries only what the tab does not.
         */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <Button
-            appearance="secondary"
-            icon={<ArrowLeft20Regular />}
-            // Icon-only, so the label has to come from aria-label instead.
-            aria-label="Back to runs"
-            title="Back to runs"
-            onClick={onBack}
-          />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           {/*
-            The name leads and the id follows, dimmed: the name is what a
-            human recognizes, but the id is what `--resume` and `whiphand
-            rename-run` take, so it stays on screen rather than in a tooltip.
+            The name is what a human recognizes. The id is what `--resume` and
+            `whiphand rename-run` take, but it is secondary, so it sits in a
+            tooltip on the name. An unnamed run is titled by its id already.
           */}
-          <Text weight="semibold" size={500}>
-            {runName ?? `Run ${effectiveRunId ?? effectiveJobId}`}
-          </Text>
-          {runName !== undefined && effectiveRunId && (
-            <Text
-              data-testid="run-detail-id"
-              style={{ fontFamily: 'monospace', color: 'var(--colorNeutralForeground3)' }}
-            >
-              {effectiveRunId}
+          {runName !== undefined && effectiveRunId ? (
+            <Tooltip content={effectiveRunId} relationship="description">
+              <Text
+                data-testid="run-detail-name"
+                tabIndex={0}
+                weight="semibold"
+                size={500}
+                style={titleStyle}
+              >
+                {runName}
+              </Text>
+            </Tooltip>
+          ) : (
+            <Text data-testid="run-detail-name" weight="semibold" size={500} style={titleStyle}>
+              {runName ?? `Run ${effectiveRunId ?? effectiveJobId}`}
             </Text>
           )}
-          {/*
-            No awaiting badge here. What is waiting is a fact about one step,
-            so it belongs to that step's pill — which is always the focus pill,
-            and so survives a collapsed stepper. The dot on the Terminal tab
-            below points at where to go; a third copy in the header only
-            widened a row this screen wants kept to one line.
-          */}
-          {(job?.status ?? manifest?.status) && <StatusBadge status={job?.status ?? (manifest?.status as string)} />}
           {runElapsed !== null && (
-            <Text data-testid="run-elapsed" style={{ color: 'var(--colorNeutralForeground3)' }}>
+            <Text data-testid="run-elapsed" style={{ color: 'var(--colorNeutralForeground3)', flexShrink: 0 }}>
               {runElapsed}
             </Text>
           )}
-          <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+          {manifest?.worktree && <WorktreeInfoButton worktree={manifest.worktree} />}
+          <div style={{ display: 'flex', gap: 8, marginLeft: 'auto', flexShrink: 0 }}>
             {job?.ptyActive && effectiveJobId && (
-              <Button
-                appearance="secondary"
-                disabled={endingSession}
-                icon={endingSession ? <Spinner size="tiny" /> : <PlugDisconnected20Regular />}
-                title="Finish this interactive step and collect its artifact. The run continues."
-                onClick={() => void handleEndSession()}
+              <Tooltip
+                content={
+                  endingSession
+                    ? 'Ending…'
+                    : 'End session: finish this interactive step and collect its artifact. The run continues.'
+                }
+                relationship="description"
               >
-                {endingSession ? 'Ending…' : 'End session'}
-              </Button>
+                <Button
+                  appearance="secondary"
+                  aria-label={endingSession ? 'Ending…' : 'End session'}
+                  disabled={endingSession}
+                  icon={endingSession ? <Spinner size="tiny" /> : <PlugDisconnected20Regular />}
+                  onClick={() => void handleEndSession()}
+                />
+              </Tooltip>
             )}
             {isRunning && (
               <Dialog open={confirmOpen} onOpenChange={(_e, data) => setConfirmOpen(data.open)}>
                 <DialogTrigger disableButtonEnhancement>
-                  <Button
-                    appearance="secondary"
-                    disabled={cancelling}
-                    icon={cancelling ? <Spinner size="tiny" /> : <Stop20Regular />}
-                    title="Cancel this run"
-                  >
-                    {cancelling ? 'Cancelling…' : 'Cancel'}
-                  </Button>
+                  <Tooltip content={cancelling ? 'Cancelling…' : 'Cancel'} relationship="label">
+                    <Button
+                      appearance="secondary"
+                      disabled={cancelling}
+                      icon={cancelling ? <Spinner size="tiny" /> : <Stop20Regular />}
+                    />
+                  </Tooltip>
                 </DialogTrigger>
                 <DialogSurface>
                   <DialogBody>
@@ -1171,18 +1174,21 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
               <Menu positioning="below-end">
                 <MenuTrigger disableButtonEnhancement>
                   {(triggerProps: MenuButtonProps) => (
-                    <SplitButton
-                      appearance="primary"
-                      disabled={resuming}
-                      menuButton={{ ...triggerProps, 'aria-label': 'More resume options' }}
-                      primaryActionButton={{
-                        onClick: () => void handleResume(),
-                        title: 'Continue this run from its first unfinished step',
-                      }}
-                      icon={resuming ? <Spinner size="tiny" /> : <PlayCircle20Regular />}
+                    <Tooltip
+                      content={resuming ? 'Resuming…' : 'Resume'}
+                      relationship="description"
                     >
-                      {resuming ? 'Resuming…' : 'Resume'}
-                    </SplitButton>
+                      <SplitButton
+                        appearance="primary"
+                        disabled={resuming}
+                        menuButton={{ ...triggerProps, 'aria-label': 'More resume options' }}
+                        primaryActionButton={{
+                          onClick: () => void handleResume(),
+                          'aria-label': resuming ? 'Resuming…' : 'Resume',
+                        }}
+                        icon={resuming ? <Spinner size="tiny" /> : <PlayCircle20Regular />}
+                      />
+                    </Tooltip>
                   )}
                 </MenuTrigger>
                 <MenuPopover>
@@ -1243,23 +1249,24 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
               </Dialog>
             )}
             {!isRunning && typeof manifest?.workflow === 'string' && (
-              <Button
-                appearance="secondary"
-                icon={<Replay20Regular />}
-                onClick={() => onRunAgain(
-                  manifest.workflow as string,
-                  (manifest.inputs ?? {}) as Record<string, string>,
-                  manifest.workflowSource as Scope | undefined,
-                )}
-              >
-                Run again
-              </Button>
+              <Tooltip content="Run again" relationship="label">
+                <Button
+                  appearance="secondary"
+                  icon={<Replay20Regular />}
+                  onClick={() => onRunAgain(
+                    manifest.workflow as string,
+                    (manifest.inputs ?? {}) as Record<string, string>,
+                    manifest.workflowSource as Scope | undefined,
+                  )}
+                />
+              </Tooltip>
             )}
             {manifest?.worktree && workspacePath && (
               <OpenInEditorButton
                 workdir={workspacePath}
                 worktree={manifest.worktree}
                 size="medium"
+                iconOnly
                 onError={setOpenError}
               />
             )}
@@ -1275,9 +1282,9 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
                 }}
               >
                 <DialogTrigger disableButtonEnhancement>
-                  <Button appearance="secondary" icon={<Rename20Regular />}>
-                    Rename
-                  </Button>
+                  <Tooltip content="Rename" relationship="label">
+                    <Button appearance="secondary" icon={<Rename20Regular />} />
+                  </Tooltip>
                 </DialogTrigger>
                 <DialogSurface>
                   <DialogBody>
@@ -1312,20 +1319,20 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
               </Dialog>
             )}
             {effectiveRunId && (
-              <ToggleButton
-                appearance="secondary"
-                checked={!!manifest?.locked}
-                disabled={locking}
-                icon={locking ? <Spinner size="tiny" /> : manifest?.locked ? <LockClosed20Regular /> : <LockOpen20Regular />}
-                onClick={() => void handleToggleLock()}
-              >
-                {manifest?.locked ? 'Locked' : 'Lock'}
-              </ToggleButton>
+              <Tooltip content={manifest?.locked ? 'Locked' : 'Lock'} relationship="label">
+                <ToggleButton
+                  appearance="secondary"
+                  checked={!!manifest?.locked}
+                  disabled={locking}
+                  icon={locking ? <Spinner size="tiny" /> : manifest?.locked ? <LockClosed20Regular /> : <LockOpen20Regular />}
+                  onClick={() => void handleToggleLock()}
+                />
+              </Tooltip>
             )}
             {effectiveRunId && (
-              <DangerButton icon={<Delete20Regular />} onClick={() => setDeleteOpen(true)}>
-                Delete
-              </DangerButton>
+              <Tooltip content="Delete" relationship="label">
+                <DangerButton variant="subtle" icon={<Delete20Regular />} onClick={() => setDeleteOpen(true)} />
+              </Tooltip>
             )}
             {deleteOpen && workspacePath && effectiveRunId && (
               <DeleteRunDialog
@@ -1341,19 +1348,6 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
             )}
           </div>
         </div>
-        {manifest?.worktree && (
-          <div
-            data-testid="run-detail-worktree"
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              color: 'var(--colorNeutralForeground3)',
-            }}
-          >
-            <BranchFork16Regular aria-hidden />
-            <Text>branch {manifest.worktree.branch}</Text>
-            <Text style={{ fontFamily: 'monospace' }}>{manifest.worktree.path}</Text>
-          </div>
-        )}
     </>}>
 
       {/*

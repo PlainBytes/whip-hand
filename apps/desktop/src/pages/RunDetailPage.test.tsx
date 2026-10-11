@@ -118,14 +118,18 @@ describe('RunDetailPage', () => {
     useAppStore.setState({ workspacePath: null, jobs: {} });
   });
 
-  it('titles the page with the run name, keeping the id beside it', async () => {
+  it('titles the page with the run name only, showing the id in its tooltip and no status badge', async () => {
     const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1');
     await respondGetRun(transport, {
       runId: 'run-1', runDir: '/ws/.whiphand/runs/run-1', status: 'succeeded',
       name: 'OAuth support', artifacts: [],
     });
-    expect(await screen.findByText('OAuth support')).toBeInTheDocument();
-    expect(screen.getByTestId('run-detail-id')).toHaveTextContent('run-1');
+    const name = await screen.findByText('OAuth support');
+    expect(name).toHaveAttribute('data-testid', 'run-detail-name');
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+    expect(screen.queryByText(/succeeded/i)).not.toBeInTheDocument();
+    fireEvent.focus(name);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('run-1');
   });
 
   describe('worktree', () => {
@@ -136,12 +140,13 @@ describe('RunDetailPage', () => {
       useAppStore.setState({ appState: null });
     });
 
-    it('shows the branch and path line for a worktree run, and nothing for a plain run', async () => {
+    it('shows a worktree button for a worktree run, and nothing for a plain run', async () => {
       const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1');
       await respondGetRun(transport, { ...base, worktree: WORKTREE });
-      const line = await screen.findByTestId('run-detail-worktree');
-      expect(line).toHaveTextContent('branch whiphand/run-1');
-      expect(line).toHaveTextContent('.whiphand/worktrees/run-1');
+      const button = await screen.findByTestId('run-detail-worktree');
+      expect(button.tagName).toBe('BUTTON');
+      expect(screen.queryByText('whiphand/run-1')).not.toBeInTheDocument();
+      expect(screen.queryByText('.whiphand/worktrees/run-1')).not.toBeInTheDocument();
       cleanup();
 
       const plain = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1');
@@ -150,7 +155,52 @@ describe('RunDetailPage', () => {
       expect(screen.queryByTestId('run-detail-worktree')).not.toBeInTheDocument();
     });
 
-    it('shows a disabled open button without the capability, and still shows the line', async () => {
+    it('opens a popover with the branch and path on click', async () => {
+      const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1');
+      await respondGetRun(transport, { ...base, worktree: WORKTREE });
+      fireEvent.click(await screen.findByTestId('run-detail-worktree'));
+      expect(await screen.findByTestId('run-detail-worktree-branch')).toHaveTextContent('whiphand/run-1');
+      expect(screen.getByTestId('run-detail-worktree-path')).toHaveTextContent('.whiphand/worktrees/run-1');
+    });
+
+    describe('copying', () => {
+      const original = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+      afterEach(() => {
+        if (original) Object.defineProperty(navigator, 'clipboard', original);
+        else delete (navigator as { clipboard?: unknown }).clipboard;
+      });
+
+      async function openPopover(writeText: ReturnType<typeof vi.fn>) {
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+        const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1');
+        await respondGetRun(transport, { ...base, worktree: WORKTREE });
+        fireEvent.click(await screen.findByTestId('run-detail-worktree'));
+        await screen.findByTestId('run-detail-worktree-branch');
+      }
+
+      it('copies the branch and the path, acknowledging each', async () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        await openPopover(writeText);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Copy branch' }));
+        await waitFor(() => expect(writeText).toHaveBeenCalledWith('whiphand/run-1'));
+        expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Copy path' }));
+        await waitFor(() => expect(writeText).toHaveBeenCalledWith('.whiphand/worktrees/run-1'));
+      });
+
+      it('shows a failure, not "Copied", when the clipboard rejects', async () => {
+        const writeText = vi.fn().mockRejectedValue(new Error('denied'));
+        await openPopover(writeText);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Copy path' }));
+        expect(await screen.findByRole('button', { name: 'Copy failed' })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Copied' })).not.toBeInTheDocument();
+      });
+    });
+
+    it('shows a disabled open button without the capability', async () => {
       const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1');
       await respondGetRun(transport, { ...base, worktree: WORKTREE });
       await screen.findByTestId('run-detail-worktree');
@@ -192,8 +242,8 @@ describe('RunDetailPage', () => {
     await respondGetRun(transport, {
       runId: 'run-1', runDir: '/ws/.whiphand/runs/run-1', status: 'succeeded', artifacts: [],
     });
-    expect(await screen.findByText('Run run-1')).toBeInTheDocument();
-    expect(screen.queryByTestId('run-detail-id')).not.toBeInTheDocument();
+    expect(await screen.findByText('Run run-1')).toHaveAttribute('data-testid', 'run-detail-name');
+    expect(screen.queryByText('run-1')).not.toBeInTheDocument();
   });
 
   it('Rename sends renameRun and re-titles the page from the stored name', async () => {
@@ -410,25 +460,27 @@ describe('RunDetailPage', () => {
     expect(await screen.findByRole('button', { name: 'Locked' })).toBeInTheDocument();
   });
 
-  it('goes back from the icon-only back button, which keeps an accessible name', async () => {
-    // The button carries no visible text, so aria-label is the only thing
-    // naming it — for a screen reader and for this query alike.
-    const onBack = vi.fn();
-    const { transport } = renderRunDetail('job-back', onBack);
-    emitWhiphandEvent(transport, 'job-back', 'run-back', { type: 'step:start', stepId: 'plan', kind: 'agent', runner: 'claude', mode: 'headless' }, 't1');
-    await respondGetRun(transport, { runId: 'run-back', runDir: '/ws/.whiphand/runs/run-back', status: 'succeeded', artifacts: [] });
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Back to runs' }));
-    expect(onBack).toHaveBeenCalled();
-  });
-
-  it('styles the header Delete filled red', async () => {
+  it('styles the header Delete subtle red', async () => {
     const { transport } = renderRunDetail('job-red');
     emitWhiphandEvent(transport, 'job-red', 'run-red', { type: 'step:start', stepId: 'plan', kind: 'agent', runner: 'claude', mode: 'headless' }, 't1');
     await respondGetRun(transport, { runId: 'run-red', runDir: '/ws/.whiphand/runs/run-red', status: 'succeeded', artifacts: [] });
 
     const del = await screen.findByRole('button', { name: 'Delete' });
-    expect(hasInjectedStyle(del, 'background-color', 'var(--colorPaletteRedBackground3)')).toBe(true);
+    expect(hasInjectedStyle(del, 'color', 'var(--colorPaletteRedForeground1)')).toBe(true);
+    expect(hasInjectedStyle(del, 'background-color', 'var(--colorPaletteRedBackground3)')).toBe(false);
+  });
+
+  it('renders the header actions icon-only, with no visible label text', async () => {
+    const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1');
+    await respondGetRun(transport, {
+      runId: 'run-1', runDir: '/ws/.whiphand/runs/run-1', status: 'succeeded', artifacts: [],
+    });
+
+    for (const name of ['Rename', 'Delete']) {
+      const button = await screen.findByRole('button', { name });
+      expect(button).toHaveTextContent('');
+      expect(button).not.toHaveAttribute('title');
+    }
   });
 
   it('deletes the run via deleteRun and navigates back on success', async () => {

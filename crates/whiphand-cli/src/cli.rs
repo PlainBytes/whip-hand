@@ -117,14 +117,22 @@ pub fn build_cli() -> Command {
                         "worktree",
                         "run in a new git worktree on its own branch, even if the workflow does not ask for one",
                     )
-                    .conflicts_with_all(["no-worktree", "resume"]),
+                    .conflicts_with_all(["no-worktree", "resume", "in-worktree"]),
                 )
                 .arg(
                     flag(
                         "no-worktree",
                         "run in the workspace even if the workflow asks for a worktree",
                     )
-                    .conflicts_with("resume"),
+                    .conflicts_with_all(["resume", "in-worktree"]),
+                )
+                .arg(
+                    value(
+                        "in-worktree",
+                        "runId",
+                        "run in the worktree an earlier run made, on its branch, instead of the workspace or a new worktree",
+                    )
+                    .conflicts_with_all(["worktree", "no-worktree", "resume"]),
                 )
                 .arg(flag("dry-run", "resolve and print every step argv without spawning"))
                 .arg(variadic("input", "pair", "workflow input as key=value"))

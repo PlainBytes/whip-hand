@@ -58,6 +58,7 @@ async fn dispatch(matches: ArgMatches) -> CmdResult {
                 extra_iterations: m.get_one::<u64>("extra-iterations").copied(),
                 worktree: flag(m, "worktree"),
                 no_worktree: flag(m, "no-worktree"),
+                in_worktree: string(m, "in-worktree"),
             })
             .await
         }

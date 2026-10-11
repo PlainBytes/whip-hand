@@ -385,6 +385,7 @@ pub struct RunArgs {
     pub extra_iterations: Option<u64>,
     pub worktree: bool,
     pub no_worktree: bool,
+    pub in_worktree: Option<String>,
 }
 
 fn attachment_refusal(problems: &[String]) -> i32 {
@@ -405,6 +406,12 @@ fn usage_problem(a: &RunArgs) -> Option<&'static str> {
     if (a.worktree || a.no_worktree) && a.resume.is_some() {
         return Some(
             "--resume returns to the working tree the run started in; --worktree and --no-worktree only apply to a new run",
+        );
+    }
+    if a.in_worktree.is_some() && (a.worktree || a.no_worktree || a.resume.is_some()) {
+        return Some(
+            "--in-worktree runs in the worktree an earlier run made; it cannot be combined with \
+             --worktree, --no-worktree or --resume",
         );
     }
     if a.worktree && a.no_worktree {
@@ -644,7 +651,7 @@ pub async fn run(a: RunArgs) -> CmdResult {
             (_, true) => Some(false),
             _ => None,
         },
-        continue_in: None,
+        continue_in: a.in_worktree.clone(),
         degradations: opened.degradations.clone(),
     };
     let result = run_workflow(&opts, &tty).await;
@@ -657,6 +664,13 @@ pub async fn run(a: RunArgs) -> CmdResult {
         Ok(r) => Ok(if r.ok { 0 } else { 1 }),
         // A file that changed between the check above and the run's own.
         Err(RunError::Attachment(problems)) => Ok(attachment_refusal(&problems)),
+        // The engine refuses a missing, gone or busy worktree before it makes a run.
+        Err(RunError::Workflow(problems)) if a.in_worktree.is_some() => {
+            for p in &problems {
+                err_line(&format!("✘ {p}"));
+            }
+            Ok(1)
+        }
         Err(RunError::Workflow(problems)) => Err(WorkflowError::new(problems).into()),
         Err(RunError::Failed(message)) => Err(Thrown::error(message)),
     }

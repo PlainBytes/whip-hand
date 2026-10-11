@@ -1297,3 +1297,91 @@ fn pruning_keeps_a_dirty_worktree_run_and_says_so() {
         "{reason}"
     );
 }
+
+// ------------------------------------------------------------------ run: --in-worktree
+
+fn run_dirs(e: &Env) -> Vec<PathBuf> {
+    let mut runs: Vec<PathBuf> = std::fs::read_dir(e.runs_dir())
+        .map(|dir| dir.flatten().map(|d| d.path()).collect())
+        .unwrap_or_default();
+    runs.sort();
+    runs
+}
+
+#[test]
+fn in_worktree_runs_in_the_earlier_runs_worktree_and_says_so() {
+    let e = Env::new();
+    git_workspace(&e);
+    worktree_workflow(&e, "worktree: true\n", RECORD_BRANCH_AND_PWD);
+    let out = e.run(&["run", "wt"]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    let first = run_id(&e.only_run());
+
+    let out = e.run(&["run", "wt", "--in-worktree", &first]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    let runs = run_dirs(&e);
+    assert_eq!(runs.len(), 2);
+    let second = runs.iter().find(|r| run_id(r) != first).unwrap();
+    assert_eq!(recorded(second, "branch.txt"), format!("whiphand/{first}"));
+    assert_eq!(
+        canonical(Path::new(&recorded(second, "pwd.txt"))),
+        canonical(&e.ws().join(".whiphand/worktrees").join(&first))
+    );
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(second.join("run.json")).unwrap()).unwrap();
+    assert_eq!(manifest["worktree"]["continuedFrom"], first.as_str());
+    assert!(
+        out.stdout().contains(&format!(
+            "in worktree of run {first}, branch whiphand/{first}"
+        )),
+        "{}",
+        out.stdout()
+    );
+    assert!(!out.stdout().contains("🌿 worktree"), "{}", out.stdout());
+}
+
+#[test]
+fn in_worktree_conflicts_with_the_other_worktree_flags_and_makes_no_run() {
+    let e = Env::new();
+    git_workspace(&e);
+    worktree_workflow(&e, "", RECORD_BRANCH_AND_PWD);
+    for other in [
+        &["--worktree"][..],
+        &["--no-worktree"],
+        &["--resume", RUN_ID],
+    ] {
+        let mut args = vec!["run", "wt", "--in-worktree", "x"];
+        args.extend_from_slice(other);
+        let out = e.run(&args);
+        assert_ne!(out.code(), 0, "{args:?}");
+        assert!(out.stderr().contains("--in-worktree"), "{}", out.stderr());
+    }
+    assert!(run_dirs(&e).is_empty());
+}
+
+#[test]
+fn in_worktree_refusal_is_a_cross_line_and_creates_no_run() {
+    let e = Env::new();
+    git_workspace(&e);
+    worktree_workflow(&e, "", RECORD_BRANCH_AND_PWD);
+    let out = e.run(&["run", "wt", "--no-worktree"]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    let plain = run_id(&e.only_run());
+
+    let out = e.run(&["run", "wt", "--in-worktree", &plain]);
+    assert_eq!(out.code(), 1, "{}", out.stdout());
+    assert!(
+        out.stderr()
+            .contains(&format!("✘ run '{plain}' has no worktree")),
+        "{}",
+        out.stderr()
+    );
+    let out = e.run(&["run", "wt", "--in-worktree", "no-such-run"]);
+    assert_eq!(out.code(), 1);
+    assert!(
+        out.stderr().contains("✘ no run 'no-such-run'"),
+        "{}",
+        out.stderr()
+    );
+    assert_eq!(run_dirs(&e).len(), 1);
+}

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { RunsPage } from './RunsPage.tsx';
+import { DOUBLE_CLICK_MS } from '../lib/use-click-or-double-click.ts';
 import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
 import { AgentClientProvider } from '../agent/agent-context.tsx';
@@ -251,7 +252,7 @@ describe('RunsPage', () => {
     expect(await screen.findByText('r2')).toBeInTheDocument();
   });
 
-  it('calls onSelectRun with the runId when a row is clicked', async () => {
+  it('calls onSelectRun un-pinned with the runId when a row is clicked', async () => {
     const { transport, onSelectRun } = renderRunsPage();
 
     await respondListRuns(transport, [
@@ -259,7 +260,25 @@ describe('RunsPage', () => {
     ]);
 
     fireEvent.click(await screen.findByText('r1'));
-    expect(onSelectRun).toHaveBeenCalledWith('r1');
+    // Held back briefly, so a double click can claim it.
+    await waitFor(() => expect(onSelectRun).toHaveBeenCalledWith('r1', false));
+    expect(onSelectRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens a pinned tab, and only that, when a row is double-clicked', async () => {
+    const { transport, onSelectRun } = renderRunsPage();
+
+    await respondListRuns(transport, [
+      { runId: 'r1', runDir: '/ws/.whiphand/runs/r1', status: 'succeeded', workflow: 'demo' },
+    ]);
+
+    const row = await screen.findByText('r1');
+    fireEvent.click(row);
+    fireEvent.click(row);
+    fireEvent.doubleClick(row);
+    expect(onSelectRun).toHaveBeenCalledExactlyOnceWith('r1', true);
+    await new Promise(resolve => setTimeout(resolve, DOUBLE_CLICK_MS + 50));
+    expect(onSelectRun).toHaveBeenCalledTimes(1);
   });
 
   it('shows a lock glyph for a locked run', async () => {

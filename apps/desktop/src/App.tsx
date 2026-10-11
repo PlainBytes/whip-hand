@@ -15,9 +15,10 @@ import { NotificationBridge } from './components/NotificationBridge.tsx';
 import { UpdateBanner } from './components/UpdateBanner.tsx';
 import { AgentDownBanner } from './components/AgentDownBanner.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
-import { PageContent, type RunDetailTarget } from './components/PageContent.tsx';
+import { PageContent } from './components/PageContent.tsx';
 import { UnsavedChangesDialog } from './components/UnsavedChangesDialog.tsx';
 import { WorkspaceQuickSwitch } from './components/WorkspaceQuickSwitch.tsx';
+import type { RunTabTarget } from './lib/run-tabs.ts';
 import type { PageId } from './nav.ts';
 
 /** The one window-level shortcut: everything else hangs off the control it acts on. */
@@ -30,13 +31,12 @@ export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
   const setPage = useAppStore(state => state.setPage);
   const filesDirty = useAppStore(state => state.filesDirty);
   const setFilesDirty = useAppStore(state => state.setFilesDirty);
-  const [runDetailTarget, setRunDetailTarget] = useState<RunDetailTarget | null>(null);
   /**
    * Navigation the unsaved-edits guard is holding until the user decides.
-   * Carries a run-detail target too, so a sidebar "Ongoing runs" click that
+   * Carries a run tab target too, so a sidebar "Ongoing runs" click that
    * gets deferred still lands on the right run once the human answers.
    */
-  const [pendingPage, setPendingPage] = useState<{ id: PageId; runDetailTarget?: RunDetailTarget } | null>(null);
+  const [pendingPage, setPendingPage] = useState<{ id: PageId; runTarget?: RunTabTarget } | null>(null);
   const [quickSwitchOpen, setQuickSwitchOpen] = useState(false);
   const workspacePath = useAppStore(state => state.workspacePath);
   const workspaceIdentityKey = useAppStore(state => state.workspaceIdentityKey);
@@ -46,16 +46,12 @@ export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
   // Replays runs that started before this client connected — see use-job-attach.ts.
   useJobAttach(client);
 
-  // runDetailTarget is local state, so no store-level clearing reaches it. A
-  // workspace switch doesn't go through goToPage, and leaving it set would
-  // have RunDetailPage query the new workspace for the old workspace's run.
-  useEffect(() => setRunDetailTarget(null), [workspacePath]);
-
   useGlobalShortcut(QUICK_SWITCH, useCallback(() => setQuickSwitchOpen(true), []));
   useWindowTitle();
 
-  function goToPage(next: PageId, target: RunDetailTarget | null = null): void {
-    setRunDetailTarget(target);
+  function goToPage(next: PageId, runTarget?: RunTabTarget): void {
+    // A preview tab, like any other single-click open.
+    if (runTarget !== undefined) useAppStore.getState().openRunTab(runTarget, { pin: false });
     setPage(next);
     void client.request('setUiState', { lastPage: next }).catch(() => {});
   }
@@ -86,16 +82,28 @@ export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
    *     when guard 1 didn't, since nothing switched.
    */
   async function openRun(job: JobState): Promise<void> {
-    const target: RunDetailTarget = { jobId: job.jobId, runId: job.runId };
+    const target: RunTabTarget = {
+      workdir: job.workdir ?? workspacePath ?? '',
+      identityKey: job.identityKey ?? (job.workdir === undefined ? workspaceIdentityKey ?? undefined : undefined),
+      jobId: job.jobId,
+      runId: job.runId,
+    };
     const here = workspacePath === null ? null : { path: workspacePath, identityKey: workspaceIdentityKey ?? undefined };
     if (job.workdir !== undefined && (here === null || !jobInWorkspace(job, here))) {
       const opened = await openWorkspace(client, job.workdir).catch(() => false);
       if (!opened) return;
-      goToPage('runs', target);
+      // The agent may have canonicalised the path; the tab must match the
+      // workspace that is now open, or it would read as another workspace.
+      const now = useAppStore.getState();
+      goToPage('runs', {
+        ...target,
+        workdir: now.workspacePath ?? target.workdir,
+        identityKey: now.workspaceIdentityKey ?? target.identityKey,
+      });
       return;
     }
     if (page === 'files' && filesDirty) {
-      setPendingPage({ id: 'runs', runDetailTarget: target });
+      setPendingPage({ id: 'runs', runTarget: target });
       return;
     }
     goToPage('runs', target);
@@ -116,13 +124,7 @@ export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
           <main
             style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
           >
-            <PageContent
-              page={page}
-              runDetailTarget={runDetailTarget}
-              onOpenRunDetail={target => { setPage('runs'); setRunDetailTarget(target); }}
-              onCloseRunDetail={() => setRunDetailTarget(null)}
-              onNavigate={goToPage}
-            />
+            <PageContent page={page} onNavigate={next => goToPage(next)} />
           </main>
         </div>
       </div>
@@ -154,7 +156,7 @@ export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
             const next = pendingPage;
             setPendingPage(null);
             setFilesDirty(false);
-            goToPage(next.id, next.runDetailTarget ?? null);
+            goToPage(next.id, next.runTarget);
           }}
           onKeepEditing={() => setPendingPage(null)}
         />

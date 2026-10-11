@@ -27,10 +27,12 @@ import { DeleteRunDialog } from '../components/DeleteRunDialog.tsx';
 import { errorMessage } from '../lib/error-message.ts';
 import { DangerButton } from '../components/DangerButton.tsx';
 import { OpenInEditorButton } from '../components/OpenInEditorButton.tsx';
+import { useClickOrDoubleClick } from '../lib/use-click-or-double-click.ts';
 import { Page } from '../components/Page.tsx';
 
 export interface RunsPageProps {
-  onSelectRun: (runId: string) => void;
+  /** A single click opens a preview tab; a double click (`pin`) a pinned one. */
+  onSelectRun: (runId: string, pin: boolean) => void;
   onStarted: (jobId: string) => void;
 }
 
@@ -58,6 +60,7 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
   const [deleting, setDeleting] = useState<RunSummary | null>(null);
   const [lockingId, setLockingId] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
+  const rowClick = useClickOrDoubleClick<string>(onSelectRun);
 
   // Hoisted out of the polling effect so row actions can trigger an immediate
   // re-poll on success, rather than mutating local state and risking drift
@@ -210,7 +213,8 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
             {({ item, rowId }) => (
               <DataGridRow<RunSummary>
                 key={rowId}
-                onClick={() => onSelectRun(item.runId)}
+                onClick={() => rowClick.click(item.runId)}
+                onDoubleClick={() => rowClick.doubleClick(item.runId)}
                 style={{ cursor: 'pointer' }}
               >
                 {({ renderCell }) => <DataGridCell>{renderCell(item)}</DataGridCell>}

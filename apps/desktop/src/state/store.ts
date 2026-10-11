@@ -30,6 +30,9 @@ import type { AppState as AppStateData } from '../shared/protocol.gen.ts';
 import type { LogRow } from '../shared/log-rows.ts';
 import { mergeUsage, progressActionText, summarizeEvent } from '../shared/log-rows.ts';
 import { preselect, type PendingAttachment, type RunAgain } from '../lib/new-run-draft.ts';
+import {
+  activateTab, adoptRunIds, closeTab, openTab, pinTab, retargetTab, type RunTab, type RunTabTarget,
+} from '../lib/run-tabs.ts';
 
 /**
  * Workflows, the runs list, per-job live state, doctor results, config, the
@@ -964,6 +967,19 @@ export interface AppState {
   pendingRunAgain: { workflow: string; inputs: Record<string, string> } | null;
   setPendingRunAgain: (v: { workflow: string; inputs: Record<string, string> } | null) => void;
 
+  /**
+   * Run tabs on the Runs page, in memory only. `activeTabKey` null is the
+   * fixed Runs list tab. The rules live in lib/run-tabs.ts.
+   */
+  tabs: RunTab[];
+  activeTabKey: string | null;
+  openRunTab: (target: RunTabTarget, opts: { pin: boolean }) => void;
+  pinTab: (key: string) => void;
+  closeTab: (key: string) => void;
+  activateTab: (key: string | null) => void;
+  /** Re-points a tab at another job or run — a job learning its runId, or a resume. */
+  retargetTab: (key: string, target: RunTabTarget) => void;
+
   /** New runs being filled in, by id. Not persisted. */
   drafts: Record<string, RunDraft>;
   /** Preselects from `init.runAgain`, then the workspace's memory; no workflow while the list is not loaded. */
@@ -1130,6 +1146,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       workflows: [],
       config: null,
       pendingRunAgain: null,
+      // The tabs stay open across workspaces, but the list of the workspace
+      // just opened is what should show.
+      activeTabKey: null,
     };
   }),
 
@@ -1460,6 +1479,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { drafts: rest };
     });
   },
+
+  tabs: [],
+  activeTabKey: null,
+  openRunTab: (target, opts) => set(state => {
+    const adopted = adoptRunIds({ tabs: state.tabs, activeTabKey: state.activeTabKey }, state.jobs);
+    return openTab(adopted, target, opts);
+  }),
+  pinTab: key => set(state => pinTab({ tabs: state.tabs, activeTabKey: state.activeTabKey }, key)),
+  closeTab: key => set(state => closeTab({ tabs: state.tabs, activeTabKey: state.activeTabKey }, key)),
+  activateTab: key => set(state => activateTab({ tabs: state.tabs, activeTabKey: state.activeTabKey }, key)),
+  retargetTab: (key, target) => set(state => retargetTab({ tabs: state.tabs, activeTabKey: state.activeTabKey }, key, target)),
 
   filesDirty: false,
   setFilesDirty: filesDirty => set({ filesDirty }),

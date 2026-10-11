@@ -9,21 +9,13 @@ import { DoctorPage } from '../pages/DoctorPage.tsx';
 import { WorkspaceSettingsPage } from '../pages/WorkspaceSettingsPage.tsx';
 import { PreferencesPage } from '../pages/PreferencesPage.tsx';
 import { ActivityPage } from '../pages/ActivityPage.tsx';
+import { RunTabStrip } from './RunTabStrip.tsx';
 import { RunDetailPage } from '../pages/RunDetailPage.tsx';
 import { WelcomePage } from '../pages/WelcomePage.tsx';
 import { Page } from './Page.tsx';
 
-/** RunDetail is reached from a Runs row or a just-started run, not a tab of its own. */
-export interface RunDetailTarget {
-  jobId?: string;
-  runId?: string;
-}
-
 export interface PageContentProps {
   page: PageId;
-  runDetailTarget: RunDetailTarget | null;
-  onOpenRunDetail: (target: RunDetailTarget) => void;
-  onCloseRunDetail: () => void;
   onNavigate: (next: PageId) => void;
 }
 
@@ -47,46 +39,64 @@ function LocalFilesUnavailable() {
   );
 }
 
-export function PageContent({
-  page, runDetailTarget, onOpenRunDetail, onCloseRunDetail, onNavigate,
-}: PageContentProps) {
+export function PageContent({ page, onNavigate }: PageContentProps) {
   const workspacePath = useAppStore(state => state.workspacePath);
   const restoreDone = useAppStore(state => state.restoreDone);
+  const tabs = useAppStore(state => state.tabs);
+  const activeTabKey = useAppStore(state => state.activeTabKey);
   const { localFiles } = useCapabilities();
 
   // Which pages survive without a workspace is nav.ts's `requiresWorkspace`
   // column, not a condition spelled out here.
   if (requiresWorkspace(page) && !workspacePath) return restoreDone ? <WelcomePage /> : null;
 
-  if (runDetailTarget) {
+  /**
+   * A run in the open workspace: the Runs list and Activity both open runs
+   * this way. Read from the store, not the render's closure — Activity calls
+   * this right after switching workspace, before this component re-renders.
+   */
+  function openRun(target: { runId?: string; jobId?: string }, pin: boolean): void {
+    const { workspacePath: workdir, workspaceIdentityKey } = useAppStore.getState();
+    if (!workdir) return;
+    useAppStore.getState().openRunTab({ workdir, identityKey: workspaceIdentityKey ?? undefined, ...target }, { pin });
+    onNavigate('runs');
+  }
+
+  if (page === 'runs') {
+    const active = tabs.find(tab => tab.key === activeTabKey);
     return (
-      <RunDetailPage
-        jobId={runDetailTarget.jobId}
-        runId={runDetailTarget.runId}
-        onBack={onCloseRunDetail}
-        // A resume runs under a job of its own; re-point the page at it, which
-        // is exactly what opening a run detail target already means.
-        onResumed={onOpenRunDetail}
-        onRunAgain={(workflow, inputs, source) => {
-          // Same scoping as the WorkflowsPage `onRunWorkflow` callback below:
-          // a global run must not preselect a same-named project workflow.
-          const ref = source === 'global' ? `global:${workflow}` : workflow;
-          useAppStore.getState().setPendingRunAgain({ workflow: ref, inputs });
-          onCloseRunDetail();
-          onNavigate('runs');
-        }}
-      />
+      <>
+        <RunTabStrip />
+        {active ? (
+          <RunDetailPage
+            // A resume's new job is a fresh page, as the re-pointed page was before tabs.
+            key={active.jobId ?? active.key}
+            jobId={active.jobId}
+            runId={active.runId}
+            onBack={() => useAppStore.getState().activateTab(null)}
+            // A resume runs under a job of its own; re-point this tab at it
+            // rather than opening another.
+            onResumed={target => useAppStore.getState().retargetTab(active.key, { ...active, ...target })}
+            onRunAgain={(workflow, inputs, source) => {
+              // Same scoping as the WorkflowsPage `onRunWorkflow` callback below:
+              // a global run must not preselect a same-named project workflow.
+              const ref = source === 'global' ? `global:${workflow}` : workflow;
+              useAppStore.getState().setPendingRunAgain({ workflow: ref, inputs });
+              useAppStore.getState().activateTab(null);
+            }}
+          />
+        ) : (
+          <RunsPage
+            onSelectRun={(runId, pin) => openRun({ runId }, pin)}
+            onStarted={jobId => openRun({ jobId }, true)}
+          />
+        )}
+      </>
     );
   }
 
   return (
     <>
-      {page === 'runs' && (
-        <RunsPage
-          onSelectRun={runId => onOpenRunDetail({ runId })}
-          onStarted={jobId => onOpenRunDetail({ jobId })}
-        />
-      )}
       {page === 'workflows' && (
         <WorkflowsPage
           onRunWorkflow={(workflow, source) => {
@@ -105,7 +115,7 @@ export function PageContent({
       )}
       {page === 'files' && (localFiles ? <FilesPage /> : <LocalFilesUnavailable />)}
       {page === 'workspace-settings' && <WorkspaceSettingsPage />}
-      {page === 'activity' && <ActivityPage onSelectRun={runId => onOpenRunDetail({ runId })} />}
+      {page === 'activity' && <ActivityPage onSelectRun={runId => openRun({ runId }, false)} />}
       {page === 'doctor' && <DoctorPage />}
       {page === 'preferences' && <PreferencesPage />}
     </>

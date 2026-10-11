@@ -30,6 +30,8 @@ function resetStore(): void {
     pendingRunAgain: null,
     filesDirty: false,
     drafts: {},
+    tabs: [],
+    activeTabKey: null,
   });
 }
 
@@ -1293,5 +1295,45 @@ describe('run drafts', () => {
     } finally {
       URL.revokeObjectURL = original;
     }
+  });
+});
+
+describe('run tabs', () => {
+  beforeEach(() => resetStore());
+
+  it('opens, pins and closes through the actions', () => {
+    const { openRunTab, pinTab, closeTab } = useAppStore.getState();
+    openRunTab({ workdir: '/ws/a', runId: 'r1' }, { pin: false });
+    expect(useAppStore.getState().tabs).toMatchObject([{ key: 'r1', preview: true }]);
+    pinTab('r1');
+    expect(useAppStore.getState().tabs[0]!.preview).toBe(false);
+    closeTab('r1');
+    expect(useAppStore.getState()).toMatchObject({ tabs: [], activeTabKey: null });
+  });
+
+  it('finds a job-only tab by runId once its job has learned one', () => {
+    const { openRunTab } = useAppStore.getState();
+    openRunTab({ workdir: '/ws/a', jobId: 'j1' }, { pin: true });
+    useAppStore.setState({ jobs: { j1: { ...baseJob('j1'), runId: 'r1' } } });
+    openRunTab({ workdir: '/ws/a', runId: 'r1' }, { pin: false });
+    expect(useAppStore.getState().tabs).toHaveLength(1);
+    expect(useAppStore.getState().activeTabKey).toBe('r1');
+  });
+
+  it('shows the Runs tab on a real workspace change and keeps every tab', () => {
+    const { openRunTab, setWorkspacePath } = useAppStore.getState();
+    setWorkspacePath('/ws/a');
+    openRunTab({ workdir: '/ws/b', runId: 'r1' }, { pin: true });
+    setWorkspacePath('/ws/b');
+    expect(useAppStore.getState().activeTabKey).toBeNull();
+    expect(useAppStore.getState().tabs).toHaveLength(1);
+  });
+
+  it('keeps the active tab when the same workspace is re-adopted', () => {
+    const { openRunTab, setWorkspacePath } = useAppStore.getState();
+    setWorkspacePath('/ws/a');
+    openRunTab({ workdir: '/ws/a', runId: 'r1' }, { pin: true });
+    setWorkspacePath('/ws/a');
+    expect(useAppStore.getState().activeTabKey).toBe('r1');
   });
 });

@@ -107,6 +107,18 @@ describe('RunsPage', () => {
     expect(hasInjectedStyle(confirm, 'background-color', 'var(--colorPaletteRedBackground3)')).toBe(true);
   });
 
+  it('renders lock and delete as icon-only buttons, and lock has no pressed state', async () => {
+    const { transport } = renderRunsPage();
+    await respondListRuns(transport, [
+      { runId: 'r1', runDir: '/ws/.whiphand/runs/r1', status: 'succeeded', workflow: 'demo', locked: true },
+    ]);
+
+    const lock = await screen.findByRole('button', { name: 'Unlock r1' });
+    const del = screen.getByRole('button', { name: 'Delete r1' });
+    for (const button of [lock, del]) expect(button.textContent).toBe('');
+    expect(lock).not.toHaveAttribute('aria-pressed');
+  });
+
   it('shows a run blocked on the human as waiting, not merely running', async () => {
     // The run row comes off disk, where it just says 'running'; only the live
     // job knows anyone is waiting, so the two are bridged by runId.

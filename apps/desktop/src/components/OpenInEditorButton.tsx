@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Spinner, Text } from '@fluentui/react-components';
+import { Button, Spinner, Text, Tooltip } from '@fluentui/react-components';
 import { Open16Regular, Open20Regular } from '@fluentui/react-icons';
 import { useCapabilities } from '../capabilities.tsx';
 import { useAppStore } from '../state/store.ts';
@@ -55,17 +55,27 @@ export function OpenInEditorButton({ workdir, worktree, size, iconOnly, onError 
 
   return (
     <>
-      <Button
-        appearance={iconOnly ? 'subtle' : 'secondary'}
-        size={size}
-        icon={icon}
-        disabled={pending}
-        aria-label={label}
-        title={label}
-        onClick={event => void handleClick(event)}
-      >
-        {iconOnly ? undefined : label}
-      </Button>
+      {iconOnly ? (
+        <Tooltip content={label} relationship="label">
+          <Button
+            appearance="secondary"
+            size={size}
+            icon={icon}
+            disabled={pending}
+            onClick={event => void handleClick(event)}
+          />
+        </Tooltip>
+      ) : (
+        <Button
+          appearance="secondary"
+          size={size}
+          icon={icon}
+          disabled={pending}
+          onClick={event => void handleClick(event)}
+        >
+          {label}
+        </Button>
+      )}
       {localError !== null && <Text role="alert" onClick={e => e.stopPropagation()}>{localError}</Text>}
     </>
   );

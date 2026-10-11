@@ -13,7 +13,7 @@ import {
   Spinner,
   Switch,
   Text,
-  ToggleButton,
+  Tooltip,
   type TableColumnDefinition,
 } from '@fluentui/react-components';
 import { Add20Regular, Delete16Regular, LockClosed16Regular, LockOpen16Regular } from '@fluentui/react-icons';
@@ -113,28 +113,27 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
             onError={setOpenError}
           />
         )}
-        <ToggleButton
-          size="small"
-          checked={!!run.locked}
-          disabled={lockingId === run.runId}
-          icon={
-            lockingId === run.runId ? <Spinner size="tiny" />
-              : run.locked ? <LockClosed16Regular /> : <LockOpen16Regular />
-          }
-          aria-label={run.locked ? `Unlock ${runLabel(run)}` : `Lock ${runLabel(run)}`}
-          onClick={event => { event.stopPropagation(); void handleToggleLock(run); }}
-        >
-          {run.locked ? 'Locked' : 'Lock'}
-        </ToggleButton>
-        <DangerButton
-          variant="subtle"
-          size="small"
-          icon={<Delete16Regular />}
-          aria-label={`Delete ${runLabel(run)}`}
-          onClick={event => { event.stopPropagation(); setDeleting(run); }}
-        >
-          Delete
-        </DangerButton>
+        <Tooltip content={run.locked ? `Unlock ${runLabel(run)}` : `Lock ${runLabel(run)}`} relationship="label">
+          <Button
+            size="small"
+            appearance="secondary"
+            disabled={lockingId === run.runId}
+            icon={
+              lockingId === run.runId ? <Spinner size="tiny" />
+                : run.locked ? <LockClosed16Regular /> : <LockOpen16Regular />
+            }
+            onClick={event => { event.stopPropagation(); void handleToggleLock(run); }}
+          />
+        </Tooltip>
+        <Tooltip content={`Delete ${runLabel(run)}`} relationship="label">
+          <DangerButton
+            variant="subtle"
+            appearance="secondary"
+            size="small"
+            icon={<Delete16Regular />}
+            onClick={event => { event.stopPropagation(); setDeleting(run); }}
+          />
+        </Tooltip>
       </div>
     ),
     // handleToggleLock isn't memoized (it closes over poll, which already

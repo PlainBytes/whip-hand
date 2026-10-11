@@ -52,6 +52,14 @@ describe('OpenInEditorButton', () => {
     ));
   });
 
+  it('renders icon-only with no visible text and no native title', () => {
+    renderButton({ host: 'desktop', localFiles: true, openInEditor: vi.fn() }, { iconOnly: true });
+
+    const button = screen.getByRole('button', { name: 'Open in Visual Studio Code' });
+    expect(button.textContent).toBe('');
+    expect(button).not.toHaveAttribute('title');
+  });
+
   it('does not trigger the enclosing row click', async () => {
     const openInEditor = vi.fn().mockResolvedValue(undefined);
     const { onRowClick } = renderButton({ host: 'desktop', localFiles: true, openInEditor }, { iconOnly: true });

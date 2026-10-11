@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { ResizablePane } from './ResizablePane.tsx';
 
 const KEY = 'test.paneWidth';
@@ -234,6 +234,27 @@ describe('ResizablePane', () => {
         stubPaneHeight();
         renderHeight({ defaultSize: DEFAULT });
         expect(separator()).toHaveAttribute('aria-valuenow', '300');
+      });
+
+      it('updates aria-valuenow when the pane alone resizes', () => {
+        const observed: Element[] = [];
+        let notify = () => {};
+        vi.stubGlobal('ResizeObserver', class {
+          constructor(callback: () => void) { notify = callback; }
+          observe(target: Element) { observed.push(target); }
+          disconnect() {}
+        });
+        stubPaneHeight();
+        renderHeight({ defaultSize: DEFAULT, fit: true });
+        expect(observed).toContain(paneEl());
+        vi.restoreAllMocks();
+        vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+          const height = this === paneEl() ? 360 : 1000;
+          return { width: 0, height, top: 0, left: 0, right: 0, bottom: height, x: 0, y: 0, toJSON: () => ({}) };
+        });
+        act(() => notify());
+        expect(separator()).toHaveAttribute('aria-valuenow', '360');
+        vi.unstubAllGlobals();
       });
 
       it('starts a drag from the measured size', () => {

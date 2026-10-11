@@ -128,10 +128,13 @@ export function ResizablePane({
 
   useEffect(() => {
     measure();
-    const parent = paneRef.current?.parentElement;
-    if (!parent || typeof ResizeObserver === 'undefined') return;
+    const pane = paneRef.current;
+    const parent = pane?.parentElement;
+    if (!pane || !parent || typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(measure);
     observer.observe(parent);
+    // With `fit` or a string default, content changes resize the pane alone.
+    observer.observe(pane);
     return () => observer.disconnect();
   }, [measure]);
 

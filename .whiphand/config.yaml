@@ -1,10 +1,2 @@
-defaults:
-  runner: claude
-on_findings: report
-loop:
-  max_iterations: 3
-artifacts_dir: .whiphand/runs
 runs:
-  max_retained: null
-  auto_name: false
-  max_attachment_mb: 25
+  max_retained: 10

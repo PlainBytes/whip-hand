@@ -35,7 +35,7 @@ use whiphand_core::types::Scope;
 use whiphand_core::workspace::{list_workflows, resolve_workflow_path};
 use whiphand_core::yaml_emit::stringify_yaml;
 
-use crate::host::{Agent, RequestCtx};
+use crate::host::{Agent, ClientKind, RequestCtx};
 
 type R = Result<Value, String>;
 
@@ -71,6 +71,10 @@ const METHODS: &[&str] = &[
     "touchRecentWorkspace",
     "setWorkspacePinned",
     "setUiState",
+    "saveRunDraft",
+    "deleteRunDraft",
+    "setRunTabs",
+    "stashDraftAttachment",
     "listRecentRuns",
     "startRun",
     "resumeRun",
@@ -266,6 +270,15 @@ pub async fn call(agent: &Rc<Agent>, ctx: RequestCtx, method: &str, p: Value) ->
             })?;
             Ok(json!({ "ok": true }))
         }
+        "saveRunDraft" => save_run_draft(agent, ctx, &p),
+        "deleteRunDraft" => delete_run_draft(agent, &p),
+        "setRunTabs" => {
+            agent
+                .app_state
+                .mutate(|state| crate::app_state::set_tabs(state, p["runTabs"].clone()))?;
+            Ok(json!({ "ok": true }))
+        }
+        "stashDraftAttachment" => stash_draft_attachment(agent, &p),
         "listRecentRuns" => Ok(list_recent_runs(agent, &p)),
         other => Err(format!("method not found: {other}")),
     }
@@ -663,6 +676,64 @@ fn set_workspace_pinned(agent: &Rc<Agent>, p: &Value) -> R {
         }
     })?;
     Ok(json!({ "recentWorkspaces": next["recentWorkspaces"] }))
+}
+
+/// A decoded paste above this is refused: a stash is a convenience copy, and
+/// a LAN browser may call it.
+const MAX_STASH_BYTES: usize = 64 * 1024 * 1024;
+
+fn save_run_draft(agent: &Rc<Agent>, ctx: RequestCtx, p: &Value) -> R {
+    let draft = p["draft"].clone();
+    let id = draft["id"].as_str().unwrap_or_default();
+    crate::app_state::single_segment(id).map_err(|e| format!("draft id: {e}"))?;
+    if ctx.kind == ClientKind::Remote {
+        // A remote caller must not plant a path a local `startRun` would later
+        // copy into a run: only files in this draft's own stash are allowed.
+        let stash = agent.app_state.drafts_dir().join(id);
+        for a in draft["attachments"].as_array().into_iter().flatten() {
+            let path = a["path"].as_str().unwrap_or_default();
+            if !crate::app_state::is_inside(&stash, Path::new(path)) {
+                return Err(format!(
+                    "attachment is not in the draft's stash directory: {path}"
+                ));
+            }
+        }
+    }
+    agent
+        .app_state
+        .mutate(|state| crate::app_state::save_draft(state, draft))?;
+    Ok(json!({ "ok": true }))
+}
+
+fn delete_run_draft(agent: &Rc<Agent>, p: &Value) -> R {
+    let id = s(p, "id");
+    crate::app_state::single_segment(id).map_err(|e| format!("draft id: {e}"))?;
+    agent
+        .app_state
+        .mutate(|state| crate::app_state::delete_draft(state, id))?;
+    // Best effort: a leftover directory is swept on the next start.
+    let _ = std::fs::remove_dir_all(agent.app_state.drafts_dir().join(id));
+    Ok(json!({ "ok": true }))
+}
+
+fn stash_draft_attachment(agent: &Rc<Agent>, p: &Value) -> R {
+    let (draft_id, name) = (s(p, "draftId"), s(p, "name"));
+    crate::app_state::single_segment(draft_id).map_err(|e| format!("draftId: {e}"))?;
+    crate::app_state::single_segment(name).map_err(|e| format!("name: {e}"))?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(s(p, "base64"))
+        .map_err(|e| format!("base64: {e}"))?;
+    if bytes.len() > MAX_STASH_BYTES {
+        return Err(format!(
+            "attachment is larger than {} MB",
+            MAX_STASH_BYTES / (1024 * 1024)
+        ));
+    }
+    let dir = agent.app_state.drafts_dir().join(draft_id);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = crate::app_state::free_name(&dir, name);
+    whiphand_core::durable_fs::write_file_atomic(&path, &bytes).map_err(|e| e.to_string())?;
+    Ok(json!({ "path": path.to_string_lossy() }))
 }
 
 fn list_recent_runs(agent: &Rc<Agent>, p: &Value) -> Value {

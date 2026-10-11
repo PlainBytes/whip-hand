@@ -1,0 +1,529 @@
+{
+  "responses": [
+    {
+      "step": "getAppState",
+      "response": {
+        "result": {
+          "schemaVersion": 1,
+          "recentWorkspaces": [],
+          "window": null,
+          "lastPage": null,
+          "theme": "system",
+          "workspaces": {},
+          "runsRetention": {
+            "maxPerWorkspace": 0
+          },
+          "showOngoingRuns": true,
+          "editor": {
+            "kind": "vscode"
+          },
+          "runDrafts": [],
+          "runTabs": {
+            "tabs": [],
+            "active": null
+          }
+        }
+      }
+    },
+    {
+      "step": "saveRunDraft",
+      "response": {
+        "result": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "step": "saveRunDraft second",
+      "response": {
+        "result": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "step": "stashDraftAttachment",
+      "response": {
+        "result": {
+          "path": "<WS>/drafts/d1/shot.png"
+        }
+      }
+    },
+    {
+      "step": "stash same name",
+      "response": {
+        "result": {
+          "path": "<WS>/drafts/d1/shot-2.png"
+        }
+      }
+    },
+    {
+      "step": "stash escaping name",
+      "response": {
+        "error": {
+          "code": -32000,
+          "message": "name: not a single path segment: \"../escape.png\""
+        }
+      }
+    },
+    {
+      "step": "stash escaping draft id",
+      "response": {
+        "error": {
+          "code": -32000,
+          "message": "draftId: not a single path segment: \"..\""
+        }
+      }
+    },
+    {
+      "step": "saveRunDraft replaces by id",
+      "response": {
+        "result": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "step": "setRunTabs",
+      "response": {
+        "result": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "step": "getAppState with drafts",
+      "response": {
+        "result": {
+          "schemaVersion": 1,
+          "recentWorkspaces": [],
+          "window": null,
+          "lastPage": null,
+          "theme": "system",
+          "workspaces": {},
+          "runsRetention": {
+            "maxPerWorkspace": 0
+          },
+          "showOngoingRuns": true,
+          "editor": {
+            "kind": "vscode"
+          },
+          "runDrafts": [
+            {
+              "id": "d1",
+              "workdir": "<WS>/ws",
+              "workflow": "feature",
+              "inputs": {
+                "goal": "x"
+              },
+              "name": "one again",
+              "dryRun": false,
+              "attachments": [
+                {
+                  "path": "<WS>/drafts/d1/shot.png",
+                  "pasted": true
+                }
+              ],
+              "createdAt": "<TS>",
+              "updatedAt": "<TS>"
+            },
+            {
+              "id": "d2",
+              "workdir": "<WS>/ws",
+              "workflow": "feature",
+              "inputs": {
+                "goal": "x"
+              },
+              "name": "two",
+              "dryRun": false,
+              "attachments": [],
+              "createdAt": "<TS>",
+              "updatedAt": "<TS>"
+            }
+          ],
+          "runTabs": {
+            "tabs": [
+              {
+                "kind": "run",
+                "workdir": "<WS>/ws",
+                "runId": "r1",
+                "preview": true
+              },
+              {
+                "kind": "draft",
+                "draftId": "d1"
+              }
+            ],
+            "active": "draft:d1"
+          }
+        }
+      }
+    },
+    {
+      "step": "deleteRunDraft",
+      "response": {
+        "result": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "step": "deleteRunDraft unknown",
+      "response": {
+        "result": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "step": "deleteRunDraft escaping id",
+      "response": {
+        "error": {
+          "code": -32000,
+          "message": "draft id: not a single path segment: \"..\""
+        }
+      }
+    },
+    {
+      "step": "getAppState after delete",
+      "response": {
+        "result": {
+          "schemaVersion": 1,
+          "recentWorkspaces": [],
+          "window": null,
+          "lastPage": null,
+          "theme": "system",
+          "workspaces": {},
+          "runsRetention": {
+            "maxPerWorkspace": 0
+          },
+          "showOngoingRuns": true,
+          "editor": {
+            "kind": "vscode"
+          },
+          "runDrafts": [
+            {
+              "id": "d2",
+              "workdir": "<WS>/ws",
+              "workflow": "feature",
+              "inputs": {
+                "goal": "x"
+              },
+              "name": "two",
+              "dryRun": false,
+              "attachments": [],
+              "createdAt": "<TS>",
+              "updatedAt": "<TS>"
+            }
+          ],
+          "runTabs": {
+            "tabs": [
+              {
+                "kind": "run",
+                "workdir": "<WS>/ws",
+                "runId": "r1",
+                "preview": true
+              },
+              {
+                "kind": "draft",
+                "draftId": "d1"
+              }
+            ],
+            "active": "draft:d1"
+          }
+        }
+      }
+    }
+  ],
+  "notifications": {
+    "appStateChanged": [
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [],
+        "window": null,
+        "lastPage": null,
+        "theme": "system",
+        "workspaces": {},
+        "runsRetention": {
+          "maxPerWorkspace": 0
+        },
+        "showOngoingRuns": true,
+        "editor": {
+          "kind": "vscode"
+        },
+        "runDrafts": [
+          {
+            "id": "d1",
+            "workdir": "<WS>/ws",
+            "workflow": "feature",
+            "inputs": {
+              "goal": "x"
+            },
+            "name": "one",
+            "dryRun": false,
+            "attachments": [],
+            "createdAt": "<TS>",
+            "updatedAt": "<TS>"
+          }
+        ],
+        "runTabs": {
+          "tabs": [],
+          "active": null
+        }
+      },
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [],
+        "window": null,
+        "lastPage": null,
+        "theme": "system",
+        "workspaces": {},
+        "runsRetention": {
+          "maxPerWorkspace": 0
+        },
+        "showOngoingRuns": true,
+        "editor": {
+          "kind": "vscode"
+        },
+        "runDrafts": [
+          {
+            "id": "d1",
+            "workdir": "<WS>/ws",
+            "workflow": "feature",
+            "inputs": {
+              "goal": "x"
+            },
+            "name": "one",
+            "dryRun": false,
+            "attachments": [],
+            "createdAt": "<TS>",
+            "updatedAt": "<TS>"
+          },
+          {
+            "id": "d2",
+            "workdir": "<WS>/ws",
+            "workflow": "feature",
+            "inputs": {
+              "goal": "x"
+            },
+            "name": "two",
+            "dryRun": false,
+            "attachments": [],
+            "createdAt": "<TS>",
+            "updatedAt": "<TS>"
+          }
+        ],
+        "runTabs": {
+          "tabs": [],
+          "active": null
+        }
+      },
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [],
+        "window": null,
+        "lastPage": null,
+        "theme": "system",
+        "workspaces": {},
+        "runsRetention": {
+          "maxPerWorkspace": 0
+        },
+        "showOngoingRuns": true,
+        "editor": {
+          "kind": "vscode"
+        },
+        "runDrafts": [
+          {
+            "id": "d1",
+            "workdir": "<WS>/ws",
+            "workflow": "feature",
+            "inputs": {
+              "goal": "x"
+            },
+            "name": "one again",
+            "dryRun": false,
+            "attachments": [
+              {
+                "path": "<WS>/drafts/d1/shot.png",
+                "pasted": true
+              }
+            ],
+            "createdAt": "<TS>",
+            "updatedAt": "<TS>"
+          },
+          {
+            "id": "d2",
+            "workdir": "<WS>/ws",
+            "workflow": "feature",
+            "inputs": {
+              "goal": "x"
+            },
+            "name": "two",
+            "dryRun": false,
+            "attachments": [],
+            "createdAt": "<TS>",
+            "updatedAt": "<TS>"
+          }
+        ],
+        "runTabs": {
+          "tabs": [],
+          "active": null
+        }
+      },
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [],
+        "window": null,
+        "lastPage": null,
+        "theme": "system",
+        "workspaces": {},
+        "runsRetention": {
+          "maxPerWorkspace": 0
+        },
+        "showOngoingRuns": true,
+        "editor": {
+          "kind": "vscode"
+        },
+        "runDrafts": [
+          {
+            "id": "d1",
+            "workdir": "<WS>/ws",
+            "workflow": "feature",
+            "inputs": {
+              "goal": "x"
+            },
+            "name": "one again",
+            "dryRun": false,
+            "attachments": [
+              {
+                "path": "<WS>/drafts/d1/shot.png",
+                "pasted": true
+              }
+            ],
+            "createdAt": "<TS>",
+            "updatedAt": "<TS>"
+          },
+          {
+            "id": "d2",
+            "workdir": "<WS>/ws",
+            "workflow": "feature",
+            "inputs": {
+              "goal": "x"
+            },
+            "name": "two",
+            "dryRun": false,
+            "attachments": [],
+            "createdAt": "<TS>",
+            "updatedAt": "<TS>"
+          }
+        ],
+        "runTabs": {
+          "tabs": [
+            {
+              "kind": "run",
+              "workdir": "<WS>/ws",
+              "runId": "r1",
+              "preview": true
+            },
+            {
+              "kind": "draft",
+              "draftId": "d1"
+            }
+          ],
+          "active": "draft:d1"
+        }
+      },
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [],
+        "window": null,
+        "lastPage": null,
+        "theme": "system",
+        "workspaces": {},
+        "runsRetention": {
+          "maxPerWorkspace": 0
+        },
+        "showOngoingRuns": true,
+        "editor": {
+          "kind": "vscode"
+        },
+        "runDrafts": [
+          {
+            "id": "d2",
+            "workdir": "<WS>/ws",
+            "workflow": "feature",
+            "inputs": {
+              "goal": "x"
+            },
+            "name": "two",
+            "dryRun": false,
+            "attachments": [],
+            "createdAt": "<TS>",
+            "updatedAt": "<TS>"
+          }
+        ],
+        "runTabs": {
+          "tabs": [
+            {
+              "kind": "run",
+              "workdir": "<WS>/ws",
+              "runId": "r1",
+              "preview": true
+            },
+            {
+              "kind": "draft",
+              "draftId": "d1"
+            }
+          ],
+          "active": "draft:d1"
+        }
+      },
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [],
+        "window": null,
+        "lastPage": null,
+        "theme": "system",
+        "workspaces": {},
+        "runsRetention": {
+          "maxPerWorkspace": 0
+        },
+        "showOngoingRuns": true,
+        "editor": {
+          "kind": "vscode"
+        },
+        "runDrafts": [
+          {
+            "id": "d2",
+            "workdir": "<WS>/ws",
+            "workflow": "feature",
+            "inputs": {
+              "goal": "x"
+            },
+            "name": "two",
+            "dryRun": false,
+            "attachments": [],
+            "createdAt": "<TS>",
+            "updatedAt": "<TS>"
+          }
+        ],
+        "runTabs": {
+          "tabs": [
+            {
+              "kind": "run",
+              "workdir": "<WS>/ws",
+              "runId": "r1",
+              "preview": true
+            },
+            {
+              "kind": "draft",
+              "draftId": "d1"
+            }
+          ],
+          "active": "draft:d1"
+        }
+      }
+    ]
+  },
+  "terminals": {}
+}

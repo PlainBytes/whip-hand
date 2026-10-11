@@ -96,6 +96,10 @@ pub const LATER: &[&str] = &[
     "pruneRuns",
     "writeArtifact",
     "setUiState",
+    "saveRunDraft",
+    "deleteRunDraft",
+    "setRunTabs",
+    "stashDraftAttachment",
 ];
 
 /// A request as `update` describes it: no id yet, and what to do with the

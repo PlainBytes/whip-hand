@@ -863,3 +863,101 @@ describe('NewRunDialog attachments', () => {
     });
   });
 });
+
+describe('NewRunDialog draft lifecycle', () => {
+  const originalCreate = URL.createObjectURL;
+  const originalRevoke = URL.revokeObjectURL;
+  let revoked: string[];
+
+  beforeEach(() => {
+    useAppStore.setState({ workspacePath: '/ws', workflows: [], appState: null, pendingRunAgain: null, drafts: {} });
+    let n = 0;
+    revoked = [];
+    URL.createObjectURL = () => `blob:thumb-${++n}`;
+    URL.revokeObjectURL = (url: string) => { revoked.push(url); };
+  });
+
+  afterEach(() => {
+    useAppStore.setState({ workspacePath: null, workflows: [], appState: null, pendingRunAgain: null, drafts: {} });
+    URL.createObjectURL = originalCreate;
+    URL.revokeObjectURL = originalRevoke;
+  });
+
+  it('holds one draft while open, with the form fields written through to it', async () => {
+    const { transport } = renderNewRunDialog();
+    await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
+    await respond(transport, 'listRuns', []);
+    await selectWorkflow(transport, 'ship-feature');
+    fireEvent.change(await screen.findByLabelText('Ticket ID', { exact: false }), { target: { value: 'TICK-1' } });
+    fireEvent.change(screen.getByTestId('run-name-input'), { target: { value: 'my run' } });
+
+    const drafts = Object.values(useAppStore.getState().drafts);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      workdir: '/ws', workflowRef: 'ship-feature', name: 'my run', values: { ticket: 'TICK-1', branch: 'main' },
+    });
+  });
+
+  it('deletes the draft on Cancel', async () => {
+    const onOpenChange = vi.fn();
+    const transport = new MockTransport();
+    render(
+      <AgentClientProvider client={new AgentClient(transport)}>
+        <NewRunDialog open onOpenChange={onOpenChange} onStarted={vi.fn()} />
+      </AgentClientProvider>,
+    );
+    await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
+    expect(Object.keys(useAppStore.getState().drafts)).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('deletes the draft when the dialog closes', async () => {
+    const transport = new MockTransport();
+    const client = new AgentClient(transport);
+    const ui = (open: boolean) => (
+      <AgentClientProvider client={client}>
+        <NewRunDialog open={open} onOpenChange={() => {}} onStarted={vi.fn()} />
+      </AgentClientProvider>
+    );
+    const { rerender } = render(ui(true));
+    expect(Object.keys(useAppStore.getState().drafts)).toHaveLength(1);
+    rerender(ui(false));
+    expect(useAppStore.getState().drafts).toEqual({});
+  });
+
+  it('deletes the draft after a successful start', async () => {
+    const { transport, onStarted } = renderNewRunDialog();
+    await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
+    await respond(transport, 'listRuns', []);
+    await selectWorkflow(transport, 'ship-feature');
+    fireEvent.change(await screen.findByLabelText('Ticket ID', { exact: false }), { target: { value: 'TICK-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    await respond(transport, 'startRun', { jobId: 'job-9' });
+    await waitFor(() => expect(onStarted).toHaveBeenCalledWith('job-9'));
+    expect(useAppStore.getState().drafts).toEqual({});
+  });
+
+  it('keeps a pasted thumbnail until the draft is deleted', async () => {
+    const transport = new MockTransport();
+    const client = new AgentClient(transport);
+    const ui = (open: boolean) => (
+      <AgentClientProvider client={client}>
+        <CapabilitiesProvider value={{ ...DESKTOP_DEFAULT_CAPABILITIES, pickFiles: vi.fn(async () => []) }}>
+          <NewRunDialog open={open} onOpenChange={() => {}} onStarted={vi.fn()} />
+        </CapabilitiesProvider>
+      </AgentClientProvider>
+    );
+    const { rerender } = render(ui(true));
+    await respond(transport, 'listWorkflows', [ATTACHING_WORKFLOW]);
+    await respond(transport, 'listRuns', []);
+    await selectWorkflow(transport, 'triage');
+    paste(await screen.findByTestId('run-name-input'), { files: [pngFile()] });
+    expect(await screen.findByText('pasted-1.png')).toBeInTheDocument();
+    expect(revoked).toEqual([]);
+
+    rerender(ui(false));
+    expect(revoked).toEqual(['blob:thumb-1']);
+    expect(useAppStore.getState().drafts).toEqual({});
+  });
+});

@@ -29,6 +29,7 @@ import {
 import type { AppState as AppStateData } from '../shared/protocol.gen.ts';
 import type { LogRow } from '../shared/log-rows.ts';
 import { mergeUsage, progressActionText, summarizeEvent } from '../shared/log-rows.ts';
+import { preselect, type PendingAttachment, type RunAgain } from '../lib/new-run-draft.ts';
 
 /**
  * Workflows, the runs list, per-job live state, doctor results, config, the
@@ -814,6 +815,36 @@ export function reduceJobEvent(job: JobState, params: WhiphandEventParams): JobS
   return job;
 }
 
+/** A new run being filled in: everything the form holds that is worth keeping. */
+export interface RunDraft {
+  id: string;
+  workdir: string;
+  identityKey?: string;
+  /** `refFor` form — `global:<name>` or bare `<name>`; null until a workflow is chosen. */
+  workflowRef: string | null;
+  values: Record<string, string>;
+  name: string;
+  dryRun: boolean;
+  /** The person's choice for the selected workflow; null follows the workflow's default. */
+  worktreeChoice: boolean | null;
+  maxIterationsRaw: string;
+  attachments: PendingAttachment[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type RunDraftPatch = Partial<Omit<RunDraft, 'id' | 'createdAt'>>;
+
+export interface RunDraftInit {
+  workdir: string;
+  identityKey?: string;
+  /** Wins over the workspace's remembered workflow when it names a usable one. */
+  runAgain?: RunAgain;
+}
+
+/** Selector for one draft: `useAppStore(selectDraft(id))`. */
+export const selectDraft = (id: string) => (state: Pick<AppState, 'drafts'>): RunDraft | undefined => state.drafts[id];
+
 export interface AppState {
   workspacePath: string | null;
   /** The open workspace's identity key from the agent, when it sent one. */
@@ -932,6 +963,15 @@ export interface AppState {
    */
   pendingRunAgain: { workflow: string; inputs: Record<string, string> } | null;
   setPendingRunAgain: (v: { workflow: string; inputs: Record<string, string> } | null) => void;
+
+  /** New runs being filled in, by id. Not persisted. */
+  drafts: Record<string, RunDraft>;
+  /** Preselects from `init.runAgain`, then the workspace's memory; no workflow while the list is not loaded. */
+  createDraft: (init: RunDraftInit) => string;
+  /** The patch may be a function of the current draft, for updates that build on it (attachments). */
+  updateDraft: (id: string, patch: RunDraftPatch | ((draft: RunDraft) => RunDraftPatch)) => void;
+  /** Releases the pasted-image thumbnails the draft holds. */
+  deleteDraft: (id: string) => void;
 
   /**
    * True while the Files page holds an unsaved draft. It lives here rather
@@ -1378,6 +1418,48 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   pendingRunAgain: null,
   setPendingRunAgain: pendingRunAgain => set({ pendingRunAgain }),
+
+  drafts: {},
+  createDraft: init => {
+    const { workflows, appState } = get();
+    const memory = findWorkspaceMemory(appState, { path: init.workdir, identityKey: init.identityKey });
+    const chosen = preselect(workflows, memory, init.runAgain);
+    const now = Date.now();
+    const id = crypto.randomUUID();
+    const draft: RunDraft = {
+      id,
+      workdir: init.workdir,
+      ...(init.identityKey === undefined ? {} : { identityKey: init.identityKey }),
+      workflowRef: chosen?.workflowRef ?? null,
+      values: chosen?.values ?? {},
+      name: '',
+      dryRun: false,
+      worktreeChoice: null,
+      maxIterationsRaw: '',
+      attachments: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    set(state => ({ drafts: { ...state.drafts, [id]: draft } }));
+    return id;
+  },
+  updateDraft: (id, patch) => set(state => {
+    const draft = state.drafts[id];
+    if (!draft) return {};
+    const changes = typeof patch === 'function' ? patch(draft) : patch;
+    return { drafts: { ...state.drafts, [id]: { ...draft, ...changes, updatedAt: Date.now() } } };
+  }),
+  deleteDraft: id => {
+    const draft = get().drafts[id];
+    if (!draft) return;
+    for (const item of draft.attachments) {
+      if (item.kind === 'pasted') URL.revokeObjectURL(item.thumbnailUrl);
+    }
+    set(state => {
+      const { [id]: _removed, ...rest } = state.drafts;
+      return { drafts: rest };
+    });
+  },
 
   filesDirty: false,
   setFilesDirty: filesDirty => set({ filesDirty }),

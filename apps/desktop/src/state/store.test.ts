@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  findWorkspaceMemory, jobInWorkspace, liveStageProgress, ongoingJobs, useAppStore, waitingRunIds, type JobState,
+  findWorkspaceMemory, jobInWorkspace, liveStageProgress, ongoingJobs, selectDraft, useAppStore, waitingRunIds, type JobState,
 } from './store.ts';
 import type { WhiphandEvent } from '../shared/types.ts';
 import { EMPTY_APP_STATE } from '../test/app-state.ts';
@@ -29,6 +29,7 @@ function resetStore(): void {
     page: 'runs',
     pendingRunAgain: null,
     filesDirty: false,
+    drafts: {},
   });
 }
 
@@ -1216,5 +1217,81 @@ describe('workspace identity keys', () => {
       jobId: 'j1', workdir: SHORT, identityKey: KEY, status: 'running', pty: null,
     }]);
     expect(useAppStore.getState().jobs.j1).toMatchObject({ workdir: SHORT, identityKey: KEY });
+  });
+});
+
+describe('run drafts', () => {
+  beforeEach(() => resetStore());
+
+  const entry = {
+    name: 'ship', source: 'project' as const, path: '/ws/ship.yaml',
+    workflow: { name: 'ship', inputs: { ticket: { required: true } }, steps: [] },
+  };
+
+  it('creates a blank draft when the workflow list is not loaded', () => {
+    const id = useAppStore.getState().createDraft({ workdir: '/ws', identityKey: 'k' });
+    expect(useAppStore.getState().drafts[id]).toMatchObject({
+      id, workdir: '/ws', identityKey: 'k', workflowRef: null, values: {}, name: '', dryRun: false,
+      worktreeChoice: null, maxIterationsRaw: '', attachments: [],
+    });
+  });
+
+  it('preselects the remembered workflow when the list is loaded', () => {
+    useAppStore.setState({
+      workflows: [entry] as never,
+      appState: { ...EMPTY_APP_STATE, workspaces: { '/ws': { lastWorkflow: 'ship', lastInputs: {} } } },
+    });
+    const id = useAppStore.getState().createDraft({ workdir: '/ws' });
+    expect(useAppStore.getState().drafts[id].workflowRef).toBe('ship');
+  });
+
+  it('gives each draft its own id, and updates one without touching another', () => {
+    const { createDraft, updateDraft } = useAppStore.getState();
+    const a = createDraft({ workdir: '/ws' });
+    const b = createDraft({ workdir: '/ws' });
+    expect(a).not.toBe(b);
+    updateDraft(a, { name: 'first', dryRun: true });
+    updateDraft(b, draft => ({ name: `${draft.name}second` }));
+    const { drafts } = useAppStore.getState();
+    expect(drafts[a]).toMatchObject({ name: 'first', dryRun: true });
+    expect(drafts[b].name).toBe('second');
+    expect(drafts[a].updatedAt).toBeGreaterThanOrEqual(drafts[a].createdAt);
+  });
+
+  it('ignores an update to a draft that is gone', () => {
+    useAppStore.getState().updateDraft('nope', { name: 'x' });
+    expect(useAppStore.getState().drafts).toEqual({});
+  });
+
+  it('selects a draft by id', () => {
+    const id = useAppStore.getState().createDraft({ workdir: '/ws' });
+    expect(selectDraft(id)(useAppStore.getState())).toBe(useAppStore.getState().drafts[id]);
+    expect(selectDraft('nope')(useAppStore.getState())).toBeUndefined();
+  });
+
+  it('deleting a draft revokes its pasted thumbnails, and only its own', () => {
+    const revoked: string[] = [];
+    const original = URL.revokeObjectURL;
+    URL.revokeObjectURL = (url: string) => { revoked.push(url); };
+    try {
+      const { createDraft, updateDraft, deleteDraft } = useAppStore.getState();
+      const a = createDraft({ workdir: '/ws' });
+      const b = createDraft({ workdir: '/ws' });
+      updateDraft(a, {
+        attachments: [
+          { kind: 'path', key: 0, path: '/f' },
+          { kind: 'pasted', key: 1, blob: new Blob(), ext: 'png', thumbnailUrl: 'blob:a' },
+        ],
+      });
+      updateDraft(b, { attachments: [{ kind: 'pasted', key: 0, blob: new Blob(), ext: 'png', thumbnailUrl: 'blob:b' }] });
+      expect(revoked).toEqual([]);
+      deleteDraft(a);
+      expect(revoked).toEqual(['blob:a']);
+      expect(Object.keys(useAppStore.getState().drafts)).toEqual([b]);
+      deleteDraft(a); // already gone: nothing more to release
+      expect(revoked).toEqual(['blob:a']);
+    } finally {
+      URL.revokeObjectURL = original;
+    }
   });
 });

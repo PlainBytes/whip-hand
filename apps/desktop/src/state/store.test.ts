@@ -5,6 +5,7 @@ import {
 import type { WhiphandEvent } from '../shared/types.ts';
 import { EMPTY_APP_STATE } from '../test/app-state.ts';
 import { isPreview } from '../lib/run-tabs.ts';
+import { rememberThumbnail } from '../lib/draft-thumbnails.ts';
 import { fromPosix } from '../../../../packages/test-support/src/paths.ts';
 
 /** A JobState with the fields these selector tests do not care about filled in. */
@@ -1279,11 +1280,13 @@ describe('run drafts', () => {
       const b = createDraft({ workdir: '/ws' });
       updateDraft(a, {
         attachments: [
-          { kind: 'path', key: 0, path: '/f' },
-          { kind: 'pasted', key: 1, blob: new Blob(), ext: 'png', thumbnailUrl: 'blob:a' },
+          { key: 0, path: '/f' },
+          { key: 1, path: '/stash/a/pasted-1.png', pasted: true },
         ],
       });
-      updateDraft(b, { attachments: [{ kind: 'pasted', key: 0, blob: new Blob(), ext: 'png', thumbnailUrl: 'blob:b' }] });
+      updateDraft(b, { attachments: [{ key: 0, path: '/stash/b/pasted-1.png', pasted: true }] });
+      rememberThumbnail('/stash/a/pasted-1.png', 'blob:a');
+      rememberThumbnail('/stash/b/pasted-1.png', 'blob:b');
       expect(revoked).toEqual([]);
       deleteDraft(a);
       expect(revoked).toEqual(['blob:a']);
@@ -1375,7 +1378,7 @@ describe('draft tabs', () => {
 
     it('is true for a typed name, an attachment, or an input that differs from the baseline', () => {
       expect(draftHasContent({ ...draft(), name: 'x' })).toBe(true);
-      expect(draftHasContent({ ...draft(), attachments: [{ kind: 'path', key: 0, path: '/f' }] })).toBe(true);
+      expect(draftHasContent({ ...draft(), attachments: [{ key: 0, path: '/f' }] })).toBe(true);
       expect(draftHasContent({ ...draft(), baselineValues: { a: '1' }, values: { a: '2' } })).toBe(true);
     });
 

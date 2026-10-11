@@ -8,6 +8,10 @@ import { CapabilitiesProvider, DESKTOP_DEFAULT_CAPABILITIES, type AppCapabilitie
 import { useAppStore } from '../state/store.ts';
 import type { RunAgain } from '../lib/new-run-draft.ts';
 import { EMPTY_APP_STATE } from '../test/app-state.ts';
+import { startDraftSync } from '../lib/draft-sync.ts';
+import { releaseThumbnail } from '../lib/draft-thumbnails.ts';
+import { FakeFileSystem } from '../files/fake-fs.ts';
+import { FileSystemProvider } from '../files/fs-context.tsx';
 
 const SCRIPTED_WORKFLOW = {
   name: 'ship-feature',
@@ -606,7 +610,7 @@ function renderWithCapabilities(capabilities: Partial<AppCapabilities>, draftId 
     </CapabilitiesProvider>
   );
   const rendered = render(ui(true));
-  return { transport, draftId, rerenderVisible: (visible: boolean) => rendered.rerender(ui(visible)) };
+  return { transport, client, draftId, rerenderVisible: (visible: boolean) => rendered.rerender(ui(visible)) };
 }
 
 /**
@@ -628,6 +632,25 @@ function paste(target: Element, clipboard: { files?: File[]; text?: string }): b
 }
 
 const pngFile = () => new File([PNG], 'image.png', { type: 'image/png' });
+
+/** Where the agent would put a stashed paste. */
+const stashPath = (draftId: string, name: string) => `/data/whiphand/drafts/${draftId}/${name}`;
+
+/** Pastes an image and answers the agent's stash request the way it would. */
+async function pasteAndStash(transport: MockTransport, target: Element, draftId: string) {
+  const before = transport.sent.filter(line => (JSON.parse(line) as { method: string }).method === 'stashDraftAttachment').length;
+  paste(target, { files: [pngFile()] });
+  const req = await waitFor(() => {
+    const lines = transport.sent
+      .map((line, index) => ({ index, method: (JSON.parse(line) as { method: string }).method }))
+      .filter(entry => entry.method === 'stashDraftAttachment');
+    if (lines.length <= before) throw new Error('stashDraftAttachment not sent yet');
+    return transport.sentRequest(lines[before]!.index);
+  });
+  const { name } = req.params as { name: string };
+  transport.emitLine({ id: req.id, result: { path: stashPath(draftId, name) } });
+  return req;
+}
 
 async function startRunRequest(transport: MockTransport) {
   return waitFor(() => {
@@ -685,16 +708,28 @@ describe('NewRunForm attachments', () => {
   });
 
   it('turns a pasted image into a chip with a thumbnail, and removes it again', async () => {
-    const { transport } = renderWithCapabilities({ pickFiles: vi.fn(async () => []) });
+    const { transport, draftId } = renderWithCapabilities({ pickFiles: vi.fn(async () => []) });
     await respond(transport, 'listWorkflows', [ATTACHING_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     await selectWorkflow(transport, 'triage');
 
     const nameInput = await screen.findByTestId('run-name-input');
     expect(paste(nameInput, { files: [pngFile()] })).toBe(false); // taken, not pasted as text
+    const stash = await waitFor(() => {
+      const index = transport.sent.findIndex(line => (JSON.parse(line) as { method: string }).method === 'stashDraftAttachment');
+      if (index === -1) throw new Error('not sent yet');
+      return transport.sentRequest(index);
+    });
+    // Stashed at once, under the name core will give it, as base64 of the bytes.
+    expect(stash.params).toEqual({ draftId, name: 'pasted-1.png', base64: btoa(String.fromCharCode(...PNG)) });
+    transport.emitLine({ id: stash.id, result: { path: stashPath(draftId, 'pasted-1.png') } });
 
     expect(await screen.findByText('pasted-1.png')).toBeInTheDocument();
     expect(screen.getByTestId('attachment-thumbnail')).toHaveAttribute('src', 'blob:thumb-1');
+    // The draft holds the path alone, flagged as a paste.
+    expect(useAppStore.getState().drafts[draftId]!.attachments).toEqual([
+      { key: 0, path: stashPath(draftId, 'pasted-1.png'), pasted: true },
+    ]);
 
     fireEvent.click(screen.getByRole('button', { name: 'pasted-1.png Remove' }));
     await waitFor(() => expect(screen.queryByText('pasted-1.png')).not.toBeInTheDocument());
@@ -714,11 +749,11 @@ describe('NewRunForm attachments', () => {
     expect(screen.queryByRole('button', { name: / Remove$/ })).not.toBeInTheDocument();
   });
 
-  it('sends picked paths and pasted bytes to startRun, in list order, ignoring a path picked twice', async () => {
+  it('sends picked paths and a pasted image\'s stash path to startRun, in list order, ignoring a path picked twice', async () => {
     const pickFiles = vi.fn()
       .mockResolvedValueOnce(['/home/me/bug.png', '/home/me/logs/server.log'])
       .mockResolvedValueOnce(['/home/me/bug.png']);
-    const { transport } = renderWithCapabilities({ pickFiles });
+    const { transport, draftId } = renderWithCapabilities({ pickFiles });
     await respond(transport, 'listWorkflows', [ATTACHING_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     await selectWorkflow(transport, 'triage');
@@ -729,7 +764,7 @@ describe('NewRunForm attachments', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add files…' }));
     await waitFor(() => expect(pickFiles).toHaveBeenCalledTimes(2));
 
-    paste(screen.getByTestId('run-name-input'), { files: [pngFile()] });
+    await pasteAndStash(transport, screen.getByTestId('run-name-input'), draftId);
     await screen.findByText('pasted-1.png');
     expect(screen.getAllByRole('button', { name: / Remove$/ })).toHaveLength(3);
 
@@ -738,11 +773,69 @@ describe('NewRunForm attachments', () => {
     expect((req.params as { attachments?: unknown }).attachments).toEqual([
       { path: '/home/me/bug.png' },
       { path: '/home/me/logs/server.log' },
-      { name: 'pasted-1.png', base64: btoa(String.fromCharCode(...PNG)) },
+      { path: stashPath(draftId, 'pasted-1.png') },
     ]);
 
     transport.emitLine({ id: req.id, result: { jobId: 'job-7' } });
     await expectStartedTab('job-7');
+  });
+
+  it('numbers a second paste after the first and never reuses a removed number', async () => {
+    const { transport, draftId } = renderWithCapabilities({ pickFiles: vi.fn(async () => []) });
+    await respond(transport, 'listWorkflows', [ATTACHING_WORKFLOW]);
+    await respond(transport, 'listRuns', []);
+    await selectWorkflow(transport, 'triage');
+    const nameInput = await screen.findByTestId('run-name-input');
+
+    await pasteAndStash(transport, nameInput, draftId);
+    await screen.findByText('pasted-1.png');
+    await pasteAndStash(transport, nameInput, draftId);
+    await screen.findByText('pasted-2.png');
+    fireEvent.click(screen.getByRole('button', { name: 'pasted-1.png Remove' }));
+    await waitFor(() => expect(screen.queryByText('pasted-1.png')).not.toBeInTheDocument());
+    // pasted-2 keeps its name, which is what its stash file is called.
+    expect(screen.getByText('pasted-2.png')).toBeInTheDocument();
+    await pasteAndStash(transport, nameInput, draftId);
+    await screen.findByText('pasted-3.png');
+  });
+
+  it('shows the stash error and adds no chip when the agent refuses a paste', async () => {
+    const { transport } = renderWithCapabilities({ pickFiles: vi.fn(async () => []) });
+    await respond(transport, 'listWorkflows', [ATTACHING_WORKFLOW]);
+    await respond(transport, 'listRuns', []);
+    await selectWorkflow(transport, 'triage');
+    paste(await screen.findByTestId('run-name-input'), { files: [pngFile()] });
+    const req = await waitFor(() => {
+      const index = transport.sent.findIndex(line => (JSON.parse(line) as { method: string }).method === 'stashDraftAttachment');
+      if (index === -1) throw new Error('not sent yet');
+      return transport.sentRequest(index);
+    });
+    transport.emitLine({ id: req.id, error: { code: -32000, message: 'attachment is larger than 64 MB' } });
+    expect(await screen.findByText(/larger than 64 MB/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: / Remove$/ })).not.toBeInTheDocument();
+    expect(revoked).toEqual(['blob:thumb-1']);
+  });
+
+  it('saves the draft to the agent when Start is pressed, before startRun, not waiting out the debounce', async () => {
+    const { transport, draftId, client } = renderWithCapabilities({ pickFiles: vi.fn(async () => []) });
+    const sync = startDraftSync(client);
+    try {
+      await respond(transport, 'listWorkflows', [ATTACHING_WORKFLOW]);
+      await respond(transport, 'listRuns', []);
+      await selectWorkflow(transport, 'triage');
+      fireEvent.change(await screen.findByTestId('run-name-input'), { target: { value: 'my run' } });
+      expect(transport.sent.some(line => line.includes('saveRunDraft'))).toBe(false);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+      await startRunRequest(transport);
+      const methods = transport.sent.map(line => (JSON.parse(line) as { method: string }).method);
+      expect(methods.indexOf('saveRunDraft')).toBeGreaterThanOrEqual(0);
+      expect(methods.indexOf('saveRunDraft')).toBeLessThan(methods.indexOf('startRun'));
+      const save = transport.sentRequest(methods.indexOf('saveRunDraft'));
+      expect(save.params).toMatchObject({ draft: { id: draftId, name: 'my run', workflow: 'triage' } });
+    } finally {
+      sync.dispose();
+    }
   });
 
   it('omits attachments entirely from a run started without any', async () => {
@@ -876,6 +969,62 @@ describe('NewRunForm attachments', () => {
   });
 });
 
+describe('NewRunForm restored paste chips', () => {
+  const originalCreate = URL.createObjectURL;
+  const originalRevoke = URL.revokeObjectURL;
+  const path = '/data/whiphand/drafts/d1/pasted-1.png';
+
+  function renderRestored(capabilities: Partial<AppCapabilities>, fs?: FakeFileSystem) {
+    useAppStore.setState({
+      workspacePath: '/ws', workflows: [ATTACHING_WORKFLOW] as never, appState: null, drafts: {}, tabs: [], activeTabKey: null,
+    });
+    const draftId = openDraft();
+    useAppStore.getState().updateDraft(draftId, {
+      workflowRef: 'triage', attachments: [{ key: 0, path, pasted: true }],
+    });
+    const client = new AgentClient(new MockTransport());
+    const body = (
+      <CapabilitiesProvider value={{ ...DESKTOP_DEFAULT_CAPABILITIES, pickFiles: async () => [], ...capabilities }}>
+        <AgentClientProvider client={client}><NewRunForm draftId={draftId} /></AgentClientProvider>
+      </CapabilitiesProvider>
+    );
+    render(fs ? <FileSystemProvider fs={fs}>{body}</FileSystemProvider> : body);
+  }
+
+  beforeEach(() => {
+    URL.createObjectURL = () => 'blob:from-stash';
+    URL.revokeObjectURL = () => {};
+  });
+
+  afterEach(() => {
+    useAppStore.setState({ workspacePath: null, workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null });
+    URL.createObjectURL = originalCreate;
+    URL.revokeObjectURL = originalRevoke;
+    releaseThumbnail(path);
+  });
+
+  it('loads the thumbnail from the stashed file where local files are reachable', async () => {
+    const fs = new FakeFileSystem();
+    fs.setFile(path, 'png-bytes');
+    renderRestored({ localFiles: true }, fs);
+    expect(await screen.findByTestId('attachment-thumbnail')).toHaveAttribute('src', 'blob:from-stash');
+    expect(screen.getByText('pasted-1.png')).toBeInTheDocument();
+  });
+
+  it('shows a file icon instead where they are not (a browser client)', async () => {
+    renderRestored({ host: 'browser', localFiles: false });
+    expect(await screen.findByText('pasted-1.png')).toBeInTheDocument();
+    expect(screen.queryByTestId('attachment-thumbnail')).not.toBeInTheDocument();
+  });
+
+  it('keeps the file icon when the stashed file cannot be read', async () => {
+    renderRestored({ localFiles: true }, new FakeFileSystem());
+    expect(await screen.findByText('pasted-1.png')).toBeInTheDocument();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(screen.queryByTestId('attachment-thumbnail')).not.toBeInTheDocument();
+  });
+});
+
 describe('NewRunForm draft lifecycle', () => {
   const originalCreate = URL.createObjectURL;
   const originalRevoke = URL.revokeObjectURL;
@@ -961,7 +1110,7 @@ describe('NewRunForm draft lifecycle', () => {
     await respond(transport, 'listWorkflows', [ATTACHING_WORKFLOW]);
     await respond(transport, 'listRuns', []);
     await selectWorkflow(transport, 'triage');
-    paste(await screen.findByTestId('run-name-input'), { files: [pngFile()] });
+    await pasteAndStash(transport, await screen.findByTestId('run-name-input'), draftId);
     expect(await screen.findByText('pasted-1.png')).toBeInTheDocument();
 
     rerenderVisible(false);
@@ -1172,7 +1321,7 @@ describe('NewRunForm as a draft tab', () => {
 
       act(() => handlers[0]!({ type: 'drop', paths: ['/home/me/trace.har'] }));
       const { drafts } = useAppStore.getState();
-      expect(drafts[b]!.attachments).toMatchObject([{ kind: 'path', path: '/home/me/trace.har' }]);
+      expect(drafts[b]!.attachments).toMatchObject([{ path: '/home/me/trace.har' }]);
       expect(drafts[a]!.attachments).toEqual([]);
     });
   });

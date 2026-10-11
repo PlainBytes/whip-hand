@@ -21,9 +21,12 @@ import { Page } from './Page.tsx';
 import { useDiscardDraft } from './use-discard-draft.tsx';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useCapabilities } from '../capabilities.tsx';
-import { extensionForImageMime } from '../files/file-kind.ts';
+import { useOptionalFileSystem } from '../files/fs-context.tsx';
+import { extensionForImageMime, mimeTypeForPath } from '../files/file-kind.ts';
 import { bytesToBase64 } from '../lib/base64.ts';
 import { parsePositiveInt } from '../lib/parse-number.ts';
+import { flushDraftSave } from '../lib/draft-sync.ts';
+import { releaseThumbnail, rememberThumbnail, thumbnailFor } from '../lib/draft-thumbnails.ts';
 import {
   entryKey, findEntry, initialValues, preselect, refFor, type PendingAttachment,
 } from '../lib/new-run-draft.ts';
@@ -62,12 +65,56 @@ function disabledSummary(workflow: Workflow): { names: string[]; consequences: s
 }
 
 /**
- * What core names each file from. A pasted image is offered as `pasted.<ext>`
- * because core keeps only the extension of a byte source's name, and numbers
- * it itself.
+ * A pasted image is stashed under the name core will give it, so its chip
+ * reads the same before and after a restart. The number is one past the
+ * highest this draft already holds, never reused after a removal.
  */
-function nameSources(items: readonly PendingAttachment[]): Array<{ path: string } | { name: string }> {
-  return items.map(item => (item.kind === 'path' ? { path: item.path } : { name: `pasted.${item.ext}` }));
+function pastedName(items: readonly PendingAttachment[], ext: string): string {
+  const taken = items.flatMap(item => {
+    const match = item.pasted ? /^pasted-(\d+)\./.exec(item.path.split(/[\\/]/).pop() ?? '') : null;
+    return match ? [Number(match[1])] : [];
+  });
+  return `pasted-${Math.max(0, ...taken) + 1}.${ext}`;
+}
+
+/**
+ * The chip's picture for a stashed paste: this session's object URL if the
+ * paste happened here, else the stashed file read back through the local
+ * filesystem. Without either (a browser) it is the file icon.
+ */
+function PastedThumbnail({ path }: { path: string }) {
+  const { localFiles } = useCapabilities();
+  const fs = useOptionalFileSystem();
+  const [url, setUrl] = useState<string | undefined>(() => thumbnailFor(path));
+
+  useEffect(() => {
+    if (url !== undefined || !localFiles || !fs) return;
+    let cancelled = false;
+    void (async () => {
+      const dir = path.slice(0, Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')));
+      await fs.ensureGranted(dir);
+      const bytes = await fs.readFile(path);
+      if (cancelled) return;
+      const blobUrl = URL.createObjectURL(new Blob([bytes as BlobPart], { type: mimeTypeForPath(path) }));
+      rememberThumbnail(path, blobUrl);
+      setUrl(blobUrl);
+    })().catch(() => {
+      // No thumbnail is not worth an error: the chip keeps its icon.
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [path, url, localFiles, fs]);
+
+  if (url === undefined) return <Document20Regular />;
+  return (
+    <img
+      src={url}
+      alt=""
+      data-testid="attachment-thumbnail"
+      style={{ width: 20, height: 20, objectFit: 'cover', borderRadius: 'var(--borderRadiusSmall)' }}
+    />
+  );
 }
 
 /**
@@ -149,16 +196,8 @@ function AttachmentsField({ items, names, accepting, dropActive, error, onAdd, o
               <InteractionTag key={item.key} value={String(item.key)} size="small" appearance="outline">
                 <InteractionTagPrimary
                   hasSecondaryAction
-                  title={item.kind === 'path' ? item.path : undefined}
-                  icon={item.kind === 'path' ? <Document20Regular /> : undefined}
-                  media={item.kind === 'pasted' ? (
-                    <img
-                      src={item.thumbnailUrl}
-                      alt=""
-                      data-testid="attachment-thumbnail"
-                      style={{ width: 20, height: 20, objectFit: 'cover', borderRadius: 'var(--borderRadiusSmall)' }}
-                    />
-                  ) : undefined}
+                  title={item.path}
+                  {...(item.pasted ? { media: <PastedThumbnail path={item.path} /> } : { icon: <Document20Regular /> })}
                 >
                   {names[i]}
                 </InteractionTagPrimary>
@@ -314,7 +353,7 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
   const acceptingAttachments = attachFieldShown && readsAttachments;
   // The names core will give the files, recomputed from the whole list so a
   // removal renumbers the pasted ones exactly as core would.
-  const attachmentLabels = useMemo(() => attachmentNames(nameSources(attachments)), [attachments]);
+  const attachmentLabels = useMemo(() => attachmentNames(attachments.map(item => ({ path: item.path }))), [attachments]);
 
   const canStart =
     !!draft &&
@@ -326,13 +365,13 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
 
   function addPaths(paths: readonly string[]): void {
     updateDraft(draftId, current => {
-      const known = new Set(current.attachments.flatMap(item => (item.kind === 'path' ? [item.path] : [])));
+      const known = new Set(current.attachments.map(item => item.path));
       let nextKey = nextAttachmentKey(current.attachments);
       const fresh: PendingAttachment[] = [];
       for (const path of paths) {
         if (known.has(path)) continue;
         known.add(path);
-        fresh.push({ kind: 'path', key: nextKey++, path });
+        fresh.push({ key: nextKey++, path });
       }
       return fresh.length === 0 ? {} : { attachments: [...current.attachments, ...fresh] };
     });
@@ -350,7 +389,7 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
 
   function removeAttachment(key: number): void {
     const item = attachments.find(a => a.key === key);
-    if (item?.kind === 'pasted') URL.revokeObjectURL(item.thumbnailUrl);
+    if (item?.pasted) releaseThumbnail(item.path);
     updateDraft(draftId, current => ({ attachments: current.attachments.filter(a => a.key !== key) }));
   }
 
@@ -368,13 +407,35 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
     const hasText = Array.from(event.clipboardData.types ?? []).includes('text/plain');
     if (hasText && isTextEntry(event.target)) return;
     event.preventDefault();
-    // Object URLs made here, not in a state updater, which may run twice.
-    const blobs = images.map(file => ({ blob: file, ext: extensionForImageMime(file.type), thumbnailUrl: URL.createObjectURL(file) }));
-    updateDraft(draftId, current => {
-      let nextKey = nextAttachmentKey(current.attachments);
-      const pasted: PendingAttachment[] = blobs.map(item => ({ kind: 'pasted', key: nextKey++, ...item }));
-      return { attachments: [...current.attachments, ...pasted] };
-    });
+    void stashImages(images);
+  }
+
+  /**
+   * Sends each image to the agent right away: the draft only ever holds the
+   * path it comes back with, and the stash is what survives a restart.
+   */
+  async function stashImages(images: readonly File[]): Promise<void> {
+    setAttachError(null);
+    for (const file of images) {
+      const ext = extensionForImageMime(file.type);
+      const thumbnailUrl = URL.createObjectURL(file);
+      try {
+        const base64 = bytesToBase64(new Uint8Array(await file.arrayBuffer()));
+        const name = pastedName(useAppStore.getState().drafts[draftId]?.attachments ?? [], ext);
+        const { path } = await client.request('stashDraftAttachment', { draftId, name, base64 });
+        if (useAppStore.getState().drafts[draftId] === undefined) {
+          URL.revokeObjectURL(thumbnailUrl);
+          return;
+        }
+        rememberThumbnail(path, thumbnailUrl);
+        updateDraft(draftId, current => ({
+          attachments: [...current.attachments, { key: nextAttachmentKey(current.attachments), path, pasted: true }],
+        }));
+      } catch (err) {
+        URL.revokeObjectURL(thumbnailUrl);
+        setAttachError(errorMessage(err));
+      }
+    }
   }
 
   // Through a ref: the drop subscription is set up once per form, not
@@ -416,14 +477,11 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
     setStarting(true);
     setStartError(null);
     try {
-      // In list order, which is the order core numbers and names them in.
-      // Read here rather than at paste time: a pasted image costs nothing
-      // until the run actually starts.
-      const attachmentSources = await Promise.all(attachments.map(async (item, i) => (
-        item.kind === 'path'
-          ? { path: item.path }
-          : { name: attachmentLabels[i], base64: bytesToBase64(new Uint8Array(await item.blob.arrayBuffer())) }
-      )));
+      // Saved before the request, so a crash mid-start loses nothing.
+      flushDraftSave(draftId);
+      // Paths only, in list order: a pasted image was stashed when it was
+      // pasted, and core names it by the stash file's name.
+      const attachmentSources = attachments.map(item => ({ path: item.path }));
       // Scoped explicitly for a global entry: the list entry's own name (not
       // the workflow's possibly-mismatched internal `name:` field) is what
       // was clicked, and a bare name would re-resolve to a shadowing project

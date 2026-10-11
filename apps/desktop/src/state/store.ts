@@ -30,6 +30,7 @@ import type { AppState as AppStateData } from '../shared/protocol.gen.ts';
 import type { LogRow } from '../shared/log-rows.ts';
 import { mergeUsage, progressActionText, summarizeEvent } from '../shared/log-rows.ts';
 import { preselect, type PendingAttachment, type RunAgain } from '../lib/new-run-draft.ts';
+import { releaseThumbnail } from '../lib/draft-thumbnails.ts';
 import {
   activateTab, adoptRunIds, closeTab, convertDraftTab, openDraftTab, openTab, pinTab, retargetTab, type AnyTab, type RunTabTarget,
 } from '../lib/run-tabs.ts';
@@ -979,8 +980,8 @@ export interface AppState {
   ) => void;
 
   /**
-   * Run tabs on the Runs page, in memory only. `activeTabKey` null is the
-   * fixed Runs list tab. The rules live in lib/run-tabs.ts.
+   * Run tabs on the Runs page; lib/draft-sync.ts saves them to the agent.
+   * `activeTabKey` null is the fixed Runs list tab. The rules live in lib/run-tabs.ts.
    */
   tabs: AnyTab[];
   activeTabKey: string | null;
@@ -991,7 +992,7 @@ export interface AppState {
   /** Re-points a tab at another job or run — a job learning its runId, or a resume. */
   retargetTab: (key: string, target: RunTabTarget) => void;
 
-  /** New runs being filled in, by id. Not persisted. */
+  /** New runs being filled in, by id. Saved to the agent by lib/draft-sync.ts. */
   drafts: Record<string, RunDraft>;
   /** Preselects from `init.runAgain`, then the workspace's memory; no workflow while the list is not loaded. */
   createDraft: (init: RunDraftInit) => string;
@@ -1488,7 +1489,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const draft = get().drafts[id];
     if (!draft) return;
     for (const item of draft.attachments) {
-      if (item.kind === 'pasted') URL.revokeObjectURL(item.thumbnailUrl);
+      if (item.pasted) releaseThumbnail(item.path);
     }
     set(state => {
       const { [id]: _removed, ...rest } = state.drafts;

@@ -44,14 +44,16 @@ export function findEntry(workflows: WorkflowEntry[], ref: string): WorkflowEntr
 }
 
 /**
- * A file waiting to be attached. A picked or dropped file is only its path:
- * the agent does the copying, and the webview could not read an arbitrary
- * path anyway. A pasted image never had a path, so its bytes are kept, plus
- * an object URL for the chip's thumbnail.
+ * A file waiting to be attached, always as a path: the agent does the copying,
+ * and the webview could not read an arbitrary path anyway. A pasted image has
+ * no path of its own, so the form stashes its bytes with the agent at once and
+ * keeps the stash path here, flagged `pasted` so its chip can show a thumbnail.
  */
-export type PendingAttachment =
-  | { kind: 'path'; key: number; path: string }
-  | { kind: 'pasted'; key: number; blob: Blob; ext: string; thumbnailUrl: string };
+export interface PendingAttachment {
+  key: number;
+  path: string;
+  pasted?: boolean;
+}
 
 /** A request to reopen a past run's workflow with its inputs ("Run again", "Run workflow"). */
 export interface RunAgain {

@@ -148,10 +148,10 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
     [waiting, stages, actionsColumn],
   );
 
-  const header = <Text weight="semibold" size={500}>Runs</Text>;
+  const title = <Text weight="semibold" size={500}>Runs</Text>;
 
   if (!workspacePath) {
-    return <Page header={header}><Text>Choose a workspace to see its runs.</Text></Page>;
+    return <Page header={title}><Text>Choose a workspace to see its runs.</Text></Page>;
   }
 
   const matchesFilters = (run: RunSummary): boolean => {
@@ -161,26 +161,30 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
   };
   const filtered = runs.filter(matchesFilters);
 
-  return (
-    <Page header={header}>
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ display: 'flex', gap: 16 }}>
-          <Switch
-            label="Show dry runs"
-            checked={showDryRuns}
-            onChange={(_e, data) => setShowDryRuns(data.checked)}
-          />
-          <Switch
-            label="Show interrupted"
-            checked={showInterrupted}
-            onChange={(_e, data) => setShowInterrupted(data.checked)}
-          />
-        </div>
+  const header = (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+      {title}
+      <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexShrink: 0 }}>
+        <Switch
+          label="Show dry runs"
+          checked={showDryRuns}
+          onChange={(_e, data) => setShowDryRuns(data.checked)}
+        />
+        <Switch
+          label="Show interrupted"
+          checked={showInterrupted}
+          onChange={(_e, data) => setShowInterrupted(data.checked)}
+        />
         <Button appearance="primary" icon={<Add20Regular />} onClick={() => setNewRunOpen(true)}>
           New run
         </Button>
       </div>
+    </div>
+  );
+
+  return (
+    <Page header={header}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {newRunOpen && (
         <NewRunDialog
           open

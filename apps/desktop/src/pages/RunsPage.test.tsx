@@ -251,6 +251,26 @@ describe('RunsPage', () => {
     expect(await screen.findByText('r2')).toBeInTheDocument();
   });
 
+  it('puts the filter switches and New run in the page header, not the body', () => {
+    renderRunsPage();
+
+    const header = screen.getByTestId('page-header');
+    expect(within(header).getByText('Runs')).toBeInTheDocument();
+    expect(within(header).getByRole('switch', { name: 'Show dry runs' })).not.toBeChecked();
+    expect(within(header).getByRole('switch', { name: 'Show interrupted' })).toBeChecked();
+    expect(within(header).getByRole('button', { name: 'New run' })).toBeInTheDocument();
+  });
+
+  it('shows only the title in the header when no workspace is selected', () => {
+    useAppStore.setState({ workspacePath: null });
+    renderRunsPage();
+
+    const header = screen.getByTestId('page-header');
+    expect(within(header).getByText('Runs')).toBeInTheDocument();
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New run' })).not.toBeInTheDocument();
+  });
+
   it('calls onSelectRun with the runId when a row is clicked', async () => {
     const { transport, onSelectRun } = renderRunsPage();
 

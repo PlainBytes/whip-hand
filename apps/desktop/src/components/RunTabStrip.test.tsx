@@ -6,7 +6,7 @@ import { MockTransport } from '../agent/transport.ts';
 import { AgentClientProvider } from '../agent/agent-context.tsx';
 import { useAppStore, type JobState } from '../state/store.ts';
 import { settlePendingWorkspaceSwitch } from '../lib/workspace-switch.ts';
-import type { RunTab } from '../lib/run-tabs.ts';
+import { isPreview, type RunTab } from '../lib/run-tabs.ts';
 
 const tab = (runId: string, extra: Partial<RunTab> = {}): RunTab => (
   { kind: 'run', key: runId, workdir: '/ws/a', runId, preview: false, ...extra }
@@ -50,7 +50,7 @@ describe('RunTabStrip', () => {
   beforeEach(() => seed([], null));
   afterEach(() => {
     settlePendingWorkspaceSwitch(false);
-    useAppStore.setState({ tabs: [], activeTabKey: null, jobs: {}, filesDirty: false, workspacePath: null });
+    useAppStore.setState({ tabs: [], activeTabKey: null, drafts: {}, jobs: {}, filesDirty: false, workspacePath: null });
   });
 
   it('always starts with the Runs tab, which has no close button', () => {
@@ -100,7 +100,7 @@ describe('RunTabStrip', () => {
     seed([tab('r1', { preview: true })], 'r1');
     renderStrip();
     fireEvent.doubleClick(screen.getByRole('tab', { name: /r1/ }));
-    expect(useAppStore.getState().tabs[0]!.preview).toBe(false);
+    expect(isPreview(useAppStore.getState().tabs[0]!)).toBe(false);
     expect(screen.getByTestId('run-tab-title-r1')).not.toHaveStyle({ fontStyle: 'italic' });
   });
 
@@ -198,5 +198,75 @@ describe('RunTabStrip', () => {
     expect(useAppStore.getState().activeTabKey).toBeNull();
     const req = await touchRequest(transport);
     expect(req).toMatchObject({ method: 'touchRecentWorkspace', params: { path: '/ws/b' } });
+  });
+
+  describe('draft tabs', () => {
+    function seedDraft(init: Parameters<ReturnType<typeof useAppStore.getState>['createDraft']>[0] = { workdir: '/ws/a' }): string {
+      const id = useAppStore.getState().createDraft(init);
+      useAppStore.getState().openDraftTab(id);
+      return id;
+    }
+
+    it('shows "New run" with a pencil glyph for a blank draft', () => {
+      const id = seedDraft();
+      renderStrip();
+      expect(screen.getByTestId(`run-tab-title-${id}`)).toHaveTextContent('New run');
+      expect(screen.getByTestId(`draft-tab-glyph-${id}`)).toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: /New run/ })).toHaveAttribute('aria-selected', 'true');
+    });
+
+    it('is titled by the selected workflow, and the typed run name wins', () => {
+      const id = seedDraft();
+      renderStrip();
+      act(() => useAppStore.getState().updateDraft(id, { workflowRef: 'global:ship' }));
+      expect(screen.getByTestId(`run-tab-title-${id}`)).toHaveTextContent('ship');
+      act(() => useAppStore.getState().updateDraft(id, { name: 'My run' }));
+      expect(screen.getByTestId(`run-tab-title-${id}`)).toHaveTextContent('My run');
+    });
+
+    it('is never italic, as a preview is', () => {
+      const id = seedDraft();
+      renderStrip();
+      expect(screen.getByTestId(`run-tab-title-${id}`)).not.toHaveStyle({ fontStyle: 'italic' });
+    });
+
+    it('closes an untouched draft at once, deleting it', () => {
+      const id = seedDraft();
+      renderStrip();
+      fireEvent.click(screen.getByRole('button', { name: 'Close New run' }));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(useAppStore.getState()).toMatchObject({ tabs: [], activeTabKey: null });
+      expect(useAppStore.getState().drafts[id]).toBeUndefined();
+    });
+
+    it('asks before closing a draft with content, and keeps it on Keep editing', async () => {
+      const id = seedDraft();
+      useAppStore.getState().updateDraft(id, { name: 'work' });
+      renderStrip();
+      fireEvent.click(screen.getByRole('button', { name: 'Close work' }));
+      expect(await screen.findByRole('dialog')).toBeInTheDocument();
+      expect(useAppStore.getState().drafts[id]).toBeDefined();
+      fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(useAppStore.getState().tabs).toHaveLength(1);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Close work' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Discard changes' }));
+      expect(useAppStore.getState().drafts[id]).toBeUndefined();
+      expect(useAppStore.getState().tabs).toEqual([]);
+    });
+
+    it('switches workspace through openWorkspace before activating a draft from another one', async () => {
+      const id = seedDraft({ workdir: '/ws/b' });
+      act(() => useAppStore.getState().activateTab(null));
+      const { transport } = renderStrip();
+      fireEvent.click(screen.getByRole('tab', { name: /New run/ }));
+
+      const req = await touchRequest(transport);
+      expect(req).toMatchObject({ method: 'touchRecentWorkspace', params: { path: '/ws/b' } });
+      transport.emitLine({ id: req.id, result: { recentWorkspaces: [{ path: '/ws/b', lastOpenedAt: 'now' }] } });
+      await waitFor(() => expect(useAppStore.getState().activeTabKey).toBe(id));
+      expect(useAppStore.getState().workspacePath).toBe('/ws/b');
+    });
   });
 });

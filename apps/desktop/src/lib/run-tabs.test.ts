@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  EMPTY_TABS, activateTab, adoptRunIds, closeTab, openTab, pinTab, retargetTab, type RunTabTarget, type TabsState,
+  EMPTY_TABS, isPreview, activateTab, adoptRunIds, closeTab, convertDraftTab, openDraftTab, openTab, pinTab, retargetTab, type RunTabTarget, type TabsState,
 } from './run-tabs.ts';
 
 const W = '/work/a';
@@ -28,7 +28,7 @@ describe('openTab', () => {
   it('adds a pinned tab and leaves an existing preview alone', () => {
     let state = open(EMPTY_TABS, run('r1'));
     state = open(state, run('r2'), true);
-    expect(state.tabs.map(tab => [tab.key, tab.preview])).toEqual([['r1', true], ['r2', false]]);
+    expect(state.tabs.map(tab => [tab.key, isPreview(tab)])).toEqual([['r1', true], ['r2', false]]);
   });
 
   it('focuses the tab a run already has and adds no duplicate', () => {
@@ -37,7 +37,7 @@ describe('openTab', () => {
     state = open(state, run('r1'));
     expect(keys(state)).toEqual(['r1', 'r2']);
     expect(state.activeTabKey).toBe('r1');
-    expect(state.tabs[0]!.preview).toBe(false);
+    expect(isPreview(state.tabs[0]!)).toBe(false);
   });
 
   it('pins an existing preview tab when opened with pin', () => {
@@ -49,7 +49,7 @@ describe('openTab', () => {
   it('keeps an existing preview tab a preview when re-opened without pin', () => {
     let state = open(EMPTY_TABS, run('r1'));
     state = open(state, run('r1'));
-    expect(state.tabs[0]!.preview).toBe(true);
+    expect(isPreview(state.tabs[0]!)).toBe(true);
   });
 
   it('adds a new preview after the active tab, beside a pinned one', () => {
@@ -73,7 +73,7 @@ describe('openTab', () => {
     state = open(state, run('d'), true);
     state = open(state, run('e'));
     state = open(state, run('f'));
-    expect(state.tabs.filter(tab => tab.preview)).toHaveLength(1);
+    expect(state.tabs.filter(tab => isPreview(tab))).toHaveLength(1);
   });
 
   it('treats the same runId in another workspace as another run', () => {
@@ -95,7 +95,7 @@ describe('openTab', () => {
 describe('pinTab', () => {
   it('turns a preview tab into a pinned one', () => {
     const state = pinTab(open(EMPTY_TABS, run('r1')), 'r1');
-    expect(state.tabs[0]!.preview).toBe(false);
+    expect(isPreview(state.tabs[0]!)).toBe(false);
   });
 
   it('leaves state untouched for an unknown key', () => {
@@ -106,7 +106,7 @@ describe('pinTab', () => {
   it('lets the next un-pinned open add a fresh preview beside it', () => {
     let state = pinTab(open(EMPTY_TABS, run('r1')), 'r1');
     state = open(state, run('r2'));
-    expect(state.tabs.map(tab => [tab.key, tab.preview])).toEqual([['r1', false], ['r2', true]]);
+    expect(state.tabs.map(tab => [tab.key, isPreview(tab)])).toEqual([['r1', false], ['r2', true]]);
   });
 });
 
@@ -198,5 +198,60 @@ describe('adoptRunIds', () => {
   it('leaves tabs alone while their job has no runId', () => {
     const state = open(EMPTY_TABS, { workdir: W, jobId: 'j1' }, true);
     expect(adoptRunIds(state, { j1: {} })).toBe(state);
+  });
+});
+
+describe('draft tabs', () => {
+  it('opens right of the active tab and activates', () => {
+    let state = open(EMPTY_TABS, run('r1'), true);
+    state = open(state, run('r2'), true);
+    state = activateTab(state, 'r1');
+    state = openDraftTab(state, 'd1');
+    expect(keys(state)).toEqual(['r1', 'd1', 'r2']);
+    expect(state.activeTabKey).toBe('d1');
+  });
+
+  it('activates an already open draft instead of adding another', () => {
+    let state = openDraftTab(EMPTY_TABS, 'd1');
+    state = activateTab(open(state, run('r1'), true), 'd1');
+    expect(openDraftTab(state, 'd1')).toBe(state);
+  });
+
+  it('is never the preview, and is left alone by the next un-pinned open', () => {
+    let state = openDraftTab(EMPTY_TABS, 'd1');
+    expect(isPreview(state.tabs[0]!)).toBe(false);
+    state = open(state, run('r1'));
+    state = open(state, run('r2'));
+    expect(keys(state)).toEqual(['d1', 'r2']);
+  });
+
+  it('converts to a pinned run tab at the same position, keeping it active', () => {
+    let state = open(EMPTY_TABS, run('r1'), true);
+    state = openDraftTab(state, 'd1');
+    state = open(state, run('r2'), true);
+    state = activateTab(state, 'd1');
+    state = convertDraftTab(state, 'd1', { workdir: W, jobId: 'j1' });
+    expect(keys(state)).toEqual(['r1', 'j1', 'r2']);
+    expect(state.tabs[1]).toMatchObject({ kind: 'run', jobId: 'j1', preview: false });
+    expect(state.activeTabKey).toBe('j1');
+  });
+
+  it('leaves the active tab alone when converting a draft that is not active', () => {
+    let state = openDraftTab(EMPTY_TABS, 'd1');
+    state = open(state, run('r1'), true);
+    state = convertDraftTab(state, 'd1', { workdir: W, jobId: 'j1' });
+    expect(state.activeTabKey).toBe('r1');
+  });
+
+  it('ignores an unknown draft, and a target with no run or job', () => {
+    const state = openDraftTab(EMPTY_TABS, 'd1');
+    expect(convertDraftTab(state, 'nope', { workdir: W, jobId: 'j1' })).toBe(state);
+    expect(convertDraftTab(state, 'd1', { workdir: W })).toBe(state);
+  });
+
+  it('is skipped by retarget and adoptRunIds', () => {
+    const state = openDraftTab(EMPTY_TABS, 'd1');
+    expect(retargetTab(state, 'd1', run('r1'))).toBe(state);
+    expect(adoptRunIds(state, { d1: { runId: 'r1' } })).toBe(state);
   });
 });

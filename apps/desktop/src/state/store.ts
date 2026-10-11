@@ -31,7 +31,7 @@ import type { LogRow } from '../shared/log-rows.ts';
 import { mergeUsage, progressActionText, summarizeEvent } from '../shared/log-rows.ts';
 import { preselect, type PendingAttachment, type RunAgain } from '../lib/new-run-draft.ts';
 import {
-  activateTab, adoptRunIds, closeTab, openTab, pinTab, retargetTab, type RunTab, type RunTabTarget,
+  activateTab, adoptRunIds, closeTab, convertDraftTab, openDraftTab, openTab, pinTab, retargetTab, type AnyTab, type RunTabTarget,
 } from '../lib/run-tabs.ts';
 
 /**
@@ -832,6 +832,14 @@ export interface RunDraft {
   worktreeChoice: boolean | null;
   maxIterationsRaw: string;
   attachments: PendingAttachment[];
+  /**
+   * The inputs the form filled in by itself (a workflow's remembered values and
+   * defaults, or a run-again's), so "has the person typed anything" can tell
+   * their edits from the starting point.
+   */
+  baselineValues: Record<string, string>;
+  /** A run-again request that found no workflow list yet; the form applies it when the list arrives. */
+  runAgain?: RunAgain | undefined;
   createdAt: number;
   updatedAt: number;
 }
@@ -843,6 +851,16 @@ export interface RunDraftInit {
   identityKey?: string;
   /** Wins over the workspace's remembered workflow when it names a usable one. */
   runAgain?: RunAgain;
+}
+
+/** Whether closing the draft would lose something typed: an input edit, a name or an attachment. */
+export function draftHasContent(draft: RunDraft): boolean {
+  if (draft.name.trim() !== '' || draft.attachments.length > 0) return true;
+  const keys = new Set([...Object.keys(draft.values), ...Object.keys(draft.baselineValues)]);
+  for (const key of keys) {
+    if ((draft.values[key] ?? '') !== (draft.baselineValues[key] ?? '')) return true;
+  }
+  return false;
 }
 
 /** Selector for one draft: `useAppStore(selectDraft(id))`. */
@@ -961,17 +979,10 @@ export interface AppState {
   ) => void;
 
   /**
-   * Set by RunDetailPage's "Run again" button, consumed by NewRunPage on
-   * mount to pre-select the workflow and override its inputs — cleared once applied.
-   */
-  pendingRunAgain: { workflow: string; inputs: Record<string, string> } | null;
-  setPendingRunAgain: (v: { workflow: string; inputs: Record<string, string> } | null) => void;
-
-  /**
    * Run tabs on the Runs page, in memory only. `activeTabKey` null is the
    * fixed Runs list tab. The rules live in lib/run-tabs.ts.
    */
-  tabs: RunTab[];
+  tabs: AnyTab[];
   activeTabKey: string | null;
   openRunTab: (target: RunTabTarget, opts: { pin: boolean }) => void;
   pinTab: (key: string) => void;
@@ -988,6 +999,12 @@ export interface AppState {
   updateDraft: (id: string, patch: RunDraftPatch | ((draft: RunDraft) => RunDraftPatch)) => void;
   /** Releases the pasted-image thumbnails the draft holds. */
   deleteDraft: (id: string) => void;
+  /** Opens the draft's tab, right of the active one, and activates it. */
+  openDraftTab: (draftId: string) => void;
+  /** Turns the draft's tab into the pinned tab of the run it started, and deletes the draft. */
+  convertDraftTab: (draftId: string, target: RunTabTarget) => void;
+  /** Closes the draft's tab and deletes the draft. */
+  discardDraft: (draftId: string) => void;
 
   /**
    * True while the Files page holds an unsaved draft. It lives here rather
@@ -1145,7 +1162,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       runs: [],
       workflows: [],
       config: null,
-      pendingRunAgain: null,
       // The tabs stay open across workspaces, but the list of the workspace
       // just opened is what should show.
       activeTabKey: null,
@@ -1435,9 +1451,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     };
   }),
 
-  pendingRunAgain: null,
-  setPendingRunAgain: pendingRunAgain => set({ pendingRunAgain }),
-
   drafts: {},
   createDraft: init => {
     const { workflows, appState } = get();
@@ -1456,6 +1469,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       worktreeChoice: null,
       maxIterationsRaw: '',
       attachments: [],
+      baselineValues: chosen?.values ?? {},
+      // Kept for the form to apply once the list arrives, when it was not there to consider now.
+      ...(init.runAgain && !chosen && workflows.length === 0 ? { runAgain: init.runAgain } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -1478,6 +1494,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       const { [id]: _removed, ...rest } = state.drafts;
       return { drafts: rest };
     });
+  },
+
+  discardDraft: id => {
+    set(state => closeTab({ tabs: state.tabs, activeTabKey: state.activeTabKey }, id));
+    get().deleteDraft(id);
+  },
+  openDraftTab: draftId => set(state => openDraftTab({ tabs: state.tabs, activeTabKey: state.activeTabKey }, draftId)),
+  convertDraftTab: (draftId, target) => {
+    set(state => convertDraftTab({ tabs: state.tabs, activeTabKey: state.activeTabKey }, draftId, target));
+    get().deleteDraft(draftId);
   },
 
   tabs: [],

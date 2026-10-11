@@ -9,7 +9,7 @@ const BROWSER_CAPS: AppCapabilities = { host: 'browser', localFiles: false };
 
 /**
  * PageContent's job here is just the glue between a card/page click and
- * `pendingRunAgain`: scoping the ref so a global workflow can't silently
+ * a new draft: scoping the ref so a global workflow can't silently
  * re-resolve to a same-named project one (review: do-review/iter-2, finding
  * 1 — RunDetailPage's "Run again" was missing this, WorkflowsPage's card
  * already had it). Real WorkflowsPage/RunDetailPage need a live agent
@@ -26,19 +26,25 @@ vi.mock('../pages/FilesPage.tsx', () => ({
   FilesPage: () => <div>files-page</div>,
 }));
 
+vi.mock('./NewRunForm.tsx', () => ({
+  NewRunForm: ({ draftId, visible }: { draftId: string; visible?: boolean }) => (
+    <div data-testid={`form-${draftId}`} data-visible={String(visible)} />
+  ),
+}));
+
 vi.mock('./RunTabStrip.tsx', () => ({
   RunTabStrip: () => <div>run-tab-strip</div>,
 }));
 
 vi.mock('../pages/RunsPage.tsx', () => ({
-  RunsPage: ({ onSelectRun, onStarted }: {
+  RunsPage: ({ onSelectRun, onNewRun }: {
     onSelectRun: (runId: string, pin: boolean) => void;
-    onStarted: (jobId: string) => void;
+    onNewRun: () => void;
   }) => (
     <>
       <button onClick={() => onSelectRun('r1', false)}>select-run</button>
       <button onClick={() => onSelectRun('r1', true)}>pin-run</button>
-      <button onClick={() => onStarted('job-1')}>started</button>
+      <button onClick={onNewRun}>new-run</button>
     </>
   ),
 }));
@@ -75,35 +81,93 @@ const TAB = { kind: 'run', key: 'r1', workdir: '/ws', runId: 'r1', preview: fals
 
 describe('PageContent', () => {
   beforeEach(() => {
-    useAppStore.setState({ workspacePath: '/ws', pendingRunAgain: null, tabs: [], activeTabKey: null });
+    useAppStore.setState({ workspacePath: '/ws', drafts: {}, tabs: [], activeTabKey: null });
   });
 
   afterEach(() => {
-    useAppStore.setState({ workspacePath: null, pendingRunAgain: null, tabs: [], activeTabKey: null });
+    useAppStore.setState({ workspacePath: null, drafts: {}, tabs: [], activeTabKey: null });
   });
 
-  it('scopes a global workflow card click into a global:-prefixed pendingRunAgain', () => {
+  /** The workflow the active draft was created for. */
+  function activeDraft() {
+    const { drafts, activeTabKey } = useAppStore.getState();
+    return drafts[activeTabKey!]!;
+  }
+
+  it('scopes a global workflow card click into a draft that selects the global entry', () => {
+    useAppStore.setState({
+      workflows: [{ name: 'feature', source: 'global', path: '/g/feature.yaml', workflow: { name: 'feature', steps: [] } }] as never,
+    });
+    const { onNavigate } = renderPageContent({ page: 'workflows' });
+    fireEvent.click(screen.getByRole('button', { name: 'run-workflow-global' }));
+    expect(activeDraft()).toMatchObject({ workdir: '/ws', workflowRef: 'global:feature' });
+    expect(useAppStore.getState().tabs).toMatchObject([{ kind: 'draft' }]);
+    expect(onNavigate).toHaveBeenCalledWith('runs');
+  });
+
+  it('makes a new draft for every Run workflow click', () => {
     renderPageContent({ page: 'workflows' });
     fireEvent.click(screen.getByRole('button', { name: 'run-workflow-global' }));
-    expect(useAppStore.getState().pendingRunAgain).toEqual({ workflow: 'global:feature', inputs: {} });
+    fireEvent.click(screen.getByRole('button', { name: 'run-workflow-global' }));
+    expect(useAppStore.getState().tabs).toHaveLength(2);
+    expect(Object.keys(useAppStore.getState().drafts)).toHaveLength(2);
   });
 
-  it('scopes Run again into a global:-prefixed pendingRunAgain when the run was started from a global workflow', () => {
-    useAppStore.setState({ tabs: [TAB], activeTabKey: 'r1' });
+  it('scopes Run again into a draft on the global entry when the run was started from a global workflow', () => {
+    useAppStore.setState({
+      tabs: [TAB], activeTabKey: 'r1',
+      workflows: [{ name: 'feature', source: 'global', path: '/g/feature.yaml', workflow: { name: 'feature', inputs: { a: {} }, steps: [] } }] as never,
+    });
     renderPageContent({ page: 'runs' });
     fireEvent.click(screen.getByRole('button', { name: 'run-again-global' }));
-    expect(useAppStore.getState().pendingRunAgain).toEqual({ workflow: 'global:feature', inputs: { a: '1' } });
-    // Back to the list, where New run opens; the run's tab stays.
-    expect(useAppStore.getState().activeTabKey).toBeNull();
-    expect(useAppStore.getState().tabs).toHaveLength(1);
+    expect(activeDraft()).toMatchObject({ workflowRef: 'global:feature', values: { a: '1' } });
+    // The run's tab stays, with the draft opened beside it.
+    expect(useAppStore.getState().tabs).toMatchObject([{ key: 'r1' }, { kind: 'draft' }]);
   });
 
   it('leaves an unscoped Run again bare, for a run with no recorded workflowSource', () => {
-    useAppStore.setState({ tabs: [TAB], activeTabKey: 'r1' });
+    useAppStore.setState({
+      tabs: [TAB], activeTabKey: 'r1',
+      workflows: [{ name: 'feature', source: 'project', path: '/p/feature.yaml', workflow: { name: 'feature', inputs: { a: {} }, steps: [] } }] as never,
+    });
     renderPageContent({ page: 'runs' });
     fireEvent.click(screen.getByRole('button', { name: 'run-again-unscoped' }));
-    expect(useAppStore.getState().pendingRunAgain).toEqual({ workflow: 'feature', inputs: { a: '1' } });
+    expect(activeDraft()).toMatchObject({ workflowRef: 'feature', values: { a: '1' } });
   });
+
+  it('opens a blank draft tab, three times for three clicks, and no dialog', () => {
+    renderPageContent({ page: 'runs' });
+    for (let i = 0; i < 3; i++) {
+      // Back on the Runs list, where the button is, between clicks.
+      act(() => useAppStore.getState().activateTab(null));
+      fireEvent.click(screen.getByRole('button', { name: 'new-run' }));
+    }
+    const { tabs, activeTabKey } = useAppStore.getState();
+    expect(tabs.map(tab => tab.kind)).toEqual(['draft', 'draft', 'draft']);
+    expect(activeTabKey).toBe(tabs[0]!.key); // each lands right of the list tab it was opened from
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('shows only the active draft\'s form, and keeps the others mounted but hidden', () => {
+    const { createDraft, openDraftTab } = useAppStore.getState();
+    const a = createDraft({ workdir: '/ws' });
+    const b = createDraft({ workdir: '/ws' });
+    openDraftTab(a);
+    openDraftTab(b);
+    renderPageContent({ page: 'runs' });
+    expect(screen.getByTestId(`form-${a}`)).toHaveAttribute('data-visible', 'false');
+    expect(screen.getByTestId(`form-${b}`)).toHaveAttribute('data-visible', 'true');
+    expect(screen.queryByRole('button', { name: 'select-run' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the forms mounted but not visible on another page', () => {
+    const { createDraft, openDraftTab } = useAppStore.getState();
+    const a = createDraft({ workdir: '/ws' });
+    openDraftTab(a);
+    renderPageContent({ page: 'workflows' });
+    expect(screen.getByTestId(`form-${a}`)).toHaveAttribute('data-visible', 'false');
+  });
+
   it('shows the tab strip and the Runs list while the Runs tab is active', () => {
     renderPageContent({ page: 'runs' });
     expect(screen.getByText('run-tab-strip')).toBeInTheDocument();
@@ -133,12 +197,6 @@ describe('PageContent', () => {
     act(() => useAppStore.setState({ activeTabKey: null }));
     fireEvent.click(screen.getByRole('button', { name: 'pin-run' }));
     expect(useAppStore.getState().tabs).toMatchObject([{ key: 'r1', preview: false }]);
-  });
-
-  it('opens a just-started run in a pinned tab keyed by its job', () => {
-    renderPageContent({ page: 'runs' });
-    fireEvent.click(screen.getByRole('button', { name: 'started' }));
-    expect(useAppStore.getState().tabs).toMatchObject([{ key: 'job-1', jobId: 'job-1', preview: false }]);
   });
 
   it('goes back to the Runs tab and keeps the run\'s tab', () => {

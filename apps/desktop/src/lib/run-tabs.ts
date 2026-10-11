@@ -21,8 +21,19 @@ export interface RunTab extends RunTabTarget {
   preview: boolean;
 }
 
+/**
+ * A new run being filled in; `key` is the draft's id. Always pinned — the
+ * preview slot is only ever taken by a run tab.
+ */
+export interface DraftTab {
+  kind: 'draft';
+  key: string;
+}
+
+export type AnyTab = RunTab | DraftTab;
+
 export interface TabsState {
-  tabs: RunTab[];
+  tabs: AnyTab[];
   /** null is the fixed Runs list tab, which is not in `tabs`. */
   activeTabKey: string | null;
 }
@@ -32,6 +43,11 @@ export const EMPTY_TABS: TabsState = { tabs: [], activeTabKey: null };
 /** Stable across the job gaining a runId only in that the runId wins once known. */
 export function tabKey(target: Pick<RunTabTarget, 'runId' | 'jobId'>): string {
   return target.runId ?? target.jobId ?? '';
+}
+
+/** Whether `tab` is the italic, replaceable preview tab. */
+export function isPreview(tab: AnyTab): boolean {
+  return tab.kind === 'run' && tab.preview;
 }
 
 function toTab(target: RunTabTarget, preview: boolean): RunTab {
@@ -66,9 +82,9 @@ function merged(tab: RunTab, target: RunTabTarget, preview: boolean): RunTab {
 
 export function openTab(state: TabsState, target: RunTabTarget, opts: { pin: boolean }): TabsState {
   if (tabKey(target) === '') return state;
-  const found = state.tabs.findIndex(tab => matches(tab, target));
+  const found = state.tabs.findIndex(tab => tab.kind === 'run' && matches(tab, target));
   if (found !== -1) {
-    const existing = state.tabs[found]!;
+    const existing = state.tabs[found] as RunTab;
     const next = merged(existing, target, existing.preview && !opts.pin);
     const tabs = state.tabs.slice();
     tabs[found] = next;
@@ -77,7 +93,7 @@ export function openTab(state: TabsState, target: RunTabTarget, opts: { pin: boo
 
   const fresh = toTab(target, !opts.pin);
   const tabs = state.tabs.slice();
-  const previewAt = opts.pin ? -1 : tabs.findIndex(tab => tab.preview);
+  const previewAt = opts.pin ? -1 : tabs.findIndex(isPreview);
   if (previewAt !== -1) {
     tabs[previewAt] = fresh;
   } else {
@@ -89,8 +105,8 @@ export function openTab(state: TabsState, target: RunTabTarget, opts: { pin: boo
 }
 
 export function pinTab(state: TabsState, key: string): TabsState {
-  if (!state.tabs.some(tab => tab.key === key && tab.preview)) return state;
-  return { ...state, tabs: state.tabs.map(tab => (tab.key === key ? { ...tab, preview: false } : tab)) };
+  if (!state.tabs.some(tab => tab.kind === 'run' && tab.key === key && tab.preview)) return state;
+  return { ...state, tabs: state.tabs.map(tab => (tab.kind === 'run' && tab.key === key ? { ...tab, preview: false } : tab)) };
 }
 
 export function closeTab(state: TabsState, key: string): TabsState {
@@ -107,6 +123,30 @@ export function activateTab(state: TabsState, key: string | null): TabsState {
   return state.activeTabKey === key ? state : { ...state, activeTabKey: key };
 }
 
+/** Opens a tab for a new draft right of the active one and activates it; an existing one is just activated. */
+export function openDraftTab(state: TabsState, draftId: string): TabsState {
+  if (state.tabs.some(tab => tab.key === draftId)) return activateTab(state, draftId);
+  const tabs = state.tabs.slice();
+  const activeAt = tabs.findIndex(tab => tab.key === state.activeTabKey);
+  tabs.splice(activeAt + 1, 0, { kind: 'draft', key: draftId });
+  return { tabs, activeTabKey: draftId };
+}
+
+/**
+ * Swaps a started draft's tab for the pinned tab of its run, in the same
+ * position. The run tab is active only if the draft's was: a start that
+ * finishes after the person moved on must not pull them back.
+ */
+export function convertDraftTab(state: TabsState, draftId: string, target: RunTabTarget): TabsState {
+  const at = state.tabs.findIndex(tab => tab.kind === 'draft' && tab.key === draftId);
+  if (at === -1 || tabKey(target) === '') return state;
+  const fresh = toTab(target, false);
+  const wasActive = state.activeTabKey === draftId;
+  const tabs = state.tabs.slice();
+  tabs[at] = fresh;
+  return { tabs, activeTabKey: wasActive ? fresh.key : state.activeTabKey };
+}
+
 /**
  * Re-points tab `key` at `target`, keeping its place and pin state. The key
  * follows the target (a job that learns its runId changes it); if that lands
@@ -117,6 +157,7 @@ export function retargetTab(state: TabsState, key: string, target: RunTabTarget)
   const at = state.tabs.findIndex(tab => tab.key === key);
   if (at === -1 || tabKey(target) === '') return state;
   const old = state.tabs[at]!;
+  if (old.kind !== 'run') return state;
   const next = toTab({ ...target, workdir: target.workdir || old.workdir }, old.preview);
   const wasActive = state.activeTabKey === key;
 
@@ -126,7 +167,7 @@ export function retargetTab(state: TabsState, key: string, target: RunTabTarget)
     tabs[at] = next;
   } else {
     const keep = Math.min(at, other);
-    tabs[keep] = { ...next, preview: old.preview && state.tabs[other]!.preview };
+    tabs[keep] = { ...next, preview: old.preview && isPreview(state.tabs[other]!) };
     tabs.splice(Math.max(at, other), 1);
   }
   const otherWasActive = other !== -1 && state.activeTabKey === state.tabs[other]!.key;
@@ -140,7 +181,7 @@ export function retargetTab(state: TabsState, key: string, target: RunTabTarget)
 export function adoptRunIds(state: TabsState, jobs: Record<string, { runId?: string | undefined }>): TabsState {
   let next = state;
   for (const tab of state.tabs) {
-    if (tab.runId !== undefined || tab.jobId === undefined) continue;
+    if (tab.kind !== 'run' || tab.runId !== undefined || tab.jobId === undefined) continue;
     const runId = jobs[tab.jobId]?.runId;
     if (runId !== undefined) next = retargetTab(next, tab.key, { ...tab, runId });
   }

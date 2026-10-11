@@ -1,8 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactElement } from 'react';
 import {
   Button,
-  DialogActions,
-  DialogContent,
   Dropdown,
   Field,
   Input,
@@ -19,13 +17,15 @@ import {
 } from '@fluentui/react-components';
 import { Attach20Regular, Document20Regular } from '@fluentui/react-icons';
 import { AutoGrowTextarea } from './AutoGrowTextarea.tsx';
+import { Page } from './Page.tsx';
+import { useDiscardDraft } from './use-discard-draft.tsx';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useCapabilities } from '../capabilities.tsx';
 import { extensionForImageMime } from '../files/file-kind.ts';
 import { bytesToBase64 } from '../lib/base64.ts';
 import { parsePositiveInt } from '../lib/parse-number.ts';
 import {
-  entryKey, findEntry, initialValues, preselect, refFor, type PendingAttachment, type RunAgain,
+  entryKey, findEntry, initialValues, preselect, refFor, type PendingAttachment,
 } from '../lib/new-run-draft.ts';
 import { findWorkspaceMemory, selectDraft, useAppStore } from '../state/store.ts';
 import { collectLoops, findStep, flattenSteps, isLoopStep } from '../shared/steps.ts';
@@ -97,7 +97,7 @@ interface AttachmentsFieldProps {
   names: readonly string[];
   /** The selected workflow reads `attachments`; without that, nothing can be added. */
   accepting: boolean;
-  /** Files are being dragged over the window right now. */
+  /** Files are being dragged over the form right now. */
   dropActive: boolean;
   error: string | null;
   onAdd: () => void;
@@ -118,7 +118,7 @@ function AttachmentsField({ items, names, accepting, dropActive, error, onAdd, o
     <Field
       label="Attachments"
       style={NARROW}
-      hint={accepting ? 'Drop files anywhere on this dialog, or paste an image.' : NOT_READ_HINT}
+      hint={accepting ? 'Drop files here, or paste an image.' : NOT_READ_HINT}
       validationState={error ? 'error' : 'none'}
       validationMessage={error ?? undefined}
     >
@@ -181,28 +181,21 @@ function nextAttachmentKey(items: readonly PendingAttachment[]): number {
 export interface NewRunFormProps {
   draftId: string;
   /**
-   * Whether the form is on screen. A hidden form keeps its draft, but its
-   * "another run active" answer goes stale, so it is asked again on showing.
+   * Whether the form is the one on screen. Hidden forms stay mounted, so their
+   * local state survives a switch of tab, but they hold no drop listener and
+   * their workspace-wide answers (the workflow list, "another run active")
+   * go stale, so those are asked again on showing.
    */
   visible?: boolean;
-  /** Extra action beside Start — the host's Cancel. */
-  cancel?: ReactNode;
-  onStarted: (jobId: string) => void;
-  /** A run-again request still waiting for the workflow list; applied (and reported consumed) on arrival. */
-  runAgain?: RunAgain;
-  onRunAgainConsumed?: () => void;
-  /** Files are being dragged over the window and would be accepted. */
-  onDropActiveChange?: (active: boolean) => void;
 }
 
 /**
- * Workflow picker + generated input form + attachments + dry-run switch,
- * driving startRun. Everything worth keeping lives in the store's draft; only
- * transient UI state is local.
+ * A draft tab's page: workflow picker + generated input form + attachments +
+ * dry-run switch, driving startRun. Everything worth keeping lives in the
+ * store's draft; only transient UI state is local. A successful start turns
+ * the draft's tab into the run's tab.
  */
-export function NewRunForm({
-  draftId, visible = true, cancel, onStarted, runAgain, onRunAgainConsumed, onDropActiveChange,
-}: NewRunFormProps) {
+export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
   const client = useAgentClient();
   const draft = useAppStore(selectDraft(draftId));
   const workflows = useAppStore(state => state.workflows);
@@ -221,9 +214,13 @@ export function NewRunForm({
   const [attachError, setAttachError] = useState<string | null>(null);
   const [dropHover, setDropHover] = useState(false);
   const { pickFiles, onFileDrop } = useCapabilities();
+  const discard = useDiscardDraft();
 
+  // The store holds one workflow list, for the current workspace. A hidden
+  // draft may belong to another, so each fetches on showing, which is also
+  // when the tab's activation has switched the workspace to its own.
   useEffect(() => {
-    if (!workdir) return;
+    if (!visible || !workdir) return;
     let cancelled = false;
     client
       .request('listWorkflows', { workdir })
@@ -236,7 +233,7 @@ export function NewRunForm({
     return () => {
       cancelled = true;
     };
-  }, [client, workdir, setWorkflows]);
+  }, [client, workdir, visible, setWorkflows]);
 
   // `visible` is in the deps because the answer goes stale: a run started (or
   // finished) since the last check would otherwise keep whatever verdict the
@@ -277,23 +274,24 @@ export function NewRunForm({
     const memory = findWorkspaceMemory(useAppStore.getState().appState, { path: draft.workdir, identityKey: draft.identityKey });
     setStartError(null);
     // The worktree choice is for the workflow it was made on, so it resets.
-    updateDraft(draftId, { workflowRef: refFor(entry), values: initialValues(entry, memory), worktreeChoice: null });
+    const values = initialValues(entry, memory);
+    updateDraft(draftId, { workflowRef: refFor(entry), values, baselineValues: values, worktreeChoice: null });
   }
 
-  // Auto-select once workflows arrive: an explicit run-again beats the remembered workflow.
-  // The run-again request is reported consumed unconditionally once it has been
-  // considered — whether or not its target validated — so a stale request (naming
-  // a workflow that's since been removed or now has a parse error) can't wrongly
-  // reapply on a later mount (e.g. after switching workspaces).
+  // Auto-select once workflows arrive: a run-again the draft was created with
+  // beats the remembered workflow. The request is dropped once considered —
+  // whether or not its target validated — so a stale one (naming a workflow
+  // that's since been removed or now has a parse error) can't reapply later.
   useEffect(() => {
+    if (!visible) return;
     const current = useAppStore.getState().drafts[draftId];
     if (!current || current.workflowRef !== null || workflows.length === 0) return;
     const memory = findWorkspaceMemory(useAppStore.getState().appState, { path: current.workdir, identityKey: current.identityKey });
-    const chosen = preselect(workflows, memory, runAgain);
-    if (chosen) updateDraft(draftId, chosen);
-    if (runAgain) onRunAgainConsumed?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per workflows arrival
-  }, [workflows]);
+    const chosen = preselect(workflows, memory, current.runAgain);
+    if (chosen) updateDraft(draftId, { ...chosen, baselineValues: chosen.values, runAgain: undefined });
+    else if (current.runAgain) updateDraft(draftId, { runAgain: undefined });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per workflows arrival or showing
+  }, [workflows, visible]);
 
   const values = draft?.values ?? {};
   const name = draft?.name ?? '';
@@ -412,9 +410,6 @@ export function NewRunForm({
   }, [visible, onFileDrop, attachFieldShown]);
 
   const dropActive = dropHover && acceptingAttachments;
-  useEffect(() => {
-    onDropActiveChange?.(dropActive);
-  }, [dropActive, onDropActiveChange]);
 
   async function handleStart(): Promise<void> {
     if (!draft || !selectedEntry || !selectedWorkflow) return;
@@ -453,7 +448,10 @@ export function NewRunForm({
       // rather than from the first whiphandEvent.
       noteJobWorkspace(result.jobId, draft.workdir, draft.identityKey);
       rememberInputsLocal(draft.workdir, ref, values, draft.identityKey);
-      onStarted(result.jobId);
+      // The draft's own workspace, not the current one: it may have been left since.
+      useAppStore.getState().convertDraftTab(draftId, {
+        workdir: draft.workdir, identityKey: draft.identityKey, jobId: result.jobId,
+      });
     } catch (err) {
       setStartError(errorMessage(err));
     } finally {
@@ -463,12 +461,13 @@ export function NewRunForm({
 
   if (!draft) return null;
 
-  // `display: contents` keeps the content and actions direct grid children of
-  // the host's DialogBody while giving paste and the Start shortcut one place
-  // to listen.
   return (
     <div
-      style={{ display: 'contents' }}
+      style={{
+        height: '100%', minHeight: 0,
+        outline: dropActive ? '2px dashed var(--colorBrandStroke1)' : undefined,
+        outlineOffset: -4,
+      }}
       onPaste={handlePaste}
       onKeyDown={e => {
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && canStart) {
@@ -477,7 +476,8 @@ export function NewRunForm({
         }
       }}
     >
-      <DialogContent style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <Page header={<Text weight="semibold" size={500}>New run</Text>}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         {loadError && (
           <MessageBar intent="error" style={NARROW}><MessageBarBody>{loadError}</MessageBarBody></MessageBar>
         )}
@@ -627,13 +627,17 @@ export function NewRunForm({
             )}
           </>
         )}
-      </DialogContent>
-      <DialogActions>
-        {cancel}
-        <Button appearance="primary" disabled={!canStart} onClick={() => void handleStart()}>
-          {starting ? 'Starting…' : 'Start'}
-        </Button>
-      </DialogActions>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Button appearance="primary" disabled={!canStart} onClick={() => void handleStart()}>
+            {starting ? 'Starting…' : 'Start'}
+          </Button>
+          <Button appearance="secondary" disabled={starting} onClick={() => discard.request(draftId)}>
+            Discard
+          </Button>
+        </div>
+      </div>
+      </Page>
+      {discard.dialog}
     </div>
   );
 }

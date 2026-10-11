@@ -22,7 +22,6 @@ import { liveStageProgress, useAppStore, waitingRunIds } from '../state/store.ts
 import { sameSet, sameStageProgress, useAppStoreStable } from '../state/use-stable-selector.ts';
 import type { RunSummary } from '../agent/client.ts';
 import { POLL_INTERVAL_MS, runColumns, runLabel } from './run-columns.tsx';
-import { NewRunDialog } from '../components/NewRunDialog.tsx';
 import { DeleteRunDialog } from '../components/DeleteRunDialog.tsx';
 import { errorMessage } from '../lib/error-message.ts';
 import { DangerButton } from '../components/DangerButton.tsx';
@@ -33,16 +32,16 @@ import { Page } from '../components/Page.tsx';
 export interface RunsPageProps {
   /** A single click opens a preview tab; a double click (`pin`) a pinned one. */
   onSelectRun: (runId: string, pin: boolean) => void;
-  onStarted: (jobId: string) => void;
+  /** Opens a new draft tab. */
+  onNewRun: () => void;
 }
 
 /** Fluent DataGrid over listRuns, polled every 5s, with dry-run/interrupted filters. */
-export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
+export function RunsPage({ onSelectRun, onNewRun }: RunsPageProps) {
   const client = useAgentClient();
   const workspacePath = useAppStore(state => state.workspacePath);
   const runs = useAppStore(state => state.runs);
   const setRuns = useAppStore(state => state.setRuns);
-  const pendingRunAgain = useAppStore(state => state.pendingRunAgain);
   const identityKey = useAppStore(state => state.workspaceIdentityKey);
   const workspace = useMemo(
     () => (workspacePath === null ? undefined : { path: workspacePath, identityKey: identityKey ?? undefined }),
@@ -55,7 +54,6 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [showDryRuns, setShowDryRuns] = useState(false);
   const [showInterrupted, setShowInterrupted] = useState(true);
-  const [newRunOpen, setNewRunOpen] = useState(false);
   /** The run awaiting delete confirmation; null when no dialog is open. */
   const [deleting, setDeleting] = useState<RunSummary | null>(null);
   const [lockingId, setLockingId] = useState<string | null>(null);
@@ -77,10 +75,6 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
         setError(errorMessage(err));
       });
   }, [client, workspacePath, setRuns]);
-
-  useEffect(() => {
-    if (pendingRunAgain) setNewRunOpen(true);
-  }, [pendingRunAgain]);
 
   useEffect(() => {
     if (!workspacePath) return;
@@ -180,20 +174,10 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
             onChange={(_e, data) => setShowInterrupted(data.checked)}
           />
         </div>
-        <Button appearance="primary" icon={<Add20Regular />} onClick={() => setNewRunOpen(true)}>
+        <Button appearance="primary" icon={<Add20Regular />} onClick={onNewRun}>
           New run
         </Button>
       </div>
-      {newRunOpen && (
-        <NewRunDialog
-          open
-          onOpenChange={setNewRunOpen}
-          onStarted={jobId => {
-            setNewRunOpen(false);
-            onStarted(jobId);
-          }}
-        />
-      )}
       {error && <Text>Failed to load runs: {error}</Text>}
       {openError && (
         <MessageBar intent="error" data-testid="runs-open-error">

@@ -20,11 +20,9 @@ import { errorMessage } from '../lib/error-message.ts';
 
 export interface WorkflowsPageProps {
   /**
-   * Start a run of this workflow. App.tsx routes it through the same
-   * pendingRunAgain path "Run again" uses, so the Runs page opens with
-   * NewRunDialog already on this workflow. `source` distinguishes a global
-   * card from a project one sharing the same name — see NewRunDialog's
-   * `findEntry`.
+   * Start a run of this workflow. PageContent opens a new draft tab with this
+   * workflow selected, the way "Run again" does. `source` distinguishes a global
+   * card from a project one sharing the same name — see `findEntry`.
    */
   onRunWorkflow: (name: string, source: Scope) => void;
 }

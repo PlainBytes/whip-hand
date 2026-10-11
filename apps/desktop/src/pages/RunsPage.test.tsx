@@ -9,16 +9,16 @@ import { useAppStore } from '../state/store.ts';
 import { CapabilitiesProvider, type AppCapabilities } from '../capabilities.tsx';
 import { hasInjectedStyle } from '../test/badge-style.ts';
 
-function renderRunsPage(onSelectRun = vi.fn(), onStarted = vi.fn(), capabilities?: AppCapabilities) {
+function renderRunsPage(onSelectRun = vi.fn(), onNewRun = vi.fn(), capabilities?: AppCapabilities) {
   const transport = new MockTransport();
   const client = new AgentClient(transport);
   const page = (
     <AgentClientProvider client={client}>
-      <RunsPage onSelectRun={onSelectRun} onStarted={onStarted} />
+      <RunsPage onSelectRun={onSelectRun} onNewRun={onNewRun} />
     </AgentClientProvider>
   );
   render(capabilities ? <CapabilitiesProvider value={capabilities}>{page}</CapabilitiesProvider> : page);
-  return { transport, client, onSelectRun, onStarted };
+  return { transport, client, onSelectRun, onNewRun };
 }
 
 describe('RunsPage', () => {
@@ -28,7 +28,7 @@ describe('RunsPage', () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    useAppStore.setState({ workspacePath: null, runs: [], pendingRunAgain: null });
+    useAppStore.setState({ workspacePath: null, runs: [] });
   });
 
   async function respondListRuns(transport: MockTransport, result: unknown) {
@@ -403,22 +403,13 @@ describe('RunsPage', () => {
     expect(screen.queryByRole('switch', { name: /all workspaces/i })).not.toBeInTheDocument();
   });
 
-  it('opens the New run dialog when the toolbar button is clicked', async () => {
-    const { transport } = renderRunsPage();
+  it('asks for a new draft when the toolbar button is clicked, and opens no dialog', async () => {
+    const { transport, onNewRun } = renderRunsPage();
     await respondListRuns(transport, []);
 
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'New run' }));
-    expect(await screen.findByRole('dialog')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'New run' })).toBeInTheDocument();
-  });
-
-  it('auto-opens the New run dialog when a run-again request is pending', async () => {
-    useAppStore.setState({ pendingRunAgain: { workflow: 'ship-feature', inputs: { ticket: 'T-1' } } });
-    const { transport } = renderRunsPage();
-    await respondListRuns(transport, []);
-
-    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(onNewRun).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   describe('worktree runs', () => {

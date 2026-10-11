@@ -11,7 +11,7 @@ use crate::process::git::{
     GitResult, branch_exists, check_ref_format, current_branch, fetch, is_ancestor,
     rev_parse_commit, show_prefix, upstream_of, worktree_add,
 };
-use crate::store::runs::get_run;
+use crate::store::runs::{get_run, list_runs};
 use crate::types::{Workflow, WorktreeSetting};
 
 /// What a run asked for, before rendering: `None` = run in the workspace.
@@ -71,6 +71,8 @@ pub struct WorktreeRecord {
     /// What the branch started from: `origin/main` when synced, else `base`. Absent in
     /// records written before sync existed.
     pub started_from: Option<String>,
+    /// The run whose worktree this run continues in; absent for the run that created it.
+    pub continued_from: Option<String>,
 }
 
 /// A created worktree, and why it did not start from the synced upstream when it was
@@ -267,6 +269,7 @@ pub async fn create(
             base: base.to_string(),
             base_sha: start.sha,
             started_from: Some(start.from),
+            continued_from: None,
         },
         fallback: start.fallback,
     })
@@ -364,6 +367,7 @@ pub fn record_from_manifest(manifest: &JsObject) -> Option<WorktreeRecord> {
         base: field("base")?,
         base_sha: field("baseSha")?,
         started_from: field("startedFrom"),
+        continued_from: field("continuedFrom"),
     })
 }
 
@@ -375,15 +379,39 @@ pub fn record_to_js(r: &WorktreeRecord) -> JsObject {
     if let Some(from) = &r.started_from {
         o.set("startedFrom", from.as_str());
     }
+    if let Some(from) = &r.continued_from {
+        o.set("continuedFrom", from.as_str());
+    }
     o
 }
 
 /// The `worktree` an event carries: `path` is rewritten to workspace-relative on emit.
 pub fn record_to_event(r: &WorktreeRecord) -> JsObject {
-    obj! {
+    let mut o = obj! {
         "path" => r.path.as_str(), "branch" => r.branch.as_str(),
         "base" => r.base.as_str(), "baseSha" => r.base_sha.as_str(),
+    };
+    if let Some(from) = &r.continued_from {
+        o.set("continuedFrom", from.as_str());
     }
+    o
+}
+
+/// The id of a `running` run, other than `except`, whose worktree is at `path`.
+pub fn busy_run(
+    workspace: &str,
+    config: &WorkspaceConfig,
+    path: &str,
+    except: Option<&str>,
+) -> Option<String> {
+    list_runs(workspace, config).into_iter().find_map(|run| {
+        let id = run.run_id();
+        if run.status() != "running" || Some(id.as_str()) == except {
+            return None;
+        }
+        let record = record_from_manifest(&run.obj)?;
+        (record.path == path).then_some(id)
+    })
 }
 
 /// Where a run's steps ran, as a native path: its worktree, or the workspace itself
@@ -409,12 +437,16 @@ pub fn execution_tree(
 /// workspace-relative `path` and the `branch`; a run without one keeps no key.
 pub fn summary_for_protocol(summary: &JsObject, workspace: &str) -> JsObject {
     match record_from_manifest(summary) {
-        Some(r) => summary.spread(&obj! {
-            "worktree" => JsValue::Obj(obj! {
+        Some(r) => {
+            let mut w = obj! {
                 "path" => to_workspace(&to_native(&r.path, ""), workspace),
                 "branch" => r.branch.as_str(),
-            }),
-        }),
+            };
+            if let Some(from) = &r.continued_from {
+                w.set("continuedFrom", from.as_str());
+            }
+            summary.spread(&obj! { "worktree" => JsValue::Obj(w) })
+        }
         None => summary.clone(),
     }
 }
@@ -598,6 +630,7 @@ mod tests {
             base: "HEAD".into(),
             base_sha: "abc".into(),
             started_from: None,
+            continued_from: None,
         }
     }
 
@@ -651,6 +684,7 @@ mod tests {
             base: "main".into(),
             base_sha: "abc".into(),
             started_from: Some("origin/main".into()),
+            continued_from: Some("r0".into()),
         };
         let manifest = obj! { "worktree" => record_to_js(&r) };
         assert_eq!(record_from_manifest(&manifest), Some(r));
@@ -666,6 +700,7 @@ mod tests {
             base: "main".into(),
             base_sha: "abc".into(),
             started_from: None,
+            continued_from: None,
         });
         assert_eq!(js.str_prop("startedFrom"), None);
         let manifest = obj! { "worktree" => js.clone() };

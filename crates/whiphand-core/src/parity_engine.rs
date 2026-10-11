@@ -203,6 +203,7 @@ fn run_workflow_op(op: &Value, repo: &Path) -> Value {
         attachments: Vec::new(),
         cancel: CancellationToken::new(),
         worktree: Some(false),
+        continue_in: None,
         degradations: Vec::new(),
     };
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -264,6 +265,7 @@ fn run_workflow_op(op: &Value, repo: &Path) -> Value {
                 attachments: Vec::new(),
                 cancel: CancellationToken::new(),
                 worktree: Some(false),
+                continue_in: None,
                 degradations: Vec::new(),
             };
             match run_workflow(&again_opts, &frontend).await {

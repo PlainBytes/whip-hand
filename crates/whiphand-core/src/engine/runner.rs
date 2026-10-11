@@ -66,6 +66,7 @@ use crate::steps::{disabled_ids, flatten_steps};
 use crate::store::journal::{JournalInit, JournalOptions, RunJournal, SeedStep};
 use crate::store::markers::{WORKFLOW_SNAPSHOT_NAME, read_run_name, run_slug_for, set_run_name};
 use crate::store::retention::prune_runs;
+use crate::store::runs::get_run;
 use crate::template::{
     Frame, LoopFrame, Stage, StageFrame, TemplateScope, nearest_loop, nearest_stage,
     render_template,
@@ -98,6 +99,9 @@ pub struct RunOptions {
     /// The per-run `worktree` override: `Some(true)` forces a worktree on, `Some(false)` off,
     /// `None` defers to the workflow.
     pub worktree: Option<bool>,
+    /// Run in the worktree this earlier run recorded, instead of creating one. The workflow's
+    /// own `worktree:` key is ignored.
+    pub continue_in: Option<String>,
     /// `(capability, reason)` the frontend already knows.
     pub degradations: Vec<(String, String)>,
 }
@@ -300,6 +304,34 @@ async fn preflight_worktree(
     Ok((request, pf))
 }
 
+/// The record a run continued in `source`'s worktree gets, or why it cannot be used.
+async fn continue_record(
+    workspace: &str,
+    config: &WorkspaceConfig,
+    source: &str,
+) -> Result<WorktreeRecord, RunError> {
+    let refuse = |m: String| RunError::Workflow(vec![m]);
+    let run =
+        get_run(workspace, config, source).ok_or_else(|| refuse(format!("no run '{source}'")))?;
+    let Some(mut record) = worktree::record_from_manifest(&run.obj) else {
+        return Err(refuse(format!("run '{source}' has no worktree")));
+    };
+    if let Err(reason) = worktree::check(&record).await {
+        return Err(refuse(format!(
+            "run '{source}' ran in worktree {}, which cannot be used ({reason}); start a fresh run",
+            record.path
+        )));
+    }
+    if let Some(other) = worktree::busy_run(workspace, config, &record.path, None) {
+        return Err(refuse(format!(
+            "worktree {} is in use by run '{other}'",
+            record.path
+        )));
+    }
+    record.continued_from = Some(source.to_string());
+    Ok(record)
+}
+
 /// Runs a workflow to its end, or continues a stopped one (`opts.resume`).
 pub async fn run_workflow<F: Frontend>(
     opts: &RunOptions,
@@ -366,9 +398,27 @@ pub async fn run_workflow<F: Frontend>(
     let workdir = node_path::resolve(&opts.workdir);
     let mut tree = workdir.clone();
     let mut requested: Option<(WorktreeRequest, Preflight)> = None;
+    let mut continued: Option<WorktreeRecord> = None;
+    if let Some(source) = &opts.continue_in {
+        if opts.worktree.is_some() {
+            return Err(RunError::Workflow(vec![
+                "a run continued in another run's worktree cannot also ask for its own".into(),
+            ]));
+        }
+        if opts.resume.is_some() {
+            return Err(RunError::Workflow(vec![
+                "a resumed run keeps the working tree it started in".into(),
+            ]));
+        }
+        let record = continue_record(&workdir, config, source).await?;
+        tree = record.native_tree();
+        continued = Some(record);
+    }
     match &opts.resume {
         None => {
-            if let Some(request) = worktree::resolve_request(workflow, opts.worktree) {
+            if continued.is_some() {
+                // The worktree exists already: nothing to create.
+            } else if let Some(request) = worktree::resolve_request(workflow, opts.worktree) {
                 requested = Some(preflight_worktree(request, &inputs, &workdir).await?);
             }
         }
@@ -383,6 +433,14 @@ pub async fn run_workflow<F: Frontend>(
                     return Err(RunError::Workflow(vec![format!(
                         "run '{}' ran in worktree {}, which no longer exists (or is not on branch '{}'); start a fresh run",
                         plan.run_id, record.path, record.branch
+                    )]));
+                }
+                if let Some(other) =
+                    worktree::busy_run(&workdir, config, &record.path, Some(&plan.run_id))
+                {
+                    return Err(RunError::Workflow(vec![format!(
+                        "worktree {} is in use by run '{other}'",
+                        record.path
                     )]));
                 }
                 tree = record.native_tree();
@@ -556,10 +614,15 @@ pub async fn run_workflow<F: Frontend>(
                 .map(|r| r.done.clone())
                 .unwrap_or_default(),
             warned_no_git: false,
-            created_worktree: None,
+            created_worktree: continued.clone(),
             worktree_fallback: None,
         }),
     };
+    if let Some(record) = &continued
+        && !opts.dry_run
+    {
+        run.journal.note_worktree(record_to_js(record));
+    }
     let result = run.start(&attachments, requested.as_ref()).await;
     let result = match result {
         Ok(r) => Ok(r),

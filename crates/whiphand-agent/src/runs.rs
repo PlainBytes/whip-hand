@@ -160,6 +160,7 @@ pub async fn run_job(agent: Rc<Agent>, job: Rc<Job>, params: StartParams, opened
             attachments: params.attachments,
             cancel: job.cancel.clone(),
             worktree: params.worktree,
+            continue_in: None,
             degradations: opened.degradations.clone(),
         };
         let result = run_workflow(&opts, &frontend)
@@ -216,6 +217,7 @@ pub async fn resume_job(
             attachments: Vec::new(),
             cancel: job.cancel.clone(),
             worktree: None,
+            continue_in: None,
             degradations: opened.degradations.clone(),
         };
         let result = run_workflow(&opts, &frontend)

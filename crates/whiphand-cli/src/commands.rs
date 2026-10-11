@@ -633,6 +633,7 @@ pub async fn run(a: RunArgs) -> CmdResult {
             (_, true) => Some(false),
             _ => None,
         },
+        continue_in: None,
         degradations: opened.degradations.clone(),
     };
     let result = run_workflow(&opts, &tty).await;

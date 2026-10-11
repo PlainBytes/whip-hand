@@ -1219,6 +1219,21 @@ valid ref, the branch already exists, or `git worktree add` itself fails.
 **Resume.** A resumed run reuses the worktree it recorded, provided the directory still exists and
 is still on the recorded branch. If not, resume is refused with the path and the reason; it never
 falls back to the workspace, since that would run the remaining steps against the wrong tree.
+Resume is also refused while another `running` run uses the same worktree path: two runs must not
+edit one checkout at once.
+
+**Continuing in a run's worktree.** A new run, of any workflow, can execute in the worktree an
+earlier run created (`continue_in`: the source run's id). It is not a resume: the run is fresh, with
+its own id, folder and steps, and only its execution tree is the source's recorded worktree. This
+serves "a few more changes after a workflow finished" and "the PR needs fixes" without a new branch
+or checkout. Nothing is created, fetched or branched, and the workflow's own `worktree:` key is
+ignored. The new run's `run.json` `worktree` is a copy of the source's record plus
+`continuedFrom: <source run id>`, and `run:start` carries it. These are *refusals* that leave no run
+behind: `continue_in` together with a per-run worktree override or with resume; a source run that
+does not exist or has no worktree; a worktree whose directory is gone or is no longer on the
+recorded branch (start a fresh run; it is not recreated); and a worktree that another `running` run
+is using, which the refusal names. Runs that share a worktree are independent; what deleting one
+does to the checkout the others use is decided separately.
 
 **The run folder from inside the worktree.** The run folder is outside the execution tree, so an
 agent that must read and write artifacts there is given access to it: claude and copilot get

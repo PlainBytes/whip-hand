@@ -10,7 +10,7 @@ import { sameWorkspace } from '../shared/path-form.ts';
 import { openWorkspace } from '../lib/workspace-switch.ts';
 import { basename } from '../lib/workspace-identity.ts';
 import { WorkspaceDot } from '../components/WorkspaceDot.tsx';
-import { POLL_INTERVAL_MS, runColumns, type RecentRun, type StageProgress } from './run-columns.tsx';
+import { POLL_INTERVAL_MS, runColumns, runColumnStyle, type RecentRun, type StageProgress } from './run-columns.tsx';
 import { errorMessage } from '../lib/error-message.ts';
 import { Page } from '../components/Page.tsx';
 
@@ -107,7 +107,9 @@ export function ActivityPage({ onSelectRun }: ActivityPageProps) {
         <DataGrid items={runs} columns={columns} getRowId={run => `${run.workspace}:${run.runId}`} sortable={false}>
           <DataGridHeader>
             <DataGridRow>
-              {({ renderHeaderCell }) => <DataGridHeaderCell>{renderHeaderCell()}</DataGridHeaderCell>}
+              {({ columnId, renderHeaderCell }) => (
+                <DataGridHeaderCell style={runColumnStyle(columnId)}>{renderHeaderCell()}</DataGridHeaderCell>
+              )}
             </DataGridRow>
           </DataGridHeader>
           <DataGridBody<RecentRun>>
@@ -117,7 +119,9 @@ export function ActivityPage({ onSelectRun }: ActivityPageProps) {
                 onClick={() => void openRun(item)}
                 style={{ cursor: 'pointer' }}
               >
-                {({ renderCell }) => <DataGridCell>{renderCell(item)}</DataGridCell>}
+                {({ columnId, renderCell }) => (
+                  <DataGridCell style={runColumnStyle(columnId)}>{renderCell(item)}</DataGridCell>
+                )}
               </DataGridRow>
             )}
           </DataGridBody>

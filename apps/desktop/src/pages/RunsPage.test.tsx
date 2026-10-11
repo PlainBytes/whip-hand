@@ -282,12 +282,16 @@ describe('RunsPage', () => {
     expect(onSelectRun).toHaveBeenCalledWith('r1');
   });
 
-  it('shows a lock glyph for a locked run', async () => {
+  it('shows a lock glyph for a locked run in the Locked column, with a Locked tooltip', async () => {
     const { transport } = renderRunsPage();
     await respondListRuns(transport, [
       { runId: 'r1', runDir: '/ws/.whiphand/runs/r1', status: 'succeeded', workflow: 'demo', locked: true },
     ]);
-    expect(await screen.findByRole('img', { name: 'locked' })).toBeInTheDocument();
+    const glyph = await screen.findByRole('img', { name: 'locked' });
+    const row = glyph.closest('[role="row"]') as HTMLElement;
+    expect(glyph.closest('[role="gridcell"]')).toBe(within(row).getAllByRole('gridcell')[3]);
+    fireEvent.mouseEnter(glyph.parentElement as HTMLElement);
+    await waitFor(() => expect(document.querySelector('[role="tooltip"]')).toHaveTextContent('Locked'));
   });
 
   it('lock toggle sends setRunLocked without following the row link, and re-polls on success', async () => {
@@ -433,16 +437,30 @@ describe('RunsPage', () => {
       useAppStore.setState({ appState: null });
     });
 
-    it('marks a worktree run with a glyph naming its branch and path, and a plain run with none', async () => {
+    it('marks a worktree run in the Worktree column, naming its branch and path on hover, and a plain run with none', async () => {
       const { transport } = renderRunsPage();
       await respondListRuns(transport, [WORKTREE_RUN, PLAIN_RUN]);
 
       await screen.findByText('wt1');
       const glyphs = screen.getAllByLabelText('worktree');
       expect(glyphs).toHaveLength(1);
-      expect(glyphs[0].parentElement).toHaveAttribute(
-        'title', 'Worktree on branch whiphand/wt1\n.whiphand/worktrees/wt1',
+      expect(glyphs[0].closest('[role="gridcell"]')).toBe(
+        within(screen.getByText('wt1').closest('[role="row"]') as HTMLElement).getAllByRole('gridcell')[2],
       );
+      fireEvent.mouseEnter(glyphs[0].parentElement as HTMLElement);
+      expect(await screen.findByText('Worktree on branch whiphand/wt1')).toBeInTheDocument();
+      expect(screen.getByText('.whiphand/worktrees/wt1')).toBeInTheDocument();
+    });
+
+    it('keeps glyphs out of the Run cell so names line up', async () => {
+      const { transport } = renderRunsPage();
+      await respondListRuns(transport, [{ ...WORKTREE_RUN, locked: true }]);
+
+      const row = (await screen.findByText('wt1')).closest('[role="row"]') as HTMLElement;
+      // Cells: workflow, run, worktree, locked, ...
+      const nameCell = within(row).getAllByRole('gridcell')[1];
+      expect(nameCell).toHaveTextContent('wt1');
+      expect(nameCell.querySelector('svg')).toBeNull();
     });
 
     it('offers no open button without the capability, but keeps the glyph', async () => {

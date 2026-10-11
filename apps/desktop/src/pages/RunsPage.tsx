@@ -21,7 +21,7 @@ import { useAgentClient } from '../agent/agent-context.tsx';
 import { liveStageProgress, useAppStore, waitingRunIds } from '../state/store.ts';
 import { sameSet, sameStageProgress, useAppStoreStable } from '../state/use-stable-selector.ts';
 import type { RunSummary } from '../agent/client.ts';
-import { POLL_INTERVAL_MS, runColumns, runLabel } from './run-columns.tsx';
+import { POLL_INTERVAL_MS, runColumns, runColumnStyle, runLabel } from './run-columns.tsx';
 import { NewRunDialog } from '../components/NewRunDialog.tsx';
 import { DeleteRunDialog } from '../components/DeleteRunDialog.tsx';
 import { errorMessage } from '../lib/error-message.ts';
@@ -207,7 +207,9 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
         <DataGrid items={filtered} columns={columns} getRowId={run => run.runId} sortable={false}>
           <DataGridHeader>
             <DataGridRow>
-              {({ renderHeaderCell }) => <DataGridHeaderCell>{renderHeaderCell()}</DataGridHeaderCell>}
+              {({ columnId, renderHeaderCell }) => (
+                <DataGridHeaderCell style={runColumnStyle(columnId)}>{renderHeaderCell()}</DataGridHeaderCell>
+              )}
             </DataGridRow>
           </DataGridHeader>
           <DataGridBody<RunSummary>>
@@ -217,7 +219,9 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
                 onClick={() => onSelectRun(item.runId)}
                 style={{ cursor: 'pointer' }}
               >
-                {({ renderCell }) => <DataGridCell>{renderCell(item)}</DataGridCell>}
+                {({ columnId, renderCell }) => (
+                  <DataGridCell style={runColumnStyle(columnId)}>{renderCell(item)}</DataGridCell>
+                )}
               </DataGridRow>
             )}
           </DataGridBody>

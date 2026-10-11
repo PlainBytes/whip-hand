@@ -4,8 +4,11 @@
  * grid and the cross-workspace Activity grid, which differ only in the
  * leading Workspace column.
  */
-import { createTableColumn, tokens, type TableColumnDefinition } from '@fluentui/react-components';
+import {
+  createTableColumn, Tooltip, tokens, type TableColumnDefinition, type TableColumnId,
+} from '@fluentui/react-components';
 import { BranchFork16Regular, LockClosed16Regular } from '@fluentui/react-icons';
+import type { CSSProperties } from 'react';
 import type { RunSummary } from '../agent/client.ts';
 import { StatusBadge } from '../components/StatusBadge.tsx';
 import { elapsedMs, formatElapsed } from '../shared/format.ts';
@@ -63,6 +66,30 @@ export function manifestStageProgress(run: RunSummary): StageProgress | undefine
   return undefined;
 }
 
+/** An icon-column header: the glyph, named by a tooltip and an aria-label. */
+function iconHeader(label: string, icon: JSX.Element) {
+  return (
+    <Tooltip relationship="label" content={label}>
+      <span style={{ display: 'inline-flex' }}>{icon}</span>
+    </Tooltip>
+  );
+}
+
+const ICON_COLUMN_WIDTH = 48;
+
+/**
+ * Fluent sizes DataGrid columns equally by default, which would give the two
+ * glyph columns as much room as Workflow. Both grids spread this onto each
+ * header and body cell (`style={runColumnStyle(columnId)}`) so the icon
+ * columns stay narrow and the rest share what is left. Fluent's own
+ * `columnSizingOptions` only takes effect with resizable columns, which would
+ * add drag handles nobody asked for.
+ */
+export function runColumnStyle(columnId: TableColumnId): CSSProperties | undefined {
+  if (columnId !== 'worktree' && columnId !== 'locked') return undefined;
+  return { flex: `0 0 ${ICON_COLUMN_WIDTH}px`, minWidth: ICON_COLUMN_WIDTH, maxWidth: ICON_COLUMN_WIDTH };
+}
+
 /**
  * The columns every run grid shares. `stages` is live stage progress by
  * runId (see the store's `liveStageProgress`), which wins over the manifest's
@@ -82,20 +109,11 @@ export function runColumns<T extends RunSummary>(
       // Still 'runId': both grids address this column by that id.
       columnId: 'runId',
       renderHeaderCell: () => 'Run',
-      // The glyph shows wherever a run appears — including the cross-workspace
-      // Activity grid, which is correct: a locked run reads as locked everywhere.
-      //
       // A named run leads with its name and keeps the id beneath it, dimmed:
       // the name is what a human recognizes, but the id is what `--resume`
       // and `whiphand rename-run` take, so it must stay readable and copyable.
       renderCell: run => (
         <span style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
-          {run.locked && <LockClosed16Regular aria-label="locked" />}
-          {run.worktree && (
-            <span title={`Worktree on branch ${run.worktree.branch}\n${run.worktree.path}`} style={{ display: 'inline-flex' }}>
-              <BranchFork16Regular aria-label="worktree" />
-            </span>
-          )}
           {run.name === undefined ? run.runId : (
             <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -111,6 +129,36 @@ export function runColumns<T extends RunSummary>(
             </span>
           )}
         </span>
+      ),
+    }),
+    // The worktree and lock glyphs get columns of their own rather than
+    // sitting in front of the run name, so names line up across every row.
+    // Both show wherever a run appears — including the cross-workspace
+    // Activity grid: a locked run reads as locked everywhere.
+    createTableColumn<T>({
+      columnId: 'worktree',
+      renderHeaderCell: () => iconHeader('Worktree', <BranchFork16Regular />),
+      renderCell: run => run.worktree && (
+        <Tooltip
+          relationship="description"
+          content={(
+            <>
+              <div>Worktree on branch {run.worktree.branch}</div>
+              <div>{run.worktree.path}</div>
+            </>
+          )}
+        >
+          <span style={{ display: 'inline-flex' }}><BranchFork16Regular aria-label="worktree" /></span>
+        </Tooltip>
+      ),
+    }),
+    createTableColumn<T>({
+      columnId: 'locked',
+      renderHeaderCell: () => iconHeader('Locked', <LockClosed16Regular />),
+      renderCell: run => run.locked && (
+        <Tooltip relationship="description" content="Locked">
+          <span style={{ display: 'inline-flex' }}><LockClosed16Regular aria-label="locked" /></span>
+        </Tooltip>
       ),
     }),
     createTableColumn<T>({

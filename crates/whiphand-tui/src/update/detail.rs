@@ -249,6 +249,14 @@ pub fn on_reply(model: &mut Model, then: Then, value: Value) -> Vec<Cmd> {
         }
         Then::Scrollback { run_id } => {
             let decoded = client::decode::<GetJobScrollback>(value);
+            // The session's output so far, spliced with what came live.
+            if let Ok(p::GetJobScrollbackResult(Some(snapshot))) = &decoded
+                && let Some(pty) = &snapshot.pty
+                && let Some(job_id) = model.job_for(&run_id).map(|(id, _)| id.clone())
+                && let Some(job) = model.jobs.get_mut(&job_id)
+            {
+                job.pty.seed(pty);
+            }
             let Some(d) = detail_for(model, &run_id) else {
                 return vec![];
             };

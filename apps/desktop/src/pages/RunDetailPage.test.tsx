@@ -1650,9 +1650,48 @@ describe('RunDetailPage: cycles and manual steps', () => {
 
     // jsdom does not compute the clamp; this compares the inline string, which is all the guard needs.
     const strip = await screen.findByTestId('run-stepper-strip');
-    expect(strip).toHaveStyle({ maxHeight: 'clamp(140px, 38%, 460px)', display: 'flex', flexDirection: 'column', overflow: 'hidden' });
+    expect(strip.parentElement).toHaveStyle({ maxHeight: 'clamp(140px, 38%, 460px)', display: 'flex', flexDirection: 'column', overflow: 'hidden' });
+    expect(strip).toHaveStyle({ overflow: 'hidden' });
     expect(strip).not.toHaveStyle({ overflowY: 'auto' });
     expect(within(strip).getByTestId('run-stepper-scroller')).toHaveStyle({ overflowY: 'auto' });
+  });
+
+  it('puts a "Resize steps" handle under the strip, defaulting to the old cap', async () => {
+    window.localStorage.removeItem('whiphand.run.stepsHeight');
+    renderRunDetail('job-strip-handle');
+
+    const strip = await screen.findByTestId('run-stepper-strip');
+    const handle = screen.getByRole('separator', { name: 'Resize steps' });
+    expect(strip.parentElement?.nextElementSibling).toBe(handle);
+    expect(strip.parentElement).toHaveStyle({ maxHeight: 'clamp(140px, 38%, 460px)' });
+  });
+
+  it('uses the stored steps height, in pixels, as the strip cap', async () => {
+    window.localStorage.setItem('whiphand.run.stepsHeight', '300');
+    try {
+      renderRunDetail('job-strip-stored');
+      const strip = await screen.findByTestId('run-stepper-strip');
+      expect(strip.parentElement).toHaveStyle({ maxHeight: '300px' });
+    } finally {
+      window.localStorage.removeItem('whiphand.run.stepsHeight');
+    }
+  });
+
+  it('drops the resize handle while the steps are collapsed and restores it on expand', async () => {
+    window.localStorage.removeItem('whiphand.run.stepsHeight');
+    const { transport } = renderRunDetail('job-collapse-handle');
+    emitWhiphandEvent(transport, 'job-collapse-handle', 'run-ch', { type: 'step:start', stepId: 'one', kind: 'agent', runner: 'claude', mode: 'headless' }, 't1');
+    await respondGetRun(transport, {
+      runId: 'run-ch', runDir: '/ws/.whiphand/runs/run-ch', status: 'running', artifacts: [],
+      steps: [{ id: 'one', status: 'running' }, { id: 'two', status: 'pending' }],
+    });
+
+    expect(await screen.findByRole('separator', { name: 'Resize steps' })).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('stepper-collapse-toggle'));
+    expect(screen.queryByRole('separator', { name: 'Resize steps' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('run-stepper-strip').parentElement).not.toHaveStyle({ maxHeight: 'clamp(140px, 38%, 460px)' });
+    fireEvent.click(screen.getByTestId('stepper-collapse-toggle'));
+    expect(screen.getByRole('separator', { name: 'Resize steps' })).toBeInTheDocument();
   });
 
   it('collapses the stepper strip and brings it back', async () => {

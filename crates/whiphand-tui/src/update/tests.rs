@@ -1060,3 +1060,79 @@ fn a_step_without_capture_takes_no_note() {
         json!({ "jobId": "j1", "stepId": "check", "choice": "continue" })
     );
 }
+
+// Continue in a run's worktree.
+
+const WORKTREE: &str = "/w/.whiphand/worktrees/r1";
+
+fn finished_with_worktree() -> Value {
+    json!({ "runId": "r1", "status": "succeeded",
+        "worktree": { "path": WORKTREE, "branch": "f/x" } })
+}
+
+#[test]
+fn w_on_a_finished_run_opens_the_new_run_screen_in_its_worktree() {
+    let mut model = detail_on(finished_with_worktree());
+    let cmds = update(&mut model, key('w'));
+    assert_eq!(methods(&cmds), ["listWorkflows", "getAppState"]);
+    assert_eq!(*model.screen(), Route::NewRun);
+    let generation = model.new_run.as_ref().unwrap().generation;
+    update(
+        &mut model,
+        Msg::Reply(Then::Workflows(generation), Ok(workflows())),
+    );
+    update(&mut model, key('j'));
+    update(&mut model, code(KeyCode::Enter));
+    let form = model.new_run.as_ref().unwrap().form.as_ref().unwrap();
+    assert!(form.fields.iter().all(|f| f.label() != "worktree"));
+    assert_eq!(
+        form.continue_in.as_ref().unwrap().branch.as_deref(),
+        Some("f/x")
+    );
+    // Starting sends continueIn, not a worktree.
+    update(&mut model, code(KeyCode::Enter));
+    typed(&mut model, "search box");
+    update(&mut model, code(KeyCode::Enter));
+    let call = rpc(&update(&mut model, key('s'))).params.clone();
+    assert_eq!(call["continueIn"], "r1");
+    assert_eq!(call["worktree"], Value::Null);
+    // Back to the picker and another workflow: the target stays.
+    update(&mut model, key('q'));
+    update(&mut model, key('k'));
+    update(&mut model, code(KeyCode::Enter));
+    let form = model.new_run.as_ref().unwrap().form.as_ref().unwrap();
+    assert_eq!(form.continue_in.as_ref().unwrap().run_id, "r1");
+}
+
+#[test]
+fn w_does_nothing_on_a_running_run_or_one_without_a_worktree() {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "succeeded" }));
+    assert!(update(&mut model, key('w')).is_empty());
+    assert_eq!(*model.screen(), Route::RunDetail);
+    assert!(model.notice.is_some());
+
+    let mut model = detail_on(json!({ "runId": "r1", "status": "running",
+        "worktree": { "path": WORKTREE, "branch": "f/x" } }));
+    running(&mut model, "j1", "r1");
+    assert!(update(&mut model, key('w')).is_empty());
+    assert_eq!(*model.screen(), Route::RunDetail);
+}
+
+#[test]
+fn delete_says_the_worktree_is_kept_while_another_run_uses_it() {
+    let mut model = Model::new("/w".into(), 0.0);
+    runs(
+        &mut model,
+        json!([finished_with_worktree(),
+            { "runId": "r2", "status": "succeeded",
+              "worktree": { "path": WORKTREE, "branch": "f/x", "continuedFrom": "r1" } }]),
+    );
+    update(&mut model, key('x'));
+    let Some(Dialog::Confirm { question, .. }) = &model.dialog else {
+        panic!("a confirmation");
+    };
+    assert!(
+        question.contains("worktree is kept (used by run r2)"),
+        "{question}"
+    );
+}

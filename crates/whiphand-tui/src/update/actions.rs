@@ -3,12 +3,14 @@
 //! cannot be undone asks first; an action that does not apply says why.
 
 use crossterm::event::{KeyCode, KeyEvent};
+use serde_json::Value;
 use whiphand_protocol::{self as p, DeleteRefusal, JobStatus};
 
 use super::{detail, refresh_runs};
 use crate::client::{self, CancelRun, DeleteRun, EndSession, RenameRun, ResumeRun, SetRunLocked};
 use crate::cmd::{Cmd, Then};
 use crate::model::input::{Edit, Input};
+use crate::model::new_run::ContinueIn;
 use crate::model::runs::{Row, row};
 use crate::model::{Ask, Dialog, Model, Route, RunRef};
 use crate::view::keymap::Action;
@@ -78,6 +80,7 @@ pub fn act(model: &mut Model, action: Action) -> Option<Vec<Cmd>> {
             | Action::Lock
             | Action::Delete
             | Action::EndSession
+            | Action::ContinueInWorktree
     ) {
         return None;
     }
@@ -121,12 +124,19 @@ pub fn act(model: &mut Model, action: Action) -> Option<Vec<Cmd>> {
             refuse(model, "the run is running; cancel it first")
         }
         Action::Delete => {
-            let question = format!(
-                "Delete run {} with its files and worktree? (y/n)",
-                label(&row)
-            );
+            let question = match worktree_user(model, &row.run_id) {
+                Some(other) => format!(
+                    "Delete run {} with its files? Its worktree is kept (used by run {other}). (y/n)",
+                    label(&row)
+                ),
+                None => format!(
+                    "Delete run {} with its files and worktree? (y/n)",
+                    label(&row)
+                ),
+            };
             confirm(model, question, Ask::Delete(run))
         }
+        Action::ContinueInWorktree => continue_in_worktree(model, &run, &row),
         Action::EndSession => match job_id {
             _ if row.foreign => refuse(model, FOREIGN),
             None => refuse(model, "the run is not running"),
@@ -147,6 +157,57 @@ pub fn act(model: &mut Model, action: Action) -> Option<Vec<Cmd>> {
         },
         _ => unreachable!("filtered above"),
     })
+}
+
+fn worktree_path(run: &Value) -> Option<&str> {
+    run.pointer("/worktree/path").and_then(Value::as_str)
+}
+
+/// Another listed run on the same worktree path as `run_id`'s, by id.
+fn worktree_user(model: &Model, run_id: &str) -> Option<String> {
+    let manifest = match model.screen() {
+        Route::RunDetail => model.detail.as_ref()?.manifest.as_ref(),
+        _ => model
+            .runs
+            .iter()
+            .chain(&model.runs_ui.recent)
+            .find(|r| r.get("runId").and_then(Value::as_str) == Some(run_id)),
+    }?;
+    let path = worktree_path(manifest)?;
+    model
+        .runs
+        .iter()
+        .chain(&model.runs_ui.recent)
+        .filter(|r| worktree_path(r) == Some(path))
+        .filter_map(|r| r.get("runId").and_then(Value::as_str))
+        .find(|id| *id != run_id)
+        .map(str::to_string)
+}
+
+/// `w` on the detail: a new run in this run's worktree.
+fn continue_in_worktree(model: &mut Model, run: &RunRef, row: &Row) -> Vec<Cmd> {
+    if *model.screen() != Route::RunDetail {
+        return vec![];
+    }
+    let Some(worktree) = model
+        .detail
+        .as_ref()
+        .and_then(|d| d.manifest.as_ref())
+        .and_then(|m| m.get("worktree"))
+        .cloned()
+    else {
+        return refuse(model, "the run has no worktree to continue in");
+    };
+    if row.status == "running" {
+        return refuse(model, "the run is running; wait for it to finish");
+    }
+    let text = |k: &str| worktree.get(k).and_then(Value::as_str).map(str::to_string);
+    let target = ContinueIn {
+        run_id: run.run_id.clone(),
+        branch: text("branch"),
+        path: text("path"),
+    };
+    super::new_run::open_continuing(model, run.workdir.clone(), target)
 }
 
 fn cancel_question(model: &mut Model, row: &Row, job_id: String) -> Vec<Cmd> {

@@ -106,6 +106,14 @@ impl Field {
     }
 }
 
+/// The earlier run whose worktree a new run continues in.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContinueIn {
+    pub run_id: String,
+    pub branch: Option<String>,
+    pub path: Option<String>,
+}
+
 /// A workflow picked, its fields being filled.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Form {
@@ -120,6 +128,8 @@ pub struct Form {
     pub editing: bool,
     pub dry_run: bool,
     pub worktree: bool,
+    /// Set: the worktree toggle gives way to this read-only target.
+    pub continue_in: Option<ContinueIn>,
     /// Steps that will not run, and what that drops, as the desktop says it.
     pub disabled: Option<(Vec<String>, Vec<String>)>,
     /// Why the last start was refused.
@@ -155,7 +165,11 @@ fn disabled_summary(workflow: &Workflow) -> Option<(Vec<String>, Vec<String>)> {
 impl Form {
     /// The form for `entry`, prefilled as the desktop does: a remembered
     /// value for an input that asks to be remembered, else its default.
-    pub fn new(entry: &WorkflowListEntry, memory: Option<&Value>) -> Form {
+    pub fn new(
+        entry: &WorkflowListEntry,
+        memory: Option<&Value>,
+        continue_in: Option<&ContinueIn>,
+    ) -> Form {
         let json = entry.workflow.clone().unwrap_or(Value::Null);
         let workflow = parse_workflow(&json.to_string()).ok();
         let remembered = memory
@@ -189,7 +203,9 @@ impl Form {
             fields.push(Field::new(FieldKind::Attachments, "", true));
         }
         fields.push(Field::new(FieldKind::DryRun, "", false));
-        fields.push(Field::new(FieldKind::Worktree, "", false));
+        if continue_in.is_none() {
+            fields.push(Field::new(FieldKind::Worktree, "", false));
+        }
         fields.push(Field::new(FieldKind::Start, "", false));
         let worktree = !matches!(json.get("worktree"), None | Some(Value::Bool(false)));
         Form {
@@ -205,6 +221,7 @@ impl Form {
             editing: false,
             dry_run: false,
             worktree,
+            continue_in: continue_in.cloned(),
             error: None,
         }
     }
@@ -266,8 +283,11 @@ impl Form {
             max_iterations,
             name,
             attachments: (!attachments.is_empty()).then_some(attachments),
-            continue_in: None,
-            worktree: Some(self.worktree),
+            continue_in: self.continue_in.as_ref().map(|c| c.run_id.clone()),
+            worktree: match self.continue_in {
+                Some(_) => None,
+                None => Some(self.worktree),
+            },
         })
     }
 
@@ -292,6 +312,8 @@ pub struct NewRun {
     /// This workspace's app-state record, for the prefill.
     pub memory: Option<Value>,
     pub form: Option<Form>,
+    /// Opened from a run's detail: the run whose worktree the new run uses.
+    pub continue_in: Option<ContinueIn>,
     /// `startRun` is on its way.
     pub starting: bool,
     /// Started: the detail opens once the job knows its run id.
@@ -378,7 +400,11 @@ steps:
     fn the_form_is_prefilled_and_offers_what_the_workflow_uses() {
         let memory =
             json!({ "lastInputs": { "feature": { "feature": "checkout", "ticket": "T-1" } } });
-        let form = Form::new(&entry("feature", Scope::Project, feature()), Some(&memory));
+        let form = Form::new(
+            &entry("feature", Scope::Project, feature()),
+            Some(&memory),
+            None,
+        );
         let texts: Vec<(&str, String)> = form
             .fields
             .iter()
@@ -409,7 +435,7 @@ steps:
 
     #[test]
     fn starting_checks_required_inputs_and_numbers() {
-        let mut form = Form::new(&entry("feature", Scope::Global, feature()), None);
+        let mut form = Form::new(&entry("feature", Scope::Global, feature()), None, None);
         form.focus = 4;
         assert_eq!(form.params("/w").unwrap_err(), "feature is required");
         assert_eq!(form.focus, 0);
@@ -436,6 +462,25 @@ steps:
         assert_eq!(paths[1], "/abs/shot.png");
         assert_eq!(Path::new(&paths[0]), Path::new("/w").join("notes.md"));
         assert_eq!(params.inputs.unwrap()["ticket"], "none");
+    }
+
+    #[test]
+    fn continuing_in_a_worktree_replaces_the_toggle_and_sends_the_run() {
+        let target = ContinueIn {
+            run_id: "r1".into(),
+            branch: Some("f/x".into()),
+            path: Some("/w/.whiphand/worktrees/r1".into()),
+        };
+        let mut form = Form::new(
+            &entry("feature", Scope::Project, feature()),
+            None,
+            Some(&target),
+        );
+        assert!(form.fields.iter().all(|f| f.kind != FieldKind::Worktree));
+        form.fields[0].input.set("checkout");
+        let params = form.params("/w").unwrap();
+        assert_eq!(params.continue_in.as_deref(), Some("r1"));
+        assert_eq!(params.worktree, None);
     }
 
     #[test]

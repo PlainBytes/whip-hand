@@ -83,6 +83,7 @@ pub enum Action {
     Delete,
     EndSession,
     NewRun,
+    ContinueInWorktree,
     StartRun,
     OpenManual,
     Approve,
@@ -303,6 +304,13 @@ pub const BINDINGS: &[Binding] = &[
         "t",
         A::Attach,
         "attach to the interactive session (Ctrl-] detaches)",
+    ),
+    b(
+        C::Detail,
+        &[Char('w')],
+        "w",
+        A::ContinueInWorktree,
+        "new run in this run's worktree",
     ),
     b(
         C::Detail,

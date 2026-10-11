@@ -9,7 +9,7 @@ use super::{PAGE, detail, get_app_state, step};
 use crate::client::{self, Call, ListWorkflows, StartRun};
 use crate::cmd::{Cmd, External, Then};
 use crate::model::input::Edit;
-use crate::model::new_run::{FieldKind, Form, NewRun, find_entry, workspace_memory};
+use crate::model::new_run::{ContinueIn, FieldKind, Form, NewRun, find_entry, workspace_memory};
 use crate::model::{Job, Model, Route};
 use crate::view::keymap::Action;
 
@@ -19,18 +19,30 @@ pub fn open(model: &mut Model) -> Vec<Cmd> {
         model.notice = Some("pick a workspace first".into());
         return vec![];
     };
+    open_at(model, workdir, None)
+}
+
+/// Opens the screen aimed at an earlier run's worktree.
+pub fn open_continuing(model: &mut Model, workdir: String, target: ContinueIn) -> Vec<Cmd> {
+    open_at(model, workdir, Some(target))
+}
+
+fn open_at(model: &mut Model, workdir: String, continue_in: Option<ContinueIn>) -> Vec<Cmd> {
     // As the desktop warns: a run going here outside a worktree, not a dry one.
-    let workspace_busy = model.runs.iter().any(|r| {
-        r.get("status").and_then(Value::as_str) == Some("running")
-            && r.get("dryRun") != Some(&Value::Bool(true))
-            && r.get("worktree").is_none()
-    });
+    // A run in a worktree does not touch the workspace, so no warning there.
+    let workspace_busy = continue_in.is_none()
+        && model.runs.iter().any(|r| {
+            r.get("status").and_then(Value::as_str) == Some("running")
+                && r.get("dryRun") != Some(&Value::Bool(true))
+                && r.get("worktree").is_none()
+        });
     model.new_run_generation += 1;
     let generation = model.new_run_generation;
     model.new_run = Some(NewRun {
         generation,
         workdir: workdir.clone(),
         workspace_busy,
+        continue_in,
         ..NewRun::default()
     });
     model.route.push(Route::NewRun);
@@ -79,7 +91,7 @@ fn pick(model: &mut Model) {
         model.notice = Some(format!("{} does not parse: {error}", entry.name));
         return;
     }
-    n.form = Some(Form::new(entry, n.memory.as_ref()));
+    n.form = Some(Form::new(entry, n.memory.as_ref(), n.continue_in.as_ref()));
 }
 
 fn start(model: &mut Model) -> Vec<Cmd> {

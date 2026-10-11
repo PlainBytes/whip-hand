@@ -58,6 +58,15 @@ fn header(model: &Model, d: &RunDetail) -> Text<'static> {
     {
         first.push(Span::styled(format!("  ⎇ {branch}"), theme::dim()));
     }
+    if let Some(from) = manifest
+        .pointer("/worktree/continuedFrom")
+        .and_then(|b| b.as_str())
+    {
+        first.push(Span::styled(
+            format!("  continued from run {from}"),
+            theme::dim(),
+        ));
+    }
     if r.locked {
         first.push(Span::styled("  [locked]", theme::dim()));
     }

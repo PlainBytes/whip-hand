@@ -422,13 +422,27 @@ describe('RunDetailPage', () => {
     expect(onBack).toHaveBeenCalled();
   });
 
-  it('styles the header Delete filled red', async () => {
+  it('styles the header Delete subtle red', async () => {
     const { transport } = renderRunDetail('job-red');
     emitWhiphandEvent(transport, 'job-red', 'run-red', { type: 'step:start', stepId: 'plan', kind: 'agent', runner: 'claude', mode: 'headless' }, 't1');
     await respondGetRun(transport, { runId: 'run-red', runDir: '/ws/.whiphand/runs/run-red', status: 'succeeded', artifacts: [] });
 
     const del = await screen.findByRole('button', { name: 'Delete' });
-    expect(hasInjectedStyle(del, 'background-color', 'var(--colorPaletteRedBackground3)')).toBe(true);
+    expect(hasInjectedStyle(del, 'color', 'var(--colorPaletteRedForeground1)')).toBe(true);
+    expect(hasInjectedStyle(del, 'background-color', 'var(--colorPaletteRedBackground3)')).toBe(false);
+  });
+
+  it('renders the header actions icon-only, with no visible label text', async () => {
+    const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1');
+    await respondGetRun(transport, {
+      runId: 'run-1', runDir: '/ws/.whiphand/runs/run-1', status: 'succeeded', artifacts: [],
+    });
+
+    for (const name of ['Rename', 'Delete']) {
+      const button = await screen.findByRole('button', { name });
+      expect(button).toHaveTextContent('');
+      expect(button).not.toHaveAttribute('title');
+    }
   });
 
   it('deletes the run via deleteRun and navigates back on success', async () => {

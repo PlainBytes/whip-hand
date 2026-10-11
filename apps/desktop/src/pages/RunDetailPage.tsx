@@ -26,6 +26,7 @@ import {
   TabList,
   Text,
   ToggleButton,
+  Tooltip,
 } from '@fluentui/react-components';
 import {
   ArrowDown20Regular, ArrowLeft20Regular, BranchFork16Regular, Copy20Regular, Delete20Regular, DocumentFolder48Regular,
@@ -1129,27 +1130,33 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
           )}
           <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
             {job?.ptyActive && effectiveJobId && (
-              <Button
-                appearance="secondary"
-                disabled={endingSession}
-                icon={endingSession ? <Spinner size="tiny" /> : <PlugDisconnected20Regular />}
-                title="Finish this interactive step and collect its artifact. The run continues."
-                onClick={() => void handleEndSession()}
+              <Tooltip
+                content={
+                  endingSession
+                    ? 'Ending…'
+                    : 'End session: finish this interactive step and collect its artifact. The run continues.'
+                }
+                relationship="description"
               >
-                {endingSession ? 'Ending…' : 'End session'}
-              </Button>
+                <Button
+                  appearance="secondary"
+                  aria-label={endingSession ? 'Ending…' : 'End session'}
+                  disabled={endingSession}
+                  icon={endingSession ? <Spinner size="tiny" /> : <PlugDisconnected20Regular />}
+                  onClick={() => void handleEndSession()}
+                />
+              </Tooltip>
             )}
             {isRunning && (
               <Dialog open={confirmOpen} onOpenChange={(_e, data) => setConfirmOpen(data.open)}>
                 <DialogTrigger disableButtonEnhancement>
-                  <Button
-                    appearance="secondary"
-                    disabled={cancelling}
-                    icon={cancelling ? <Spinner size="tiny" /> : <Stop20Regular />}
-                    title="Cancel this run"
-                  >
-                    {cancelling ? 'Cancelling…' : 'Cancel'}
-                  </Button>
+                  <Tooltip content={cancelling ? 'Cancelling…' : 'Cancel'} relationship="label">
+                    <Button
+                      appearance="secondary"
+                      disabled={cancelling}
+                      icon={cancelling ? <Spinner size="tiny" /> : <Stop20Regular />}
+                    />
+                  </Tooltip>
                 </DialogTrigger>
                 <DialogSurface>
                   <DialogBody>
@@ -1171,18 +1178,21 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
               <Menu positioning="below-end">
                 <MenuTrigger disableButtonEnhancement>
                   {(triggerProps: MenuButtonProps) => (
-                    <SplitButton
-                      appearance="primary"
-                      disabled={resuming}
-                      menuButton={{ ...triggerProps, 'aria-label': 'More resume options' }}
-                      primaryActionButton={{
-                        onClick: () => void handleResume(),
-                        title: 'Continue this run from its first unfinished step',
-                      }}
-                      icon={resuming ? <Spinner size="tiny" /> : <PlayCircle20Regular />}
+                    <Tooltip
+                      content={resuming ? 'Resuming…' : 'Resume'}
+                      relationship="description"
                     >
-                      {resuming ? 'Resuming…' : 'Resume'}
-                    </SplitButton>
+                      <SplitButton
+                        appearance="primary"
+                        disabled={resuming}
+                        menuButton={{ ...triggerProps, 'aria-label': 'More resume options' }}
+                        primaryActionButton={{
+                          onClick: () => void handleResume(),
+                          'aria-label': resuming ? 'Resuming…' : 'Resume',
+                        }}
+                        icon={resuming ? <Spinner size="tiny" /> : <PlayCircle20Regular />}
+                      />
+                    </Tooltip>
                   )}
                 </MenuTrigger>
                 <MenuPopover>
@@ -1243,23 +1253,24 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
               </Dialog>
             )}
             {!isRunning && typeof manifest?.workflow === 'string' && (
-              <Button
-                appearance="secondary"
-                icon={<Replay20Regular />}
-                onClick={() => onRunAgain(
-                  manifest.workflow as string,
-                  (manifest.inputs ?? {}) as Record<string, string>,
-                  manifest.workflowSource as Scope | undefined,
-                )}
-              >
-                Run again
-              </Button>
+              <Tooltip content="Run again" relationship="label">
+                <Button
+                  appearance="secondary"
+                  icon={<Replay20Regular />}
+                  onClick={() => onRunAgain(
+                    manifest.workflow as string,
+                    (manifest.inputs ?? {}) as Record<string, string>,
+                    manifest.workflowSource as Scope | undefined,
+                  )}
+                />
+              </Tooltip>
             )}
             {manifest?.worktree && workspacePath && (
               <OpenInEditorButton
                 workdir={workspacePath}
                 worktree={manifest.worktree}
                 size="medium"
+                iconOnly
                 onError={setOpenError}
               />
             )}
@@ -1275,9 +1286,9 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
                 }}
               >
                 <DialogTrigger disableButtonEnhancement>
-                  <Button appearance="secondary" icon={<Rename20Regular />}>
-                    Rename
-                  </Button>
+                  <Tooltip content="Rename" relationship="label">
+                    <Button appearance="secondary" icon={<Rename20Regular />} />
+                  </Tooltip>
                 </DialogTrigger>
                 <DialogSurface>
                   <DialogBody>
@@ -1312,20 +1323,20 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
               </Dialog>
             )}
             {effectiveRunId && (
-              <ToggleButton
-                appearance="secondary"
-                checked={!!manifest?.locked}
-                disabled={locking}
-                icon={locking ? <Spinner size="tiny" /> : manifest?.locked ? <LockClosed20Regular /> : <LockOpen20Regular />}
-                onClick={() => void handleToggleLock()}
-              >
-                {manifest?.locked ? 'Locked' : 'Lock'}
-              </ToggleButton>
+              <Tooltip content={manifest?.locked ? 'Locked' : 'Lock'} relationship="label">
+                <ToggleButton
+                  appearance="secondary"
+                  checked={!!manifest?.locked}
+                  disabled={locking}
+                  icon={locking ? <Spinner size="tiny" /> : manifest?.locked ? <LockClosed20Regular /> : <LockOpen20Regular />}
+                  onClick={() => void handleToggleLock()}
+                />
+              </Tooltip>
             )}
             {effectiveRunId && (
-              <DangerButton icon={<Delete20Regular />} onClick={() => setDeleteOpen(true)}>
-                Delete
-              </DangerButton>
+              <Tooltip content="Delete" relationship="label">
+                <DangerButton variant="subtle" icon={<Delete20Regular />} onClick={() => setDeleteOpen(true)} />
+              </Tooltip>
             )}
             {deleteOpen && workspacePath && effectiveRunId && (
               <DeleteRunDialog

@@ -3,7 +3,7 @@
 //! terminal and the real stderr; the agent keeps running meanwhile and its
 //! lines queue until the TUI is back.
 
-use std::io;
+use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
 
@@ -57,15 +57,60 @@ pub fn command(what: &External) -> Command {
             cmd.arg("diff").current_dir(Path::new(cwd));
             cmd
         }
+        External::Editor { .. } => {
+            let (program, args) = editor();
+            let mut cmd = Command::new(program);
+            cmd.args(args);
+            cmd
+        }
     }
+}
+
+/// `$VISUAL`, else `$EDITOR`, else `vi` (`notepad` on Windows).
+fn editor() -> (String, Vec<String>) {
+    ["VISUAL", "EDITOR"]
+        .iter()
+        .filter_map(|v| std::env::var(v).ok())
+        .find_map(|cmd| split(&cmd))
+        .unwrap_or_else(|| {
+            let program = if cfg!(windows) { "notepad" } else { "vi" };
+            (program.into(), vec![])
+        })
+}
+
+/// Hands `text` to the editor in a temporary file and reads it back. The
+/// file has a random name, is created exclusively and only its owner can
+/// read it: the text may be a review nobody else should see.
+pub fn edit(terminal: &mut Term, text: &str, log: &Path) -> Result<String, String> {
+    let mut file = tempfile::Builder::new()
+        .prefix("whiphand-tui-")
+        .suffix(".md")
+        .tempfile()
+        .map_err(|e| format!("could not make a file to edit: {e}"))?;
+    file.write_all(text.as_bytes())
+        .and_then(|()| file.flush())
+        .map_err(|e| format!("could not write {}: {e}", file.path().display()))?;
+    let what = External::Editor {
+        text: String::new(),
+    };
+    let mut cmd = command(&what);
+    cmd.arg(file.path());
+    hand_over(terminal, cmd, log)?;
+    // By path: an editor may have replaced the file rather than written it.
+    std::fs::read_to_string(file.path())
+        .map_err(|e| format!("could not read {}: {e}", file.path().display()))
 }
 
 /// Runs `what` on the real terminal and comes back to the TUI.
 pub fn run(terminal: &mut Term, what: &External, log: &Path) -> Result<(), String> {
+    hand_over(terminal, command(what), log)
+}
+
+fn hand_over(terminal: &mut Term, mut cmd: Command, log: &Path) -> Result<(), String> {
     let _ = execute!(io::stdout(), LeaveAlternateScreen, Show);
     let _ = disable_raw_mode();
     super::stderr::restore();
-    let status = command(what).status();
+    let status = cmd.status();
     if let Err(e) = super::stderr::redirect(log) {
         eprintln!("whiphand tui: stderr stays on the terminal ({e})");
     }
@@ -78,7 +123,7 @@ pub fn run(terminal: &mut Term, what: &External, log: &Path) -> Result<(), Strin
     // A pager quit with q, or git with nothing to say, is still fine; only
     // a program that would not start is worth a word.
     status.map(|_| ()).map_err(|e| {
-        let program = command(what).get_program().to_string_lossy().into_owned();
+        let program = cmd.get_program().to_string_lossy().into_owned();
         format!("could not run {program}: {e}")
     })
 }

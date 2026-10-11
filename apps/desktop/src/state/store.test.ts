@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  findWorkspaceMemory, jobInWorkspace, liveStageProgress, ongoingJobs, useAppStore, waitingRunIds, type JobState,
+  findWorkspaceMemory, jobInWorkspace, liveStageProgress, ongoingJobs, draftHasContent, selectDraft, useAppStore, waitingRunIds, type JobState,
 } from './store.ts';
 import type { WhiphandEvent } from '../shared/types.ts';
 import { EMPTY_APP_STATE } from '../test/app-state.ts';
+import { isPreview } from '../lib/run-tabs.ts';
+import { rememberThumbnail } from '../lib/draft-thumbnails.ts';
 import { fromPosix } from '../../../../packages/test-support/src/paths.ts';
 
 /** A JobState with the fields these selector tests do not care about filled in. */
@@ -27,8 +29,10 @@ function resetStore(): void {
     appState: null,
     restoreDone: false,
     page: 'runs',
-    pendingRunAgain: null,
     filesDirty: false,
+    drafts: {},
+    tabs: [],
+    activeTabKey: null,
   });
 }
 
@@ -45,7 +49,6 @@ describe('setWorkspacePath', () => {
         global: { config: {}, path: '/g/config.yaml', exists: false },
         project: { config: {}, path: '/ws/a/.whiphand/config.yaml', exists: true },
       },
-      pendingRunAgain: { workflow: 'feature', inputs: {} },
     });
 
     useAppStore.getState().setWorkspacePath('/ws/b');
@@ -55,7 +58,6 @@ describe('setWorkspacePath', () => {
     expect(state.runs).toEqual([]);
     expect(state.workflows).toEqual([]);
     expect(state.config).toBeNull();
-    expect(state.pendingRunAgain).toBeNull();
   });
 
   it('keeps state the doctor RPC, the guard and Activity depend on', () => {
@@ -1216,5 +1218,213 @@ describe('workspace identity keys', () => {
       jobId: 'j1', workdir: SHORT, identityKey: KEY, status: 'running', pty: null,
     }]);
     expect(useAppStore.getState().jobs.j1).toMatchObject({ workdir: SHORT, identityKey: KEY });
+  });
+});
+
+describe('run drafts', () => {
+  beforeEach(() => resetStore());
+
+  const entry = {
+    name: 'ship', source: 'project' as const, path: '/ws/ship.yaml',
+    workflow: { name: 'ship', inputs: { ticket: { required: true } }, steps: [] },
+  };
+
+  it('creates a blank draft when the workflow list is not loaded', () => {
+    const id = useAppStore.getState().createDraft({ workdir: '/ws', identityKey: 'k' });
+    expect(useAppStore.getState().drafts[id]).toMatchObject({
+      id, workdir: '/ws', identityKey: 'k', workflowRef: null, values: {}, name: '', dryRun: false,
+      worktreeChoice: null, maxIterationsRaw: '', attachments: [],
+    });
+  });
+
+  it('preselects the remembered workflow when the list is loaded', () => {
+    useAppStore.setState({
+      workflows: [entry] as never,
+      appState: { ...EMPTY_APP_STATE, workspaces: { '/ws': { lastWorkflow: 'ship', lastInputs: {} } } },
+    });
+    const id = useAppStore.getState().createDraft({ workdir: '/ws' });
+    expect(useAppStore.getState().drafts[id].workflowRef).toBe('ship');
+  });
+
+  it('gives each draft its own id, and updates one without touching another', () => {
+    const { createDraft, updateDraft } = useAppStore.getState();
+    const a = createDraft({ workdir: '/ws' });
+    const b = createDraft({ workdir: '/ws' });
+    expect(a).not.toBe(b);
+    updateDraft(a, { name: 'first', dryRun: true });
+    updateDraft(b, draft => ({ name: `${draft.name}second` }));
+    const { drafts } = useAppStore.getState();
+    expect(drafts[a]).toMatchObject({ name: 'first', dryRun: true });
+    expect(drafts[b].name).toBe('second');
+    expect(drafts[a].updatedAt).toBeGreaterThanOrEqual(drafts[a].createdAt);
+  });
+
+  it('ignores an update to a draft that is gone', () => {
+    useAppStore.getState().updateDraft('nope', { name: 'x' });
+    expect(useAppStore.getState().drafts).toEqual({});
+  });
+
+  it('selects a draft by id', () => {
+    const id = useAppStore.getState().createDraft({ workdir: '/ws' });
+    expect(selectDraft(id)(useAppStore.getState())).toBe(useAppStore.getState().drafts[id]);
+    expect(selectDraft('nope')(useAppStore.getState())).toBeUndefined();
+  });
+
+  it('deleting a draft revokes its pasted thumbnails, and only its own', () => {
+    const revoked: string[] = [];
+    const original = URL.revokeObjectURL;
+    URL.revokeObjectURL = (url: string) => { revoked.push(url); };
+    try {
+      const { createDraft, updateDraft, deleteDraft } = useAppStore.getState();
+      const a = createDraft({ workdir: '/ws' });
+      const b = createDraft({ workdir: '/ws' });
+      updateDraft(a, {
+        attachments: [
+          { key: 0, path: '/f' },
+          { key: 1, path: '/stash/a/pasted-1.png', pasted: true },
+        ],
+      });
+      updateDraft(b, { attachments: [{ key: 0, path: '/stash/b/pasted-1.png', pasted: true }] });
+      rememberThumbnail('/stash/a/pasted-1.png', 'blob:a');
+      rememberThumbnail('/stash/b/pasted-1.png', 'blob:b');
+      expect(revoked).toEqual([]);
+      deleteDraft(a);
+      expect(revoked).toEqual(['blob:a']);
+      expect(Object.keys(useAppStore.getState().drafts)).toEqual([b]);
+      deleteDraft(a); // already gone: nothing more to release
+      expect(revoked).toEqual(['blob:a']);
+    } finally {
+      URL.revokeObjectURL = original;
+    }
+  });
+});
+
+describe('draft tabs', () => {
+  beforeEach(() => resetStore());
+
+  it('opens a tab per draft, each active in turn, so three clicks give three tabs', () => {
+    const { createDraft, openDraftTab } = useAppStore.getState();
+    const ids = [createDraft({ workdir: '/ws' }), createDraft({ workdir: '/ws' }), createDraft({ workdir: '/ws' })];
+    for (const id of ids) openDraftTab(id);
+    const { tabs, activeTabKey } = useAppStore.getState();
+    expect(tabs.map(tab => tab.kind)).toEqual(['draft', 'draft', 'draft']);
+    expect(new Set(tabs.map(tab => tab.key)).size).toBe(3);
+    expect(activeTabKey).toBe(ids[2]);
+  });
+
+  it('converting a draft swaps its tab for a pinned run tab in place and deletes the draft', () => {
+    const { createDraft, openDraftTab, openRunTab, convertDraftTab } = useAppStore.getState();
+    openRunTab({ workdir: '/ws', runId: 'r1' }, { pin: true });
+    const id = createDraft({ workdir: '/ws' });
+    openDraftTab(id);
+    openRunTab({ workdir: '/ws', runId: 'r2' }, { pin: true });
+    useAppStore.getState().activateTab(id);
+    convertDraftTab(id, { workdir: '/ws', jobId: 'j1' });
+    const state = useAppStore.getState();
+    expect(state.tabs).toMatchObject([{ key: 'r1' }, { kind: 'run', key: 'j1', jobId: 'j1', preview: false }, { key: 'r2' }]);
+    expect(state.activeTabKey).toBe('j1');
+    expect(state.drafts[id]).toBeUndefined();
+  });
+
+  it('does not pull the person back when a draft they left is converted', () => {
+    const { createDraft, openDraftTab, convertDraftTab } = useAppStore.getState();
+    const a = createDraft({ workdir: '/ws' });
+    const b = createDraft({ workdir: '/ws' });
+    openDraftTab(a);
+    openDraftTab(b);
+    convertDraftTab(a, { workdir: '/ws', jobId: 'ja' });
+    expect(useAppStore.getState().activeTabKey).toBe(b);
+    convertDraftTab(b, { workdir: '/ws', jobId: 'jb' });
+    expect(useAppStore.getState().tabs.map(tab => tab.key)).toEqual(['ja', 'jb']);
+    expect(useAppStore.getState().activeTabKey).toBe('jb');
+  });
+
+  it('never lets the preview tab replace a draft tab', () => {
+    const { createDraft, openDraftTab, openRunTab } = useAppStore.getState();
+    const id = createDraft({ workdir: '/ws' });
+    openDraftTab(id);
+    openRunTab({ workdir: '/ws', runId: 'r1' }, { pin: false });
+    openRunTab({ workdir: '/ws', runId: 'r2' }, { pin: false });
+    expect(useAppStore.getState().tabs.map(tab => tab.key)).toEqual([id, 'r2']);
+  });
+
+  it('discarding closes the tab, deletes the draft and hands focus to a neighbour', () => {
+    const { createDraft, openDraftTab, discardDraft } = useAppStore.getState();
+    const a = createDraft({ workdir: '/ws' });
+    const b = createDraft({ workdir: '/ws' });
+    openDraftTab(a);
+    openDraftTab(b);
+    discardDraft(b);
+    const state = useAppStore.getState();
+    expect(state.tabs.map(tab => tab.key)).toEqual([a]);
+    expect(state.activeTabKey).toBe(a);
+    expect(Object.keys(state.drafts)).toEqual([a]);
+  });
+
+  it('keeps a run-again the list was not loaded for, on the draft', () => {
+    const id = useAppStore.getState().createDraft({ workdir: '/ws', runAgain: { workflow: 'ship', inputs: { ticket: 'T' } } });
+    expect(useAppStore.getState().drafts[id]!.runAgain).toEqual({ workflow: 'ship', inputs: { ticket: 'T' } });
+  });
+
+  describe('draftHasContent', () => {
+    const draft = () => {
+      const id = useAppStore.getState().createDraft({ workdir: '/ws' });
+      return useAppStore.getState().drafts[id]!;
+    };
+
+    it('is false for an untouched draft', () => {
+      expect(draftHasContent(draft())).toBe(false);
+    });
+
+    it('is true for a typed name, an attachment, or an input that differs from the baseline', () => {
+      expect(draftHasContent({ ...draft(), name: 'x' })).toBe(true);
+      expect(draftHasContent({ ...draft(), attachments: [{ key: 0, path: '/f' }] })).toBe(true);
+      expect(draftHasContent({ ...draft(), baselineValues: { a: '1' }, values: { a: '2' } })).toBe(true);
+    });
+
+    it('is false when the inputs are exactly what the form filled in', () => {
+      expect(draftHasContent({ ...draft(), baselineValues: { a: '1' }, values: { a: '1' } })).toBe(false);
+      expect(draftHasContent({ ...draft(), name: '  ' })).toBe(false);
+    });
+  });
+});
+
+describe('run tabs', () => {
+  beforeEach(() => resetStore());
+
+  it('opens, pins and closes through the actions', () => {
+    const { openRunTab, pinTab, closeTab } = useAppStore.getState();
+    openRunTab({ workdir: '/ws/a', runId: 'r1' }, { pin: false });
+    expect(useAppStore.getState().tabs).toMatchObject([{ key: 'r1', preview: true }]);
+    pinTab('r1');
+    expect(isPreview(useAppStore.getState().tabs[0]!)).toBe(false);
+    closeTab('r1');
+    expect(useAppStore.getState()).toMatchObject({ tabs: [], activeTabKey: null });
+  });
+
+  it('finds a job-only tab by runId once its job has learned one', () => {
+    const { openRunTab } = useAppStore.getState();
+    openRunTab({ workdir: '/ws/a', jobId: 'j1' }, { pin: true });
+    useAppStore.setState({ jobs: { j1: { ...baseJob('j1'), runId: 'r1' } } });
+    openRunTab({ workdir: '/ws/a', runId: 'r1' }, { pin: false });
+    expect(useAppStore.getState().tabs).toHaveLength(1);
+    expect(useAppStore.getState().activeTabKey).toBe('r1');
+  });
+
+  it('shows the Runs tab on a real workspace change and keeps every tab', () => {
+    const { openRunTab, setWorkspacePath } = useAppStore.getState();
+    setWorkspacePath('/ws/a');
+    openRunTab({ workdir: '/ws/b', runId: 'r1' }, { pin: true });
+    setWorkspacePath('/ws/b');
+    expect(useAppStore.getState().activeTabKey).toBeNull();
+    expect(useAppStore.getState().tabs).toHaveLength(1);
+  });
+
+  it('keeps the active tab when the same workspace is re-adopted', () => {
+    const { openRunTab, setWorkspacePath } = useAppStore.getState();
+    setWorkspacePath('/ws/a');
+    openRunTab({ workdir: '/ws/a', runId: 'r1' }, { pin: true });
+    setWorkspacePath('/ws/a');
+    expect(useAppStore.getState().activeTabKey).toBe('r1');
   });
 });

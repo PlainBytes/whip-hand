@@ -2209,7 +2209,7 @@ describe('RunDetailPage: cycles and manual steps', () => {
     await respondResumeRun(transport, 'job-resumed');
 
     await waitFor(() => expect(onResumed).toHaveBeenCalledWith({ jobId: 'job-resumed', runId: 'r-follow' }));
-    // Tagged before any notification can land, the way NewRunDialog does it.
+    // Tagged before any notification can land, the way NewRunForm does it.
     await waitFor(() => expect(useAppStore.getState().jobs['job-resumed']?.workdir).toBe('/ws'));
   });
 

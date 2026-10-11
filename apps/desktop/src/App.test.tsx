@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App } from './App.tsx';
 import { AgentClient } from './agent/client.ts';
 import { MockTransport } from './agent/transport.ts';
 import { AgentClientProvider } from './agent/agent-context.tsx';
-import { useAppStore } from './state/store.ts';
+import { useAppStore, type JobState } from './state/store.ts';
 import { FakeFileSystem } from './files/fake-fs.ts';
 import { FileSystemProvider } from './files/fs-context.tsx';
 import { EMPTY_APP_STATE } from './test/app-state.ts';
@@ -14,6 +14,11 @@ import { EMPTY_APP_STATE } from './test/app-state.ts';
 // observable.
 vi.mock('./components/UpdateBanner.tsx', () => ({
   UpdateBanner: () => <div data-testid="update-banner-marker" />,
+}));
+
+// The real page mounts a terminal, which jsdom can't host; the tab wiring only needs to know it was shown.
+vi.mock('./pages/RunDetailPage.tsx', () => ({
+  RunDetailPage: ({ runId }: { runId?: string }) => <div>run-detail-{runId}</div>,
 }));
 
 // A FileSystemProvider is always present: the Files tab throws without one,
@@ -311,5 +316,41 @@ describe('App unsaved-edits guard on tab switch', () => {
     await waitFor(() => expect(useAppStore.getState().page).toBe('runs'));
     expect(useAppStore.getState().filesDirty).toBe(false);
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  });
+
+  describe('run tabs', () => {
+    afterEach(() => useAppStore.setState({ tabs: [], activeTabKey: null, jobs: {} }));
+
+    const liveJob = (runId: string): JobState => ({
+      jobId: `job-${runId}`, workdir: '/ws', runId, runName: `Run ${runId}`, finished: false,
+      stepOrder: [], steps: {}, currentExecution: {}, events: [], logTail: [], logRows: [], activityTail: [],
+      hasNarrated: false, ptyActive: true, ptyDataBuffer: [], ptyDataBaseIndex: 0, ptyDataTrimmed: false, ptyExited: false,
+    });
+
+    it('opens a sidebar Ongoing runs row in a preview tab on the Runs page', async () => {
+      renderApp();
+      useAppStore.setState({
+        appState: EMPTY_APP_STATE, restoreDone: true, page: 'workflows', workspacePath: '/ws',
+        jobs: { 'job-r1': liveJob('r1') },
+      });
+
+      fireEvent.click(await screen.findByRole('button', { name: /Run r1/ }));
+
+      await waitFor(() => expect(useAppStore.getState().page).toBe('runs'));
+      expect(useAppStore.getState()).toMatchObject({
+        activeTabKey: 'r1', tabs: [{ key: 'r1', workdir: '/ws', preview: true }],
+      });
+    });
+
+    it('keeps every tab and shows the Runs list after a workspace switch by another route', () => {
+      renderApp();
+      useAppStore.setState({
+        workspacePath: '/ws', tabs: [{ kind: 'run', key: 'r1', workdir: '/ws', runId: 'r1', preview: false }],
+        activeTabKey: 'r1',
+      });
+      act(() => useAppStore.getState().setWorkspacePath('/ws-b'));
+      expect(useAppStore.getState().activeTabKey).toBeNull();
+      expect(useAppStore.getState().tabs).toHaveLength(1);
+    });
   });
 });

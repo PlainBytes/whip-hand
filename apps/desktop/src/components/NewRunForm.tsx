@@ -1,0 +1,701 @@
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactElement } from 'react';
+import {
+  Button,
+  Dropdown,
+  Field,
+  Input,
+  InteractionTag,
+  InteractionTagPrimary,
+  InteractionTagSecondary,
+  MessageBar,
+  MessageBarBody,
+  Option,
+  Switch,
+  TagGroup,
+  Text,
+  Tooltip,
+} from '@fluentui/react-components';
+import { Attach20Regular, Document20Regular } from '@fluentui/react-icons';
+import { AutoGrowTextarea } from './AutoGrowTextarea.tsx';
+import { Page } from './Page.tsx';
+import { useDiscardDraft } from './use-discard-draft.tsx';
+import { useAgentClient } from '../agent/agent-context.tsx';
+import { useCapabilities } from '../capabilities.tsx';
+import { useOptionalFileSystem } from '../files/fs-context.tsx';
+import { extensionForImageMime, mimeTypeForPath } from '../files/file-kind.ts';
+import { bytesToBase64 } from '../lib/base64.ts';
+import { parsePositiveInt } from '../lib/parse-number.ts';
+import { flushDraftSave } from '../lib/draft-sync.ts';
+import { releaseThumbnail, rememberThumbnail, thumbnailFor } from '../lib/draft-thumbnails.ts';
+import {
+  entryKey, findEntry, initialValues, preselect, refFor, type PendingAttachment,
+} from '../lib/new-run-draft.ts';
+import { findWorkspaceMemory, selectDraft, useAppStore } from '../state/store.ts';
+import { collectLoops, findStep, flattenSteps, isLoopStep } from '../shared/steps.ts';
+import { disabledRoots, droppedRefs, droppedRefSentence } from '../shared/enabled.ts';
+import { attachmentNames, consumesAttachments } from '../shared/attachments.ts';
+import type { Workflow } from '../shared/types.ts';
+import type { ListWorkflowsResult } from '../shared/protocol.gen.ts';
+import { errorMessage } from '../lib/error-message.ts';
+
+type WorkflowEntry = ListWorkflowsResult[number];
+
+const NARROW = { maxWidth: 480 };
+
+/**
+ * Names the disabled roots — a loop counts as one entry naming its size, not
+ * one per body step, which is the "one click, one count" rule `disabledRoots`
+ * exists for. This is the last moment before tokens are spent, so it has the
+ * room to also say the consequence: every disabler-voiced sentence
+ * `droppedRefSentence` derives, shared with the CLI's own `guard:warning`.
+ */
+function disabledSummary(workflow: Workflow): { names: string[]; consequences: string[] } | null {
+  const roots = disabledRoots(workflow.steps);
+  if (roots.size === 0) return null;
+  const names = [...roots].map(id => {
+    const step = findStep(workflow.steps, id);
+    if (step && isLoopStep(step)) {
+      const size = flattenSteps(step.steps).length;
+      return `${id} (loop, ${size} step${size === 1 ? '' : 's'})`;
+    }
+    return id;
+  });
+  const consequences = droppedRefSentence(droppedRefs(workflow));
+  return { names, consequences };
+}
+
+/**
+ * A pasted image is stashed under the name core will give it, so its chip
+ * reads the same before and after a restart. The number is one past the
+ * highest this draft already holds, never reused after a removal.
+ */
+function pastedName(items: readonly PendingAttachment[], ext: string): string {
+  const taken = items.flatMap(item => {
+    const match = item.pasted ? /^pasted-(\d+)\./.exec(item.path.split(/[\\/]/).pop() ?? '') : null;
+    return match ? [Number(match[1])] : [];
+  });
+  return `pasted-${Math.max(0, ...taken) + 1}.${ext}`;
+}
+
+/**
+ * The chip's picture for a stashed paste: this session's object URL if the
+ * paste happened here, else the stashed file read back through the local
+ * filesystem. Without either (a browser) it is the file icon.
+ */
+function PastedThumbnail({ path }: { path: string }) {
+  const { localFiles } = useCapabilities();
+  const fs = useOptionalFileSystem();
+  const [url, setUrl] = useState<string | undefined>(() => thumbnailFor(path));
+
+  useEffect(() => {
+    if (url !== undefined || !localFiles || !fs) return;
+    let cancelled = false;
+    void (async () => {
+      const dir = path.slice(0, Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')));
+      await fs.ensureGranted(dir);
+      const bytes = await fs.readFile(path);
+      if (cancelled) return;
+      const blobUrl = URL.createObjectURL(new Blob([bytes as BlobPart], { type: mimeTypeForPath(path) }));
+      rememberThumbnail(path, blobUrl);
+      setUrl(blobUrl);
+    })().catch(() => {
+      // No thumbnail is not worth an error: the chip keeps its icon.
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [path, url, localFiles, fs]);
+
+  if (url === undefined) return <Document20Regular />;
+  return (
+    <img
+      src={url}
+      alt=""
+      data-testid="attachment-thumbnail"
+      style={{ width: 20, height: 20, objectFit: 'cover', borderRadius: 'var(--borderRadiusSmall)' }}
+    />
+  );
+}
+
+/**
+ * The image files on a paste. Read from `items`, then `files`, because which
+ * of the two an engine fills for a pasted screenshot is not something to bet
+ * on across three webviews.
+ */
+function clipboardImages(data: DataTransfer | null): File[] {
+  if (!data) return [];
+  const fromItems = Array.from(data.items ?? [])
+    .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
+    .map(item => item.getAsFile())
+    .filter((file): file is File => file !== null);
+  if (fromItems.length > 0) return fromItems;
+  return Array.from(data.files ?? []).filter(file => file.type.startsWith('image/'));
+}
+
+function isTextEntry(target: EventTarget): boolean {
+  return target instanceof HTMLTextAreaElement
+    || target instanceof HTMLInputElement
+    || (target instanceof HTMLElement && target.isContentEditable);
+}
+
+interface AttachmentsFieldProps {
+  items: readonly PendingAttachment[];
+  /** Parallel to `items`: the final name core will give each file. */
+  names: readonly string[];
+  /** The selected workflow reads `attachments`; without that, nothing can be added. */
+  accepting: boolean;
+  /** Files are being dragged over the form right now. */
+  dropActive: boolean;
+  error: string | null;
+  onAdd: () => void;
+  onRemove: (key: number) => void;
+}
+
+const NOT_READ_HINT: ReactElement = (
+  <>This workflow doesn't read attachments — add <code>attachments</code> to a step's inputs.</>
+);
+
+/**
+ * The CLI's `--attach`. Chips stay removable even while the field is greyed:
+ * files added before switching to a workflow that reads none are still
+ * there, and Start stays disabled until they are gone.
+ */
+function AttachmentsField({ items, names, accepting, dropActive, error, onAdd, onRemove }: AttachmentsFieldProps) {
+  return (
+    <Field
+      label="Attachments"
+      style={NARROW}
+      hint={accepting ? 'Drop files here, or paste an image.' : NOT_READ_HINT}
+      validationState={error ? 'error' : 'none'}
+      validationMessage={error ?? undefined}
+    >
+      <div
+        role="group"
+        aria-label="Attachments"
+        data-testid="attachments-field"
+        data-drop-active={dropActive || undefined}
+        style={{
+          display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: 8,
+          borderRadius: 'var(--borderRadiusMedium)',
+          border: `1px dashed ${dropActive ? 'var(--colorBrandStroke1)' : accepting ? 'var(--colorNeutralStroke1)' : 'var(--colorNeutralStrokeDisabled)'}`,
+          background: dropActive ? 'var(--colorBrandBackground2)' : undefined,
+          color: accepting ? undefined : 'var(--colorNeutralForegroundDisabled)',
+        }}
+      >
+        <Button size="small" icon={<Attach20Regular />} disabled={!accepting} onClick={onAdd}>
+          Add files…
+        </Button>
+        {dropActive && <Text size={200}>Drop to attach</Text>}
+        {items.length > 0 && (
+          <TagGroup
+            aria-label="Attached files"
+            onDismiss={(_e, data) => onRemove(Number(data.value))}
+            style={{ flexWrap: 'wrap', gap: 4 }}
+          >
+            {items.map((item, i) => (
+              <InteractionTag key={item.key} value={String(item.key)} size="small" appearance="outline">
+                <InteractionTagPrimary
+                  hasSecondaryAction
+                  title={item.path}
+                  {...(item.pasted ? { media: <PastedThumbnail path={item.path} /> } : { icon: <Document20Regular /> })}
+                >
+                  {names[i]}
+                </InteractionTagPrimary>
+                {/* Fluent names this button "<primary> <own label>", i.e. "bug.png Remove". */}
+                <InteractionTagSecondary aria-label="Remove" />
+              </InteractionTag>
+            ))}
+          </TagGroup>
+        )}
+      </div>
+    </Field>
+  );
+}
+
+/** Keys only need to be unique within a draft's list; one past the highest never collides. */
+function nextAttachmentKey(items: readonly PendingAttachment[]): number {
+  return items.reduce((max, item) => Math.max(max, item.key + 1), 0);
+}
+
+export interface NewRunFormProps {
+  draftId: string;
+  /**
+   * Whether the form is the one on screen. Hidden forms stay mounted, so their
+   * local state survives a switch of tab, but they hold no drop listener and
+   * their workspace-wide answers (the workflow list, "another run active")
+   * go stale, so those are asked again on showing.
+   */
+  visible?: boolean;
+}
+
+/**
+ * A draft tab's page: workflow picker + generated input form + attachments +
+ * dry-run switch, driving startRun. Everything worth keeping lives in the
+ * store's draft; only transient UI state is local. A successful start turns
+ * the draft's tab into the run's tab.
+ */
+export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
+  const client = useAgentClient();
+  const draft = useAppStore(selectDraft(draftId));
+  const workflows = useAppStore(state => state.workflows);
+  const noteJobWorkspace = useAppStore(state => state.noteJobWorkspace);
+  const setWorkflows = useAppStore(state => state.setWorkflows);
+  const updateDraft = useAppStore(state => state.updateDraft);
+  const rememberInputsLocal = useAppStore(state => state.rememberInputsLocal);
+  const workdir = draft?.workdir;
+
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
+  // A running, non-dry-run run that works in the workspace itself. An isolated
+  // run touches nothing here, so it is no reason to warn.
+  const [workspaceRunActive, setWorkspaceRunActive] = useState(false);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const [dropHover, setDropHover] = useState(false);
+  const { pickFiles, onFileDrop } = useCapabilities();
+  const discard = useDiscardDraft();
+
+  // The store holds one workflow list, for the current workspace. A hidden
+  // draft may belong to another, so each fetches on showing, which is also
+  // when the tab's activation has switched the workspace to its own.
+  useEffect(() => {
+    if (!visible || !workdir) return;
+    let cancelled = false;
+    client
+      .request('listWorkflows', { workdir })
+      .then(result => {
+        if (!cancelled) setWorkflows(result);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setLoadError(errorMessage(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, workdir, visible, setWorkflows]);
+
+  // `visible` is in the deps because the answer goes stale: a run started (or
+  // finished) since the last check would otherwise keep whatever verdict the
+  // first mount happened to reach for this workspace.
+  useEffect(() => {
+    if (!visible || !workdir) return;
+    let cancelled = false;
+    client
+      .request('listRuns', { workdir })
+      .then(result => {
+        if (cancelled) return;
+        const running = result.some(
+          run => run.status === 'running' && run.dryRun !== true && run.worktree === undefined,
+        );
+        setWorkspaceRunActive(running);
+      })
+      .catch(() => {
+        // Best-effort warning only — a failed check just means no warning shown.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, workdir, visible]);
+
+  const workflowRef = draft?.workflowRef ?? null;
+  const selectedEntry = useMemo(
+    () => (workflowRef === null ? null : findEntry(workflows, workflowRef) ?? null),
+    [workflows, workflowRef],
+  );
+  const selectedKey = selectedEntry ? entryKey(selectedEntry) : null;
+  const selectedWorkflow = selectedEntry?.workflow ?? null;
+  const worktreeDefault = selectedWorkflow?.worktree !== undefined && selectedWorkflow.worktree !== false;
+  const worktree = draft?.worktreeChoice ?? worktreeDefault;
+  const anotherRunActive = workspaceRunActive && !worktree;
+
+  function selectWorkflow(entry: WorkflowEntry): void {
+    if (!draft) return;
+    const memory = findWorkspaceMemory(useAppStore.getState().appState, { path: draft.workdir, identityKey: draft.identityKey });
+    setStartError(null);
+    // The worktree choice is for the workflow it was made on, so it resets.
+    const values = initialValues(entry, memory);
+    updateDraft(draftId, { workflowRef: refFor(entry), values, baselineValues: values, worktreeChoice: null });
+  }
+
+  // Auto-select once workflows arrive: a run-again the draft was created with
+  // beats the remembered workflow. The request is dropped once considered —
+  // whether or not its target validated — so a stale one (naming a workflow
+  // that's since been removed or now has a parse error) can't reapply later.
+  useEffect(() => {
+    if (!visible) return;
+    const current = useAppStore.getState().drafts[draftId];
+    if (!current || current.workflowRef !== null || workflows.length === 0) return;
+    const memory = findWorkspaceMemory(useAppStore.getState().appState, { path: current.workdir, identityKey: current.identityKey });
+    const chosen = preselect(workflows, memory, current.runAgain);
+    if (chosen) updateDraft(draftId, { ...chosen, baselineValues: chosen.values, runAgain: undefined });
+    else if (current.runAgain) updateDraft(draftId, { runAgain: undefined });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per workflows arrival or showing
+  }, [workflows, visible]);
+
+  const values = draft?.values ?? {};
+  const name = draft?.name ?? '';
+  const dryRun = draft?.dryRun ?? false;
+  const maxIterationsRaw = draft?.maxIterationsRaw ?? '';
+  const attachments = useMemo(() => draft?.attachments ?? [], [draft?.attachments]);
+
+  const inputEntries = selectedWorkflow?.inputs ? Object.entries(selectedWorkflow.inputs) : [];
+  const hasLoop = (selectedWorkflow?.steps.length ?? 0) > 0 && collectLoops(selectedWorkflow!.steps).length > 0;
+  // Blank means "leave the workflow's own budgets alone" — which is why the
+  // field below only flags undefined when something was actually typed.
+  const maxIterations = parsePositiveInt(maxIterationsRaw);
+
+  // The field only exists where a picker does — a browser has none, and a
+  // path from its machine would mean nothing to the agent — and, like every
+  // other field here, only once a workflow is chosen. Paste and drop are
+  // inert whenever it isn't on screen.
+  const attachFieldShown = !!pickFiles && !!selectedWorkflow;
+  const readsAttachments = selectedWorkflow ? consumesAttachments(selectedWorkflow) : false;
+  const acceptingAttachments = attachFieldShown && readsAttachments;
+  // The names core will give the files, recomputed from the whole list so a
+  // removal renumbers the pasted ones exactly as core would.
+  const attachmentLabels = useMemo(() => attachmentNames(attachments.map(item => ({ path: item.path }))), [attachments]);
+
+  const canStart =
+    !!draft &&
+    !!selectedWorkflow &&
+    !starting &&
+    inputEntries.every(([key, input]) => !input.required || (values[key]?.trim().length ?? 0) > 0) &&
+    // Core would refuse the run anyway; this says so before the click.
+    (attachments.length === 0 || readsAttachments);
+
+  function addPaths(paths: readonly string[]): void {
+    updateDraft(draftId, current => {
+      const known = new Set(current.attachments.map(item => item.path));
+      let nextKey = nextAttachmentKey(current.attachments);
+      const fresh: PendingAttachment[] = [];
+      for (const path of paths) {
+        if (known.has(path)) continue;
+        known.add(path);
+        fresh.push({ key: nextKey++, path });
+      }
+      return fresh.length === 0 ? {} : { attachments: [...current.attachments, ...fresh] };
+    });
+  }
+
+  async function handleAddFiles(): Promise<void> {
+    if (!pickFiles) return;
+    setAttachError(null);
+    try {
+      addPaths(await pickFiles());
+    } catch (err) {
+      setAttachError(errorMessage(err));
+    }
+  }
+
+  function removeAttachment(key: number): void {
+    const item = attachments.find(a => a.key === key);
+    if (item?.pasted) releaseThumbnail(item.path);
+    updateDraft(draftId, current => ({ attachments: current.attachments.filter(a => a.key !== key) }));
+  }
+
+  /**
+   * Ctrl/Cmd+V of an image, anywhere in the form. Everything else is left
+   * to the browser, and so is an image pasted into a text box when the
+   * clipboard also holds text: copying from a spreadsheet or a document
+   * often carries a picture of the selection too, and the person pasting
+   * into a text box meant the text.
+   */
+  function handlePaste(event: ClipboardEvent<HTMLElement>): void {
+    if (!acceptingAttachments) return;
+    const images = clipboardImages(event.clipboardData);
+    if (images.length === 0) return;
+    const hasText = Array.from(event.clipboardData.types ?? []).includes('text/plain');
+    if (hasText && isTextEntry(event.target)) return;
+    event.preventDefault();
+    void stashImages(images);
+  }
+
+  /**
+   * Sends each image to the agent right away: the draft only ever holds the
+   * path it comes back with, and the stash is what survives a restart.
+   */
+  async function stashImages(images: readonly File[]): Promise<void> {
+    setAttachError(null);
+    for (const file of images) {
+      const ext = extensionForImageMime(file.type);
+      const thumbnailUrl = URL.createObjectURL(file);
+      try {
+        const base64 = bytesToBase64(new Uint8Array(await file.arrayBuffer()));
+        const name = pastedName(useAppStore.getState().drafts[draftId]?.attachments ?? [], ext);
+        const { path } = await client.request('stashDraftAttachment', { draftId, name, base64 });
+        if (useAppStore.getState().drafts[draftId] === undefined) {
+          URL.revokeObjectURL(thumbnailUrl);
+          return;
+        }
+        rememberThumbnail(path, thumbnailUrl);
+        updateDraft(draftId, current => ({
+          attachments: [...current.attachments, { key: nextAttachmentKey(current.attachments), path, pasted: true }],
+        }));
+      } catch (err) {
+        URL.revokeObjectURL(thumbnailUrl);
+        setAttachError(errorMessage(err));
+      }
+    }
+  }
+
+  // Through a ref: the drop subscription is set up once per form, not
+  // again every time the workflow (and with it, acceptance) changes.
+  const acceptingRef = useRef(acceptingAttachments);
+  acceptingRef.current = acceptingAttachments;
+
+  useEffect(() => {
+    if (!visible || !onFileDrop || !attachFieldShown) return;
+    let stop: (() => void) | undefined;
+    let cancelled = false;
+    onFileDrop(event => {
+      if (event.type === 'drop') {
+        setDropHover(false);
+        if (acceptingRef.current) addPaths(event.paths);
+      } else {
+        setDropHover(event.type !== 'leave');
+      }
+    })
+      .then(unlisten => {
+        // The form may have been hidden while the listener was being set up.
+        if (cancelled) unlisten();
+        else stop = unlisten;
+      })
+      .catch(() => {
+        // No drop target is not worth an error: the picker and paste still work.
+      });
+    return () => {
+      cancelled = true;
+      stop?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- addPaths only uses a functional update
+  }, [visible, onFileDrop, attachFieldShown]);
+
+  const dropActive = dropHover && acceptingAttachments;
+
+  async function handleStart(): Promise<void> {
+    if (!draft || !selectedEntry || !selectedWorkflow) return;
+    setStarting(true);
+    setStartError(null);
+    try {
+      // Saved before the request, so a crash mid-start loses nothing.
+      flushDraftSave(draftId);
+      // Paths only, in list order: a pasted image was stashed when it was
+      // pasted, and core names it by the stash file's name.
+      const attachmentSources = attachments.map(item => ({ path: item.path }));
+      // Scoped explicitly for a global entry: the list entry's own name (not
+      // the workflow's possibly-mismatched internal `name:` field) is what
+      // was clicked, and a bare name would re-resolve to a shadowing project
+      // workflow of the same name instead of the one shown on this card.
+      const ref = refFor(selectedEntry);
+      const result = await client.request('startRun', {
+        workdir: draft.workdir,
+        workflow: ref,
+        inputs: values,
+        dryRun,
+        worktree,
+        ...(maxIterations === undefined ? {} : { maxIterations }),
+        // Core normalizes and drops an empty one; send it only when typed so
+        // an untouched field is indistinguishable from not passing --name.
+        ...(name.trim() === '' ? {} : { name }),
+        // Only when there are some, so a run without any is exactly the
+        // request it always was.
+        ...(attachmentSources.length === 0 ? {} : { attachments: attachmentSources }),
+      });
+      // Tag the job before any of its notifications can land, so the window
+      // title and Activity badge attribute it from the first millisecond
+      // rather than from the first whiphandEvent.
+      noteJobWorkspace(result.jobId, draft.workdir, draft.identityKey);
+      rememberInputsLocal(draft.workdir, ref, values, draft.identityKey);
+      // The draft's own workspace, not the current one: it may have been left since.
+      useAppStore.getState().convertDraftTab(draftId, {
+        workdir: draft.workdir, identityKey: draft.identityKey, jobId: result.jobId,
+      });
+    } catch (err) {
+      setStartError(errorMessage(err));
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  if (!draft) return null;
+
+  return (
+    <div
+      style={{
+        height: '100%', minHeight: 0,
+        outline: dropActive ? '2px dashed var(--colorBrandStroke1)' : undefined,
+        outlineOffset: -4,
+      }}
+      onPaste={handlePaste}
+      onKeyDown={e => {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && canStart) {
+          e.preventDefault();
+          void handleStart();
+        }
+      }}
+    >
+      <Page header={<Text weight="semibold" size={500}>New run</Text>}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {loadError && (
+          <MessageBar intent="error" style={NARROW}><MessageBarBody>{loadError}</MessageBarBody></MessageBar>
+        )}
+        {anotherRunActive && (
+          <MessageBar intent="warning" style={NARROW}>
+            <MessageBarBody>Another run is already in progress in this workspace.</MessageBarBody>
+          </MessageBar>
+        )}
+
+        <Field label="Workflow" style={NARROW}>
+          <Dropdown
+            placeholder="Choose a workflow…"
+            value={selectedEntry ? `${selectedEntry.name}${selectedEntry.source === 'global' ? ' (Global)' : ''}` : ''}
+            selectedOptions={selectedKey ? [selectedKey] : []}
+            onOptionSelect={(_e, data) => {
+              const entry = data.optionValue
+                ? workflows.find(w => entryKey(w) === data.optionValue)
+                : undefined;
+              if (entry) selectWorkflow(entry);
+            }}
+          >
+            {workflows.map(entry =>
+              entry.error ? (
+                <Tooltip key={entryKey(entry)} content={entry.error} relationship="description">
+                  <Option value={entryKey(entry)} disabled text={entry.name}>
+                    {entry.name} (parse error)
+                  </Option>
+                </Tooltip>
+              ) : (
+                <Option key={entryKey(entry)} value={entryKey(entry)} text={entry.name}>
+                  {entry.name}{entry.source === 'global' ? ' (Global)' : ''}
+                </Option>
+              ),
+            )}
+          </Dropdown>
+        </Field>
+
+        {selectedWorkflow && (
+          <>
+            {selectedWorkflow.description && <Text style={NARROW}>{selectedWorkflow.description}</Text>}
+
+            {(() => {
+              const disabled = disabledSummary(selectedWorkflow);
+              if (!disabled) return null;
+              return (
+                <MessageBar intent="warning" style={NARROW} data-testid="disabled-steps-warning">
+                  <MessageBarBody>
+                    <Text>Disabled: {disabled.names.join(', ')}.</Text>
+                    {disabled.consequences.map(sentence => (
+                      <Text key={sentence} block>{sentence}</Text>
+                    ))}
+                  </MessageBarBody>
+                </MessageBar>
+              );
+            })()}
+
+            {/* The CLI's `--name`. Optional: an unnamed run reads as its
+                id, exactly as every run did before names existed. */}
+            <Field
+              style={NARROW}
+              label="Name (optional)"
+              hint="Shown instead of the run id. Steps see it as {{ run.name }} / $WHIPHAND_RUN_SLUG."
+            >
+              <Input
+                data-testid="run-name-input"
+                value={name}
+                onChange={(_e, data) => updateDraft(draftId, { name: data.value })}
+              />
+            </Field>
+
+            {inputEntries.map(([key, input]) => (
+              <Field
+                key={key}
+                label={input.prompt ?? key}
+                required={input.required}
+              >
+                {input.multiline === false ? (
+                  <Input
+                    style={NARROW}
+                    value={values[key] ?? ''}
+                    onChange={(_e, data) => updateDraft(draftId, current => ({ values: { ...current.values, [key]: data.value } }))}
+                  />
+                ) : (
+                  <AutoGrowTextarea
+                    value={values[key] ?? ''}
+                    onChange={(_e, data) => updateDraft(draftId, current => ({ values: { ...current.values, [key]: data.value } }))}
+                  />
+                )}
+              </Field>
+            ))}
+
+            {attachFieldShown && (
+              <AttachmentsField
+                items={attachments}
+                names={attachmentLabels}
+                accepting={readsAttachments}
+                dropActive={dropActive}
+                error={attachError}
+                onAdd={() => void handleAddFiles()}
+                onRemove={removeAttachment}
+              />
+            )}
+
+            <Switch
+              style={NARROW}
+              label="Dry run (no side effects)"
+              checked={dryRun}
+              onChange={(_e, data) => updateDraft(draftId, { dryRun: data.checked })}
+            />
+
+            <Field
+              style={NARROW}
+              hint={<>Changes land on a new branch in <code>.whiphand/worktrees/</code>. Other runs keep the workspace.</>}
+            >
+              <Switch
+                data-testid="worktree-switch"
+                label="Run in a separate worktree"
+                checked={worktree}
+                onChange={(_e, data) => updateDraft(draftId, { worktreeChoice: data.checked })}
+              />
+            </Field>
+
+            {/* The CLI's `--max-iterations`. Only meaningful for a workflow
+                that contains a loop, so it is only offered for one. */}
+            {hasLoop && (
+              <Field
+                style={NARROW}
+                label="Max loop iterations"
+                hint="Overrides every loop's own budget for this run. Blank = as written."
+                validationState={maxIterationsRaw !== '' && maxIterations === undefined ? 'error' : 'none'}
+                validationMessage={
+                  maxIterationsRaw !== '' && maxIterations === undefined
+                    ? 'Must be a positive whole number.'
+                    : undefined
+                }
+              >
+                <Input
+                  data-testid="max-iterations-input"
+                  value={maxIterationsRaw}
+                  onChange={(_e, data) => updateDraft(draftId, { maxIterationsRaw: data.value })}
+                />
+              </Field>
+            )}
+
+            {startError && (
+              <MessageBar intent="error" style={NARROW}><MessageBarBody>{startError}</MessageBarBody></MessageBar>
+            )}
+          </>
+        )}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Button appearance="primary" disabled={!canStart} onClick={() => void handleStart()}>
+            {starting ? 'Starting…' : 'Start'}
+          </Button>
+          <Button appearance="secondary" disabled={starting} onClick={() => discard.request(draftId)}>
+            Discard
+          </Button>
+        </div>
+      </div>
+      </Page>
+      {discard.dialog}
+    </div>
+  );
+}

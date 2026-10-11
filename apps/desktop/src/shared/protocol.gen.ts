@@ -182,7 +182,39 @@ export type WorkspaceMemory = { identityKey?: string, lastWorkflow?: string,
  */
 lastInputs: Record<string, Record<string, string>>, };
 
-export type AppState = { schemaVersion: 1, recentWorkspaces: Array<RecentWorkspace>, window: WindowState | null, lastPage: string | null, theme: ThemePreference, workspaces: Record<string, WorkspaceMemory>, runsRetention: RunsRetention, showOngoingRuns: boolean, editor: EditorPreference, };
+export type DraftAttachment = { path: string, 
+/**
+ * A pasted image the agent stashed, as opposed to a file the user picked.
+ */
+pasted?: boolean, };
+
+export type RunDraft = { id: string, workdir: string, identityKey?: string, 
+/**
+ * The workflow's name.
+ */
+workflow?: string, inputs: Record<string, string>, name?: string, dryRun: boolean, 
+/**
+ * Absent means the workflow's own default.
+ */
+worktree?: boolean, 
+/**
+ * As typed, not yet a number.
+ */
+maxIterations?: string, attachments: Array<DraftAttachment>, createdAt: string, updatedAt: string, };
+
+export type RunTabRef = { "kind": "run", workdir: string, identityKey?: string, runId: string, preview: boolean, } | { "kind": "draft", draftId: string, };
+
+export type RunTabsState = { tabs: Array<RunTabRef>, 
+/**
+ * A tab key; null means the Runs tab.
+ */
+active: string | null, };
+
+export type AppState = { schemaVersion: 1, recentWorkspaces: Array<RecentWorkspace>, window: WindowState | null, lastPage: string | null, theme: ThemePreference, workspaces: Record<string, WorkspaceMemory>, runsRetention: RunsRetention, showOngoingRuns: boolean, editor: EditorPreference, 
+/**
+ * Unstarted New-run forms, kept so they survive a restart.
+ */
+runDrafts: Array<RunDraft>, runTabs: RunTabsState, };
 
 export type TouchRecentWorkspaceParams = { path: string, };
 
@@ -193,6 +225,16 @@ export type SetWorkspacePinnedParams = { path: string, pinned: boolean, };
 export type EditorPreference = { "kind": "vscode" } | { "kind": "vscode-insiders" } | { "kind": "cursor" } | { "kind": "windsurf" } | { "kind": "zed" } | { "kind": "custom", command: string, };
 
 export type SetUiStateParams = { window?: WindowState | null, lastPage?: string | null, theme?: ThemePreference, runsRetention?: RunsRetention, showOngoingRuns?: boolean, editor?: EditorPreference, };
+
+export type SaveRunDraftParams = { draft: RunDraft, };
+
+export type DeleteRunDraftParams = { id: string, };
+
+export type SetRunTabsParams = { runTabs: RunTabsState, };
+
+export type StashDraftAttachmentParams = { draftId: string, name: string, base64: string, };
+
+export type StashDraftAttachmentResult = { path: string, };
 
 export type ListRecentRunsParams = { limit?: number, };
 
@@ -278,6 +320,9 @@ export type GetAppStateResult = AppState;
 export type TouchRecentWorkspaceResult = RecentWorkspacesResult;
 export type SetWorkspacePinnedResult = RecentWorkspacesResult;
 export type SetUiStateResult = OkTrue;
+export type SaveRunDraftResult = OkTrue;
+export type DeleteRunDraftResult = OkTrue;
+export type SetRunTabsResult = OkTrue;
 export type ListJobsParams = Empty;
 export type ListJobsResult = JobSummary[];
 export type GetJobScrollbackParams = JobParams;
@@ -325,6 +370,10 @@ export interface MethodMap {
   touchRecentWorkspace: { params: TouchRecentWorkspaceParams; result: TouchRecentWorkspaceResult };
   setWorkspacePinned: { params: SetWorkspacePinnedParams; result: SetWorkspacePinnedResult };
   setUiState: { params: SetUiStateParams; result: SetUiStateResult };
+  saveRunDraft: { params: SaveRunDraftParams; result: SaveRunDraftResult };
+  deleteRunDraft: { params: DeleteRunDraftParams; result: DeleteRunDraftResult };
+  setRunTabs: { params: SetRunTabsParams; result: SetRunTabsResult };
+  stashDraftAttachment: { params: StashDraftAttachmentParams; result: StashDraftAttachmentResult };
   listRecentRuns: { params: ListRecentRunsParams; result: ListRecentRunsResult };
   listJobs: { params: ListJobsParams; result: ListJobsResult };
   getJobScrollback: { params: GetJobScrollbackParams; result: GetJobScrollbackResult };

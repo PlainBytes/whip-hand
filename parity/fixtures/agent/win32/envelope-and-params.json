@@ -430,6 +430,51 @@
       }
     },
     {
+      "step": "saveRunDraft {\"draft\":{\"id\":\"\",\"workdir\":\"w\",\"inputs\":{\"a\":1},\"dryRun\":\"no\",\"attachments\":[{\"path\":\"\"}]}}",
+      "response": {
+        "error": {
+          "code": -32602,
+          "message": "invalid params: draft.id: Too small: expected string to have >=1 characters; draft.inputs.a: Invalid input: expected string, received number; draft.dryRun: Invalid input: expected boolean, received string; draft.attachments.0.path: Too small: expected string to have >=1 characters; draft.createdAt: Invalid input: expected string, received undefined; draft.updatedAt: Invalid input: expected string, received undefined"
+        }
+      }
+    },
+    {
+      "step": "saveRunDraft {}",
+      "response": {
+        "error": {
+          "code": -32602,
+          "message": "invalid params: draft: Invalid input: expected object, received undefined"
+        }
+      }
+    },
+    {
+      "step": "deleteRunDraft {\"id\":\"\"}",
+      "response": {
+        "error": {
+          "code": -32602,
+          "message": "invalid params: id: Too small: expected string to have >=1 characters"
+        }
+      }
+    },
+    {
+      "step": "setRunTabs {\"runTabs\":{\"tabs\":[{\"kind\":\"other\"}],\"active\":1}}",
+      "response": {
+        "error": {
+          "code": -32602,
+          "message": "invalid params: runTabs.tabs.0: Invalid input; runTabs.active: Invalid input: expected string, received number"
+        }
+      }
+    },
+    {
+      "step": "stashDraftAttachment {\"draftId\":\"\",\"name\":\"n\"}",
+      "response": {
+        "error": {
+          "code": -32602,
+          "message": "invalid params: draftId: Too small: expected string to have >=1 characters; base64: Invalid input: expected string, received undefined"
+        }
+      }
+    },
+    {
       "step": "listRecentRuns {\"limit\":101}",
       "response": {
         "error": {

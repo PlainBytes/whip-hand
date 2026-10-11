@@ -22,25 +22,27 @@ import { liveStageProgress, useAppStore, waitingRunIds } from '../state/store.ts
 import { sameSet, sameStageProgress, useAppStoreStable } from '../state/use-stable-selector.ts';
 import type { RunSummary } from '../agent/client.ts';
 import { POLL_INTERVAL_MS, runColumns, runColumnStyle, runLabel } from './run-columns.tsx';
-import { NewRunDialog } from '../components/NewRunDialog.tsx';
 import { DeleteRunDialog } from '../components/DeleteRunDialog.tsx';
 import { errorMessage } from '../lib/error-message.ts';
 import { DangerButton } from '../components/DangerButton.tsx';
 import { OpenInEditorButton } from '../components/OpenInEditorButton.tsx';
+import { useClickOrDoubleClick } from '../lib/use-click-or-double-click.ts';
 import { Page } from '../components/Page.tsx';
+import { NEW_RUN_TAB, shortcutLabel } from '../lib/tab-shortcuts.ts';
 
 export interface RunsPageProps {
-  onSelectRun: (runId: string) => void;
-  onStarted: (jobId: string) => void;
+  /** A single click opens a preview tab; a double click (`pin`) a pinned one. */
+  onSelectRun: (runId: string, pin: boolean) => void;
+  /** Opens a new draft tab. */
+  onNewRun: () => void;
 }
 
 /** Fluent DataGrid over listRuns, polled every 5s, with dry-run/interrupted filters. */
-export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
+export function RunsPage({ onSelectRun, onNewRun }: RunsPageProps) {
   const client = useAgentClient();
   const workspacePath = useAppStore(state => state.workspacePath);
   const runs = useAppStore(state => state.runs);
   const setRuns = useAppStore(state => state.setRuns);
-  const pendingRunAgain = useAppStore(state => state.pendingRunAgain);
   const identityKey = useAppStore(state => state.workspaceIdentityKey);
   const workspace = useMemo(
     () => (workspacePath === null ? undefined : { path: workspacePath, identityKey: identityKey ?? undefined }),
@@ -53,11 +55,11 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [showDryRuns, setShowDryRuns] = useState(false);
   const [showInterrupted, setShowInterrupted] = useState(true);
-  const [newRunOpen, setNewRunOpen] = useState(false);
   /** The run awaiting delete confirmation; null when no dialog is open. */
   const [deleting, setDeleting] = useState<RunSummary | null>(null);
   const [lockingId, setLockingId] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
+  const rowClick = useClickOrDoubleClick<string>(onSelectRun);
 
   // Hoisted out of the polling effect so row actions can trigger an immediate
   // re-poll on success, rather than mutating local state and risking drift
@@ -74,10 +76,6 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
         setError(errorMessage(err));
       });
   }, [client, workspacePath, setRuns]);
-
-  useEffect(() => {
-    if (pendingRunAgain) setNewRunOpen(true);
-  }, [pendingRunAgain]);
 
   useEffect(() => {
     if (!workspacePath) return;
@@ -173,9 +171,11 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
           checked={showInterrupted}
           onChange={(_e, data) => setShowInterrupted(data.checked)}
         />
-        <Button appearance="primary" icon={<Add20Regular />} onClick={() => setNewRunOpen(true)}>
-          New run
-        </Button>
+        <Tooltip content={`New run (${shortcutLabel(NEW_RUN_TAB)})`} relationship="description">
+          <Button appearance="primary" icon={<Add20Regular />} onClick={onNewRun}>
+            New run
+          </Button>
+        </Tooltip>
       </div>
     </div>
   );
@@ -183,16 +183,6 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
   return (
     <Page header={header}>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {newRunOpen && (
-        <NewRunDialog
-          open
-          onOpenChange={setNewRunOpen}
-          onStarted={jobId => {
-            setNewRunOpen(false);
-            onStarted(jobId);
-          }}
-        />
-      )}
       {error && <Text>Failed to load runs: {error}</Text>}
       {openError && (
         <MessageBar intent="error" data-testid="runs-open-error">
@@ -214,7 +204,8 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
             {({ item, rowId }) => (
               <DataGridRow<RunSummary>
                 key={rowId}
-                onClick={() => onSelectRun(item.runId)}
+                onClick={() => rowClick.click(item.runId)}
+                onDoubleClick={() => rowClick.doubleClick(item.runId)}
                 style={{ cursor: 'pointer' }}
               >
                 {({ columnId, renderCell }) => (

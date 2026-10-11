@@ -19,7 +19,7 @@ function rowName(job: JobState): string {
  * accessible name — `AWAIT_LABEL`/`manualLabel` are already the one place
  * this copy is centralised, so the row does not invent its own "waiting".
  */
-function stateLabel(job: JobState): string {
+export function stateLabel(job: JobState): string {
   const base = job.awaiting ? AWAIT_LABEL[job.awaiting.reason]
     : job.pendingManual ? manualLabel(job.pendingManual.kind)
     : 'running';

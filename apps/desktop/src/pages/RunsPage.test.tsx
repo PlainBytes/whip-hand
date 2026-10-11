@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { RunsPage } from './RunsPage.tsx';
+import { DOUBLE_CLICK_MS } from '../lib/use-click-or-double-click.ts';
 import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
 import { AgentClientProvider } from '../agent/agent-context.tsx';
@@ -8,16 +9,16 @@ import { useAppStore } from '../state/store.ts';
 import { CapabilitiesProvider, type AppCapabilities } from '../capabilities.tsx';
 import { hasInjectedStyle } from '../test/badge-style.ts';
 
-function renderRunsPage(onSelectRun = vi.fn(), onStarted = vi.fn(), capabilities?: AppCapabilities) {
+function renderRunsPage(onSelectRun = vi.fn(), onNewRun = vi.fn(), capabilities?: AppCapabilities) {
   const transport = new MockTransport();
   const client = new AgentClient(transport);
   const page = (
     <AgentClientProvider client={client}>
-      <RunsPage onSelectRun={onSelectRun} onStarted={onStarted} />
+      <RunsPage onSelectRun={onSelectRun} onNewRun={onNewRun} />
     </AgentClientProvider>
   );
   render(capabilities ? <CapabilitiesProvider value={capabilities}>{page}</CapabilitiesProvider> : page);
-  return { transport, client, onSelectRun, onStarted };
+  return { transport, client, onSelectRun, onNewRun };
 }
 
 describe('RunsPage', () => {
@@ -27,7 +28,7 @@ describe('RunsPage', () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    useAppStore.setState({ workspacePath: null, runs: [], pendingRunAgain: null });
+    useAppStore.setState({ workspacePath: null, runs: [] });
   });
 
   async function respondListRuns(transport: MockTransport, result: unknown) {
@@ -283,7 +284,7 @@ describe('RunsPage', () => {
     expect(screen.queryByRole('button', { name: 'New run' })).not.toBeInTheDocument();
   });
 
-  it('calls onSelectRun with the runId when a row is clicked', async () => {
+  it('calls onSelectRun un-pinned with the runId when a row is clicked', async () => {
     const { transport, onSelectRun } = renderRunsPage();
 
     await respondListRuns(transport, [
@@ -291,7 +292,25 @@ describe('RunsPage', () => {
     ]);
 
     fireEvent.click(await screen.findByText('r1'));
-    expect(onSelectRun).toHaveBeenCalledWith('r1');
+    // Held back briefly, so a double click can claim it.
+    await waitFor(() => expect(onSelectRun).toHaveBeenCalledWith('r1', false));
+    expect(onSelectRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens a pinned tab, and only that, when a row is double-clicked', async () => {
+    const { transport, onSelectRun } = renderRunsPage();
+
+    await respondListRuns(transport, [
+      { runId: 'r1', runDir: '/ws/.whiphand/runs/r1', status: 'succeeded', workflow: 'demo' },
+    ]);
+
+    const row = await screen.findByText('r1');
+    fireEvent.click(row);
+    fireEvent.click(row);
+    fireEvent.doubleClick(row);
+    expect(onSelectRun).toHaveBeenCalledExactlyOnceWith('r1', true);
+    await new Promise(resolve => setTimeout(resolve, DOUBLE_CLICK_MS + 50));
+    expect(onSelectRun).toHaveBeenCalledTimes(1);
   });
 
   it('shows a lock glyph for a locked run in the Locked column, with a Locked tooltip', async () => {
@@ -302,8 +321,13 @@ describe('RunsPage', () => {
     const glyph = await screen.findByRole('img', { name: 'locked' });
     const row = glyph.closest('[role="row"]') as HTMLElement;
     expect(glyph.closest('[role="gridcell"]')).toBe(within(row).getAllByRole('gridcell')[3]);
-    fireEvent.mouseEnter(glyph.parentElement as HTMLElement);
-    await waitFor(() => expect(document.querySelector('[role="tooltip"]')).toHaveTextContent('Locked'));
+    const trigger = glyph.parentElement as HTMLElement;
+    fireEvent.mouseEnter(trigger);
+    // Other description tooltips (New run) stay mounted, so find this one by its id.
+    await waitFor(() => {
+      const id = trigger.getAttribute('aria-describedby');
+      expect(id && document.getElementById(id)).toHaveTextContent('Locked');
+    });
   });
 
   it('lock toggle sends setRunLocked without following the row link, and re-polls on success', async () => {
@@ -420,22 +444,13 @@ describe('RunsPage', () => {
     expect(screen.queryByRole('switch', { name: /all workspaces/i })).not.toBeInTheDocument();
   });
 
-  it('opens the New run dialog when the toolbar button is clicked', async () => {
-    const { transport } = renderRunsPage();
+  it('asks for a new draft when the toolbar button is clicked, and opens no dialog', async () => {
+    const { transport, onNewRun } = renderRunsPage();
     await respondListRuns(transport, []);
 
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'New run' }));
-    expect(await screen.findByRole('dialog')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'New run' })).toBeInTheDocument();
-  });
-
-  it('auto-opens the New run dialog when a run-again request is pending', async () => {
-    useAppStore.setState({ pendingRunAgain: { workflow: 'ship-feature', inputs: { ticket: 'T-1' } } });
-    const { transport } = renderRunsPage();
-    await respondListRuns(transport, []);
-
-    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(onNewRun).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   describe('worktree runs', () => {

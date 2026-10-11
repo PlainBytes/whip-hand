@@ -12,17 +12,17 @@ export const uiActions: Record<string, Record<string, string>> = {
     '-C': 'sidebar:workspaceSwitcher',
   },
   run: {
-    // RunsPage's "New run" button, opening NewRunDialog.
+    // RunsPage's "New run" button, opening a draft tab holding NewRunForm.
     _command: 'runs:newRunButton',
-    // NewRunDialog's Workflow Dropdown (Field label "Workflow").
-    '<workflow>': 'new-run-dialog:workflowDropdown',
-    // NewRunDialog's "Dry run (no side effects)" Switch.
-    '--dry-run': 'new-run-dialog:dryRunSwitch',
-    // NewRunDialog's generated Field/Input per workflow input, driving startRun's `inputs`.
-    '--input': 'new-run-dialog:inputForm',
-    // NewRunDialog's "Attachments" field — Add files…, drop, or paste an
+    // NewRunForm's Workflow Dropdown (Field label "Workflow").
+    '<workflow>': 'new-run-form:workflowDropdown',
+    // NewRunForm's "Dry run (no side effects)" Switch.
+    '--dry-run': 'new-run-form:dryRunSwitch',
+    // NewRunForm's generated Field/Input per workflow input, driving startRun's `inputs`.
+    '--input': 'new-run-form:inputForm',
+    // NewRunForm's "Attachments" field — Add files…, drop, or paste an
     // image — driving startRun's `attachments`.
-    '--attach': 'new-run-dialog:attachmentsField',
+    '--attach': 'new-run-form:attachmentsField',
     // components/WorkspaceSwitcher.tsx, at the top of the sidebar — sets the
     // workspace path used as startRun's `workdir`, the UI's equivalent of
     // `-C <dir>`.
@@ -32,15 +32,15 @@ export const uiActions: Record<string, Record<string, string>> = {
     // Auto-resolving a human gate only makes sense where there is no human.
     // The desktop always has one — it shows the ManualStepCard instead.
     '--yes': 'exempt:non-interactive-automation',
-    // NewRunDialog's "Max loop iterations" Field/SpinButton, driving startRun's
+    // NewRunForm's "Max loop iterations" Field/SpinButton, driving startRun's
     // `maxIterations`.
-    '--max-iterations': 'new-run-dialog:maxIterationsInput',
-    // NewRunDialog's "Run in a separate worktree" Switch, driving startRun's
+    '--max-iterations': 'new-run-form:maxIterationsInput',
+    // NewRunForm's "Run in a separate worktree" Switch, driving startRun's
     // `worktree`. The switch sends false explicitly, which is `--no-worktree`.
-    '--worktree': 'new-run-dialog:worktreeSwitch',
-    '--no-worktree': 'new-run-dialog:worktreeSwitch',
-    // NewRunDialog's "Name (optional)" Field/Input, driving startRun's `name`.
-    '--name': 'new-run-dialog:nameInput',
+    '--worktree': 'new-run-form:worktreeSwitch',
+    '--no-worktree': 'new-run-form:worktreeSwitch',
+    // NewRunForm's "Name (optional)" Field/Input, driving startRun's `name`.
+    '--name': 'new-run-form:nameInput',
     // RunDetailPage's "Resume" button, shown for a failed, interrupted or
     // cancelled run and driving the resumeRun RPC.
     '--resume': 'run-detail:resumeButton',

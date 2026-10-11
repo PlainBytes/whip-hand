@@ -118,14 +118,18 @@ describe('RunDetailPage', () => {
     useAppStore.setState({ workspacePath: null, jobs: {} });
   });
 
-  it('titles the page with the run name, keeping the id beside it', async () => {
+  it('titles the page with the run name only, showing the id in its tooltip and no status badge', async () => {
     const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1');
     await respondGetRun(transport, {
       runId: 'run-1', runDir: '/ws/.whiphand/runs/run-1', status: 'succeeded',
       name: 'OAuth support', artifacts: [],
     });
-    expect(await screen.findByText('OAuth support')).toBeInTheDocument();
-    expect(screen.getByTestId('run-detail-id')).toHaveTextContent('run-1');
+    const name = await screen.findByText('OAuth support');
+    expect(name).toHaveAttribute('data-testid', 'run-detail-name');
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+    expect(screen.queryByText(/succeeded/i)).not.toBeInTheDocument();
+    fireEvent.focus(name);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('run-1');
   });
 
   describe('worktree', () => {
@@ -192,8 +196,8 @@ describe('RunDetailPage', () => {
     await respondGetRun(transport, {
       runId: 'run-1', runDir: '/ws/.whiphand/runs/run-1', status: 'succeeded', artifacts: [],
     });
-    expect(await screen.findByText('Run run-1')).toBeInTheDocument();
-    expect(screen.queryByTestId('run-detail-id')).not.toBeInTheDocument();
+    expect(await screen.findByText('Run run-1')).toHaveAttribute('data-testid', 'run-detail-name');
+    expect(screen.queryByText('run-1')).not.toBeInTheDocument();
   });
 
   it('Rename sends renameRun and re-titles the page from the stored name', async () => {
@@ -408,18 +412,6 @@ describe('RunDetailPage', () => {
 
     transport.emitLine({ id: req.id, result: { locked: true } });
     expect(await screen.findByRole('button', { name: 'Locked' })).toBeInTheDocument();
-  });
-
-  it('goes back from the icon-only back button, which keeps an accessible name', async () => {
-    // The button carries no visible text, so aria-label is the only thing
-    // naming it — for a screen reader and for this query alike.
-    const onBack = vi.fn();
-    const { transport } = renderRunDetail('job-back', onBack);
-    emitWhiphandEvent(transport, 'job-back', 'run-back', { type: 'step:start', stepId: 'plan', kind: 'agent', runner: 'claude', mode: 'headless' }, 't1');
-    await respondGetRun(transport, { runId: 'run-back', runDir: '/ws/.whiphand/runs/run-back', status: 'succeeded', artifacts: [] });
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Back to runs' }));
-    expect(onBack).toHaveBeenCalled();
   });
 
   it('styles the header Delete subtle red', async () => {

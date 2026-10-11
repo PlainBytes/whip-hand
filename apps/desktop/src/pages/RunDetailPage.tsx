@@ -29,7 +29,7 @@ import {
   Tooltip,
 } from '@fluentui/react-components';
 import {
-  ArrowDown20Regular, ArrowLeft20Regular, BranchFork16Regular, Copy20Regular, Delete20Regular, DocumentFolder48Regular,
+  ArrowDown20Regular, BranchFork16Regular, Copy20Regular, Delete20Regular, DocumentFolder48Regular,
   LockClosed20Regular, LockOpen20Regular,
   PlayCircle20Regular, PlugDisconnected20Regular, PlugDisconnected48Regular, Prompt48Regular,
   Rename20Regular, Stop20Regular, Replay20Regular, TextBulletListSquare48Regular,
@@ -38,7 +38,6 @@ import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore, executionKey, type JobState, type StepState } from '../state/store.ts';
 import type { RunDetail as RunDetailResult } from '../agent/client.ts';
 import { summarizeEvent, parseLogLine, type LogRow } from '../shared/log-rows.ts';
-import { StatusBadge } from '../components/StatusBadge.tsx';
 import { AttentionBadge } from '../components/AttentionBadge.tsx';
 import { DangerButton } from '../components/DangerButton.tsx';
 import { OpenInEditorButton } from '../components/OpenInEditorButton.tsx';
@@ -1084,51 +1083,46 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
     );
   }
 
+  const titleStyle = {
+    minWidth: 0, flexShrink: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  } as const;
+
   return (
     <Page body="fill" header={<>
         {/*
-          One row: title, status and actions all fit on a line, and this is the
-          screen where every pixel above the fold belongs to the run itself.
+          One row, kept on one line: title, elapsed time and actions. The run's
+          tab already shows its status and a back button has nothing to go back
+          to, so the left side carries only what the tab does not.
         */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <Button
-            appearance="secondary"
-            icon={<ArrowLeft20Regular />}
-            // Icon-only, so the label has to come from aria-label instead.
-            aria-label="Back to runs"
-            title="Back to runs"
-            onClick={onBack}
-          />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           {/*
-            The name leads and the id follows, dimmed: the name is what a
-            human recognizes, but the id is what `--resume` and `whiphand
-            rename-run` take, so it stays on screen rather than in a tooltip.
+            The name is what a human recognizes. The id is what `--resume` and
+            `whiphand rename-run` take, but it is secondary, so it sits in a
+            tooltip on the name. An unnamed run is titled by its id already.
           */}
-          <Text weight="semibold" size={500}>
-            {runName ?? `Run ${effectiveRunId ?? effectiveJobId}`}
-          </Text>
-          {runName !== undefined && effectiveRunId && (
-            <Text
-              data-testid="run-detail-id"
-              style={{ fontFamily: 'monospace', color: 'var(--colorNeutralForeground3)' }}
-            >
-              {effectiveRunId}
+          {runName !== undefined && effectiveRunId ? (
+            <Tooltip content={effectiveRunId} relationship="description">
+              <Text
+                data-testid="run-detail-name"
+                tabIndex={0}
+                weight="semibold"
+                size={500}
+                style={titleStyle}
+              >
+                {runName}
+              </Text>
+            </Tooltip>
+          ) : (
+            <Text data-testid="run-detail-name" weight="semibold" size={500} style={titleStyle}>
+              {runName ?? `Run ${effectiveRunId ?? effectiveJobId}`}
             </Text>
           )}
-          {/*
-            No awaiting badge here. What is waiting is a fact about one step,
-            so it belongs to that step's pill — which is always the focus pill,
-            and so survives a collapsed stepper. The dot on the Terminal tab
-            below points at where to go; a third copy in the header only
-            widened a row this screen wants kept to one line.
-          */}
-          {(job?.status ?? manifest?.status) && <StatusBadge status={job?.status ?? (manifest?.status as string)} />}
           {runElapsed !== null && (
-            <Text data-testid="run-elapsed" style={{ color: 'var(--colorNeutralForeground3)' }}>
+            <Text data-testid="run-elapsed" style={{ color: 'var(--colorNeutralForeground3)', flexShrink: 0 }}>
               {runElapsed}
             </Text>
           )}
-          <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+          <div style={{ display: 'flex', gap: 8, marginLeft: 'auto', flexShrink: 0 }}>
             {job?.ptyActive && effectiveJobId && (
               <Tooltip
                 content={

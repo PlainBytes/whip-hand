@@ -128,7 +128,6 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
         <Tooltip content={`Delete ${runLabel(run)}`} relationship="label">
           <DangerButton
             variant="subtle"
-            appearance="secondary"
             size="small"
             icon={<Delete16Regular />}
             onClick={event => { event.stopPropagation(); setDeleting(run); }}

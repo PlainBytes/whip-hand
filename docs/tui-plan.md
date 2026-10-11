@@ -531,8 +531,9 @@ Not done, and why:
   covers was run against the stub instead. The sign-off check uses the
   `feature-development` template: `examples/feature.yaml` has no approval step.
 - Windows attach input is type-checked and clippy-clean, not run: CI has no
-  console to attach. A UTF-16 surrogate pair split across two console reads
-  would be lost. The attach test is Unix-only (its stub is `sh`).
+  console to attach. Keys without a character (arrows, F-keys) are turned
+  into VT sequences by a table that is unit-tested on every platform. The
+  attach test is Unix-only (its stub is `sh`).
 - tmux and SSH were not tried (Phase 4's manual matrix).
 - `attach.auto` waits for settings (Phase 3); `Ctrl-]` is not configurable yet.
 - No path completion or pasted images for attachments, and no model

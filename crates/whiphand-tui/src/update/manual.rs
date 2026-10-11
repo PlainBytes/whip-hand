@@ -42,6 +42,9 @@ pub fn open(model: &mut Model, job_id: &str) -> Vec<Cmd> {
         .or_else(|| model.workdir.clone())
         .unwrap_or_default();
     let mut m = Manual::new(job_id.to_string(), run_id.clone(), workdir, request);
+    if !m.takes_note() && !m.request.context.artifacts.is_empty() {
+        m.focus = Focus::Artifact(0);
+    }
     let mut cmds = Vec::new();
     if m.wants_diff()
         && let Some(run_id) = run_id
@@ -120,11 +123,12 @@ fn resolve(model: &mut Model, choice: ManualChoice) -> Vec<Cmd> {
         return vec![];
     };
     let comments = m.file_comments();
+    let note = m.takes_note() && !m.note.is_blank();
     let params = p::ResolveManualParams {
         job_id: m.job_id.clone(),
         step_id: m.request.step_id.clone(),
         choice,
-        note: (!m.note.is_blank()).then(|| m.note.text().trim().to_string()),
+        note: note.then(|| m.note.text().trim().to_string()),
         comments: (!comments.is_empty()).then_some(comments),
     };
     m.sent = Some(choice);
@@ -169,9 +173,16 @@ fn choose(model: &mut Model, choice: ManualChoice) -> Vec<Cmd> {
 
 /// What the focus moves through: the note, the artifacts, the diff's files.
 fn stops(m: &Manual) -> Vec<Focus> {
-    let mut out = vec![Focus::Note];
+    let mut out = Vec::new();
+    if m.takes_note() {
+        out.push(Focus::Note);
+    }
     out.extend((0..m.request.context.artifacts.len()).map(Focus::Artifact));
     out.extend((0..m.files().len()).map(Focus::File));
+    // Nothing to move between: the focus rests where nothing is drawn.
+    if out.is_empty() {
+        out.push(Focus::Note);
+    }
     out
 }
 
@@ -182,6 +193,10 @@ pub fn act(model: &mut Model, action: Action) -> Option<Vec<Cmd>> {
         Action::Approve => return Some(choose(model, ManualChoice::Continue)),
         Action::SendBack => return Some(choose(model, ManualChoice::Retry)),
         Action::AbortStep => return Some(choose(model, ManualChoice::Abort)),
+        Action::EditNote if !m.takes_note() => {
+            model.notice = Some("this step takes no note".into());
+            return Some(vec![]);
+        }
         Action::EditNote => {
             m.focus = Focus::Note;
             m.editing = true;
@@ -205,7 +220,7 @@ pub fn act(model: &mut Model, action: Action) -> Option<Vec<Cmd>> {
                 Focus::Note | Focus::File(_) => {
                     let takes = m.focused_input().is_some();
                     m.editing = takes;
-                    if !takes {
+                    if !takes && matches!(m.focus, Focus::File(_)) {
                         model.notice = Some("this step takes no per-file comments".into());
                     }
                     vec![]
@@ -219,7 +234,12 @@ pub fn act(model: &mut Model, action: Action) -> Option<Vec<Cmd>> {
         _ => return None,
     };
     let stops = stops(m);
-    let mut at = stops.iter().position(|f| *f == m.focus).unwrap_or(0);
+    // Resting where nothing is drawn (no note; the files came later): the
+    // first key lands on the first stop.
+    let Some(mut at) = stops.iter().position(|f| *f == m.focus) else {
+        m.focus = stops[0];
+        return Some(vec![]);
+    };
     step(&mut at, stops.len(), delta);
     m.focus = stops[at];
     Some(vec![])

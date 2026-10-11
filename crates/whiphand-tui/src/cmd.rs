@@ -85,8 +85,10 @@ pub enum Then {
     Locked(String),
     Deleted(String),
     SessionEnded(String),
-    Workflows,
-    Started,
+    /// The new-run screen's requests, by the generation of the screen that
+    /// asked: a reply for one the user has left is dropped.
+    Workflows(u64),
+    Started(u64),
     /// `resolveManual` for a job.
     Resolved(String),
     /// `getWorkingDiff` for a job's manual step.

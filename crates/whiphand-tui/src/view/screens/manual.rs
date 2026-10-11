@@ -69,19 +69,22 @@ fn list_lines(m: &Manual) -> (Vec<Line<'static>>, usize) {
         .capture
         .as_ref()
         .is_some_and(|c| !c.required_for.is_empty());
-    if m.focus == Focus::Note {
-        focus_line = lines.len();
-    }
-    let star = if required { "*" } else { "" };
-    lines.push(Line::from(vec![
-        marker(m, Focus::Note),
-        Span::styled(format!("{label}{star}"), theme::bold()),
-    ]));
-    let editing_note = m.editing && m.focus == Focus::Note;
-    if m.note.is_blank() && !editing_note {
-        lines.push(Line::styled("    i to write it", theme::dim()));
-    } else {
-        lines.extend(input_lines(&m.note, editing_note, "    "));
+    // Only a step that captures a note gets one; it would go nowhere else.
+    if m.takes_note() {
+        if m.focus == Focus::Note {
+            focus_line = lines.len();
+        }
+        let star = if required { "*" } else { "" };
+        lines.push(Line::from(vec![
+            marker(m, Focus::Note),
+            Span::styled(format!("{label}{star}"), theme::bold()),
+        ]));
+        let editing_note = m.editing && m.focus == Focus::Note;
+        if m.note.is_blank() && !editing_note {
+            lines.push(Line::styled("    i to write it", theme::dim()));
+        } else {
+            lines.extend(input_lines(&m.note, editing_note, "    "));
+        }
     }
     let artifacts = &m.request.context.artifacts;
     if !artifacts.is_empty() {

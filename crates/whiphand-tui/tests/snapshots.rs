@@ -458,7 +458,7 @@ steps:
         { "name": "old", "path": "/home/dev/shop/.whiphand/workflows/old.yaml",
           "source": "project", "error": "steps: required" },
     ]);
-    reply(&mut model, Then::Workflows, entries);
+    reply(&mut model, Then::Workflows(1), entries);
     model
 }
 

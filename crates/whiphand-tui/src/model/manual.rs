@@ -185,6 +185,12 @@ impl Manual {
         }
     }
 
+    /// The step asks for a note (`capture`); without it a note would go
+    /// nowhere, so none is offered.
+    pub fn takes_note(&self) -> bool {
+        self.request.capture.is_some()
+    }
+
     pub fn wants_diff(&self) -> bool {
         self.request.context.diff.is_some()
     }
@@ -207,7 +213,8 @@ impl Manual {
     /// The input the focus is on, made if it is a file's first comment.
     pub fn focused_input(&mut self) -> Option<&mut Input> {
         match self.focus {
-            Focus::Note => Some(&mut self.note),
+            Focus::Note if self.takes_note() => Some(&mut self.note),
+            Focus::Note => None,
             Focus::Artifact(_) => None,
             Focus::File(i) => {
                 let per_file = self.request.capture.as_ref().is_some_and(|c| c.per_file);

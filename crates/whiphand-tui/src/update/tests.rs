@@ -756,7 +756,11 @@ fn new_run_on(model: &mut Model) {
     let cmds = update(model, key('n'));
     assert_eq!(methods(&cmds), ["listWorkflows", "getAppState"]);
     assert_eq!(*model.screen(), Route::NewRun);
-    update(model, Msg::Reply(Then::Workflows, Ok(workflows())));
+    let generation = model.new_run.as_ref().unwrap().generation;
+    update(
+        model,
+        Msg::Reply(Then::Workflows(generation), Ok(workflows())),
+    );
 }
 
 #[test]
@@ -811,7 +815,7 @@ fn a_started_run_opens_its_detail_once_it_has_an_id() {
     assert!(update(&mut model, key('s')).is_empty(), "no second start");
     update(
         &mut model,
-        Msg::Reply(Then::Started, Ok(json!({ "jobId": "j1" }))),
+        Msg::Reply(Then::Started(1), Ok(json!({ "jobId": "j1" }))),
     );
     assert_eq!(*model.screen(), Route::NewRun);
     let cmds = running(&mut model, "j1", "r1");
@@ -832,7 +836,7 @@ fn a_refused_start_stays_on_the_form() {
         message: "workflow 'cycle' has a problem".into(),
         data: None,
     };
-    update(&mut model, Msg::Reply(Then::Started, Err(refused)));
+    update(&mut model, Msg::Reply(Then::Started(1), Err(refused)));
     let n = model.new_run.as_ref().unwrap();
     assert!(!n.starting);
     assert_eq!(
@@ -1012,5 +1016,47 @@ fn a_foreign_runs_step_is_answered_where_it_started() {
             .as_deref()
             .unwrap()
             .contains("where the run was started")
+    );
+}
+
+#[test]
+fn a_reply_for_a_new_run_screen_since_left_is_dropped() {
+    let mut model = Model::new("/w".into(), 0.0);
+    update(&mut model, key('n'));
+    update(&mut model, key('q'));
+    update(&mut model, key('n'));
+    assert_eq!(model.new_run.as_ref().unwrap().generation, 2);
+    // The first screen's answers land on the second one: ignored.
+    update(&mut model, Msg::Reply(Then::Workflows(1), Ok(workflows())));
+    assert!(model.new_run.as_ref().unwrap().workflows.is_none());
+    update(
+        &mut model,
+        Msg::Reply(Then::Started(1), Ok(json!({ "jobId": "j1" }))),
+    );
+    assert!(model.new_run.as_ref().unwrap().job_id.is_none());
+    update(&mut model, Msg::Reply(Then::Workflows(2), Ok(workflows())));
+    assert!(model.new_run.as_ref().unwrap().workflows.is_some());
+}
+
+#[test]
+fn a_step_without_capture_takes_no_note() {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "running" }));
+    running(&mut model, "j1", "r1");
+    ask(
+        &mut model,
+        json!({
+            "stepId": "check", "kind": "manual", "title": "Look", "instructions": "Look at it.",
+            "choices": ["continue", "abort"], "context": { "artifacts": [] }, "defaultChoice": "continue",
+        }),
+    );
+    assert_eq!(*model.screen(), Route::Manual);
+    assert!(update(&mut model, key('i')).is_empty());
+    assert_eq!(model.notice.as_deref(), Some("this step takes no note"));
+    update(&mut model, code(KeyCode::Enter));
+    assert!(!model.manual.as_ref().unwrap().editing);
+    let cmds = update(&mut model, key('a'));
+    assert_eq!(
+        rpc(&cmds).params,
+        json!({ "jobId": "j1", "stepId": "check", "choice": "continue" })
     );
 }

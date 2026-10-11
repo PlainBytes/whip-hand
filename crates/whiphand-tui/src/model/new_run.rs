@@ -281,6 +281,8 @@ impl Form {
 /// Where the screen is.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NewRun {
+    /// Which opening of the screen this is; replies carry it.
+    pub generation: u64,
     pub workdir: String,
     /// `None` until `listWorkflows` answers.
     pub workflows: Option<Vec<WorkflowListEntry>>,

@@ -174,7 +174,9 @@ pub fn run(host: &Host, terminal: &mut Term, mut model: Model, log: &Path) -> io
                     }
                     msgs
                 }
-                () = tokio::time::sleep_until(next_frame.into()), if model.dirty => vec![],
+                // Not while attached: nothing is drawn then, so `dirty` stays set and
+                // the timer would fire at once, every turn.
+                () = tokio::time::sleep_until(next_frame.into()), if model.dirty && attached.is_none() => vec![],
             };
             for msg in msgs {
                 cmds.extend(update(&mut model, msg));

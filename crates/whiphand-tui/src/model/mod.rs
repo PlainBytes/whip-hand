@@ -189,6 +189,8 @@ pub struct Model {
     pub workspaces: WorkspacesUi,
     pub detail: Option<RunDetail>,
     pub new_run: Option<new_run::NewRun>,
+    /// How many times the new-run screen has been opened.
+    pub new_run_generation: u64,
     pub manual: Option<manual::Manual>,
     /// Attached to a session: the screen is not the TUI's.
     pub attach: Option<Attach>,

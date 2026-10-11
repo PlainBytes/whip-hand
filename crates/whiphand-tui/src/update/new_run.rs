@@ -25,7 +25,10 @@ pub fn open(model: &mut Model) -> Vec<Cmd> {
             && r.get("dryRun") != Some(&Value::Bool(true))
             && r.get("worktree").is_none()
     });
+    model.new_run_generation += 1;
+    let generation = model.new_run_generation;
     model.new_run = Some(NewRun {
+        generation,
         workdir: workdir.clone(),
         workspace_busy,
         ..NewRun::default()
@@ -34,7 +37,7 @@ pub fn open(model: &mut Model) -> Vec<Cmd> {
     vec![
         Cmd::Rpc(Call::new::<ListWorkflows>(
             p::WorkdirParams { workdir },
-            Then::Workflows,
+            Then::Workflows(generation),
         )),
         get_app_state(),
     ]
@@ -93,7 +96,10 @@ fn start(model: &mut Model) -> Vec<Cmd> {
         Ok(params) => {
             form.error = None;
             n.starting = true;
-            vec![Cmd::Rpc(Call::new::<StartRun>(params, Then::Started))]
+            vec![Cmd::Rpc(Call::new::<StartRun>(
+                params,
+                Then::Started(n.generation),
+            ))]
         }
         Err(why) => {
             form.error = Some(why);
@@ -181,21 +187,27 @@ pub fn on_edited(model: &mut Model, text: &str) {
 
 /// This screen's replies; any other's value comes back untouched.
 pub fn on_reply(model: &mut Model, then: &Then, value: Value) -> Result<Vec<Cmd>, Value> {
-    let Some(n) = model.new_run.as_mut() else {
-        return match then {
-            Then::Workflows | Then::Started => Ok(vec![]),
-            _ => Err(value),
-        };
+    let (Then::Workflows(generation) | Then::Started(generation)) = then else {
+        return Err(value);
+    };
+    // The screen that asked is gone (left, or opened again since). A run it
+    // started is still followed through its notifications.
+    let Some(n) = model
+        .new_run
+        .as_mut()
+        .filter(|n| n.generation == *generation)
+    else {
+        return Ok(vec![]);
     };
     match then {
-        Then::Workflows => match client::decode::<ListWorkflows>(value) {
+        Then::Workflows(_) => match client::decode::<ListWorkflows>(value) {
             Ok(list) => {
                 n.workflows = Some(list);
                 preselect(n);
             }
             Err(e) => model.notice = Some(e),
         },
-        Then::Started => {
+        Then::Started(_) => {
             n.starting = false;
             match client::decode::<StartRun>(value) {
                 Ok(r) => {
@@ -209,21 +221,29 @@ pub fn on_reply(model: &mut Model, then: &Then, value: Value) -> Result<Vec<Cmd>
                 Err(e) => model.notice = Some(e),
             }
         }
-        _ => return Err(value),
+        _ => unreachable!("matched above"),
     }
     Ok(vec![])
 }
 
 /// A refused `startRun` stays on the form, saying why; whether it was one.
 pub fn on_error(model: &mut Model, then: &Then, message: &str) -> bool {
-    if *then != Then::Started {
+    let Then::Started(generation) = then else {
         return false;
-    }
-    if let Some(n) = model.new_run.as_mut() {
-        n.starting = false;
-        if let Some(form) = n.form.as_mut() {
-            form.error = Some(message.to_string());
+    };
+    match model
+        .new_run
+        .as_mut()
+        .filter(|n| n.generation == *generation)
+    {
+        Some(n) => {
+            n.starting = false;
+            if let Some(form) = n.form.as_mut() {
+                form.error = Some(message.to_string());
+            }
         }
+        // Its form is gone: the refusal still deserves a word.
+        None => model.notice = Some(message.to_string()),
     }
     true
 }

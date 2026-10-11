@@ -104,10 +104,10 @@ export function RunsPage({ onSelectRun, onStarted }: RunsPageProps) {
     renderHeaderCell: () => 'Actions',
     renderCell: run => (
       <div style={{ display: 'flex', gap: 8 }}>
-        {run.worktree && workspacePath && (
+        {workspacePath && (
           <OpenInEditorButton
             workdir={workspacePath}
-            worktree={run.worktree}
+            worktree={run.worktree ?? undefined}
             size="small"
             iconOnly
             onError={setOpenError}

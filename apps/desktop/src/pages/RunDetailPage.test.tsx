@@ -150,11 +150,12 @@ describe('RunDetailPage', () => {
       expect(screen.queryByTestId('run-detail-worktree')).not.toBeInTheDocument();
     });
 
-    it('has no open button without the capability, but still shows the line', async () => {
+    it('shows a disabled open button without the capability, and still shows the line', async () => {
       const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1');
       await respondGetRun(transport, { ...base, worktree: WORKTREE });
       await screen.findByTestId('run-detail-worktree');
-      expect(screen.queryByRole('button', { name: /Open in/ })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Open worktree in Visual Studio Code' }))
+        .toHaveAttribute('aria-disabled', 'true');
     });
 
     it('opens the worktree in the chosen editor, labelled by the preference', async () => {
@@ -165,7 +166,7 @@ describe('RunDetailPage', () => {
       );
       await respondGetRun(transport, { ...base, worktree: WORKTREE });
 
-      fireEvent.click(await screen.findByRole('button', { name: 'Open in Zed' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Open worktree in Zed' }));
 
       await waitFor(() => expect(openInEditor).toHaveBeenCalledWith(
         '/ws', '.whiphand/worktrees/run-1', { kind: 'zed' },
@@ -179,7 +180,7 @@ describe('RunDetailPage', () => {
       );
       await respondGetRun(transport, { ...base, worktree: WORKTREE });
 
-      fireEvent.click(await screen.findByRole('button', { name: 'Open in Visual Studio Code' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Open worktree in Visual Studio Code' }));
 
       expect(await screen.findByTestId('run-open-error')).toHaveTextContent('editor not found on PATH');
       expect(screen.getByTestId('run-detail-worktree')).toBeInTheDocument();

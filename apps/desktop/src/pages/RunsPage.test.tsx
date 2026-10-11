@@ -475,16 +475,25 @@ describe('RunsPage', () => {
       expect(nameCell.querySelector('svg')).toBeNull();
     });
 
-    it('offers no open button without the capability, but keeps the glyph', async () => {
-      const { transport } = renderRunsPage();
-      await respondListRuns(transport, [WORKTREE_RUN]);
+    it('disables every open button without the capability, with a desktop-only tooltip, and keeps the glyph', async () => {
+      const onSelectRun = vi.fn();
+      const { transport } = renderRunsPage(onSelectRun);
+      await respondListRuns(transport, [WORKTREE_RUN, PLAIN_RUN]);
 
       await screen.findByText('wt1');
       expect(screen.getByLabelText('worktree')).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: /Open in/ })).not.toBeInTheDocument();
+      const buttons = screen.getAllByRole('button', { name: /Open (worktree|repository) in/ });
+      expect(buttons).toHaveLength(2);
+      for (const button of buttons) expect(button).toHaveAttribute('aria-disabled', 'true');
+
+      fireEvent.mouseEnter(buttons[0]);
+      expect(await screen.findAllByText(/only available in the desktop app/)).not.toHaveLength(0);
+      fireEvent.click(buttons[0]);
+      fireEvent.click(buttons[1]);
+      expect(onSelectRun).not.toHaveBeenCalled();
     });
 
-    it('opens the worktree in the chosen editor without opening the run', async () => {
+    it('opens the worktree or the repository per row, without opening the run', async () => {
       const openInEditor = vi.fn().mockResolvedValue(undefined);
       useAppStore.setState({ appState: { editor: { kind: 'cursor' } } as never });
       const onSelectRun = vi.fn();
@@ -493,26 +502,30 @@ describe('RunsPage', () => {
       );
       await respondListRuns(transport, [WORKTREE_RUN, PLAIN_RUN]);
 
-      const buttons = await screen.findAllByRole('button', { name: 'Open in Cursor' });
-      expect(buttons).toHaveLength(1);
-      fireEvent.click(buttons[0]);
-
+      const worktreeButtons = await screen.findAllByRole('button', { name: 'Open worktree in Cursor' });
+      expect(worktreeButtons).toHaveLength(1);
+      fireEvent.click(worktreeButtons[0]);
       await waitFor(() => expect(openInEditor).toHaveBeenCalledWith(
         '/ws', '.whiphand/worktrees/wt1', { kind: 'cursor' },
       ));
+
+      const repoButtons = screen.getAllByRole('button', { name: 'Open repository in Cursor' });
+      expect(repoButtons).toHaveLength(1);
+      fireEvent.click(repoButtons[0]);
+      await waitFor(() => expect(openInEditor).toHaveBeenCalledWith('/ws', '', { kind: 'cursor' }));
       expect(onSelectRun).not.toHaveBeenCalled();
     });
 
     it('shows the launcher error above the grid', async () => {
-      const openInEditor = vi.fn().mockRejectedValue(new Error('worktree no longer exists'));
+      const openInEditor = vi.fn().mockRejectedValue(new Error('Folder no longer exists: /ws'));
       const { transport } = renderRunsPage(
         vi.fn(), vi.fn(), { host: 'desktop', localFiles: true, openInEditor },
       );
       await respondListRuns(transport, [WORKTREE_RUN]);
 
-      fireEvent.click(await screen.findByRole('button', { name: 'Open in Visual Studio Code' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Open worktree in Visual Studio Code' }));
 
-      expect(await screen.findByTestId('runs-open-error')).toHaveTextContent('worktree no longer exists');
+      expect(await screen.findByTestId('runs-open-error')).toHaveTextContent('Folder no longer exists');
       expect(screen.getByText('wt1')).toBeInTheDocument();
     });
   });

@@ -26,16 +26,31 @@ describe('OpenInEditorButton', () => {
     useAppStore.setState({ appState: null });
   });
 
-  it('renders nothing without the openInEditor capability', () => {
-    renderButton({ host: 'browser', localFiles: false });
-    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  it('is disabled with a desktop-only tooltip without the openInEditor capability', async () => {
+    const { onRowClick } = renderButton({ host: 'browser', localFiles: false }, { iconOnly: true });
+
+    const button = screen.getByRole('button', { name: 'Open worktree in Visual Studio Code' });
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.mouseEnter(button);
+    expect(await screen.findByText(/only available in the desktop app/)).toBeInTheDocument();
+    fireEvent.click(button);
+    expect(onRowClick).not.toHaveBeenCalled();
+  });
+
+  it('opens the workdir itself, labelled as the repository, without a worktree', async () => {
+    const openInEditor = vi.fn().mockResolvedValue(undefined);
+    renderButton({ host: 'desktop', localFiles: true, openInEditor }, { worktree: undefined });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open repository in Visual Studio Code' }));
+
+    await waitFor(() => expect(openInEditor).toHaveBeenCalledWith('/ws', '', { kind: 'vscode' }));
   });
 
   it('falls back to vscode when no editor is stored', async () => {
     const openInEditor = vi.fn().mockResolvedValue(undefined);
     renderButton({ host: 'desktop', localFiles: true, openInEditor });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open in Visual Studio Code' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open worktree in Visual Studio Code' }));
 
     await waitFor(() => expect(openInEditor).toHaveBeenCalledWith('/ws', WORKTREE.path, { kind: 'vscode' }));
   });
@@ -45,7 +60,7 @@ describe('OpenInEditorButton', () => {
     useAppStore.setState({ appState: { editor: { kind: 'custom', command: 'hx' } } as never });
     renderButton({ host: 'desktop', localFiles: true, openInEditor });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open in editor' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open worktree in editor' }));
 
     await waitFor(() => expect(openInEditor).toHaveBeenCalledWith(
       '/ws', WORKTREE.path, { kind: 'custom', command: 'hx' },
@@ -55,7 +70,7 @@ describe('OpenInEditorButton', () => {
   it('renders icon-only with no visible text and no native title', () => {
     renderButton({ host: 'desktop', localFiles: true, openInEditor: vi.fn() }, { iconOnly: true });
 
-    const button = screen.getByRole('button', { name: 'Open in Visual Studio Code' });
+    const button = screen.getByRole('button', { name: 'Open worktree in Visual Studio Code' });
     expect(button.textContent).toBe('');
     expect(button).not.toHaveAttribute('title');
   });
@@ -64,7 +79,7 @@ describe('OpenInEditorButton', () => {
     const openInEditor = vi.fn().mockResolvedValue(undefined);
     const { onRowClick } = renderButton({ host: 'desktop', localFiles: true, openInEditor }, { iconOnly: true });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open in Visual Studio Code' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open worktree in Visual Studio Code' }));
 
     await waitFor(() => expect(openInEditor).toHaveBeenCalled());
     expect(onRowClick).not.toHaveBeenCalled();

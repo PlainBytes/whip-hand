@@ -1415,37 +1415,61 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
       )}
 
       {/*
-        Capped so a run with many expanded stages cannot squeeze the tabs panel
-        away. A percentage max-height resolves because the frame above has a
-        definite height; no measurement is needed. The collapse chevron stays
-        as the way to hide the strip entirely.
+        The user sets how tall the strip may grow by dragging the handle below
+        it, so a run with many expanded stages cannot squeeze the tabs panel
+        away unless they choose it. The default is the old fixed cap; its
+        percentage resolves because the frame above has a definite height. The
+        strip itself does not scroll: the cap passes down to the stepper's own
+        scroller, so the collapse chevron beside it stays in view as the way
+        to hide the strip entirely. Collapsed, it is one line, so it gets
+        neither the handle nor the cap.
       */}
-      <div
-        data-testid="run-stepper-strip"
-        style={{
-          flexShrink: 0,
-          maxHeight: 'clamp(140px, 38%, 460px)',
-          overflowY: 'auto',
-          paddingTop: 8,
-          paddingBottom: 8,
-        }}
-      >
-        <RunStepper
-          // Remounting on a different run is what resets the stages' follow-the-run latch.
-          key={effectiveRunId ?? jobId}
-          steps={steps}
-          focusStepId={focusStep?.id}
-          collapsed={stepsCollapsed}
-          onToggleCollapse={() => setStepsCollapsed(current => !current)}
-          awaiting={
-            job?.awaiting
-              ? { stepId: job.awaiting.stepId, label: AWAIT_LABEL[job.awaiting.reason] }
-              : undefined
-          }
-          nodeRef={(key, el) => { stepRefs.current[key] = el; }}
-          now={now}
-        />
-      </div>
+      {(() => {
+        const stepper = (
+          <div
+            data-testid="run-stepper-strip"
+            style={{
+              // Inside the pane it shrinks to the pane's cap; alone it is one line.
+              flexShrink: stepsCollapsed ? 0 : 1,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              paddingTop: 8,
+              ...(stepsCollapsed ? { paddingBottom: 8 } : {}),
+            }}
+          >
+            <RunStepper
+              // Remounting on a different run is what resets the stages' follow-the-run latch.
+              key={effectiveRunId ?? jobId}
+              steps={steps}
+              focusStepId={focusStep?.id}
+              collapsed={stepsCollapsed}
+              onToggleCollapse={() => setStepsCollapsed(current => !current)}
+              awaiting={
+                job?.awaiting
+                  ? { stepId: job.awaiting.stepId, label: AWAIT_LABEL[job.awaiting.reason] }
+                  : undefined
+              }
+              nodeRef={(key, el) => { stepRefs.current[key] = el; }}
+              now={now}
+            />
+          </div>
+        );
+        return stepsCollapsed ? stepper : (
+          <ResizablePane
+            axis="height"
+            fit
+            defaultSize="clamp(140px, 38%, 460px)"
+            storageKey="whiphand.run.stepsHeight"
+            label="Resize steps"
+            minSize={80}
+            maxFraction={0.7}
+          >
+            {stepper}
+          </ResizablePane>
+        );
+      })()}
 
       {reviewRequest && effectiveJobId && !reviewOpen && (
         // The run is blocked until this is answered, so backing out of the

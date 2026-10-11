@@ -182,8 +182,19 @@ export function RunStepper({
   return (
     <div
       data-testid="run-stepper"
-      style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 8 }}
+      style={{ display: 'flex', flex: 1, minHeight: 0, alignItems: 'stretch', gap: 8 }}
     >
+      {/*
+        The steps scroll here, beside the toggle rather than under it, so the
+        scrollbar never covers the chevron and it stays reachable.
+      */}
+      <div
+        data-testid="run-stepper-scroller"
+        style={{
+          flex: 1, minWidth: 0, minHeight: 0, overflowY: 'auto',
+          display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 8,
+        }}
+      >
       {/*
         The stepper owns this strip, so it is the stepper's job to say when it
         has nothing in it. A quiet annotation rather than a centred
@@ -223,8 +234,9 @@ export function RunStepper({
           ))}
         </StepTrack>
       ))}
+      </div>
       {onToggleCollapse && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>{toggle()}</div>
+        <div data-testid="run-stepper-toggle-column" style={{ flexShrink: 0, alignSelf: 'flex-start' }}>{toggle()}</div>
       )}
     </div>
   );

@@ -1397,15 +1397,18 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onResumed }: R
       {/*
         Capped so a run with many expanded stages cannot squeeze the tabs panel
         away. A percentage max-height resolves because the frame above has a
-        definite height; no measurement is needed. The collapse chevron stays
-        as the way to hide the strip entirely.
+        definite height; no measurement is needed. The strip itself does not
+        scroll: the cap passes down to the stepper's own scroller, so the
+        collapse chevron beside it stays in view as the way to hide the strip.
       */}
       <div
         data-testid="run-stepper-strip"
         style={{
           flexShrink: 0,
           maxHeight: 'clamp(140px, 38%, 460px)',
-          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
           paddingTop: 8,
           paddingBottom: 8,
         }}

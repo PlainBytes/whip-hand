@@ -854,7 +854,7 @@ describe('layout', () => {
 
   it('stacks two step bands with the stages block between them', () => {
     render(<RunStepper steps={bandedRows()} />);
-    const root = screen.getByTestId('run-stepper');
+    const root = screen.getByTestId('run-stepper-scroller');
     expect(root).toHaveStyle({ display: 'flex', flexDirection: 'column' });
     const testids = Array.from(root.children).map(child => child.getAttribute('data-testid'));
     expect(testids).toEqual(['step-band-one', 'step-stages-build', 'step-band-push']);
@@ -909,11 +909,25 @@ describe('layout', () => {
     expect(stages).toHaveStyle({ flexShrink: '0' });
   });
 
-  it('keeps the chevron on a row of its own at the end when expanded', () => {
+  it('keeps the chevron outside the scroller, beside the steps area', () => {
     render(<RunStepper steps={steps()} focusStepId="b" onToggleCollapse={vi.fn()} />);
-    const row = screen.getByTestId('stepper-collapse-toggle').parentElement as HTMLElement;
-    expect(row).toHaveStyle({ display: 'flex', justifyContent: 'flex-end' });
-    expect(row.parentElement).toBe(screen.getByTestId('run-stepper'));
+    const root = screen.getByTestId('run-stepper');
+    const scroller = screen.getByTestId('run-stepper-scroller');
+    const toggle = screen.getByTestId('stepper-collapse-toggle');
+    expect(scroller).toHaveStyle({ overflowY: 'auto', minHeight: '0' });
+    expect(scroller).not.toContainElement(toggle);
+    const column = toggle.parentElement as HTMLElement;
+    expect(column).toHaveStyle({ flexShrink: '0' });
+    expect(scroller.parentElement).toBe(root);
+    expect(column.parentElement).toBe(root);
+  });
+
+  it('renders no toggle column when collapsing is not offered', () => {
+    render(<RunStepper steps={steps()} focusStepId="b" />);
+    const root = screen.getByTestId('run-stepper');
+    expect(screen.queryByTestId('run-stepper-toggle-column')).toBeNull();
+    expect(root.children).toHaveLength(1);
+    expect(root.firstElementChild).toBe(screen.getByTestId('run-stepper-scroller'));
   });
 
   it('keeps collapsed as one row, the chevron pushed to its end', () => {

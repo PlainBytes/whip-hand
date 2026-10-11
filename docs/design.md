@@ -1243,10 +1243,13 @@ agent that must read and write artifacts there is given access to it: claude and
 tree against its `HEAD`, so a review screen shows the run's own changes whatever else is going on
 in the main checkout.
 
-**Cleanup.** Deleting a run, and retention pruning, remove the run's worktree first. A worktree with
-modified or untracked files is *dirty*: delete refuses (`worktree-dirty`) and keeps the run, and
-pruning skips that run and records why. A worktree already gone from disk is not an error; git's
-record of it is pruned. `whiphand worktree remove <run-id>` removes one by hand, keeping the run,
+**Cleanup.** Deleting a run, and retention pruning, remove the run's worktree first. A worktree can be
+shared by several runs (a new run may continue in an earlier one's): it is removed only with the last
+run that records it, so deleting or pruning any other run removes just that run's folder. A worktree
+with modified or untracked files is *dirty*: delete of the last run refuses (`worktree-dirty`) and
+keeps the run, and pruning skips the runs of that worktree and records one reason. A worktree already gone from disk is not an error; git's
+record of it is pruned. `whiphand worktree remove <run-id>` removes one by hand, keeping the run
+(and naming any other runs that shared it, which can no longer be resumed),
 and `--force` discards a dirty tree's changes. **Branches are never deleted** by any of this:
 the work on them is yours to merge or drop.
 

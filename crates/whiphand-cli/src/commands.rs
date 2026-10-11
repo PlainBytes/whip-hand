@@ -16,7 +16,9 @@ use whiphand_core::doctor::tools::{detect_tools, doctor_report};
 use whiphand_core::engine::attachments::{AttachmentSource, validate_attachments};
 use whiphand_core::engine::resume::{ResumePlan, plan_resume};
 use whiphand_core::engine::runner::{RunError, RunOptions, run_workflow};
-use whiphand_core::engine::worktree::{RemoveWorktree, record_from_manifest, remove_sync};
+use whiphand_core::engine::worktree::{
+    RemoveWorktree, record_from_manifest, remove_sync, sharing_runs,
+};
 use whiphand_core::js::number_to_string;
 use whiphand_core::node_path;
 use whiphand_core::process::container::Container;
@@ -150,17 +152,26 @@ pub fn worktree_remove(run_id: &str, force: bool, dir: &str) -> CmdResult {
         err_line(&format!("✘ run '{run_id}' has no worktree"));
         return Ok(1);
     };
+    let others = sharing_runs(&workdir, &config, &record.path, &[run_id.to_string()]);
+    let also_used = if others.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; also used by run(s) {}; they can no longer be resumed",
+            others.join(", ")
+        )
+    };
     match remove_sync(&workdir, &record, force) {
         RemoveWorktree::Removed => {
             out_line(&format!(
-                "removed {}; branch {} kept",
+                "removed {}; branch {} kept{also_used}",
                 record.path, record.branch
             ));
             Ok(0)
         }
         RemoveWorktree::Absent => {
             out_line(&format!(
-                "{} is already gone; branch {} kept",
+                "{} is already gone; branch {} kept{also_used}",
                 record.path, record.branch
             ));
             Ok(0)

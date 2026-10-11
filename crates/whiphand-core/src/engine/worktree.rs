@@ -414,6 +414,33 @@ pub fn busy_run(
     })
 }
 
+/// The ids of the runs, other than those in `exclude`, whose recorded worktree is at `path`
+/// (compared in normalized `/`-form). `exclude` lets pruning ignore runs it removes in the
+/// same pass.
+pub fn sharing_runs(
+    workspace: &str,
+    config: &WorkspaceConfig,
+    path: &str,
+    exclude: &[String],
+) -> Vec<String> {
+    let want = normalize_path(path);
+    list_runs(workspace, config)
+        .into_iter()
+        .filter_map(|run| {
+            let id = run.run_id();
+            if exclude.contains(&id) {
+                return None;
+            }
+            let record = record_from_manifest(&run.obj)?;
+            (normalize_path(&record.path) == want).then_some(id)
+        })
+        .collect()
+}
+
+fn normalize_path(p: &str) -> String {
+    p.replace('\\', "/").trim_end_matches('/').to_string()
+}
+
 /// Where a run's steps ran, as a native path: its worktree, or the workspace itself
 /// when it had none. A recorded worktree that is gone is an error, not the workspace.
 pub fn execution_tree(

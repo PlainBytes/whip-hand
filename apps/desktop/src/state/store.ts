@@ -831,6 +831,11 @@ export interface RunDraft {
   dryRun: boolean;
   /** The person's choice for the selected workflow; null follows the workflow's default. */
   worktreeChoice: boolean | null;
+  /**
+   * A run id whose worktree the run continues in. Unlike `worktreeChoice` it is
+   * not per workflow: changing workflow keeps it. Excludes `worktreeChoice`.
+   */
+  continueIn?: string | undefined;
   maxIterationsRaw: string;
   attachments: PendingAttachment[];
   /**
@@ -852,6 +857,8 @@ export interface RunDraftInit {
   identityKey?: string;
   /** Wins over the workspace's remembered workflow when it names a usable one. */
   runAgain?: RunAgain;
+  /** Continue in this run's worktree rather than start a new one. */
+  continueIn?: string;
 }
 
 /** Whether closing the draft would lose something typed: an input edit, a name or an attachment. */
@@ -1468,6 +1475,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       name: '',
       dryRun: false,
       worktreeChoice: null,
+      ...(init.continueIn === undefined ? {} : { continueIn: init.continueIn }),
       maxIterationsRaw: '',
       attachments: [],
       baselineValues: chosen?.values ?? {},

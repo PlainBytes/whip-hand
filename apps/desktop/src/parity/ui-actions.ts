@@ -39,6 +39,9 @@ export const uiActions: Record<string, Record<string, string>> = {
     // `worktree`. The switch sends false explicitly, which is `--no-worktree`.
     '--worktree': 'new-run-form:worktreeSwitch',
     '--no-worktree': 'new-run-form:worktreeSwitch',
+    // RunDetailPage's "Continue in worktree" button (added with the desktop
+    // stage of this feature), driving startRun's `continueIn`.
+    '--in-worktree': 'run-detail:continueInWorktreeButton',
     // NewRunForm's "Name (optional)" Field/Input, driving startRun's `name`.
     '--name': 'new-run-form:nameInput',
     // RunDetailPage's "Resume" button, shown for a failed, interrupted or

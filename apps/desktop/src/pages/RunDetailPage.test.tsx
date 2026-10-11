@@ -37,17 +37,18 @@ vi.mock('../components/TerminalPanel.tsx', () => ({
 
 function renderRunDetail(
   jobId?: string, onBack = vi.fn(), onRunAgain = vi.fn(), runId?: string, onResumed = vi.fn(),
-  capabilities?: AppCapabilities,
+  capabilities?: AppCapabilities, onContinueInWorktree = vi.fn(),
 ) {
   const transport = new MockTransport();
   const client = new AgentClient(transport);
   const page = (
     <AgentClientProvider client={client}>
-      <RunDetailPage jobId={jobId} runId={runId} onBack={onBack} onRunAgain={onRunAgain} onResumed={onResumed} />
+      <RunDetailPage jobId={jobId} runId={runId} onBack={onBack} onRunAgain={onRunAgain}
+        onContinueInWorktree={onContinueInWorktree} onResumed={onResumed} />
     </AgentClientProvider>
   );
   render(capabilities ? <CapabilitiesProvider value={capabilities}>{page}</CapabilitiesProvider> : page);
-  return { transport, client, onBack, onRunAgain, onResumed };
+  return { transport, client, onBack, onRunAgain, onResumed, onContinueInWorktree };
 }
 
 /** Answers the resumeRun the page has (or is about to have) in flight. */
@@ -977,7 +978,7 @@ describe('RunDetailPage', () => {
   it('renders a placeholder, not bare prose, when there is no run to show', () => {
     render(
       <AgentClientProvider client={new AgentClient(new MockTransport())}>
-        <RunDetailPage onBack={vi.fn()} onRunAgain={vi.fn()} onResumed={vi.fn()} />
+        <RunDetailPage onBack={vi.fn()} onRunAgain={vi.fn()} onContinueInWorktree={vi.fn()} onResumed={vi.fn()} />
       </AgentClientProvider>,
     );
 
@@ -1015,6 +1016,40 @@ describe('RunDetailPage', () => {
     // No workflowSource on this manifest (predates the field, or was resolved
     // as a plain path) — the caller must not invent a scope.
     expect(onRunAgain).toHaveBeenCalledWith('ship-feature', { ticket: 'T-1' }, undefined);
+  });
+
+  describe('Continue in worktree', () => {
+    const worktree = { path: '.whiphand/worktrees/r1', branch: 'whiphand/r1' };
+
+    it('is offered for a finished run with a worktree, and hands over its id and workflow', async () => {
+      const { transport, onContinueInWorktree } = renderRunDetail(
+        undefined, vi.fn(), vi.fn(), 'r1', vi.fn(), undefined, vi.fn(),
+      );
+      await respondGetRun(transport, {
+        runId: 'r1', runDir: '/ws/.whiphand/runs/r1', status: 'succeeded',
+        workflow: 'ship-feature', workflowSource: 'global', worktree, artifacts: [],
+      });
+      fireEvent.click(await screen.findByTestId('continue-in-worktree-button'));
+      expect(onContinueInWorktree).toHaveBeenCalledWith('r1', 'ship-feature', 'global');
+    });
+
+    it('is not offered without a worktree', async () => {
+      const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'r1');
+      await respondGetRun(transport, {
+        runId: 'r1', runDir: '/ws/.whiphand/runs/r1', status: 'succeeded', workflow: 'ship-feature', artifacts: [],
+      });
+      await screen.findByRole('button', { name: 'Run again' });
+      expect(screen.queryByTestId('continue-in-worktree-button')).not.toBeInTheDocument();
+    });
+
+    it('is not offered while the run is running', async () => {
+      const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'r1');
+      await respondGetRun(transport, {
+        runId: 'r1', runDir: '/ws/.whiphand/runs/r1', status: 'running', workflow: 'ship-feature', worktree, artifacts: [],
+      });
+      await screen.findByTestId('run-detail-worktree');
+      expect(screen.queryByTestId('continue-in-worktree-button')).not.toBeInTheDocument();
+    });
   });
 
   it('passes the run\'s own workflowSource through to Run again, so the caller can scope the rerun', async () => {
@@ -2892,7 +2927,7 @@ describe('RunDetailPage: a burst of command output', () => {
     render(
       <AgentClientProvider client={client}>
         <Profiler id="run-detail" onRender={() => { commits++; }}>
-          <RunDetailPage jobId="job-burst" onBack={vi.fn()} onRunAgain={vi.fn()} onResumed={vi.fn()} />
+          <RunDetailPage jobId="job-burst" onBack={vi.fn()} onRunAgain={vi.fn()} onContinueInWorktree={vi.fn()} onResumed={vi.fn()} />
         </Profiler>
       </AgentClientProvider>,
     );

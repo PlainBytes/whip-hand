@@ -167,6 +167,7 @@ fn manifest_schema() -> S {
                 req("branch", str1()),
                 req("base", str1()),
                 req("baseSha", str1()),
+                opt("continuedFrom", str1()),
             ]),
         ),
         req(

@@ -46,6 +46,12 @@
           "long": "--no-worktree"
         },
         {
+          "flags": "--in-worktree <runId>",
+          "required": true,
+          "hasDefault": false,
+          "long": "--in-worktree"
+        },
+        {
           "flags": "--dry-run",
           "required": false,
           "hasDefault": true,

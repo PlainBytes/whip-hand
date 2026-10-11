@@ -35,6 +35,7 @@ whiphand run iterate --input feature="fix login" --attach ./bug.png --attach ./s
 whiphand rename-run 20260907-141233-a3f1 "Something better"                  # relabel it later ('' clears)
 whiphand run examples/feature.yaml --input feature=x --worktree              # run on a new branch in its own git worktree
 whiphand run develop --input feature=x --no-worktree                         # run in the working folder even if the workflow asks for a worktree
+whiphand run develop --input feature=y --in-worktree 20260907-141233-a3f1   # run again in that run's worktree, on its branch (refused while another run is using it)
 whiphand worktree remove 20260907-141233-a3f1                                # remove a run's worktree (--force discards uncommitted changes); the branch stays
 whiphand tui -C ~/src/shop                                                   # experimental: follow a workspace's runs in the terminal
 ```
@@ -68,7 +69,8 @@ and commits them one at a time, then pushes the branch (leave the push command b
 under `.whiphand/worktrees/<run-id>-<slug>` (just `<run-id>` for an unnamed run) on a new branch, and your main checkout is never touched: start
 two features at once and they cannot collide.
 `--worktree` / `--no-worktree` (or the New Run dialog's switch) override the workflow's choice for one
-run; `--resume` always returns to the tree the run started in. Deleting a run removes its worktree
+run; `--in-worktree <run-id>` instead continues in the worktree an earlier run made, on its branch;
+`--resume` always returns to the tree the run started in. Deleting a run removes its worktree
 (refusing if it has uncommitted changes) but never its branch; `whiphand worktree remove` does it by
 hand. A worktree starts from the base's fetched upstream (`worktree.sync`, on by default; set it to
 `false` to start from the local base). `whiphand init` writes templates to new workspaces only, so an

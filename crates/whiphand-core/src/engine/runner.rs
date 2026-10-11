@@ -66,6 +66,7 @@ use crate::steps::{disabled_ids, flatten_steps};
 use crate::store::journal::{JournalInit, JournalOptions, RunJournal, SeedStep};
 use crate::store::markers::{WORKFLOW_SNAPSHOT_NAME, read_run_name, run_slug_for, set_run_name};
 use crate::store::retention::prune_runs;
+use crate::store::runs::get_run;
 use crate::template::{
     Frame, LoopFrame, Stage, StageFrame, TemplateScope, nearest_loop, nearest_stage,
     render_template,
@@ -98,6 +99,9 @@ pub struct RunOptions {
     /// The per-run `worktree` override: `Some(true)` forces a worktree on, `Some(false)` off,
     /// `None` defers to the workflow.
     pub worktree: Option<bool>,
+    /// Run in the worktree this earlier run recorded, instead of creating one. The workflow's
+    /// own `worktree:` key is ignored.
+    pub continue_in: Option<String>,
     /// `(capability, reason)` the frontend already knows.
     pub degradations: Vec<(String, String)>,
 }
@@ -300,6 +304,29 @@ async fn preflight_worktree(
     Ok((request, pf))
 }
 
+/// The record a run continued in `source`'s worktree gets, or why it cannot be used. Whether
+/// another run is in it is asked later, under the claim lock.
+async fn continue_record(
+    workspace: &str,
+    config: &WorkspaceConfig,
+    source: &str,
+) -> Result<WorktreeRecord, RunError> {
+    let refuse = |m: String| RunError::Workflow(vec![m]);
+    let run =
+        get_run(workspace, config, source).ok_or_else(|| refuse(format!("no run '{source}'")))?;
+    let Some(mut record) = worktree::record_from_manifest(&run.obj) else {
+        return Err(refuse(format!("run '{source}' has no worktree")));
+    };
+    if let Err(reason) = worktree::check(&record).await {
+        return Err(refuse(format!(
+            "run '{source}' ran in worktree {}, which cannot be used ({reason}); start a fresh run",
+            record.path
+        )));
+    }
+    record.continued_from = Some(source.to_string());
+    Ok(record)
+}
+
 /// Runs a workflow to its end, or continues a stopped one (`opts.resume`).
 pub async fn run_workflow<F: Frontend>(
     opts: &RunOptions,
@@ -366,9 +393,27 @@ pub async fn run_workflow<F: Frontend>(
     let workdir = node_path::resolve(&opts.workdir);
     let mut tree = workdir.clone();
     let mut requested: Option<(WorktreeRequest, Preflight)> = None;
+    let mut continued: Option<WorktreeRecord> = None;
+    if let Some(source) = &opts.continue_in {
+        if opts.worktree.is_some() {
+            return Err(RunError::Workflow(vec![
+                "a run continued in another run's worktree cannot also ask for its own".into(),
+            ]));
+        }
+        if opts.resume.is_some() {
+            return Err(RunError::Workflow(vec![
+                "a resumed run keeps the working tree it started in".into(),
+            ]));
+        }
+        let record = continue_record(&workdir, config, source).await?;
+        tree = record.native_tree();
+        continued = Some(record);
+    }
     match &opts.resume {
         None => {
-            if let Some(request) = worktree::resolve_request(workflow, opts.worktree) {
+            if continued.is_some() {
+                // The worktree exists already: nothing to create.
+            } else if let Some(request) = worktree::resolve_request(workflow, opts.worktree) {
                 requested = Some(preflight_worktree(request, &inputs, &workdir).await?);
             }
         }
@@ -392,6 +437,36 @@ pub async fn run_workflow<F: Frontend>(
             }
         }
     }
+    // A worktree that already exists is claimed by this run's first `running` manifest, which
+    // names it: check it is free and write that manifest under one lock, with no `.await`
+    // between (see `ClaimLock`).
+    let shared = match &opts.resume {
+        None => continued.as_ref().map(|r| (r, None)),
+        Some(plan) => plan
+            .worktree
+            .as_ref()
+            .map(|r| (r, Some(plan.run_id.as_str()))),
+    };
+    let claim = match shared {
+        Some((record, except)) => {
+            let lock =
+                worktree::lock_claims(&workdir).map_err(|e| RunError::Failed(e.to_string()))?;
+            if !Path::new(&record.native_tree()).is_dir() {
+                return Err(RunError::Workflow(vec![format!(
+                    "worktree {} no longer exists; start a fresh run",
+                    record.path
+                )]));
+            }
+            if let Some(other) = worktree::busy_run(&workdir, config, &record.path, except) {
+                return Err(RunError::Workflow(vec![format!(
+                    "worktree {} is in use by run '{other}'",
+                    record.path
+                )]));
+            }
+            Some(lock)
+        }
+        None => None,
+    };
     let (run_id, run_dir) = match &opts.resume {
         None => create_run_dir(&workdir, &config.artifacts_dir)
             .map_err(|e| RunError::Failed(e.to_string()))?,
@@ -497,6 +572,10 @@ pub async fn run_workflow<F: Frontend>(
                     .collect(),
                 attachments: attachments.iter().map(PlannedAttachment::record).collect(),
                 session_ids: session_ids_js,
+                worktree: continued
+                    .as_ref()
+                    .filter(|_| !opts.dry_run)
+                    .map(record_to_js),
                 steps: flatten_steps(&workflow.steps)
                     .iter()
                     .map(|f| {
@@ -526,6 +605,7 @@ pub async fn run_workflow<F: Frontend>(
             journal_opts,
         ),
     };
+    drop(claim);
 
     let run = Run {
         opts,
@@ -556,7 +636,7 @@ pub async fn run_workflow<F: Frontend>(
                 .map(|r| r.done.clone())
                 .unwrap_or_default(),
             warned_no_git: false,
-            created_worktree: None,
+            created_worktree: continued.clone(),
             worktree_fallback: None,
         }),
     };

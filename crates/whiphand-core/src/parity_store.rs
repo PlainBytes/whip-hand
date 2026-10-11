@@ -173,6 +173,7 @@ fn journal_op(op: &Value) -> Value {
             .map(|a| a.iter().map(js).collect())
             .unwrap_or_default(),
         session_ids: js_obj(&op["sessionIds"]),
+        worktree: None,
         steps: seed_steps(&op["steps"]),
     };
     let mut journal = RunJournal::create(init, opts.clone());

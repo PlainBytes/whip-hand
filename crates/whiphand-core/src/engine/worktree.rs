@@ -11,7 +11,7 @@ use crate::process::git::{
     GitResult, branch_exists, check_ref_format, current_branch, fetch, is_ancestor,
     rev_parse_commit, show_prefix, upstream_of, worktree_add,
 };
-use crate::store::runs::get_run;
+use crate::store::runs::{get_run, list_runs};
 use crate::types::{Workflow, WorktreeSetting};
 
 /// What a run asked for, before rendering: `None` = run in the workspace.
@@ -71,6 +71,8 @@ pub struct WorktreeRecord {
     /// What the branch started from: `origin/main` when synced, else `base`. Absent in
     /// records written before sync existed.
     pub started_from: Option<String>,
+    /// The run whose worktree this run continues in; absent for the run that created it.
+    pub continued_from: Option<String>,
 }
 
 /// A created worktree, and why it did not start from the synced upstream when it was
@@ -235,15 +237,8 @@ pub async fn create(
     }
     let local_sha = resolve_base(workspace, base).await?;
     let start = choose_start(workspace, base, local_sha, sync).await;
-    let root = workspace.to_string_lossy();
-    let parent = node_path::join(&[&root, WORKTREES_DIR]);
-    std::fs::create_dir_all(&parent)
-        .map_err(|e| format!("worktree: cannot create {parent}: {e}"))?;
-    let ignore = node_path::join(&[&parent, ".gitignore"]);
-    if !Path::new(&ignore).exists() {
-        std::fs::write(&ignore, "*\n")
-            .map_err(|e| format!("worktree: cannot write {ignore}: {e}"))?;
-    }
+    let parent = worktrees_parent(&workspace.to_string_lossy())
+        .map_err(|e| format!("worktree: cannot create {WORKTREES_DIR}: {e}"))?;
     let path = node_path::join(&[&parent, &folder_name(run_id, slug)]);
     match worktree_add(workspace, Path::new(&path), branch, &start.sha).await {
         GitResult::Ok(()) => {}
@@ -267,6 +262,7 @@ pub async fn create(
             base: base.to_string(),
             base_sha: start.sha,
             started_from: Some(start.from),
+            continued_from: None,
         },
         fallback: start.fallback,
     })
@@ -364,6 +360,7 @@ pub fn record_from_manifest(manifest: &JsObject) -> Option<WorktreeRecord> {
         base: field("base")?,
         base_sha: field("baseSha")?,
         started_from: field("startedFrom"),
+        continued_from: field("continuedFrom"),
     })
 }
 
@@ -375,15 +372,101 @@ pub fn record_to_js(r: &WorktreeRecord) -> JsObject {
     if let Some(from) = &r.started_from {
         o.set("startedFrom", from.as_str());
     }
+    if let Some(from) = &r.continued_from {
+        o.set("continuedFrom", from.as_str());
+    }
     o
 }
 
 /// The `worktree` an event carries: `path` is rewritten to workspace-relative on emit.
 pub fn record_to_event(r: &WorktreeRecord) -> JsObject {
-    obj! {
+    let mut o = obj! {
         "path" => r.path.as_str(), "branch" => r.branch.as_str(),
         "base" => r.base.as_str(), "baseSha" => r.base_sha.as_str(),
+    };
+    if let Some(from) = &r.continued_from {
+        o.set("continuedFrom", from.as_str());
     }
+    o
+}
+
+/// `<workspace>/.whiphand/worktrees`, created with a `.gitignore` that hides it from git.
+fn worktrees_parent(workspace: &str) -> std::io::Result<String> {
+    let parent = node_path::join(&[workspace, WORKTREES_DIR]);
+    std::fs::create_dir_all(&parent)?;
+    let ignore = node_path::join(&[&parent, ".gitignore"]);
+    if !Path::new(&ignore).exists() {
+        std::fs::write(&ignore, "*\n")?;
+    }
+    Ok(parent)
+}
+
+/// The file under the worktrees dir that [`lock_claims`] locks.
+pub const CLAIM_LOCK_NAME: &str = ".lock";
+
+/// Held while a run claims an existing worktree (finds no running run in it, then writes a
+/// `running` manifest that names it) and while a deletion decides a worktree is unused and
+/// removes it, so neither sees the other half-done. An OS file lock: it spans processes and
+/// goes when its holder does. Never hold one across an `.await`: the hosts run on one
+/// thread, and a synchronous deletion waiting on it would stall the run holding it.
+pub struct ClaimLock {
+    _file: std::fs::File,
+}
+
+/// Waits for the workspace's [`ClaimLock`].
+pub fn lock_claims(workspace: &str) -> std::io::Result<ClaimLock> {
+    let dir = worktrees_parent(workspace)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(node_path::join(&[&dir, CLAIM_LOCK_NAME]))?;
+    file.lock()?;
+    Ok(ClaimLock { _file: file })
+}
+
+/// The id of a `running` run, other than `except`, whose worktree is at `path`.
+pub fn busy_run(
+    workspace: &str,
+    config: &WorkspaceConfig,
+    path: &str,
+    except: Option<&str>,
+) -> Option<String> {
+    list_runs(workspace, config).into_iter().find_map(|run| {
+        let id = run.run_id();
+        if run.status() != "running" || Some(id.as_str()) == except {
+            return None;
+        }
+        let record = record_from_manifest(&run.obj)?;
+        (record.path == path).then_some(id)
+    })
+}
+
+/// The ids of the runs, other than those in `exclude`, whose recorded worktree is at `path`
+/// (compared in normalized `/`-form). `exclude` lets pruning ignore runs it removes in the
+/// same pass.
+pub fn sharing_runs(
+    workspace: &str,
+    config: &WorkspaceConfig,
+    path: &str,
+    exclude: &[String],
+) -> Vec<String> {
+    let want = normalize_path(path);
+    list_runs(workspace, config)
+        .into_iter()
+        .filter_map(|run| {
+            let id = run.run_id();
+            if exclude.contains(&id) {
+                return None;
+            }
+            let record = record_from_manifest(&run.obj)?;
+            (normalize_path(&record.path) == want).then_some(id)
+        })
+        .collect()
+}
+
+fn normalize_path(p: &str) -> String {
+    p.replace('\\', "/").trim_end_matches('/').to_string()
 }
 
 /// Where a run's steps ran, as a native path: its worktree, or the workspace itself
@@ -409,12 +492,16 @@ pub fn execution_tree(
 /// workspace-relative `path` and the `branch`; a run without one keeps no key.
 pub fn summary_for_protocol(summary: &JsObject, workspace: &str) -> JsObject {
     match record_from_manifest(summary) {
-        Some(r) => summary.spread(&obj! {
-            "worktree" => JsValue::Obj(obj! {
+        Some(r) => {
+            let mut w = obj! {
                 "path" => to_workspace(&to_native(&r.path, ""), workspace),
                 "branch" => r.branch.as_str(),
-            }),
-        }),
+            };
+            if let Some(from) = &r.continued_from {
+                w.set("continuedFrom", from.as_str());
+            }
+            summary.spread(&obj! { "worktree" => JsValue::Obj(w) })
+        }
         None => summary.clone(),
     }
 }
@@ -598,6 +685,7 @@ mod tests {
             base: "HEAD".into(),
             base_sha: "abc".into(),
             started_from: None,
+            continued_from: None,
         }
     }
 
@@ -651,6 +739,7 @@ mod tests {
             base: "main".into(),
             base_sha: "abc".into(),
             started_from: Some("origin/main".into()),
+            continued_from: Some("r0".into()),
         };
         let manifest = obj! { "worktree" => record_to_js(&r) };
         assert_eq!(record_from_manifest(&manifest), Some(r));
@@ -666,6 +755,7 @@ mod tests {
             base: "main".into(),
             base_sha: "abc".into(),
             started_from: None,
+            continued_from: None,
         });
         assert_eq!(js.str_prop("startedFrom"), None);
         let manifest = obj! { "worktree" => js.clone() };
@@ -758,5 +848,24 @@ mod tests {
         let mut moved = rec.clone();
         moved.branch = "other".into();
         assert!(check(&moved).await.is_err());
+    }
+
+    #[test]
+    fn the_claim_lock_is_held_by_one_holder_at_a_time_and_hidden_from_git() {
+        let d = tempfile::tempdir().unwrap();
+        let ws = d.path().to_string_lossy().into_owned();
+        let held = lock_claims(&ws).unwrap();
+        let path = d.path().join(WORKTREES_DIR).join(CLAIM_LOCK_NAME);
+        let other = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        assert!(matches!(
+            other.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        drop(held);
+        other.try_lock().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(d.path().join(WORKTREES_DIR).join(".gitignore")).unwrap(),
+            "*\n"
+        );
     }
 }

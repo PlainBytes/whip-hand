@@ -4,6 +4,7 @@ import {
   MessageBar, MessageBarBody, Spinner, Text,
 } from '@fluentui/react-components';
 import { useAgentClient } from '../agent/agent-context.tsx';
+import { useAppStore } from '../state/store.ts';
 import type { DeleteRunResult } from '../shared/protocol.gen.ts';
 import { errorMessage } from '../lib/error-message.ts';
 import { DangerButton } from './DangerButton.tsx';
@@ -13,6 +14,8 @@ export interface DeleteRunDialogProps {
   runId: string;
   /** The run's human name, when it has one — the title says it instead of the id. */
   name?: string;
+  /** The run's worktree path; another listed run on the same path keeps the worktree alive. */
+  worktreePath?: string;
   /** The run's directory is gone. Callers decide what that means: re-poll a list, or leave the page. */
   onDeleted: () => void;
   onDismiss: () => void;
@@ -41,8 +44,11 @@ function refusalMessage(reason: DeleteRunResult['reason'], runId: string): strin
  * `DeleteWorkflowDialog` pattern: mount it only while open, because a
  * closed-but-mounted Fluent Dialog is still a live Modalizer.
  */
-export function DeleteRunDialog({ workdir, runId, name, onDeleted, onDismiss }: DeleteRunDialogProps) {
+export function DeleteRunDialog({ workdir, runId, name, worktreePath, onDeleted, onDismiss }: DeleteRunDialogProps) {
   const client = useAgentClient();
+  const sharer = useAppStore(state => worktreePath === undefined
+    ? undefined
+    : state.runs.find(run => run.runId !== runId && run.worktree?.path === worktreePath));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -75,6 +81,11 @@ export function DeleteRunDialog({ workdir, runId, name, onDeleted, onDismiss }: 
           <DialogContent>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <Text>This deletes the run's directory and everything in it. This cannot be undone.</Text>
+              {sharer && (
+                <Text data-testid="delete-worktree-kept">
+                  The worktree is kept because run {sharer.name ?? sharer.runId} still uses it.
+                </Text>
+              )}
               {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
             </div>
           </DialogContent>

@@ -221,6 +221,7 @@ export function RunsPage({ onSelectRun, onNewRun }: RunsPageProps) {
           workdir={workspacePath}
           runId={deleting.runId}
           name={deleting.name}
+          {...(deleting.worktree ? { worktreePath: deleting.worktree.path } : {})}
           onDeleted={() => {
             setDeleting(null);
             poll();

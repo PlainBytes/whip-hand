@@ -192,10 +192,17 @@ impl Renderer {
                 ));
                 let tree = e.prop("worktree");
                 if let Some(path) = tree.get("path").as_str() {
-                    self.out(&format!(
-                        "🌿 worktree {path} on branch {}",
-                        s(tree.get("branch"))
-                    ));
+                    if let Some(from) = tree.get("continuedFrom").as_str() {
+                        self.out(&format!(
+                            "🌿 in worktree of run {from}, branch {}: {path}",
+                            s(tree.get("branch"))
+                        ));
+                    } else {
+                        self.out(&format!(
+                            "🌿 worktree {path} on branch {}",
+                            s(tree.get("branch"))
+                        ));
+                    }
                 }
                 let attached = e.prop("attachments").as_arr().unwrap_or(&[]);
                 if attached.is_empty() {

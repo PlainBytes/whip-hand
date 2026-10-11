@@ -7,6 +7,7 @@ import {
   InteractionTag,
   InteractionTagPrimary,
   InteractionTagSecondary,
+  Link,
   MessageBar,
   MessageBarBody,
   Option,
@@ -36,6 +37,7 @@ import { disabledRoots, droppedRefs, droppedRefSentence } from '../shared/enable
 import { attachmentNames, consumesAttachments } from '../shared/attachments.ts';
 import type { Workflow } from '../shared/types.ts';
 import type { ListWorkflowsResult } from '../shared/protocol.gen.ts';
+import type { RunSummary } from '../shared/core-types.ts';
 import { errorMessage } from '../lib/error-message.ts';
 
 type WorkflowEntry = ListWorkflowsResult[number];
@@ -250,6 +252,9 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
   // A running, non-dry-run run that works in the workspace itself. An isolated
   // run touches nothing here, so it is no reason to warn.
   const [workspaceRunActive, setWorkspaceRunActive] = useState(false);
+  // The workspace's runs as last listed: the source of a continue-in draft
+  // is looked up here for its branch, path and whether it is still running.
+  const [runs, setRuns] = useState<RunSummary[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);
   const [dropHover, setDropHover] = useState(false);
   const { pickFiles, onFileDrop } = useCapabilities();
@@ -284,6 +289,7 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
       .request('listRuns', { workdir })
       .then(result => {
         if (cancelled) return;
+        setRuns(result);
         const running = result.some(
           run => run.status === 'running' && run.dryRun !== true && run.worktree === undefined,
         );
@@ -306,7 +312,10 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
   const selectedWorkflow = selectedEntry?.workflow ?? null;
   const worktreeDefault = selectedWorkflow?.worktree !== undefined && selectedWorkflow.worktree !== false;
   const worktree = draft?.worktreeChoice ?? worktreeDefault;
-  const anotherRunActive = workspaceRunActive && !worktree;
+  const continueIn = draft?.continueIn;
+  const sourceRun = continueIn === undefined ? undefined : runs.find(run => run.runId === continueIn);
+  // Continuing shares a run's worktree, so the workspace is not what is at risk.
+  const anotherRunActive = workspaceRunActive && !worktree && continueIn === undefined;
 
   function selectWorkflow(entry: WorkflowEntry): void {
     if (!draft) return;
@@ -492,7 +501,8 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
         workflow: ref,
         inputs: values,
         dryRun,
-        worktree,
+        // Core refuses the two together, so a continuing run names only its source.
+        ...(continueIn === undefined ? { worktree } : { continueIn }),
         ...(maxIterations === undefined ? {} : { maxIterations }),
         // Core normalizes and drops an empty one; send it only when typed so
         // an untouched field is indistinguishable from not passing --name.
@@ -542,6 +552,15 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
         {anotherRunActive && (
           <MessageBar intent="warning" style={NARROW}>
             <MessageBarBody>Another run is already in progress in this workspace.</MessageBarBody>
+          </MessageBar>
+        )}
+
+        {sourceRun?.status === 'running' && (
+          <MessageBar intent="warning" style={NARROW} data-testid="continue-in-running-warning">
+            <MessageBarBody>
+              Run {sourceRun.name ?? sourceRun.runId} is still running in that worktree. Core will refuse to
+              start until it finishes.
+            </MessageBarBody>
           </MessageBar>
         )}
 
@@ -646,17 +665,37 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
               onChange={(_e, data) => updateDraft(draftId, { dryRun: data.checked })}
             />
 
-            <Field
-              style={NARROW}
-              hint={<>Changes land on a new branch in <code>.whiphand/worktrees/</code>. Other runs keep the workspace.</>}
-            >
-              <Switch
-                data-testid="worktree-switch"
-                label="Run in a separate worktree"
-                checked={worktree}
-                onChange={(_e, data) => updateDraft(draftId, { worktreeChoice: data.checked })}
-              />
-            </Field>
+            {continueIn === undefined ? (
+              <Field
+                style={NARROW}
+                hint={<>Changes land on a new branch in <code>.whiphand/worktrees/</code>. Other runs keep the workspace.</>}
+              >
+                <Switch
+                  data-testid="worktree-switch"
+                  label="Run in a separate worktree"
+                  checked={worktree}
+                  onChange={(_e, data) => updateDraft(draftId, { worktreeChoice: data.checked })}
+                />
+              </Field>
+            ) : (
+              <Field
+                style={NARROW}
+                data-testid="continue-in-field"
+                hint={sourceRun?.worktree ? <code>{sourceRun.worktree.path}</code> : undefined}
+              >
+                <Text>
+                  Runs in the worktree of run {sourceRun?.name ?? continueIn}
+                  {sourceRun?.worktree ? <> on branch <code>{sourceRun.worktree.branch}</code></> : null}
+                </Text>
+                <Link
+                  data-testid="use-new-worktree-link"
+                  as="button"
+                  onClick={() => updateDraft(draftId, { continueIn: undefined })}
+                >
+                  Use a new worktree instead
+                </Link>
+              </Field>
+            )}
 
             {/* The CLI's `--max-iterations`. Only meaningful for a workflow
                 that contains a loop, so it is only offered for one. */}

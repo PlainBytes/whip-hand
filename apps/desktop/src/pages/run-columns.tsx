@@ -145,6 +145,7 @@ export function runColumns<T extends RunSummary>(
             <>
               <div>Worktree on branch {run.worktree.branch}</div>
               <div>{run.worktree.path}</div>
+              {run.worktree.continuedFrom && <div>Continued from run {run.worktree.continuedFrom}</div>}
             </>
           )}
         >

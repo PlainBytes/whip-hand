@@ -92,7 +92,11 @@ export type PathAttachment = { path: string, };
 
 export type Base64Attachment = { name: string, base64: string, };
 
-export type StartRunParams = { workdir: string, workflow: string, inputs?: Record<string, string>, dryRun?: boolean, maxIterations?: number, name?: string, attachments?: Array<AttachmentSource>, worktree?: boolean, };
+export type StartRunParams = { workdir: string, workflow: string, inputs?: Record<string, string>, dryRun?: boolean, maxIterations?: number, name?: string, attachments?: Array<AttachmentSource>, worktree?: boolean, 
+/**
+ * A run id whose worktree this run continues in; refused with `worktree`.
+ */
+continueIn?: string, };
 
 export type JobIdResult = { jobId: string, };
 
@@ -197,6 +201,10 @@ workflow?: string, inputs: Record<string, string>, name?: string, dryRun: boolea
  * Absent means the workflow's own default.
  */
 worktree?: boolean, 
+/**
+ * A run id whose worktree the run continues in.
+ */
+continueIn?: string, 
 /**
  * As typed, not yet a number.
  */

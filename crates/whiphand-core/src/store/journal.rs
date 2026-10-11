@@ -65,6 +65,9 @@ pub struct JournalInit {
     /// `{ name, path, size, source }` records, as given.
     pub attachments: Vec<JsValue>,
     pub session_ids: JsObject,
+    /// The existing worktree the run continues in, written with the first manifest so the
+    /// run claims it as it starts.
+    pub worktree: Option<JsObject>,
     pub steps: Vec<SeedStep>,
 }
 
@@ -739,6 +742,9 @@ impl RunJournal {
         }
         manifest.set("sessionIds", init.session_ids.clone());
         manifest.set("steps", steps);
+        if let Some(record) = init.worktree {
+            manifest.set("worktree", record);
+        }
         Self::start(init.run_dir, init.workdir, manifest, opts)
     }
 

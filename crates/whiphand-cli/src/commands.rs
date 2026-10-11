@@ -16,7 +16,9 @@ use whiphand_core::doctor::tools::{detect_tools, doctor_report};
 use whiphand_core::engine::attachments::{AttachmentSource, validate_attachments};
 use whiphand_core::engine::resume::{ResumePlan, plan_resume};
 use whiphand_core::engine::runner::{RunError, RunOptions, run_workflow};
-use whiphand_core::engine::worktree::{RemoveWorktree, record_from_manifest, remove_sync};
+use whiphand_core::engine::worktree::{
+    RemoveWorktree, busy_run, lock_claims, record_from_manifest, remove_sync, sharing_runs,
+};
 use whiphand_core::js::number_to_string;
 use whiphand_core::node_path;
 use whiphand_core::process::container::Container;
@@ -150,17 +152,35 @@ pub fn worktree_remove(run_id: &str, force: bool, dir: &str) -> CmdResult {
         err_line(&format!("✘ run '{run_id}' has no worktree"));
         return Ok(1);
     };
+    // Held through the removal, so no run claims the worktree between the check and it.
+    let _claims = lock_claims(&workdir).map_err(|e| Thrown::error(e.to_string()))?;
+    if let Some(other) = busy_run(&workdir, &config, &record.path, None) {
+        err_line(&format!(
+            "✘ worktree {} is in use by run '{other}'",
+            record.path
+        ));
+        return Ok(1);
+    }
+    let others = sharing_runs(&workdir, &config, &record.path, &[run_id.to_string()]);
+    let also_used = if others.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; also used by run(s) {}; they can no longer be resumed",
+            others.join(", ")
+        )
+    };
     match remove_sync(&workdir, &record, force) {
         RemoveWorktree::Removed => {
             out_line(&format!(
-                "removed {}; branch {} kept",
+                "removed {}; branch {} kept{also_used}",
                 record.path, record.branch
             ));
             Ok(0)
         }
         RemoveWorktree::Absent => {
             out_line(&format!(
-                "{} is already gone; branch {} kept",
+                "{} is already gone; branch {} kept{also_used}",
                 record.path, record.branch
             ));
             Ok(0)
@@ -374,6 +394,7 @@ pub struct RunArgs {
     pub extra_iterations: Option<u64>,
     pub worktree: bool,
     pub no_worktree: bool,
+    pub in_worktree: Option<String>,
 }
 
 fn attachment_refusal(problems: &[String]) -> i32 {
@@ -394,6 +415,12 @@ fn usage_problem(a: &RunArgs) -> Option<&'static str> {
     if (a.worktree || a.no_worktree) && a.resume.is_some() {
         return Some(
             "--resume returns to the working tree the run started in; --worktree and --no-worktree only apply to a new run",
+        );
+    }
+    if a.in_worktree.is_some() && (a.worktree || a.no_worktree || a.resume.is_some()) {
+        return Some(
+            "--in-worktree runs in the worktree an earlier run made; it cannot be combined with \
+             --worktree, --no-worktree or --resume",
         );
     }
     if a.worktree && a.no_worktree {
@@ -633,6 +660,7 @@ pub async fn run(a: RunArgs) -> CmdResult {
             (_, true) => Some(false),
             _ => None,
         },
+        continue_in: a.in_worktree.clone(),
         degradations: opened.degradations.clone(),
     };
     let result = run_workflow(&opts, &tty).await;
@@ -645,6 +673,13 @@ pub async fn run(a: RunArgs) -> CmdResult {
         Ok(r) => Ok(if r.ok { 0 } else { 1 }),
         // A file that changed between the check above and the run's own.
         Err(RunError::Attachment(problems)) => Ok(attachment_refusal(&problems)),
+        // The engine refuses a missing, gone or busy worktree before it makes a run.
+        Err(RunError::Workflow(problems)) if a.in_worktree.is_some() => {
+            for p in &problems {
+                err_line(&format!("✘ {p}"));
+            }
+            Ok(1)
+        }
         Err(RunError::Workflow(problems)) => Err(WorkflowError::new(problems).into()),
         Err(RunError::Failed(message)) => Err(Thrown::error(message)),
     }

@@ -192,6 +192,22 @@ fn field_lines(form: &Form, i: usize, field: &Field) -> Vec<Line<'static>> {
     }
 }
 
+/// The read-only "worktree" line of a run that continues in another's.
+fn continue_line(form: &Form) -> Option<Line<'static>> {
+    let c = form.continue_in.as_ref()?;
+    let mut text = format!("continues in run {}", c.run_id);
+    if let Some(branch) = &c.branch {
+        text.push_str(&format!(" (branch {branch})"));
+    }
+    if let Some(path) = &c.path {
+        text.push_str(&format!(" at {path}"));
+    }
+    Some(Line::from(vec![
+        Span::styled(format!(" {:<LABEL$}", "worktree"), theme::bold()),
+        Span::raw(text),
+    ]))
+}
+
 fn render_form(n: &NewRun, form: &Form, frame: &mut Frame, area: Rect) {
     let title = format!(" New run · {}{} ", form.entry.name, scope(&form.entry));
     let block = Block::bordered().title(title);
@@ -225,6 +241,9 @@ fn render_form(n: &NewRun, form: &Form, frame: &mut Frame, area: Rect) {
     for (i, field) in form.fields.iter().enumerate() {
         if i == form.focus {
             focus_line = lines.len();
+        }
+        if field.kind == FieldKind::Start {
+            lines.extend(continue_line(form));
         }
         lines.extend(field_lines(form, i, field));
     }

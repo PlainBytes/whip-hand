@@ -441,6 +441,10 @@ pub struct StartRunParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub worktree: Option<bool>,
+    /// A run id whose worktree this run continues in; refused with `worktree`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub continue_in: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -876,6 +880,10 @@ pub struct RunDraft {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub worktree: Option<bool>,
+    /// A run id whose worktree the run continues in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub continue_in: Option<String>,
     /// As typed, not yet a number.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

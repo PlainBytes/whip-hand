@@ -89,10 +89,10 @@ function PageBody({ page, onNavigate }: PageContentProps) {
   }
 
   /** A new draft tab in the open workspace, active, on the Runs page. Every call makes another. */
-  function newDraft(runAgain?: RunAgain): void {
+  function newDraft(runAgain?: RunAgain, continueIn?: string): void {
     const { workspacePath: workdir, workspaceIdentityKey, createDraft, openDraftTab } = useAppStore.getState();
     if (!workdir) return;
-    openDraftTab(createDraft({ workdir, identityKey: workspaceIdentityKey ?? undefined, runAgain }));
+    openDraftTab(createDraft({ workdir, identityKey: workspaceIdentityKey ?? undefined, runAgain, continueIn }));
     onNavigate('runs');
   }
 
@@ -116,6 +116,10 @@ function PageBody({ page, onNavigate }: PageContentProps) {
               // a global run must not preselect a same-named project workflow.
               const ref = source === 'global' ? `global:${workflow}` : workflow;
               newDraft({ workflow: ref, inputs });
+            }}
+            onContinueInWorktree={(sourceId, workflow, source) => {
+              const ref = workflow === undefined ? undefined : source === 'global' ? `global:${workflow}` : workflow;
+              newDraft(ref === undefined ? undefined : { workflow: ref, inputs: {} }, sourceId);
             }}
           />
         ) : (

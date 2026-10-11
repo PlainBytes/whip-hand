@@ -17,7 +17,7 @@ use whiphand_core::engine::attachments::{AttachmentSource, validate_attachments}
 use whiphand_core::engine::resume::{ResumePlan, plan_resume};
 use whiphand_core::engine::runner::{RunError, RunOptions, run_workflow};
 use whiphand_core::engine::worktree::{
-    RemoveWorktree, record_from_manifest, remove_sync, sharing_runs,
+    RemoveWorktree, busy_run, lock_claims, record_from_manifest, remove_sync, sharing_runs,
 };
 use whiphand_core::js::number_to_string;
 use whiphand_core::node_path;
@@ -152,6 +152,15 @@ pub fn worktree_remove(run_id: &str, force: bool, dir: &str) -> CmdResult {
         err_line(&format!("✘ run '{run_id}' has no worktree"));
         return Ok(1);
     };
+    // Held through the removal, so no run claims the worktree between the check and it.
+    let _claims = lock_claims(&workdir).map_err(|e| Thrown::error(e.to_string()))?;
+    if let Some(other) = busy_run(&workdir, &config, &record.path, None) {
+        err_line(&format!(
+            "✘ worktree {} is in use by run '{other}'",
+            record.path
+        ));
+        return Ok(1);
+    }
     let others = sharing_runs(&workdir, &config, &record.path, &[run_id.to_string()]);
     let also_used = if others.is_empty() {
         String::new()

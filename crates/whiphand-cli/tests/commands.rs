@@ -1210,6 +1210,36 @@ fn worktree_remove_names_the_other_runs_that_shared_the_tree() {
 }
 
 #[test]
+fn worktree_remove_refuses_while_another_run_is_running_in_the_tree() {
+    let e = Env::new();
+    git_workspace(&e);
+    worktree_workflow(&e, "worktree: true\n", "true");
+    assert_eq!(e.run(&["run", "wt"]).code(), 0);
+    let dir = e.only_run();
+    let id = run_id(&dir);
+    // A second run continued in the same worktree, still going: a live pid keeps it `running`.
+    let other = "20990101-000000-beef";
+    let other_dir = dir.parent().unwrap().join(other);
+    std::fs::create_dir_all(&other_dir).unwrap();
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("run.json")).unwrap()).unwrap();
+    manifest["runId"] = other.into();
+    manifest["status"] = "running".into();
+    manifest["pid"] = std::process::id().into();
+    std::fs::write(other_dir.join("run.json"), manifest.to_string()).unwrap();
+
+    let out = e.run(&["worktree", "remove", &id]);
+    assert_eq!(out.code(), 1, "{}", out.stdout());
+    assert!(
+        out.stderr()
+            .contains(&format!("is in use by run '{other}'")),
+        "{}",
+        out.stderr()
+    );
+    assert!(e.ws().join(".whiphand/worktrees").join(&id).is_dir());
+}
+
+#[test]
 fn worktree_remove_refuses_a_run_without_a_worktree() {
     let e = Env::new();
     git_workspace(&e);

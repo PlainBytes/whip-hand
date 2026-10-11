@@ -237,15 +237,8 @@ pub async fn create(
     }
     let local_sha = resolve_base(workspace, base).await?;
     let start = choose_start(workspace, base, local_sha, sync).await;
-    let root = workspace.to_string_lossy();
-    let parent = node_path::join(&[&root, WORKTREES_DIR]);
-    std::fs::create_dir_all(&parent)
-        .map_err(|e| format!("worktree: cannot create {parent}: {e}"))?;
-    let ignore = node_path::join(&[&parent, ".gitignore"]);
-    if !Path::new(&ignore).exists() {
-        std::fs::write(&ignore, "*\n")
-            .map_err(|e| format!("worktree: cannot write {ignore}: {e}"))?;
-    }
+    let parent = worktrees_parent(&workspace.to_string_lossy())
+        .map_err(|e| format!("worktree: cannot create {WORKTREES_DIR}: {e}"))?;
     let path = node_path::join(&[&parent, &folder_name(run_id, slug)]);
     match worktree_add(workspace, Path::new(&path), branch, &start.sha).await {
         GitResult::Ok(()) => {}
@@ -395,6 +388,41 @@ pub fn record_to_event(r: &WorktreeRecord) -> JsObject {
         o.set("continuedFrom", from.as_str());
     }
     o
+}
+
+/// `<workspace>/.whiphand/worktrees`, created with a `.gitignore` that hides it from git.
+fn worktrees_parent(workspace: &str) -> std::io::Result<String> {
+    let parent = node_path::join(&[workspace, WORKTREES_DIR]);
+    std::fs::create_dir_all(&parent)?;
+    let ignore = node_path::join(&[&parent, ".gitignore"]);
+    if !Path::new(&ignore).exists() {
+        std::fs::write(&ignore, "*\n")?;
+    }
+    Ok(parent)
+}
+
+/// The file under the worktrees dir that [`lock_claims`] locks.
+pub const CLAIM_LOCK_NAME: &str = ".lock";
+
+/// Held while a run claims an existing worktree (finds no running run in it, then writes a
+/// `running` manifest that names it) and while a deletion decides a worktree is unused and
+/// removes it, so neither sees the other half-done. An OS file lock: it spans processes and
+/// goes when its holder does. Never hold one across an `.await`: the hosts run on one
+/// thread, and a synchronous deletion waiting on it would stall the run holding it.
+pub struct ClaimLock {
+    _file: std::fs::File,
+}
+
+/// Waits for the workspace's [`ClaimLock`].
+pub fn lock_claims(workspace: &str) -> std::io::Result<ClaimLock> {
+    let dir = worktrees_parent(workspace)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(node_path::join(&[&dir, CLAIM_LOCK_NAME]))?;
+    file.lock()?;
+    Ok(ClaimLock { _file: file })
 }
 
 /// The id of a `running` run, other than `except`, whose worktree is at `path`.
@@ -820,5 +848,24 @@ mod tests {
         let mut moved = rec.clone();
         moved.branch = "other".into();
         assert!(check(&moved).await.is_err());
+    }
+
+    #[test]
+    fn the_claim_lock_is_held_by_one_holder_at_a_time_and_hidden_from_git() {
+        let d = tempfile::tempdir().unwrap();
+        let ws = d.path().to_string_lossy().into_owned();
+        let held = lock_claims(&ws).unwrap();
+        let path = d.path().join(WORKTREES_DIR).join(CLAIM_LOCK_NAME);
+        let other = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        assert!(matches!(
+            other.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        drop(held);
+        other.try_lock().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(d.path().join(WORKTREES_DIR).join(".gitignore")).unwrap(),
+            "*\n"
+        );
     }
 }

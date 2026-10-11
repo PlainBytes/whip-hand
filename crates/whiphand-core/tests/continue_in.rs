@@ -16,6 +16,7 @@ use whiphand_core::process::launch::{
     LineSink, Out, PipeOptions, SpawnOptions, StdinFrom, pipe_child, spawn_runner,
 };
 use whiphand_core::schema::parse_workflow;
+use whiphand_core::store::journal::{JournalInit, JournalOptions, RunJournal};
 use whiphand_core::store::runs::{get_run, list_runs};
 use whiphand_core::types::Scope;
 
@@ -215,6 +216,31 @@ fn a_continued_run_works_in_the_source_worktree_and_records_it() {
         let mut expected = record;
         expected.continued_from = Some(first.run_id.clone());
         assert_eq!(copy, expected);
+    });
+}
+
+#[test]
+fn a_continued_run_names_its_worktree_in_the_manifest_it_starts_with() {
+    // Not noted after the run starts: a start or a deletion looking in between would miss the
+    // claim.
+    big_stack(|| async {
+        let d = tempfile::tempdir().unwrap();
+        let journal = RunJournal::create(
+            JournalInit {
+                run_dir: d.path().to_path_buf(),
+                run_id: "r".into(),
+                worktree: Some(
+                    whiphand_core::obj! { "path" => "/ws/.whiphand/worktrees/a", "branch" => "b" },
+                ),
+                ..JournalInit::default()
+            },
+            JournalOptions::default(),
+        );
+        let text = std::fs::read_to_string(d.path().join("run.json")).unwrap();
+        journal.close();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(json["status"], "running");
+        assert_eq!(json["worktree"]["path"], "/ws/.whiphand/worktrees/a");
     });
 }
 

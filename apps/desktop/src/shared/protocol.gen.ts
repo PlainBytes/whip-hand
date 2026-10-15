@@ -222,7 +222,11 @@ export type AppState = { schemaVersion: 1, recentWorkspaces: Array<RecentWorkspa
 /**
  * Unstarted New-run forms, kept so they survive a restart.
  */
-runDrafts: Array<RunDraft>, runTabs: RunTabsState, };
+runDrafts: Array<RunDraft>, runTabs: RunTabsState, 
+/**
+ * The terminal UI's preferences; absent until it saves one.
+ */
+tui?: TuiPreferences, };
 
 export type TouchRecentWorkspaceParams = { path: string, };
 
@@ -232,7 +236,19 @@ export type SetWorkspacePinnedParams = { path: string, pinned: boolean, };
 
 export type EditorPreference = { "kind": "vscode" } | { "kind": "vscode-insiders" } | { "kind": "cursor" } | { "kind": "windsurf" } | { "kind": "zed" } | { "kind": "custom", command: string, };
 
-export type SetUiStateParams = { window?: WindowState | null, lastPage?: string | null, theme?: ThemePreference, runsRetention?: RunsRetention, showOngoingRuns?: boolean, editor?: EditorPreference, };
+export type TuiPreferences = { 
+/**
+ * A run started from the TUI attaches when its interactive step starts.
+ */
+attachAuto?: boolean, 
+/**
+ * The key that detaches from a session.
+ */
+detachKey?: DetachKey, };
+
+export type DetachKey = "ctrl-bracket" | "ctrl-backslash" | "ctrl-caret" | "ctrl-underscore";
+
+export type SetUiStateParams = { window?: WindowState | null, lastPage?: string | null, theme?: ThemePreference, runsRetention?: RunsRetention, showOngoingRuns?: boolean, editor?: EditorPreference, tui?: TuiPreferences, };
 
 export type SaveRunDraftParams = { draft: RunDraft, };
 

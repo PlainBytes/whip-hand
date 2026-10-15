@@ -1,5 +1,6 @@
-//! Run drafts, tab layout and stashed draft images: saved in `app-state.json`
-//! and `drafts/` beside it, through the real RPC path.
+//! Run drafts, tab layout, stashed draft images and the TUI's preferences:
+//! saved in `app-state.json` and `drafts/` beside it, through the real RPC
+//! path.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -190,6 +191,22 @@ fn tabs_round_trip_and_survive_a_restart() {
     let mut again = Harness::start(dir, ClientKind::Desktop);
     assert_eq!(again.state()["runTabs"], tabs);
     assert_eq!(again.state()["runDrafts"][0]["id"], "d1");
+}
+
+#[test]
+fn tui_preferences_are_absent_until_set_then_survive_a_restart() {
+    let mut h = Harness::new(ClientKind::Desktop);
+    assert!(h.state().get("tui").is_none());
+    h.ok("setUiState", json!({ "theme": "dark" }));
+    assert!(h.state().get("tui").is_none());
+    let tui = json!({ "attachAuto": true, "detachKey": "ctrl-backslash" });
+    h.ok("setUiState", json!({ "tui": tui }));
+    assert!(h.call("setUiState", json!({ "tui": { "detachKey": "ctrl-x" } }))["error"].is_object());
+    let dir = h.shutdown();
+    let mut again = Harness::start(dir, ClientKind::Desktop);
+    let state = again.state();
+    assert_eq!(state["tui"], tui);
+    assert_eq!(state["theme"], "dark");
 }
 
 #[test]

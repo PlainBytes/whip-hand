@@ -855,6 +855,63 @@ pub struct AppState {
     pub run_drafts: Vec<RunDraft>,
     #[serde(default)]
     pub run_tabs: RunTabsState,
+    /// The terminal UI's preferences; absent until it saves one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tui: Option<TuiPreferences>,
+}
+
+/// What `whiphand tui` remembers between sessions. The desktop ignores it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TuiPreferences {
+    /// A run started from the TUI attaches when its interactive step starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub attach_auto: Option<bool>,
+    /// The key that detaches from a session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub detach_key: Option<DetachKey>,
+}
+
+/// Named, not spelled: ts-rs would not escape a backslash.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum DetachKey {
+    #[default]
+    CtrlBracket,
+    CtrlBackslash,
+    CtrlCaret,
+    CtrlUnderscore,
+}
+
+impl DetachKey {
+    pub const ALL: [DetachKey; 4] = [
+        DetachKey::CtrlBracket,
+        DetachKey::CtrlBackslash,
+        DetachKey::CtrlCaret,
+        DetachKey::CtrlUnderscore,
+    ];
+
+    /// The byte a terminal sends for it.
+    pub fn byte(self) -> u8 {
+        match self {
+            DetachKey::CtrlBracket => 0x1d,
+            DetachKey::CtrlBackslash => 0x1c,
+            DetachKey::CtrlCaret => 0x1e,
+            DetachKey::CtrlUnderscore => 0x1f,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            DetachKey::CtrlBracket => "Ctrl-]",
+            DetachKey::CtrlBackslash => "Ctrl-\\",
+            DetachKey::CtrlCaret => "Ctrl-^",
+            DetachKey::CtrlUnderscore => "Ctrl-_",
+        }
+    }
 }
 
 /// A New-run form that has not been started.
@@ -1013,6 +1070,9 @@ pub struct SetUiStateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub editor: Option<EditorPreference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tui: Option<TuiPreferences>,
 }
 
 pub type SetUiStateResult = OkTrue;

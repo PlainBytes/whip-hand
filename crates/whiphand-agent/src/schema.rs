@@ -381,6 +381,19 @@ fn run_tab_ref() -> S {
     )
 }
 
+/// The terminal UI's own preferences; the desktop never reads them.
+fn tui_preferences() -> S {
+    object! {
+        "attachAuto" => o(Bool),
+        "detachKey" => o(Enum(&[
+            "ctrl-bracket",
+            "ctrl-backslash",
+            "ctrl-caret",
+            "ctrl-underscore",
+        ])),
+    }
+}
+
 fn run_tabs_state() -> S {
     object! { "tabs" => Arr(b(run_tab_ref())), "active" => Nullable(b(Str)) }
 }
@@ -416,6 +429,8 @@ pub fn app_state() -> S {
             m.insert("active".to_string(), Raw::Null);
             Raw::Map(m)
         }),
+        // No default: a state the TUI never touched keeps its old shape.
+        "tui" => o(tui_preferences()),
     }
 }
 
@@ -560,6 +575,7 @@ pub fn params(method: &str) -> Option<S> {
             "runsRetention" => o(runs_retention()),
             "showOngoingRuns" => o(Bool),
             "editor" => o(editor_preference()),
+            "tui" => o(tui_preferences()),
         },
         "saveRunDraft" => object! { "draft" => run_draft() },
         "deleteRunDraft" => object! { "id" => StrMin1 },

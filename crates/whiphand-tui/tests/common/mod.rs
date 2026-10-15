@@ -15,7 +15,7 @@ use whiphand_agent::frontend::SessionTimings;
 use whiphand_agent::{Client, ClientKind, Host, HostConfig};
 use whiphand_tui::client::AgentClient;
 use whiphand_tui::client::wire::{self, Inbound};
-use whiphand_tui::cmd::Cmd;
+use whiphand_tui::cmd::{Cmd, External};
 use whiphand_tui::model::Model;
 use whiphand_tui::msg::Msg;
 use whiphand_tui::update::{init, update};
@@ -49,6 +49,8 @@ pub struct Tui {
     pub notices: Vec<String>,
     /// What attach mode asked of the terminal.
     pub attach_cmds: Vec<Cmd>,
+    /// Programs `update` asked the terminal to be handed to; the test plays them.
+    pub suspended: Vec<External>,
 }
 
 impl Tui {
@@ -61,6 +63,7 @@ impl Tui {
             model,
             notices: Vec::new(),
             attach_cmds: Vec::new(),
+            suspended: Vec::new(),
         };
         let cmds = init(&tui.model);
         tui.dispatch(cmds);
@@ -72,7 +75,7 @@ impl Tui {
             match cmd {
                 Cmd::Rpc(call) => self.client.send(call),
                 Cmd::Notify(n) => self.notices.push(n.title),
-                Cmd::Suspend(what) => panic!("no terminal to hand to {what:?}"),
+                Cmd::Suspend(what) => self.suspended.push(what),
                 Cmd::Quit => panic!("quit"),
                 Cmd::Attach | Cmd::Detach | Cmd::Stdout(_) => self.attach_cmds.push(cmd),
             }
@@ -110,6 +113,24 @@ impl Tui {
                 }
             }
         });
+    }
+
+    /// What the editor gave back, as the runtime would deliver it.
+    pub fn edited(&mut self, text: &str) {
+        let cmds = update(&mut self.model, Msg::Edited(Ok(text.to_string())));
+        self.dispatch(cmds);
+    }
+
+    pub fn typed(&mut self, text: &str) {
+        for c in text.chars() {
+            self.key(KeyCode::Char(c));
+        }
+    }
+
+    pub fn ctrl(&mut self, c: char) {
+        let key = KeyEvent::new(KeyCode::Char(c), crossterm::event::KeyModifiers::CONTROL);
+        let cmds = update(&mut self.model, Msg::Key(key));
+        self.dispatch(cmds);
     }
 
     pub fn key(&mut self, code: KeyCode) {

@@ -258,6 +258,20 @@ pub fn on_dialog_key(model: &mut Model, key: &KeyEvent) -> Vec<Cmd> {
             KeyCode::Char('y' | 'Y') => super::manual::abort(model),
             _ => vec![],
         },
+        Dialog::Confirm {
+            ask: Ask::DeleteWorkflow { name, source },
+            ..
+        } => match key.code {
+            KeyCode::Char('y' | 'Y') => super::workflows::delete(model, name, source),
+            _ => vec![],
+        },
+        Dialog::Confirm {
+            ask: Ask::Prune { max },
+            ..
+        } => match key.code {
+            KeyCode::Char('y' | 'Y') => super::settings::prune(model, max),
+            _ => vec![],
+        },
         Dialog::Confirm { ask, .. } => match key.code {
             KeyCode::Char('y' | 'Y') => answer(ask),
             _ => vec![],
@@ -300,6 +314,11 @@ fn submit(model: &mut Model, label: String, input: Input, ask: Ask) -> Vec<Cmd> 
                 vec![]
             }
         },
+        Ask::NewWorkflow(_) | Ask::CloneWorkflow { .. } => {
+            super::workflows::submit(model, ask, text)
+        }
+        Ask::OpenPath => super::open_path(model, &text),
+        Ask::Setting { key, global } => super::settings::submit(model, label, input, key, global),
         ask => answer(ask),
     }
 }
@@ -337,8 +356,16 @@ fn answer(ask: Ask) -> Vec<Cmd> {
         Ask::Resume(run) => resume(run, None, None),
         // The manual screen sends it, with its note and comments.
         Ask::AbortStep => return vec![],
-        // Prompts answer through `submit`.
-        Ask::Rename(_) | Ask::MoreIterations(_) => return vec![],
+        // Prompts answer through `submit`, and these questions through
+        // their screens.
+        Ask::Rename(_)
+        | Ask::MoreIterations(_)
+        | Ask::NewWorkflow(_)
+        | Ask::CloneWorkflow { .. }
+        | Ask::DeleteWorkflow { .. }
+        | Ask::OpenPath
+        | Ask::Setting { .. }
+        | Ask::Prune { .. } => return vec![],
     }]
 }
 

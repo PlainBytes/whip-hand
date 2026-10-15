@@ -1,8 +1,9 @@
 //! Attach mode's part of `update` (docs/tui-plan.md, section 5): the run's
 //! interactive session gets the real terminal. Keys go to its PTY as they
-//! are typed; its output comes back raw. `Ctrl-]` detaches, `Ctrl-] Ctrl-]`
-//! sends a literal `Ctrl-]`, and `Ctrl-] e` ends the session. The runtime
-//! swaps the screen on `Cmd::Attach` and `Cmd::Detach`; this stays pure.
+//! are typed; its output comes back raw. The detach key (`Ctrl-]` unless
+//! Settings picks another) detaches, pressed twice it sends itself, and
+//! followed by `e` it ends the session. The runtime swaps the screen on
+//! `Cmd::Attach` and `Cmd::Detach`; this stays pure.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -13,8 +14,6 @@ use crate::cmd::{Cmd, Then};
 use crate::model::detail::{Pane, TreeLine};
 use crate::model::{Attach, Model, Route};
 
-/// `Ctrl-]`, as telnet and docker use it.
-pub const DETACH: u8 = 0x1d;
 /// How long the "session ended" line stays before the TUI is back.
 const ENDED_MS: f64 = 1_000.0;
 
@@ -113,12 +112,16 @@ pub fn on_stdin(model: &mut Model, bytes: &[u8]) -> Vec<Cmd> {
         return detach(model);
     }
     let job_id = a.job_id.clone();
+    let detach_byte = model.prefs.detach_key.unwrap_or_default().byte();
+    let Some(a) = model.attach.as_mut() else {
+        return vec![];
+    };
     let mut out = Vec::new();
     let mut cmds = Vec::new();
     for &b in bytes {
         if std::mem::take(&mut a.escape) {
             match b {
-                DETACH => out.push(DETACH),
+                b if b == detach_byte => out.push(detach_byte),
                 b'e' => cmds.push(Cmd::Rpc(Call::new::<EndSession>(
                     p::JobParams {
                         job_id: job_id.clone(),
@@ -131,7 +134,7 @@ pub fn on_stdin(model: &mut Model, bytes: &[u8]) -> Vec<Cmd> {
                     return cmds;
                 }
             }
-        } else if b == DETACH {
+        } else if b == detach_byte {
             a.escape = true;
         } else {
             out.push(b);
@@ -153,6 +156,21 @@ fn input(job_id: &str, bytes: Vec<u8>) -> Vec<Cmd> {
         },
         Then::PtyAck,
     ))]
+}
+
+/// A session started for a job this TUI started: with `attachAuto` on, the
+/// terminal goes to it, as the CLI's would, unless the user is busy with
+/// another session or a question.
+pub fn auto(model: &mut Model, job_id: &str) -> Vec<Cmd> {
+    let wanted = model.prefs.attach_auto == Some(true)
+        && model.started_here.contains(job_id)
+        && model.attach.is_none()
+        && model.dialog.is_none()
+        && model.fatal.is_none();
+    if !wanted {
+        return vec![];
+    }
+    start(model, job_id.to_string())
 }
 
 /// Output of `job_id`'s session: straight to the terminal when attached to it.
@@ -202,8 +220,13 @@ pub fn on_host_gone(model: &mut Model) -> Vec<Cmd> {
 
 #[cfg(test)]
 mod tests {
+    use whiphand_protocol::DetachKey;
+
     use super::*;
     use crate::model::Job;
+
+    /// The detach key unless Settings picks another.
+    const DETACH: u8 = 0x1d;
 
     fn attached() -> Model {
         let mut model = Model::new("/w".into(), 0.0);
@@ -304,5 +327,44 @@ mod tests {
         on_size(&mut model, 80, 24);
         on_exit(&mut model, "j1", 2, Some(PtyExitReason::Exit));
         assert_eq!(on_stdin(&mut model, b"q"), [Cmd::Detach]);
+    }
+
+    #[test]
+    fn the_detach_key_is_the_one_settings_picked() {
+        let mut model = attached();
+        model.prefs.detach_key = Some(DetachKey::CtrlBackslash);
+        on_size(&mut model, 80, 24);
+        // Ctrl-] is an ordinary key now.
+        assert_eq!(
+            sent(&on_stdin(&mut model, &[DETACH])),
+            [("ptyInput", "\u{1d}".into())]
+        );
+        assert_eq!(
+            sent(&on_stdin(&mut model, &[0x1c, 0x1c])),
+            [("ptyInput", "\u{1c}".into())]
+        );
+        assert_eq!(
+            sent(&on_stdin(&mut model, &[0x1c, b'x'])),
+            [("detach", String::new())]
+        );
+    }
+
+    #[test]
+    fn attach_auto_takes_only_jobs_started_here_and_never_interrupts() {
+        let mut model = Model::new("/w".into(), 0.0);
+        model.started_here.insert("j1".into());
+        // Off by default.
+        assert!(auto(&mut model, "j1").is_empty());
+        model.prefs.attach_auto = Some(true);
+        assert!(auto(&mut model, "j2").is_empty(), "started elsewhere");
+        model.dialog = Some(crate::model::Dialog::Confirm {
+            question: "?".into(),
+            ask: crate::model::Ask::Quit,
+        });
+        assert!(auto(&mut model, "j1").is_empty(), "a question is up");
+        model.dialog = None;
+        assert_eq!(auto(&mut model, "j1"), [Cmd::Attach]);
+        assert_eq!(model.attach.as_ref().unwrap().job_id, "j1");
+        assert!(auto(&mut model, "j1").is_empty(), "already attached");
     }
 }

@@ -68,6 +68,18 @@ methods! {
     ResolveManual = "resolveManual" (p::ResolveManualParams) -> p::ResolveManualResult;
     PtyInput = "ptyInput" (p::PtyInputParams) -> p::PtyInputResult;
     PtyResize = "ptyResize" (p::PtyResizeParams) -> p::PtyResizeResult;
+    CreateWorkflow = "createWorkflow" (p::CreateWorkflowParams) -> p::CreateWorkflowResult;
+    UpdateWorkflow = "updateWorkflow" (p::UpdateWorkflowParams) -> p::UpdateWorkflowResult;
+    DeleteWorkflow = "deleteWorkflow" (p::DeleteWorkflowParams) -> p::DeleteWorkflowResult;
+    CloneWorkflow = "cloneWorkflow" (p::CloneWorkflowParams) -> p::CloneWorkflowResult;
+    ValidateWorkflow = "validateWorkflow" (p::ValidateWorkflowParams) -> p::ValidateWorkflowResult;
+    InitWorkspace = "initWorkspace" (p::InitWorkspaceParams) -> p::InitWorkspaceResult;
+    ListModels = "listModels" (p::ListModelsParams) -> p::ListModelsResult;
+    ConfigGet = "configGet" (p::ConfigGetParams) -> p::ConfigGetResult;
+    ConfigSet = "configSet" (p::ConfigSetParams) -> p::ConfigSetResult;
+    PruneRuns = "pruneRuns" (p::PruneRunsParams) -> p::PruneRunsResult;
+    WriteArtifact = "writeArtifact" (p::WriteArtifactParams) -> p::WriteArtifactResult;
+    SetUiState = "setUiState" (p::SetUiStateParams) -> p::SetUiStateResult;
 }
 
 /// Methods the TUI leaves to the desktop. A desktop PR that adds a protocol
@@ -77,25 +89,9 @@ pub const DESKTOP_ONLY: &[&str] = &[
     "remoteAccessGet",
     "remoteAccessSet",
     "remoteAccessRotateToken",
-];
-
-/// Methods a later TUI phase implements (docs/tui-plan.md, section 6): the
-/// ones that change a run, a workflow or settings. Each moves into
-/// `methods!` when its screen lands.
-pub const LATER: &[&str] = &[
+    // `listWorkflows` already carries each workflow.
     "getWorkflow",
-    "createWorkflow",
-    "updateWorkflow",
-    "deleteWorkflow",
-    "cloneWorkflow",
-    "validateWorkflow",
-    "initWorkspace",
-    "listModels",
-    "configGet",
-    "configSet",
-    "pruneRuns",
-    "writeArtifact",
-    "setUiState",
+    // The desktop's New-run tabs: the TUI has one form, never saved.
     "saveRunDraft",
     "deleteRunDraft",
     "setRunTabs",
@@ -180,8 +176,8 @@ mod tests {
     // Track rule 3: a new protocol method fails here until it is implemented
     // or listed in DESKTOP_ONLY.
     #[test]
-    fn every_protocol_method_is_implemented_deferred_or_desktop_only() {
-        let lists = [IMPLEMENTED, LATER, DESKTOP_ONLY];
+    fn every_protocol_method_is_implemented_or_desktop_only() {
+        let lists = [IMPLEMENTED, DESKTOP_ONLY];
         let mut seen = BTreeSet::new();
         for name in lists.iter().flat_map(|l| l.iter()) {
             assert!(seen.insert(*name), "'{name}' is listed twice");

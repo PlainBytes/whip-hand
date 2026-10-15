@@ -106,6 +106,8 @@ fn declarations() -> Vec<String> {
         RecentWorkspacesResult,
         SetWorkspacePinnedParams,
         EditorPreference,
+        TuiPreferences,
+        DetachKey,
         SetUiStateParams,
         SaveRunDraftParams,
         DeleteRunDraftParams,

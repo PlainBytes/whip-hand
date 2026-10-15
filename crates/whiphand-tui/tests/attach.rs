@@ -15,7 +15,6 @@ use crossterm::event::KeyCode;
 use whiphand_tui::cmd::Cmd;
 use whiphand_tui::model::Route;
 use whiphand_tui::msg::Msg;
-use whiphand_tui::update::attach::DETACH;
 use whiphand_tui::update::update;
 
 use common::*;
@@ -106,7 +105,10 @@ fn attach_detach_reattach_and_back_when_the_session_ends() {
         tui.written()
     );
     // Ctrl-] then any key: back to the TUI, the session still going.
-    tui.feed(Msg::Stdin(vec![DETACH, b'd']));
+    tui.feed(Msg::Stdin(vec![
+        whiphand_protocol::DetachKey::default().byte(),
+        b'd',
+    ]));
     assert_eq!(tui.attach_cmds.last(), Some(&Cmd::Detach));
     assert!(tui.model.attach.is_none());
     assert!(tui.model.jobs.values().next().unwrap().pty.active);

@@ -262,6 +262,7 @@ pub async fn call(agent: &Rc<Agent>, ctx: RequestCtx, method: &str, p: Value) ->
                     "runsRetention",
                     "showOngoingRuns",
                     "editor",
+                    "tui",
                 ] {
                     if let Some(v) = p.get(key) {
                         state[key] = v.clone();

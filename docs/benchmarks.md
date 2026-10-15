@@ -217,4 +217,23 @@ tick.
 
 The new screens and attach mode account for the growth. Startup is
 unchanged: nothing new runs before the runs list is up.
+
+### TUI Phase 3: workflows and settings
+
+`cargo build --release -p whiphand-cli` on Linux x86_64 (Ryzen 9 5900X),
+`main` at 4e8210b (after the Phase 2 merge and 0.5.0) against the Phase 3
+branch (docs/tui-plan.md, Phase 3). Measured as for Phase 1, both binaries
+built the same day with the same toolchain; compare within this table, not
+with the rows above.
+
+| Metric | `main` after TUI Phase 2 | TUI Phase 3 | Change |
+|---|---:|---:|---:|
+| CLI binary | 5.34 MB | 5.92 MB | +0.57 MB |
+| `whiphand tui`: spawn to the populated runs list | 21 ms | 21 ms | 0 |
+| `whiphand tui`: peak RSS (VmHWM) | 7.9 MB | 8.8 MB | +0.9 MB |
+
+The workflows and settings screens, and core's YAML parser and workflow
+types now reached from the TUI, account for the growth. Startup is
+unchanged: the one new request at start (`getAppState`, for the TUI's
+preferences) answers after the runs list is up.
 <!-- results:end -->

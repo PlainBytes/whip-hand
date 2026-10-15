@@ -22,6 +22,15 @@ pub fn open(model: &mut Model) -> Vec<Cmd> {
     open_at(model, workdir, None)
 }
 
+/// Opens the screen on one workflow's form, by its ref.
+pub fn open_on(model: &mut Model, workflow: String) -> Vec<Cmd> {
+    let cmds = open(model);
+    if let Some(n) = model.new_run.as_mut() {
+        n.workflow = Some(workflow);
+    }
+    cmds
+}
+
 /// Opens the screen aimed at an earlier run's worktree.
 pub fn open_continuing(model: &mut Model, workdir: String, target: ContinueIn) -> Vec<Cmd> {
     open_at(model, workdir, Some(target))
@@ -76,7 +85,29 @@ fn preselect(n: &mut NewRun) {
 pub fn on_app_state(model: &mut Model, workspaces: &serde_json::Map<String, Value>) {
     if let Some(n) = model.new_run.as_mut() {
         n.memory = workspace_memory(workspaces, &n.workdir);
+        n.memory_loaded = true;
         preselect(n);
+        auto_pick(model);
+    }
+}
+
+/// Opened on one workflow: its form, once the list and the prefill are in.
+fn auto_pick(model: &mut Model) {
+    let Some(n) = model.new_run.as_mut() else {
+        return;
+    };
+    let (Some(list), true) = (&n.workflows, n.memory_loaded) else {
+        return;
+    };
+    let Some(wanted) = n.workflow.take() else {
+        return;
+    };
+    match find_entry(list, &wanted).and_then(|e| list.iter().position(|x| x == e)) {
+        Some(i) => {
+            n.cursor = i;
+            pick(model);
+        }
+        None => model.notice = Some(format!("{wanted} is not in the list any more")),
     }
 }
 
@@ -177,7 +208,10 @@ pub fn edit_key(model: &mut Model, key: &KeyEvent) -> Vec<Cmd> {
     };
     if key.code == KeyCode::Char('e') && key.modifiers.contains(KeyModifiers::CONTROL) {
         let text = form.focused().input.text();
-        return vec![Cmd::Suspend(External::Editor { text })];
+        return vec![Cmd::Suspend(External::Editor {
+            text,
+            suffix: ".md",
+        })];
     }
     match form.focused().input.key(key) {
         Edit::Submit => {
@@ -216,6 +250,7 @@ pub fn on_reply(model: &mut Model, then: &Then, value: Value) -> Result<Vec<Cmd>
             Ok(list) => {
                 n.workflows = Some(list);
                 preselect(n);
+                auto_pick(model);
             }
             Err(e) => model.notice = Some(e),
         },
@@ -227,6 +262,7 @@ pub fn on_reply(model: &mut Model, then: &Then, value: Value) -> Result<Vec<Cmd>
                         .jobs
                         .entry(r.job_id.clone())
                         .or_insert_with(|| Job::new(JobStatus::Running));
+                    model.started_here.insert(r.job_id.clone());
                     n.job_id = Some(r.job_id);
                     return Ok(follow(model));
                 }

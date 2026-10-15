@@ -260,7 +260,10 @@ pub fn edit_key(model: &mut Model, key: &KeyEvent) -> Vec<Cmd> {
         return vec![];
     };
     if ctrl_e {
-        return vec![Cmd::Suspend(External::Editor { text: input.text() })];
+        return vec![Cmd::Suspend(External::Editor {
+            text: input.text(),
+            suffix: ".md",
+        })];
     }
     if input.key(key) == Edit::Leave {
         m.editing = false;

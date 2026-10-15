@@ -7,11 +7,13 @@ pub mod manual;
 pub mod new_run;
 pub mod pty;
 pub mod runs;
+pub mod settings;
+pub mod workflows;
 
 use std::collections::{BTreeMap, VecDeque};
 
 use serde_json::Value;
-use whiphand_protocol::{DoctorRow, JobStatus, RecentWorkspace};
+use whiphand_protocol::{DoctorRow, JobStatus, RecentWorkspace, Scope, TuiPreferences};
 
 use self::detail::RunDetail;
 use self::input::Input;
@@ -59,6 +61,8 @@ pub enum Route {
     NewRun,
     /// A job's open manual or approval step.
     Manual,
+    Workflows,
+    Settings,
 }
 
 impl Route {
@@ -70,6 +74,8 @@ impl Route {
             Route::Doctor => "Doctor",
             Route::NewRun => "New run",
             Route::Manual => "Decision",
+            Route::Workflows => "Workflows",
+            Route::Settings => "Settings",
         }
     }
 }
@@ -114,6 +120,42 @@ pub enum Ask {
     MoreIterations(RunRef),
     /// Abort the manual step on screen.
     AbortStep,
+    /// The workflows screen's prompts and question.
+    NewWorkflow(Scope),
+    CloneWorkflow {
+        name: String,
+        source: Scope,
+    },
+    DeleteWorkflow {
+        name: String,
+        source: Scope,
+    },
+    /// A folder to open as a workspace.
+    OpenPath,
+    /// A config leaf's new value; `global` for the global layer.
+    Setting {
+        key: settings::Key,
+        global: bool,
+    },
+    /// Delete the runs beyond the newest `max`.
+    Prune {
+        max: i64,
+    },
+}
+
+/// What `$EDITOR` is editing, for the screens that ask for it by name.
+#[derive(Clone, Debug, PartialEq)]
+pub enum EditTarget {
+    /// `model.workflows.edit`.
+    Workflow,
+    /// A run's artifact, as it was read.
+    Artifact {
+        workdir: String,
+        run_id: String,
+        name: String,
+        text: String,
+        mtime_ms: f64,
+    },
 }
 
 /// A question in the footer that takes the keys until it is answered.
@@ -195,8 +237,24 @@ pub struct Model {
     /// Attached to a session: the screen is not the TUI's.
     pub attach: Option<Attach>,
     pub doctor: DoctorUi,
+    pub workflows: workflows::WorkflowsUi,
+    pub settings: settings::SettingsUi,
+    /// The TUI's preferences, from the app state.
+    pub prefs: TuiPreferences,
+    /// Jobs started from this TUI: the ones `attachAuto` attaches to.
+    pub started_here: std::collections::BTreeSet<String>,
+    /// What the editor that is open was opened for, when a screen asked
+    /// by name rather than through its own state.
+    pub edit_target: Option<EditTarget>,
+    /// Where the TUI started and the user's home: what a typed path is
+    /// resolved against, so `update` stays pure.
+    pub cwd: Option<String>,
+    pub home: Option<String>,
+    /// Where stderr goes while the TUI owns the screen.
+    pub log_path: Option<String>,
     /// The `?` overlay is up.
     pub help: bool,
+    pub help_scroll: u16,
     /// `g` was pressed; the next key picks a screen.
     pub pending_g: bool,
     pub now_ms: f64,
@@ -288,6 +346,11 @@ impl Model {
             .or_insert_with(|| Job::new(JobStatus::Running));
         job.run_id = Some(run_id.to_string());
         job
+    }
+
+    /// The byte that detaches from a session.
+    pub fn detach_key(&self) -> whiphand_protocol::DetachKey {
+        self.prefs.detach_key.unwrap_or_default()
     }
 
     /// The terminal's title: what is waiting on the human, at a glance.

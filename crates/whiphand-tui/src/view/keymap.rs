@@ -1,6 +1,6 @@
 //! Every key binding, in one table: `update` dispatches through it, and the
 //! `?` overlay and the footer hints are drawn from it (docs/tui-plan.md,
-//! section 6). Phase 2 and 3 keys are not bound until their actions exist.
+//! section 6).
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -18,6 +18,8 @@ pub enum Ctx {
     Doctor,
     NewRun,
     Manual,
+    Workflows,
+    Settings,
 }
 
 impl Ctx {
@@ -29,6 +31,8 @@ impl Ctx {
             Route::Doctor => Ctx::Doctor,
             Route::NewRun => Ctx::NewRun,
             Route::Manual => Ctx::Manual,
+            Route::Workflows => Ctx::Workflows,
+            Route::Settings => Ctx::Settings,
         }
     }
 
@@ -42,6 +46,8 @@ impl Ctx {
             Ctx::Doctor => "Doctor",
             Ctx::NewRun => "New run",
             Ctx::Manual => "Manual or approval step",
+            Ctx::Workflows => "Workflows",
+            Ctx::Settings => "Settings",
         }
     }
 }
@@ -55,6 +61,8 @@ pub enum Action {
     GoWorkspaces,
     GoRuns,
     GoDoctor,
+    GoWorkflows,
+    GoSettings,
     Down,
     Up,
     PageDown,
@@ -91,6 +99,17 @@ pub enum Action {
     AbortStep,
     EditNote,
     Attach,
+    /// `$EDITOR` on the thing in focus: a workflow, an artifact.
+    Edit,
+    RunWorkflow,
+    NewWorkflow,
+    NewGlobalWorkflow,
+    CloneWorkflow,
+    InitWorkspace,
+    OpenPath,
+    /// Settings: drop the workspace's override of the row.
+    Inherit,
+    Prune,
 }
 
 /// A key as the table spells it.
@@ -163,7 +182,7 @@ pub const BINDINGS: &[Binding] = &[
         &[Char('g')],
         "g",
         A::Goto,
-        "go to a screen (then w, r or d)",
+        "go to a screen (then w, r, f, d or s)",
     ),
     b(
         C::Global,
@@ -204,8 +223,17 @@ pub const BINDINGS: &[Binding] = &[
     b(C::Global, &[Code(KeyCode::Enter)], "Enter", A::Open, "open"),
     b(C::Goto, &[Char('w')], "g w", A::GoWorkspaces, "workspaces"),
     b(C::Goto, &[Char('r')], "g r", A::GoRuns, "runs"),
+    b(C::Goto, &[Char('f')], "g f", A::GoWorkflows, "workflows"),
     b(C::Goto, &[Char('d')], "g d", A::GoDoctor, "doctor"),
+    b(C::Goto, &[Char('s')], "g s", A::GoSettings, "settings"),
     b(C::Workspaces, &[Char('p')], "p", A::Pin, "pin or unpin"),
+    b(
+        C::Workspaces,
+        &[Char('a')],
+        "a",
+        A::OpenPath,
+        "open a folder by its path",
+    ),
     b(C::Runs, &[Char('/')], "/", A::Filter, "filter"),
     b(C::Runs, &[Char('n')], "n", A::NewRun, "new run"),
     b(
@@ -303,7 +331,14 @@ pub const BINDINGS: &[Binding] = &[
         &[Char('t')],
         "t",
         A::Attach,
-        "attach to the interactive session (Ctrl-] detaches)",
+        "attach to the interactive session (see Settings for the detach key)",
+    ),
+    b(
+        C::Detail,
+        &[Char('e')],
+        "e",
+        A::Edit,
+        "edit the artifact in $EDITOR",
     ),
     b(
         C::Detail,
@@ -349,6 +384,73 @@ pub const BINDINGS: &[Binding] = &[
         "i",
         A::EditNote,
         "write the note (Ctrl-e: $EDITOR)",
+    ),
+    b(C::Workflows, &[Char('r')], "r", A::RunWorkflow, "run it"),
+    b(
+        C::Workflows,
+        &[Char('e')],
+        "e",
+        A::Edit,
+        "edit in $EDITOR; checked before it is saved",
+    ),
+    b(
+        C::Workflows,
+        &[Char('n')],
+        "n",
+        A::NewWorkflow,
+        "new workflow in this workspace",
+    ),
+    b(
+        C::Workflows,
+        &[Char('N')],
+        "N",
+        A::NewGlobalWorkflow,
+        "new global workflow",
+    ),
+    b(C::Workflows, &[Char('c')], "c", A::CloneWorkflow, "clone"),
+    b(C::Workflows, &[Char('x')], "x", A::Delete, "delete"),
+    b(
+        C::Workflows,
+        &[Char('o')],
+        "o",
+        A::Pager,
+        "show the file in $PAGER",
+    ),
+    b(
+        C::Workflows,
+        &[Char('i')],
+        "i",
+        A::InitWorkspace,
+        "set up this workspace (.whiphand/)",
+    ),
+    b(C::Workflows, &[Ctrl('r')], "Ctrl-r", A::Refresh, "reload"),
+    b(
+        C::Settings,
+        &[Code(KeyCode::Tab), Code(KeyCode::BackTab)],
+        "Tab",
+        A::NextPane,
+        "next pane",
+    ),
+    b(
+        C::Settings,
+        &[Char('u')],
+        "u",
+        A::Inherit,
+        "use the global value here",
+    ),
+    b(
+        C::Settings,
+        &[Char('P')],
+        "P",
+        A::Prune,
+        "delete runs beyond the maximum now",
+    ),
+    b(
+        C::Settings,
+        &[Ctrl('r')],
+        "Ctrl-r",
+        A::Refresh,
+        "reload; models are asked again",
     ),
 ];
 
@@ -409,6 +511,8 @@ mod tests {
             C::Doctor,
             C::NewRun,
             C::Manual,
+            C::Workflows,
+            C::Settings,
         ];
         for ctx in ctxs.into_iter().chain([C::Global]) {
             let scope = BINDINGS

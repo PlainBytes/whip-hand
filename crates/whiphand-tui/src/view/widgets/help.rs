@@ -9,7 +9,8 @@ use crate::model::Route;
 use crate::view::keymap::{BINDINGS, Ctx};
 use crate::view::theme;
 
-pub fn render(frame: &mut Frame, area: Rect, screen: &Route) {
+/// `scroll` lines are scrolled off the top; it stops at the last line.
+pub fn render(frame: &mut Frame, area: Rect, screen: &Route, scroll: u16) {
     let mut lines = Vec::new();
     for ctx in [Ctx::of(screen), Ctx::Global, Ctx::Goto] {
         lines.push(Line::styled(ctx.title(), theme::bold()));
@@ -21,8 +22,12 @@ pub fn render(frame: &mut Frame, area: Rect, screen: &Route) {
         }
         lines.push(Line::default());
     }
-    lines.push(Line::styled("any key closes this", theme::dim()));
+    lines.push(Line::styled(
+        "j k PgDn PgUp scroll  ·  any other key closes this",
+        theme::dim(),
+    ));
     let height = (lines.len() as u16 + 2).min(area.height);
+    let scroll = scroll.min((lines.len() as u16 + 2).saturating_sub(height));
     let width = 64.min(area.width);
     let [row] = Layout::vertical([Constraint::Length(height)])
         .flex(Flex::Center)
@@ -32,7 +37,9 @@ pub fn render(frame: &mut Frame, area: Rect, screen: &Route) {
         .areas(row);
     frame.render_widget(Clear, popup);
     frame.render_widget(
-        Paragraph::new(lines).block(Block::bordered().title(" Keys ")),
+        Paragraph::new(lines)
+            .scroll((scroll, 0))
+            .block(Block::bordered().title(" Keys ")),
         popup,
     );
 }

@@ -60,6 +60,8 @@ pub struct ArtifactView {
     pub path: String,
     pub body: ArtifactBody,
     pub scroll: u16,
+    /// When the text on screen was read: a save checks the file still is.
+    pub mtime_ms: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -135,6 +137,9 @@ pub struct RunDetail {
     pub artifacts: Vec<(String, String)>,
     pub artifact_cursor: usize,
     pub artifact_view: Option<ArtifactView>,
+    /// An edit not saved yet, by artifact name: on its way, or refused
+    /// because the run wrote the file meanwhile. The next `e` reopens it.
+    pub artifact_draft: Option<(String, String)>,
     pub diff: Option<DiffState>,
     pub diff_cursor: usize,
     pub diff_scroll: u16,
@@ -166,6 +171,7 @@ impl RunDetail {
             artifacts: Vec::new(),
             artifact_cursor: 0,
             artifact_view: None,
+            artifact_draft: None,
             diff: None,
             diff_cursor: 0,
             diff_scroll: 0,

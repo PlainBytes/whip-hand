@@ -10,7 +10,7 @@ one feature branch and one PR into `main`, with each step one or more commits.
 | 0. Groundwork | Done | [#27](https://github.com/PlainBytes/whip-hand/pull/27) |
 | 1. Read-only MVP | Done | [#29](https://github.com/PlainBytes/whip-hand/pull/29) |
 | 2. Driving runs | Done | |
-| 3. Workflows and settings | Not started | |
+| 3. Workflows and settings | Done | |
 | 4. Hardening and release | Not started | |
 | 5. Optional extras | Not started | |
 
@@ -63,9 +63,10 @@ These rules exist so the TUI never slows desktop work down.
    later if it is useful in a terminal.
 4. **TUI-motivated changes to shared crates keep the desktop identical.** The
    known ones are the `remote` feature gate and the `AppStateStore`
-   read-modify-write (both Phase 0), and the additive `log_rows::parse_log_line`
-   and `run_tree` module in `whiphand-core` (Phase 1). The desktop enables
-   `remote` explicitly and its tests must pass unchanged.
+   read-modify-write (both Phase 0), the additive `log_rows::parse_log_line`
+   and `run_tree` module in `whiphand-core` (Phase 1), and the optional `tui`
+   key in app state (Phase 3). The desktop enables `remote` explicitly and its
+   tests must pass unchanged.
 5. **Gaps are written down.** `docs/design.md` gets a "Frontends" section with a
    short desktop-only list (file explorer, remote control, embedded terminal
    until Phase 5) so nobody files a parity bug by accident.
@@ -74,7 +75,9 @@ Phase 0 was expected to be the only phase touching shared crates. Phase 1 also
 did, under rule 2: the run tree and the `run.log` reader existed only in the
 desktop's TypeScript, so they moved to `whiphand-core` (additive, with their TS
 tests ported; the desktop keeps its TS until it chooses to switch). Phase 2
-did not: what it needed from core was already there. Other phases add code
+did not: what it needed from core was already there. Phase 3 made one
+additive change, the TUI's preferences in app state (`AppState.tui`, accepted
+by `setUiState`; absent until the TUI saves one). Other phases add code
 under `crates/whiphand-tui` and a few lines in `crates/whiphand-cli`. Any shared-crate change is called out in that phase's PR
 description.
 
@@ -266,9 +269,10 @@ State machine: `Ui → Attaching → Attached → Detaching → Ui`.
    instant.
 8. `Ctrl-] e` sends `endSession`, the polite-quit path the agent implements.
 
-Optional setting `attach.auto = true` (Phase 3, with settings): a run started
-from this TUI attaches automatically when its interactive step starts, which
-gives a CLI-like flow.
+Setting `attachAuto` (Phase 3, Settings → Terminal UI): a run started from
+this TUI attaches automatically when its interactive step starts, which gives
+a CLI-like flow. The detach key is set there too: `Ctrl-]` (the default),
+`Ctrl-\`, `Ctrl-^` or `Ctrl-_`. Both live under `tui` in app state.
 
 ## 6. Screens and the RPCs behind them
 
@@ -283,7 +287,7 @@ gives a CLI-like flow.
 | Workflows | List (source scope, shadowed); new, clone, delete; edit in `$EDITOR`; validate; run | `listWorkflows`, `getWorkflow`, `createWorkflow`, `cloneWorkflow`, `deleteWorkflow`, `updateWorkflow`, `validateWorkflow` |
 | New run | Workflow picker, then a form generated from its inputs; name; max iterations; attachments (paths, one per line); dry run; worktree; prefilled from `lastInputs` in app state. No model overrides: `startRun` has none | `listWorkflows` (it carries each workflow), `getAppState`, `startRun` |
 | Doctor | Harness and support tool groups: core's `doctor_report` text, the same as `whiphand doctor` prints | `doctor` |
-| Settings | Workspace config, run retention, prune, path of the TUI log | `configGet`, `configSet`, `pruneRuns`, `setUiState` |
+| Settings | Workspace and global config, run retention, prune, the TUI's own preferences (`attachAuto`, detach key), path of the TUI log, each runner's models | `configGet`, `configSet`, `pruneRuns`, `setUiState`, `listModels` |
 
 Desktop-only by design: `remoteAccessGet`, `remoteAccessSet`,
 `remoteAccessRotateToken` and the `remoteAccessChanged` notification.
@@ -301,7 +305,12 @@ to `f`, every step's rows to `A` and the diff reload to `Ctrl-r`, freeing `e`,
 ask); runs and detail `c` cancel, `r` resume, `R` rename, `L` lock, `x`
 delete, `m` the step waiting on you; runs `n` new run; detail `t` attach, `E`
 end session; new run `s` start; the manual screen `a` continue, `b` send back,
-`X` abort, `i` the note. The plan's full set:
+`X` abort, `i` the note. Phase 3 added `g f` and `g s`; workflows `r` run,
+`e` edit, `n`/`N` new (project, global), `c` clone, `x` delete, `o` pager,
+`i` set up the workspace, `Ctrl-r` reload; settings `Tab` panes, `Enter`
+change, `u` use the global value, `P` prune now, `Ctrl-r` reload; workspaces
+`a` open a folder by path; detail `e` edit the open artifact. The `?` overlay
+scrolls with the movement keys. The plan's full set:
 
 - **Global:** `?` help, `q`/`Esc` back, `Q` quit, `:` command palette, `g w`
   workspaces, `g r` runs, `g f` workflows, `g d` doctor, `g s` settings,
@@ -549,6 +558,73 @@ tests on Node 25's own `localStorage`; this branch does not touch `apps/`.
 
 Workflow CRUD, `$EDITOR` editing and validation, `init`, config, prune, models.
 
+**Delivered** (branch `feature/tui-phase3-workflows-settings`):
+
+- Shared, additive (track rule 4): `AppState.tui` (`TuiPreferences`:
+  `attachAuto`, `detachKey`) in `whiphand-protocol`, its schema in the agent,
+  and `"tui"` among the keys `setUiState` takes. It has no default, so a state
+  the TUI never touched keeps its shape and the parity fixtures are unchanged;
+  `protocol.gen.ts` gains the types only. The detach keys are named
+  (`ctrl-backslash`), not spelled: ts-rs does not escape a backslash.
+- The client knows every protocol method: the twelve Phase 3 ones are
+  implemented, and `getWorkflow` (`listWorkflows` carries each workflow) and
+  the desktop's draft and tab methods are `DESKTOP_ONLY`. `LATER` is gone.
+- Workflows (`g f`): the list (project, global, shadowed, does not parse) and
+  a preview of the one selected (description, inputs, steps with runner and
+  model). `e` hands a copy of the file to `$EDITOR`; the text comes back
+  through core's `parse_yaml` (a YAML error is said at once), then
+  `validateWorkflow`, and only a draft that passes reaches `updateWorkflow`.
+  One that does not is kept, with its problems by step and field, so the next
+  `e` goes on from it; `Esc` drops it. `updateWorkflow` merges onto the file,
+  so its existing comments survive; comments added in the editor do not, and
+  the screen says so. `n`/`N` create and open the new file in the editor, `c`
+  clones, `x` deletes (saying when a global workflow takes the deleted one's
+  place), `r` opens the new-run form on the workflow, `i` sets the workspace
+  up (offered when it has no workflows of its own, as the desktop does).
+- Settings (`g s`): the workspace's and the global config, row by row, with
+  where each value comes from. A change saves at once (`configSet` with the
+  whole config, then both layers read again). The retention override stays
+  explicit (`explicitKeys`), as the desktop's checkbox keeps it; lowering it
+  prunes; `u` drops a workspace override; `P` prunes now. The Terminal UI pane
+  holds `attachAuto`, the detach key and the log's path; the Models pane lists
+  `listModels` per runner (live, built-in list, unavailable).
+- `attachAuto` attaches a run started from this TUI when its interactive
+  step starts, unless a session or a question is already up. The detach key is
+  the one Settings picked, for detach, its double and `… e`.
+- Workspaces: `a` opens a folder by its path (relative to where the TUI
+  started, `~` for home); the agent refuses one that is not a directory before
+  the TUI leaves the workspace it is on.
+- Run detail: `e` edits the open text artifact in `$EDITOR` and saves it with
+  `writeArtifact` and the mtime it was read at. If the run wrote the file
+  meanwhile, the save is refused, the file is shown as it is now, and the edit
+  is kept for the next `e`.
+- The `?` overlay scrolls.
+
+Followed end to end: in `whiphand tui` driven through a pseudo-terminal with
+a stand-in `$EDITOR` and a stub `claude` on `PATH`: an empty folder set up
+with `i`, a workflow created, a broken draft refused (the file untouched), the
+fix saved and run; `attachAuto` and `Ctrl-\` set in Settings, a run that
+attached by itself, detached with `Ctrl-\`, reattached with `t` and ended;
+its artifact edited with `e`; the models of the installed harnesses listed.
+The integration tests set a workspace up, edit a workflow with a comment
+(refused, then saved with the comment kept), clone, delete and create one
+against a real host; write a workspace's run limit and prune three runs to
+it; and read preferences one host saved from a second host on the same app
+state.
+
+Not done, and why:
+
+- No `:` command palette: nothing in Phase 3 needed one.
+- Workflows are edited as text only: the desktop's form editor (step rail,
+  harness and model pickers) has no terminal counterpart. The Models pane is
+  the reference for model ids.
+- `Ctrl-]` cannot be any key: Settings offers the four control keys that do
+  not clash with a shell or an editor.
+- The detail's footer hints are still cut at 80 columns (Phase 4).
+
+Verification notes: `npm run verify`'s steps all pass, including the
+desktop's vitest suite (1,551 tests) that Phases 1 and 2 saw fail on Node 25.
+
 ### Phase 4: Hardening and release (1 to 2 weeks)
 
 Manual matrix, Windows input edge cases, resize storms, `NO_COLOR`. Docs: a
@@ -606,7 +682,7 @@ desktop work leaves.
 6. **Binary size.** ratatui, crossterm and pulldown-cmark add about 1 to 1.5 MB;
    dropping axum from the CLI path offsets part of it. Recorded in
    `docs/benchmarks.md`: +1.05 MB in Phase 0, +0.56 MB in Phase 1, +0.61 MB in
-   Phase 2.
+   Phase 2, +0.57 MB in Phase 3.
 
 ## 13. Verification
 

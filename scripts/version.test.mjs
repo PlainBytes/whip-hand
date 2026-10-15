@@ -13,7 +13,11 @@ const FILES = {
   'apps/desktop/src-tauri/Cargo.toml':
     '[package]\nname = "whiphand"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\nserde = "1"\n',
   'apps/desktop/src-tauri/Cargo.lock':
-    '[[package]]\nname = "other"\nversion = "9.9.9"\n\n[[package]]\nname = "whiphand"\nversion = "0.1.0"\ndependencies = [\n "serde",\n]\n',
+    '[[package]]\nname = "other"\nversion = "9.9.9"\n\n[[package]]\nname = "whiphand"\nversion = "0.1.0"\ndependencies = [\n "serde",\n]\n\n'
+    // The desktop links the agent in-process: these are its path dependencies.
+    + '[[package]]\nname = "whiphand-agent"\nversion = "0.1.0"\n\n'
+    + '[[package]]\nname = "whiphand-core"\nversion = "0.1.0"\n\n'
+    + '[[package]]\nname = "whiphand-protocol"\nversion = "0.1.0"\n',
   'crates/whiphand-core/Cargo.toml':
     '[package]\nname = "whiphand-core"\nversion = "0.1.0"\nedition = "2024"\n\n[dependencies]\nregex = "1"\n',
   'crates/whiphand-cli/Cargo.toml':
@@ -93,6 +97,9 @@ test('--check exits non-zero and lists every mismatch', () => {
       assert.match(stderr, /package-lock\.json \(apps\/desktop\): 0\.1\.0/);
       assert.match(stderr, /^  Cargo\.lock \(whiphand-cli\): 0\.1\.0/m);
       assert.match(stderr, /^  Cargo\.lock \(whiphand-protocol\): 0\.1\.0/m);
+      assert.match(stderr, /src-tauri\/Cargo\.lock \(whiphand-agent\): 0\.1\.0/);
+      assert.match(stderr, /src-tauri\/Cargo\.lock \(whiphand-core\): 0\.1\.0/);
+      assert.match(stderr, /src-tauri\/Cargo\.lock \(whiphand-protocol\): 0\.1\.0/);
       return true;
     });
   } finally {
@@ -114,6 +121,10 @@ test('writing a version updates every location, including Cargo.lock and package
     const cargoLock = fs.readFileSync(path.join(root, 'apps/desktop/src-tauri/Cargo.lock'), 'utf8');
     assert.match(cargoLock, /name = "whiphand"\nversion = "0\.2\.0"/);
     assert.match(cargoLock, /name = "other"\nversion = "9\.9\.9"/);
+    // The shared crates, as the desktop's lockfile records them (0.5.0 shipped without this).
+    assert.match(cargoLock, /name = "whiphand-agent"\nversion = "0\.2\.0"/);
+    assert.match(cargoLock, /name = "whiphand-core"\nversion = "0\.2\.0"/);
+    assert.match(cargoLock, /name = "whiphand-protocol"\nversion = "0\.2\.0"/);
 
     const coreToml = fs.readFileSync(path.join(root, 'crates/whiphand-core/Cargo.toml'), 'utf8');
     assert.match(coreToml, /version = "0\.2\.0"/);

@@ -11,9 +11,10 @@
  * Every Rust crate (`src-tauri`, `crates/whiphand-core`, the `whiphand` CLI in
  * `crates/whiphand-cli`, `crates/whiphand-protocol` and
  * `crates/whiphand-agent`) carries the version in its Cargo.toml and again in
- * the Cargo.lock that records it: not a place a human would edit, but one
- * `cargo` will flag as stale if it drifts. One table (`CARGO_CRATES`) handles
- * all of them.
+ * every Cargo.lock that records it: not a place a human would edit, but one
+ * `cargo` rewrites if it drifts. The desktop links the agent in-process, so
+ * src-tauri's lockfile records core, protocol and agent too, beside the
+ * workspace's. One table (`CARGO_CRATES`) handles all of them.
  *
  * `package-lock.json` records each workspace's version and that same pin
  * again. `npm ci` tolerates it lagging, but the next `npm install` rewrites
@@ -38,13 +39,14 @@ const SEMVER = /^\d+\.\d+\.\d+$/;
 const PACKAGE_JSON_FILES = [
   'apps/desktop/package.json',
 ];
-/** Every Rust crate that ships the app's version: its manifest, the lockfile recording it, and its package name there. */
+const TAURI_LOCK = 'apps/desktop/src-tauri/Cargo.lock';
+/** Every Rust crate that ships the app's version: its manifest, the lockfiles recording it, and its package name there. */
 const CARGO_CRATES = [
-  { toml: 'apps/desktop/src-tauri/Cargo.toml', lock: 'apps/desktop/src-tauri/Cargo.lock', name: 'whiphand' },
-  { toml: 'crates/whiphand-core/Cargo.toml', lock: 'Cargo.lock', name: 'whiphand-core' },
-  { toml: 'crates/whiphand-cli/Cargo.toml', lock: 'Cargo.lock', name: 'whiphand-cli' },
-  { toml: 'crates/whiphand-protocol/Cargo.toml', lock: 'Cargo.lock', name: 'whiphand-protocol' },
-  { toml: 'crates/whiphand-agent/Cargo.toml', lock: 'Cargo.lock', name: 'whiphand-agent' },
+  { toml: 'apps/desktop/src-tauri/Cargo.toml', locks: [TAURI_LOCK], name: 'whiphand' },
+  { toml: 'crates/whiphand-core/Cargo.toml', locks: ['Cargo.lock', TAURI_LOCK], name: 'whiphand-core' },
+  { toml: 'crates/whiphand-cli/Cargo.toml', locks: ['Cargo.lock'], name: 'whiphand-cli' },
+  { toml: 'crates/whiphand-protocol/Cargo.toml', locks: ['Cargo.lock', TAURI_LOCK], name: 'whiphand-protocol' },
+  { toml: 'crates/whiphand-agent/Cargo.toml', locks: ['Cargo.lock', TAURI_LOCK], name: 'whiphand-agent' },
 ];
 const TAURI_CONF = 'apps/desktop/src-tauri/tauri.conf.json';
 const PACKAGE_LOCK = 'package-lock.json';
@@ -104,7 +106,7 @@ function cargoLockPattern(name) {
   return new RegExp(`(name = "${name}"\\nversion = )"(\\d+\\.\\d+\\.\\d+)"`);
 }
 
-function replaceCargoLockVersion(content, version, { lock, name }) {
+function replaceCargoLockVersion(content, version, lock, name) {
   const pattern = cargoLockPattern(name);
   if (!pattern.test(content)) throw new Error(`no '${name}' package stanza found in ${lock}`);
   return content.replace(pattern, `$1"${version}"`);
@@ -127,7 +129,9 @@ function writeVersion(version) {
   }
   for (const crate of CARGO_CRATES) {
     write(crate.toml, replaceCargoTomlVersion(read(crate.toml), version, crate.toml));
-    write(crate.lock, replaceCargoLockVersion(read(crate.lock), version, crate));
+    for (const lock of crate.locks) {
+      write(lock, replaceCargoLockVersion(read(lock), version, lock, crate.name));
+    }
   }
   write(TAURI_CONF, replaceJsonVersion(read(TAURI_CONF), version, TAURI_CONF));
   write(PACKAGE_LOCK, replacePackageLockVersions(read(PACKAGE_LOCK), version));
@@ -140,7 +144,9 @@ function collectVersions() {
   }
   for (const crate of CARGO_CRATES) {
     found.push([crate.toml, read(crate.toml).match(CARGO_TOML_VERSION)?.[1] ?? '(missing)']);
-    found.push([`${crate.lock} (${crate.name})`, read(crate.lock).match(cargoLockPattern(crate.name))?.[2] ?? '(missing)']);
+    for (const lock of crate.locks) {
+      found.push([`${lock} (${crate.name})`, read(lock).match(cargoLockPattern(crate.name))?.[2] ?? '(missing)']);
+    }
   }
 
   found.push([TAURI_CONF, readJsonVersion(read(TAURI_CONF), TAURI_CONF)]);

@@ -9,11 +9,12 @@ use whiphand_protocol as p;
 use super::PAGE;
 use crate::client::{
     self, Call, GetJobScrollback, GetRun, GetWorkingDiff, ReadArtifact, ReadRunLog, StatArtifact,
+    WriteArtifact,
 };
 use crate::cmd::{Cmd, External, LogPage, Then};
 use crate::model::detail::{ArtifactBody, ArtifactView, DiffState, Pane, RunDetail, Tab, TreeLine};
 use crate::model::log::LogEntry;
-use crate::model::{Model, Route};
+use crate::model::{EditTarget, Model, Route};
 use crate::view::keymap::Action;
 
 /// `run.log` lines per read, as the desktop pages it.
@@ -175,6 +176,119 @@ pub fn on_event(model: &mut Model, run_id: Option<&str>, kind: &str, entry: LogE
 }
 
 /// A failed reply this screen owns; whether it was one.
+/// `$EDITOR` is back with an artifact: saved when it changed, as long as
+/// the file is still what was read.
+pub fn on_artifact_edited(
+    model: &mut Model,
+    target: EditTarget,
+    result: Result<String, String>,
+) -> Vec<Cmd> {
+    let EditTarget::Artifact {
+        workdir,
+        run_id,
+        name,
+        text,
+        mtime_ms,
+    } = target
+    else {
+        return vec![];
+    };
+    let edited = match result {
+        Ok(edited) => edited,
+        Err(why) => {
+            model.notice = Some(why);
+            return vec![];
+        }
+    };
+    let Some(d) = detail_for(model, &run_id) else {
+        return vec![];
+    };
+    if edited == text {
+        d.artifact_draft = None;
+        model.toast = Some((format!("{name} unchanged"), model.now_ms + super::TOAST_MS));
+        return vec![];
+    }
+    d.artifact_draft = Some((name.clone(), edited.clone()));
+    vec![Cmd::Rpc(Call::new::<WriteArtifact>(
+        p::WriteArtifactParams {
+            workdir,
+            run_id: run_id.clone(),
+            name: name.clone(),
+            content: edited,
+            expected_mtime_ms: Some(mtime_ms),
+        },
+        Then::ArtifactWritten { run_id, name },
+    ))]
+}
+
+/// `e` on the Artifacts tab: the open artifact in `$EDITOR`, or the edit
+/// that was refused last time.
+fn edit_artifact(model: &mut Model) -> Vec<Cmd> {
+    let Some(d) = model.detail.as_ref() else {
+        return vec![];
+    };
+    if d.tab != Tab::Artifacts {
+        return vec![];
+    }
+    let Some(view) = d.artifact_view.as_ref() else {
+        model.notice = Some("open the artifact first (Enter)".into());
+        return vec![];
+    };
+    let (ArtifactBody::Text(text), Some(mtime_ms)) = (&view.body, view.mtime_ms) else {
+        model.notice = Some(format!("{} is not text the TUI can edit", view.name));
+        return vec![];
+    };
+    let draft = d
+        .artifact_draft
+        .as_ref()
+        .filter(|(n, _)| *n == view.name)
+        .map(|(_, t)| t.clone());
+    model.edit_target = Some(EditTarget::Artifact {
+        workdir: d.workdir.clone(),
+        run_id: d.run_id.clone(),
+        name: view.name.clone(),
+        text: text.clone(),
+        mtime_ms,
+    });
+    let suffix = if view.name.ends_with(".md") {
+        ".md"
+    } else {
+        ".txt"
+    };
+    vec![Cmd::Suspend(External::Editor {
+        text: draft.unwrap_or_else(|| text.clone()),
+        suffix,
+    })]
+}
+
+/// The artifact as it is on disk now, read again.
+fn reread_artifact(model: &mut Model, run_id: &str, name: &str) -> Vec<Cmd> {
+    let Some(d) = detail_for(model, run_id) else {
+        return vec![];
+    };
+    if let Some(view) = d.artifact_view.as_mut().filter(|v| v.name == name) {
+        view.body = ArtifactBody::Loading;
+        view.mtime_ms = None;
+        view.scroll = 0;
+    }
+    vec![Cmd::Rpc(Call::new::<StatArtifact>(
+        artifact_ref(d, name),
+        Then::ArtifactStat {
+            run_id: run_id.to_string(),
+            name: name.to_string(),
+        },
+    ))]
+}
+
+/// `writeArtifact` refused (the run wrote the file since it was read): the
+/// edit is kept for the next `e`, and the file is shown as it is now.
+pub fn on_write_refused(model: &mut Model, run_id: &str, name: &str, message: &str) -> Vec<Cmd> {
+    model.notice = Some(format!(
+        "{name} was not saved: {message}. e opens your edit again"
+    ));
+    reread_artifact(model, run_id, name)
+}
+
 pub fn on_error(model: &mut Model, then: &Then, message: &str) -> bool {
     match then {
         Then::ArtifactStat { run_id, name } | Then::Artifact { run_id, name } => {
@@ -192,6 +306,7 @@ pub fn on_error(model: &mut Model, then: &Then, message: &str) -> bool {
             }
             true
         }
+
         Then::RunLog { run_id, .. } => {
             if let Some(d) = detail_for(model, run_id) {
                 d.loading_earlier = false;
@@ -303,10 +418,24 @@ pub fn on_reply(model: &mut Model, then: Then, value: Value) -> Vec<Cmd> {
             {
                 view.body = match decoded {
                     Ok(a) if a.content.contains('\0') => ArtifactBody::Binary(a.size),
-                    Ok(a) => ArtifactBody::Text(a.content),
+                    Ok(a) => {
+                        view.mtime_ms = Some(a.mtime_ms);
+                        ArtifactBody::Text(a.content)
+                    }
                     Err(e) => ArtifactBody::Failed(e),
                 };
             }
+        }
+        Then::ArtifactWritten { run_id, name } => {
+            if let Err(e) = client::decode::<WriteArtifact>(value) {
+                model.notice = Some(e);
+                return vec![];
+            }
+            if let Some(d) = detail_for(model, &run_id) {
+                d.artifact_draft = None;
+            }
+            model.toast = Some((format!("saved {name}"), model.now_ms + super::TOAST_MS));
+            return reread_artifact(model, &run_id, &name);
         }
         Then::Diff(run_id) => {
             let decoded = client::decode::<GetWorkingDiff>(value);
@@ -327,6 +456,9 @@ pub fn on_reply(model: &mut Model, then: Then, value: Value) -> Vec<Cmd> {
 /// The detail screen's handling of `action`; `None` leaves it to the
 /// global handling (back, quit, help, go to).
 pub fn act(model: &mut Model, action: Action) -> Option<Vec<Cmd>> {
+    if action == Action::Edit {
+        return Some(edit_artifact(model));
+    }
     let d = model.detail.as_mut()?;
     let cmds = match action {
         Action::Back if d.artifact_view.is_some() => {
@@ -436,6 +568,7 @@ fn enter(d: &mut RunDetail) -> Vec<Cmd> {
                 path,
                 body: ArtifactBody::Loading,
                 scroll: 0,
+                mtime_ms: None,
             });
             vec![Cmd::Rpc(Call::new::<StatArtifact>(
                 artifact_ref(d, &name),

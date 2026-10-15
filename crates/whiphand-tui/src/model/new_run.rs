@@ -320,6 +320,11 @@ pub struct NewRun {
     pub job_id: Option<String>,
     /// Another run is going in this workspace, outside a worktree.
     pub workspace_busy: bool,
+    /// Opened from the workflows screen: this workflow's form opens as soon
+    /// as the list and the prefill are in.
+    pub workflow: Option<String>,
+    /// The app state has answered: `memory` is what it is.
+    pub memory_loaded: bool,
 }
 
 #[cfg(test)]

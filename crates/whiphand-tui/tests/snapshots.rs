@@ -524,3 +524,136 @@ fn a_sign_off_over_the_run() {
     chars(&mut model, "Name it lineTotal.");
     snapshot("manual_commenting", &model);
 }
+
+// ------------------------------------------------------------- workflows
+
+fn workflows() -> Model {
+    let mut model = Model::new("/home/dev/shop".into(), now());
+    hello(&mut model);
+    reply(&mut model, Then::Runs, json!([]));
+    chars(&mut model, "gf");
+    let steps = |runner: &str| {
+        json!([
+            { "id": "plan", "runner": runner, "model": "opus", "mode": "interactive", "writes": false,
+              "output": "plan.md", "prompt": "Plan {{ inputs.feature }}" },
+            { "id": "fix", "kind": "loop", "until": "tests", "max_iterations": 3, "steps": [
+                { "id": "execute", "runner": runner, "mode": "headless", "writes": true,
+                  "output": "execute.md", "prompt": "Do it" },
+                { "id": "tests", "kind": "command", "run": "npm test", "verdict": true },
+            ] },
+            { "id": "sign-off", "kind": "approval", "title": "Ship it?", "instructions": "Look first." },
+        ])
+    };
+    reply(
+        &mut model,
+        Then::WorkflowList("/home/dev/shop".into()),
+        json!([
+            { "name": "feature", "path": "/home/dev/shop/.whiphand/workflows/feature.yaml", "source": "project",
+              "workflow": { "name": "feature", "description": "Plan, build and sign off a feature.",
+                "inputs": { "feature": { "required": true, "prompt": "What?" },
+                            "branch": { "required": false, "default": "main" } },
+                "steps": steps("claude") } },
+            { "name": "broken", "path": "/home/dev/shop/.whiphand/workflows/broken.yaml", "source": "project",
+              "error": "step 'plan': runner is required" },
+            { "name": "feature", "path": "/home/dev/.config/whiphand/workflows/feature.yaml", "source": "global",
+              "shadowed": true, "workflow": { "name": "feature", "steps": steps("codex") } },
+        ]),
+    );
+    model
+}
+
+#[test]
+fn the_workflows_and_a_preview() {
+    snapshot("workflows", &workflows());
+}
+
+#[test]
+fn a_draft_that_did_not_pass() {
+    let mut model = workflows();
+    key(&mut model, KeyCode::Char('e'));
+    update(
+        &mut model,
+        Msg::Edited(Ok("name: feature\nsteps: []\n".into())),
+    );
+    reply(
+        &mut model,
+        Then::WorkflowValidated("/home/dev/shop".into()),
+        json!({ "problems": ["a workflow needs at least one step"], "fieldProblems": [
+            { "stepId": "plan", "field": "runner", "phrase": "required", "message": "runner is required" },
+        ] }),
+    );
+    snapshot("workflow_problems", &model);
+}
+
+// -------------------------------------------------------------- settings
+
+fn settings() -> Model {
+    let mut model = Model::new("/home/dev/shop".into(), now());
+    hello(&mut model);
+    model.log_path = Some("/home/dev/.local/share/whiphand/tui.log".into());
+    chars(&mut model, "gs");
+    let config = |retained: Value| {
+        json!({ "defaults": { "runner": "claude" }, "on_findings": "loop", "loop": { "max_iterations": 3 },
+                "artifacts_dir": ".whiphand/runs",
+                "runs": { "max_retained": retained, "auto_name": false, "max_attachment_mb": 25 } })
+    };
+    let global_layer = json!({ "config": { "on_findings": "loop", "runs": { "max_retained": 50 } },
+        "path": "/home/dev/.config/whiphand/config.yaml", "exists": true });
+    reply(
+        &mut model,
+        Then::Config(None),
+        json!({ "config": config(json!(50)), "global": global_layer }),
+    );
+    reply(
+        &mut model,
+        Then::Config(Some("/home/dev/shop".into())),
+        json!({ "config": config(json!(20)), "global": global_layer,
+            "project": { "config": { "runs": { "max_retained": 20 } },
+                         "path": "/home/dev/shop/.whiphand/config.yaml", "exists": true } }),
+    );
+    reply(
+        &mut model,
+        Then::Models,
+        json!({
+            "claude": { "source": "live", "models": [
+                { "id": "opus", "label": "Opus", "resolves": "claude-opus-5-5" },
+                { "id": "sonnet", "label": "Sonnet" } ] },
+            "codex": { "source": "fallback", "note": "codex is not signed in; showing the built-in list",
+                       "models": [{ "id": "gpt-5" }] },
+            "copilot": { "source": "unavailable", "models": [] },
+        }),
+    );
+    model
+}
+
+#[test]
+fn every_settings_pane() {
+    let mut model = settings();
+    snapshot("settings_workspace", &model);
+    key(&mut model, KeyCode::Tab);
+    snapshot("settings_global", &model);
+    key(&mut model, KeyCode::Tab);
+    snapshot("settings_tui", &model);
+    key(&mut model, KeyCode::Tab);
+    snapshot("settings_models", &model);
+}
+
+#[test]
+fn opening_a_folder_by_its_path() {
+    let mut model = Model::without_workspace(now());
+    hello(&mut model);
+    reply(&mut model, Then::AppState, app_state(json!([])));
+    key(&mut model, KeyCode::Char('a'));
+    chars(&mut model, "~/src/shop");
+    snapshot("workspaces_open_path", &model);
+}
+
+#[test]
+fn the_help_overlay_scrolled() {
+    let mut model = busy();
+    key(&mut model, KeyCode::Char('?'));
+    for _ in 0..12 {
+        key(&mut model, KeyCode::Char('j'));
+    }
+    snapshot("help_scrolled", &model);
+}

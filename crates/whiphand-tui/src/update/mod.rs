@@ -7,6 +7,8 @@ pub mod attach;
 pub mod detail;
 pub mod manual;
 pub mod new_run;
+pub mod settings;
+pub mod workflows;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use serde_json::Value;
@@ -20,7 +22,7 @@ use crate::client::{
 };
 use crate::cmd::{Cmd, Notice, Then};
 use crate::model::log::LogEntry;
-use crate::model::{Ask, Dialog, JOB_LOG_CAP, Job, Model, Route};
+use crate::model::{Ask, Dialog, EditTarget, JOB_LOG_CAP, Job, Model, Route};
 use crate::msg::Msg;
 use crate::view::keymap::{self, Action};
 
@@ -85,13 +87,12 @@ pub fn init(model: &Model) -> Vec<Cmd> {
         Cmd::Rpc(Call::new::<Hello>(p::Empty {}, Then::Hello)),
         Cmd::Rpc(Call::new::<ListJobs>(p::Empty {}, Then::Jobs)),
     ];
-    match &model.workdir {
-        Some(workdir) => {
-            cmds.insert(1, touch(workdir));
-            cmds.push(list_runs(workdir));
-        }
-        None => cmds.push(get_app_state()),
+    if let Some(workdir) = &model.workdir {
+        cmds.insert(1, touch(workdir));
+        cmds.push(list_runs(workdir));
     }
+    // The workspaces screen's list, and the TUI's preferences.
+    cmds.push(get_app_state());
     cmds
 }
 
@@ -122,9 +123,13 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             match result {
                 Ok(value) => on_reply(model, then, value),
                 Err(e) => {
+                    if let Then::ArtifactWritten { run_id, name } = &then {
+                        return detail::on_write_refused(model, run_id, name, &e.message);
+                    }
                     if !detail::on_error(model, &then, &e.message)
                         && !new_run::on_error(model, &then, &e.message)
                         && !manual::on_error(model, &then, &e.message)
+                        && !workflows::on_error(model, &then, &e.message)
                     {
                         model.notice = Some(e.message);
                     }
@@ -141,6 +146,13 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         }
         Msg::Edited(result) => {
             model.dirty = true;
+            match model.edit_target.take() {
+                Some(EditTarget::Workflow) => return workflows::on_edited(model, result),
+                Some(target @ EditTarget::Artifact { .. }) => {
+                    return detail::on_artifact_edited(model, target, result);
+                }
+                None => {}
+            }
             match result {
                 Ok(text) => {
                     // Editors end the file with a newline the field never had.
@@ -180,8 +192,7 @@ fn on_key(model: &mut Model, key: KeyEvent) -> Vec<Cmd> {
         return actions::on_dialog_key(model, &key);
     }
     if model.help {
-        model.help = false;
-        return vec![];
+        return help_key(model, &key);
     }
     if manual::editing(model) && *model.screen() == Route::Manual {
         return manual::edit_key(model, &key);
@@ -242,12 +253,23 @@ fn act(model: &mut Model, action: Action) -> Vec<Cmd> {
     {
         return cmds;
     }
+    if *model.screen() == Route::Workflows
+        && let Some(cmds) = workflows::act(model, action)
+    {
+        return cmds;
+    }
+    if *model.screen() == Route::Settings
+        && let Some(cmds) = settings::act(model, action)
+    {
+        return cmds;
+    }
     if let Some(cmds) = actions::act(model, action) {
         return cmds;
     }
     match action {
         Action::Help => {
             model.help = true;
+            model.help_scroll = 0;
             vec![]
         }
         Action::Back => back(model),
@@ -285,6 +307,16 @@ fn act(model: &mut Model, action: Action) -> Vec<Cmd> {
             model.manual = None;
             model.doctor.rows = None;
             vec![doctor(model)]
+        }
+        Action::GoWorkflows => workflows::open(model),
+        Action::GoSettings => settings::open(model),
+        Action::OpenPath => {
+            model.dialog = Some(Dialog::Prompt {
+                label: "Open the folder".into(),
+                input: crate::model::input::Input::new("", false),
+                ask: Ask::OpenPath,
+            });
+            vec![]
         }
         Action::Down => movement(model, 1),
         Action::Up => movement(model, -1),
@@ -366,7 +398,7 @@ fn movement(model: &mut Model, delta: i64) -> Vec<Cmd> {
             let d = &mut model.doctor;
             d.scroll = (i64::from(d.scroll) + delta).clamp(0, i64::from(u16::MAX)) as u16;
         }
-        Route::RunDetail | Route::NewRun | Route::Manual => {}
+        Route::RunDetail | Route::NewRun | Route::Manual | Route::Workflows | Route::Settings => {}
     }
     vec![]
 }
@@ -419,6 +451,65 @@ fn quit(model: &mut Model) -> Vec<Cmd> {
     } else {
         vec![Cmd::Quit]
     }
+}
+
+/// A key while the `?` overlay is up: the movement keys scroll it, any
+/// other closes it.
+fn help_key(model: &mut Model, key: &KeyEvent) -> Vec<Cmd> {
+    let delta: i64 = match keymap::action(model.screen(), false, key) {
+        Some(Action::Down) => 1,
+        Some(Action::Up) => -1,
+        Some(Action::PageDown) => PAGE as i64,
+        Some(Action::PageUp) => -(PAGE as i64),
+        Some(Action::Top) => -i64::from(model.help_scroll),
+        _ => {
+            model.help = false;
+            return vec![];
+        }
+    };
+    model.help_scroll = (i64::from(model.help_scroll) + delta).clamp(0, 500) as u16;
+    vec![]
+}
+
+/// A folder typed on the workspaces screen, made absolute against where the
+/// TUI started; `~` is the home folder.
+pub fn resolve_path(model: &Model, typed: &str) -> Option<String> {
+    use whiphand_core::node_path;
+    let typed = typed.trim();
+    if typed.is_empty() {
+        return None;
+    }
+    let home = model.home.as_deref();
+    let expanded = match typed.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with(['/', '\\']) => {
+            node_path::join(&[home?, rest])
+        }
+        _ => typed.to_string(),
+    };
+    let path = if node_path::is_absolute(&expanded) {
+        node_path::normalize(&expanded)
+    } else {
+        node_path::join(&[model.cwd.as_deref()?, &expanded])
+    };
+    // `a/` is `a`, as the recents list spells it; a root stays a root.
+    let trimmed = path.trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() || trimmed.ends_with(':') {
+        return Some(path);
+    }
+    Some(trimmed.to_string())
+}
+
+/// The typed folder: touched first, so one that is not there is refused
+/// before the TUI leaves the workspace it is on.
+pub fn open_path(model: &mut Model, typed: &str) -> Vec<Cmd> {
+    let Some(path) = resolve_path(model, typed) else {
+        model.notice = Some("type a folder's path".into());
+        return vec![];
+    };
+    vec![Cmd::Rpc(Call::new::<TouchRecentWorkspace>(
+        p::TouchRecentWorkspaceParams { path: path.clone() },
+        Then::OpenedPath(path),
+    ))]
 }
 
 fn on_tick(model: &mut Model, now_ms: f64) -> Vec<Cmd> {
@@ -528,11 +619,11 @@ fn on_notification(model: &mut Model, n: Notification) -> Vec<Cmd> {
         Notification::PtyStarted(s) => {
             let job = model
                 .jobs
-                .entry(s.job_id)
+                .entry(s.job_id.clone())
                 .or_insert_with(|| Job::new(JobStatus::Running));
             job.pty.started(&s.step_id, s.cols, s.rows);
             model.dirty = true;
-            vec![]
+            attach::auto(model, &s.job_id)
         }
         Notification::PtyData(d) => {
             let Some(job) = model.jobs.get_mut(&d.job_id) else {
@@ -629,6 +720,7 @@ fn on_notification(model: &mut Model, n: Notification) -> Vec<Cmd> {
         Notification::AppStateChanged(state) => {
             new_run::on_app_state(model, &state.workspaces);
             model.workspaces.set(state.recent_workspaces);
+            model.prefs = state.tui.unwrap_or_default();
             model.dirty |= *model.screen() == Route::Workspaces;
             vec![]
         }
@@ -662,6 +754,8 @@ fn on_reply(model: &mut Model, then: Then, value: Value) -> Vec<Cmd> {
     let value = match actions::on_reply(model, &then, value)
         .or_else(|value| new_run::on_reply(model, &then, value))
         .or_else(|value| manual::on_reply(model, &then, value))
+        .or_else(|value| workflows::on_reply(model, &then, value))
+        .or_else(|value| settings::on_reply(model, &then, value))
     {
         Ok(cmds) => return cmds,
         Err(value) => value,
@@ -680,6 +774,7 @@ fn on_reply(model: &mut Model, then: Then, value: Value) -> Vec<Cmd> {
             Err(e) => model.fatal = Some(e),
         },
         Then::Touched | Then::PtyAck => {}
+        Then::OpenedPath(path) => return switch_workspace(model, path),
         Then::Runs => match client::decode::<ListRuns>(value) {
             Ok(runs) => {
                 let was_foreign: Vec<String> = model
@@ -722,6 +817,7 @@ fn on_reply(model: &mut Model, then: Then, value: Value) -> Vec<Cmd> {
             Ok(state) => {
                 new_run::on_app_state(model, &state.workspaces);
                 model.workspaces.set(state.recent_workspaces);
+                model.prefs = state.tui.unwrap_or_default();
             }
             Err(e) => model.notice = Some(e),
         },

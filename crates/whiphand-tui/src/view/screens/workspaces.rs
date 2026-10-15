@@ -13,8 +13,8 @@ pub fn render(model: &Model, frame: &mut Frame, area: Rect) {
     let block = Block::bordered().title(" Workspaces ");
     if ws.recents.is_empty() {
         let text = if ws.loaded {
-            "No recent workspaces. Start with `whiphand tui -C <folder>` in a folder that has .whiphand/ \
-             (`whiphand init` makes one)."
+            "No recent workspaces. a opens a folder by its path; if it has no .whiphand/ yet, \
+             g f and then i set it up."
         } else {
             "Loading…"
         };

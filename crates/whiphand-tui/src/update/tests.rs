@@ -79,7 +79,13 @@ fn starts_with_hello_then_the_workspace() {
     let model = Model::new("/w".into(), 0.0);
     assert_eq!(
         methods(&init(&model)),
-        ["hello", "touchRecentWorkspace", "listJobs", "listRuns"]
+        [
+            "hello",
+            "touchRecentWorkspace",
+            "listJobs",
+            "listRuns",
+            "getAppState"
+        ]
     );
     // No workspace yet: the recents to pick one from.
     let model = Model::without_workspace(0.0);
@@ -857,7 +863,8 @@ fn ctrl_e_hands_the_field_to_the_editor() {
     assert_eq!(
         update(&mut model, ctrl('e')),
         [Cmd::Suspend(External::Editor {
-            text: "draft".into()
+            text: "draft".into(),
+            suffix: ".md",
         })]
     );
     update(&mut model, Msg::Edited(Ok("line one\nline two\n".into())));
@@ -1135,4 +1142,608 @@ fn delete_says_the_worktree_is_kept_while_another_run_uses_it() {
         question.contains("worktree is kept (used by run r2)"),
         "{question}"
     );
+}
+
+// ------------------------------------------------------------ workflows
+
+fn typed_in_dialog(model: &mut Model, text: &str) {
+    for c in text.chars() {
+        update(model, key(c));
+    }
+}
+
+fn workflow_entry(name: &str, source: &str) -> Value {
+    json!({ "name": name, "path": format!("/w/.whiphand/workflows/{name}.yaml"), "source": source,
+            "workflow": { "name": name, "steps": [] } })
+}
+
+/// The workflows screen on `/w`, listing `entries`.
+fn workflows_on(entries: Value) -> Model {
+    let mut model = Model::new("/w".into(), 0.0);
+    update(&mut model, key('g'));
+    let cmds = update(&mut model, key('f'));
+    assert_eq!(methods(&cmds), ["listWorkflows"]);
+    assert_eq!(*model.screen(), Route::Workflows);
+    update(
+        &mut model,
+        Msg::Reply(Then::WorkflowList("/w".into()), Ok(entries)),
+    );
+    model
+}
+
+fn sent_params(cmds: &[Cmd], method: &str) -> Value {
+    cmds.iter()
+        .find_map(|c| match c {
+            Cmd::Rpc(call) if call.method == method => Some(call.params.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no {method} in {cmds:?}"))
+}
+
+fn rpc_then(cmds: &[Cmd], method: &str) -> Then {
+    cmds.iter()
+        .find_map(|c| match c {
+            Cmd::Rpc(call) if call.method == method => Some(call.then.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no {method} in {cmds:?}"))
+}
+
+#[test]
+fn an_edit_is_validated_before_it_is_saved_and_a_failing_draft_is_kept() {
+    let mut model = workflows_on(json!([workflow_entry("feature", "project")]));
+    assert_eq!(
+        update(&mut model, key('e')),
+        [Cmd::Suspend(External::EditFile {
+            path: "/w/.whiphand/workflows/feature.yaml".into()
+        })]
+    );
+    // YAML that does not parse is said at once; nothing is asked.
+    assert!(update(&mut model, Msg::Edited(Ok("steps: [".into()))).is_empty());
+    let edit = model.workflows.edit.as_ref().unwrap();
+    assert!(edit.problems[0].starts_with("not valid YAML"), "{edit:?}");
+    // The next e edits the draft, not the file.
+    assert_eq!(
+        update(&mut model, key('e')),
+        [Cmd::Suspend(External::Editor {
+            text: "steps: [".into(),
+            suffix: ".yaml"
+        })]
+    );
+    let draft = "name: feature\nsteps: []\n";
+    let cmds = update(&mut model, Msg::Edited(Ok(draft.into())));
+    assert_eq!(
+        sent_params(&cmds, "validateWorkflow"),
+        json!({ "draft": { "name": "feature", "steps": [] } })
+    );
+    let validated = rpc_then(&cmds, "validateWorkflow");
+    let cmds = update(
+        &mut model,
+        Msg::Reply(
+            validated.clone(),
+            Ok(
+                json!({ "problems": ["at least one step"], "fieldProblems": [
+                { "stepId": "plan", "field": "runner", "phrase": "x", "message": "is required" },
+            ] }),
+            ),
+        ),
+    );
+    assert!(cmds.is_empty());
+    let edit = model.workflows.edit.as_ref().unwrap();
+    assert_eq!(
+        edit.problems,
+        ["plan · runner: is required", "at least one step"]
+    );
+    assert_eq!(edit.text.as_deref(), Some(draft));
+    // Passing, it is saved under its file's name and scope.
+    let workflow = json!({ "name": "feature", "steps": [{ "id": "a" }] });
+    let cmds = update(
+        &mut model,
+        Msg::Reply(
+            validated,
+            Ok(json!({ "workflow": workflow, "problems": [], "fieldProblems": [] })),
+        ),
+    );
+    assert_eq!(
+        sent_params(&cmds, "updateWorkflow"),
+        json!({ "workdir": "/w", "name": "feature", "workflow": workflow, "scope": "project" })
+    );
+    let cmds = update(
+        &mut model,
+        Msg::Reply(
+            Then::WorkflowSaved("/w".into()),
+            Ok(json!({ "path": "/w/.whiphand/workflows/feature.yaml" })),
+        ),
+    );
+    assert_eq!(methods(&cmds), ["listWorkflows"]);
+    assert!(model.workflows.edit.is_none());
+    assert!(model.toast.as_ref().unwrap().0.starts_with("saved"));
+}
+
+#[test]
+fn a_refused_save_keeps_the_draft_and_esc_drops_it() {
+    let mut model = workflows_on(json!([workflow_entry("feature", "global")]));
+    update(&mut model, key('e'));
+    update(&mut model, Msg::Edited(Ok("name: feature\n".into())));
+    update(
+        &mut model,
+        Msg::Reply(
+            Then::WorkflowSaved("/w".into()),
+            Err(RpcError {
+                code: -32000,
+                message: "disk full".into(),
+                data: None,
+            }),
+        ),
+    );
+    assert_eq!(
+        model.workflows.edit.as_ref().unwrap().problems,
+        ["disk full"]
+    );
+    update(&mut model, code(KeyCode::Esc));
+    assert!(model.workflows.edit.is_none());
+    assert_eq!(
+        *model.screen(),
+        Route::Workflows,
+        "Esc dropped the draft only"
+    );
+    // An editor that would not start loses nothing worth keeping.
+    update(&mut model, key('e'));
+    update(&mut model, Msg::Edited(Err("no editor".into())));
+    assert!(model.workflows.edit.is_none());
+    assert_eq!(model.notice.as_deref(), Some("no editor"));
+}
+
+#[test]
+fn new_clone_and_delete_ask_then_call_the_agent() {
+    let mut model = workflows_on(json!([
+        workflow_entry("feature", "project"),
+        workflow_entry("feature", "global"),
+    ]));
+    update(&mut model, key('n'));
+    typed_in_dialog(&mut model, "bugfix");
+    let cmds = update(&mut model, code(KeyCode::Enter));
+    assert_eq!(
+        sent_params(&cmds, "createWorkflow"),
+        json!({ "workdir": "/w", "name": "bugfix", "scope": "project" })
+    );
+    // Made, it opens in the editor at once.
+    let cmds = update(
+        &mut model,
+        Msg::Reply(
+            rpc_then(&cmds, "createWorkflow"),
+            Ok(json!({ "path": "/w/.whiphand/workflows/bugfix.yaml" })),
+        ),
+    );
+    assert_eq!(methods(&cmds), ["listWorkflows", "suspend"]);
+    assert_eq!(model.workflows.edit.as_ref().unwrap().name, "bugfix");
+    update(&mut model, Msg::Edited(Err("no editor".into())));
+
+    update(&mut model, key('N'));
+    typed_in_dialog(&mut model, "mine");
+    let cmds = update(&mut model, code(KeyCode::Enter));
+    assert_eq!(sent_params(&cmds, "createWorkflow")["scope"], "global");
+
+    update(&mut model, key('c'));
+    let Some(Dialog::Prompt { input, .. }) = &model.dialog else {
+        panic!("{:?}", model.dialog)
+    };
+    assert_eq!(input.text(), "feature-copy");
+    let cmds = update(&mut model, code(KeyCode::Enter));
+    assert_eq!(
+        sent_params(&cmds, "cloneWorkflow"),
+        json!({ "workdir": "/w", "name": "feature", "newName": "feature-copy", "scope": "project" })
+    );
+
+    update(&mut model, key('x'));
+    let Some(Dialog::Confirm { question, .. }) = &model.dialog else {
+        panic!()
+    };
+    assert!(
+        question.contains("The global feature takes its place"),
+        "{question}"
+    );
+    let cmds = update(&mut model, key('y'));
+    assert_eq!(
+        sent_params(&cmds, "deleteWorkflow"),
+        json!({ "workdir": "/w", "name": "feature", "scope": "project" })
+    );
+}
+
+#[test]
+fn setup_is_offered_and_run_opens_the_form_on_the_workflow() {
+    let mut model = workflows_on(json!([workflow_entry("feature", "global")]));
+    assert!(model.workflows.needs_setup());
+    let cmds = update(&mut model, key('i'));
+    assert_eq!(
+        sent_params(&cmds, "initWorkspace"),
+        json!({ "workdir": "/w" })
+    );
+    let cmds = update(
+        &mut model,
+        Msg::Reply(
+            Then::WorkspaceInit("/w".into()),
+            Ok(json!({ "created": ["a", "b"] })),
+        ),
+    );
+    assert_eq!(methods(&cmds), ["listWorkflows"]);
+
+    let cmds = update(&mut model, key('r'));
+    assert_eq!(methods(&cmds), ["listWorkflows", "getAppState"]);
+    assert_eq!(*model.screen(), Route::NewRun);
+    let generation = model.new_run.as_ref().unwrap().generation;
+    let list = json!([
+        { "name": "other", "path": "/w/o.yaml", "source": "project", "workflow": {
+            "name": "other", "steps": [{ "id": "s", "kind": "command", "run": "true" }] } },
+        { "name": "feature", "path": "/g/feature.yaml", "source": "global", "workflow": {
+            "name": "feature", "steps": [{ "id": "s", "kind": "command", "run": "true" }] } },
+    ]);
+    update(
+        &mut model,
+        Msg::Reply(Then::Workflows(generation), Ok(list)),
+    );
+    assert!(
+        model.new_run.as_ref().unwrap().form.is_none(),
+        "waits for the prefill"
+    );
+    update(
+        &mut model,
+        Msg::Reply(
+            Then::AppState,
+            Ok(
+                json!({ "schemaVersion": 1, "recentWorkspaces": [], "window": null, "lastPage": null,
+                "theme": "system", "workspaces": {}, "runsRetention": { "maxPerWorkspace": 0 },
+                "showOngoingRuns": true, "editor": { "kind": "vscode" } }),
+            ),
+        ),
+    );
+    let form = model
+        .new_run
+        .as_ref()
+        .unwrap()
+        .form
+        .as_ref()
+        .expect("the form");
+    assert_eq!(form.entry.name, "feature");
+    // Back goes to the picker, then to the workflows.
+    update(&mut model, code(KeyCode::Esc));
+    update(&mut model, code(KeyCode::Esc));
+    assert_eq!(*model.screen(), Route::Workflows);
+}
+
+#[test]
+fn a_workflows_reply_for_a_workspace_left_behind_is_dropped() {
+    let mut model = workflows_on(json!([]));
+    model.workdir = Some("/other".into());
+    update(
+        &mut model,
+        Msg::Reply(
+            Then::WorkflowList("/w".into()),
+            Ok(json!([workflow_entry("feature", "project")])),
+        ),
+    );
+    assert_eq!(model.workflows.list.as_ref().unwrap().len(), 0);
+}
+
+// ------------------------------------------------------------- settings
+
+fn config(runner: &str, retained: Value) -> Value {
+    json!({ "defaults": { "runner": runner }, "on_findings": "report", "loop": { "max_iterations": 3 },
+            "artifacts_dir": ".whiphand/runs",
+            "runs": { "max_retained": retained, "auto_name": false, "max_attachment_mb": 25 } })
+}
+
+/// The settings screen on `/w`: global retention 50, the workspace's own 10.
+fn settings_on() -> Model {
+    let mut model = Model::new("/w".into(), 0.0);
+    update(&mut model, key('g'));
+    let cmds = update(&mut model, key('s'));
+    assert_eq!(methods(&cmds), ["configGet", "configGet", "listModels"]);
+    let global = json!({ "config": config("claude", json!(50)),
+        "global": { "config": { "runs": { "max_retained": 50 } }, "path": "/h/config.yaml", "exists": true } });
+    update(&mut model, Msg::Reply(Then::Config(None), Ok(global)));
+    let project = json!({ "config": config("claude", json!(10)),
+        "global": { "config": { "runs": { "max_retained": 50 } }, "path": "/h/config.yaml", "exists": true },
+        "project": { "config": { "runs": { "max_retained": 10 } }, "path": "/w/.whiphand/config.yaml", "exists": true } });
+    update(
+        &mut model,
+        Msg::Reply(Then::Config(Some("/w".into())), Ok(project)),
+    );
+    update(
+        &mut model,
+        Msg::Reply(
+            Then::Models,
+            Ok(json!({ "claude": { "source": "live", "models": [] },
+            "codex": { "source": "fallback", "models": [] } })),
+        ),
+    );
+    model
+}
+
+#[test]
+fn a_choice_saves_at_once_keeping_the_retention_override() {
+    let mut model = settings_on();
+    // Default runner: the next runner listModels knows.
+    let cmds = update(&mut model, code(KeyCode::Enter));
+    let sent = sent_params(&cmds, "configSet");
+    assert_eq!(sent["config"]["defaults"]["runner"], "codex");
+    assert_eq!(sent["workdir"], "/w");
+    assert_eq!(sent["scope"], "project");
+    // The workspace overrides retention: saving another row keeps that.
+    assert_eq!(sent["explicitKeys"], json!(["runs.max_retained"]));
+    assert_eq!(
+        rpc_then(&cmds, "configSet"),
+        Then::ConfigSaved { prune: None }
+    );
+    let cmds = update(
+        &mut model,
+        Msg::Reply(Then::ConfigSaved { prune: None }, Ok(json!({ "ok": true }))),
+    );
+    assert_eq!(methods(&cmds), ["configGet", "configGet"]);
+
+    update(&mut model, key('j'));
+    let cmds = update(&mut model, code(KeyCode::Enter));
+    assert_eq!(
+        sent_params(&cmds, "configSet")["config"]["on_findings"],
+        "loop"
+    );
+}
+
+#[test]
+fn lowering_the_maximum_prunes_and_u_inherits_the_global_value() {
+    let mut model = settings_on();
+    for _ in 0..4 {
+        update(&mut model, key('j'));
+    }
+    update(&mut model, code(KeyCode::Enter));
+    let Some(Dialog::Prompt { input, .. }) = &model.dialog else {
+        panic!()
+    };
+    assert_eq!(input.text(), "10");
+    for _ in 0..2 {
+        update(&mut model, code(KeyCode::Backspace));
+    }
+    // Not a number: asked again.
+    typed_in_dialog(&mut model, "x");
+    assert!(update(&mut model, code(KeyCode::Enter)).is_empty());
+    assert!(model.dialog.is_some());
+    update(&mut model, code(KeyCode::Backspace));
+    typed_in_dialog(&mut model, "5");
+    let cmds = update(&mut model, code(KeyCode::Enter));
+    assert_eq!(
+        sent_params(&cmds, "configSet")["config"]["runs"]["max_retained"],
+        5
+    );
+    let saved = rpc_then(&cmds, "configSet");
+    assert_eq!(saved, Then::ConfigSaved { prune: Some(5) });
+    let cmds = update(&mut model, Msg::Reply(saved, Ok(json!({ "ok": true }))));
+    assert_eq!(
+        sent_params(&cmds, "pruneRuns"),
+        json!({ "workdir": "/w", "max": 5 })
+    );
+    update(
+        &mut model,
+        Msg::Reply(Then::Pruned, Ok(json!({ "deleted": ["r1", "r2"] }))),
+    );
+    assert_eq!(model.toast.as_ref().unwrap().0, "pruned 2 runs");
+
+    // u: the global 50, and no longer an explicit override.
+    let cmds = update(&mut model, key('u'));
+    let sent = sent_params(&cmds, "configSet");
+    assert_eq!(sent["config"]["runs"]["max_retained"], 50);
+    assert!(sent.get("explicitKeys").is_none(), "{sent}");
+    // P asks before pruning to the workspace's limit.
+    update(&mut model, key('P'));
+    assert!(matches!(
+        model.dialog,
+        Some(Dialog::Confirm {
+            ask: Ask::Prune { max: 10 },
+            ..
+        })
+    ));
+    assert_eq!(methods(&update(&mut model, key('y'))), ["pruneRuns"]);
+}
+
+#[test]
+fn the_global_pane_writes_the_global_layer() {
+    let mut model = settings_on();
+    update(&mut model, code(KeyCode::Tab));
+    for _ in 0..4 {
+        update(&mut model, key('j'));
+    }
+    update(&mut model, code(KeyCode::Enter));
+    for _ in 0..2 {
+        update(&mut model, code(KeyCode::Backspace));
+    }
+    typed_in_dialog(&mut model, "all");
+    let cmds = update(&mut model, code(KeyCode::Enter));
+    let sent = sent_params(&cmds, "configSet");
+    assert_eq!(sent["scope"], "global");
+    assert!(sent.get("workdir").is_none());
+    assert_eq!(sent["config"]["runs"]["max_retained"], Value::Null);
+    // The workspace has its own limit: a global one does not prune it.
+    assert_eq!(
+        rpc_then(&cmds, "configSet"),
+        Then::ConfigSaved { prune: None }
+    );
+    update(&mut model, key('u'));
+    assert!(model.notice.is_some(), "nothing above the global layer");
+}
+
+#[test]
+fn the_tui_pane_saves_its_preferences_in_app_state() {
+    let mut model = settings_on();
+    update(&mut model, code(KeyCode::Tab));
+    update(&mut model, code(KeyCode::Tab));
+    let cmds = update(&mut model, code(KeyCode::Enter));
+    assert_eq!(
+        sent_params(&cmds, "setUiState"),
+        json!({ "tui": { "attachAuto": true } })
+    );
+    update(&mut model, key('j'));
+    let cmds = update(&mut model, code(KeyCode::Enter));
+    assert_eq!(
+        sent_params(&cmds, "setUiState"),
+        json!({ "tui": { "attachAuto": true, "detachKey": "ctrl-backslash" } })
+    );
+    assert_eq!(model.detach_key().byte(), 0x1c);
+    // What the app state says wins, as another process may have set it.
+    update(
+        &mut model,
+        Msg::Reply(
+            Then::AppState,
+            Ok(
+                json!({ "schemaVersion": 1, "recentWorkspaces": [], "window": null, "lastPage": null,
+                "theme": "system", "workspaces": {}, "runsRetention": { "maxPerWorkspace": 0 },
+                "showOngoingRuns": true, "editor": { "kind": "vscode" } }),
+            ),
+        ),
+    );
+    assert_eq!(model.prefs, p::TuiPreferences::default());
+}
+
+// ------------------------------------------------- artifacts, paths, help
+
+#[test]
+fn an_artifact_edit_is_written_only_if_unchanged_on_disk_and_kept_if_refused() {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "succeeded" }));
+    update(
+        &mut model,
+        Msg::Reply(
+            Then::Run("r1".into()),
+            Ok(json!({ "runId": "r1", "status": "succeeded",
+                "artifacts": [{ "name": "plan.md", "path": "/w/.whiphand/runs/r1/plan.md" }] })),
+        ),
+    );
+    update(&mut model, key('3'));
+    update(&mut model, code(KeyCode::Enter));
+    let read = Then::Artifact {
+        run_id: "r1".into(),
+        name: "plan.md".into(),
+    };
+    update(
+        &mut model,
+        Msg::Reply(
+            read,
+            Ok(json!({ "content": "# Plan\n", "size": 7, "mtimeMs": 42.0 })),
+        ),
+    );
+    assert_eq!(
+        update(&mut model, key('e')),
+        [Cmd::Suspend(External::Editor {
+            text: "# Plan\n".into(),
+            suffix: ".md"
+        })]
+    );
+    // Unchanged: nothing is written.
+    assert!(update(&mut model, Msg::Edited(Ok("# Plan\n".into()))).is_empty());
+    update(&mut model, key('e'));
+    let cmds = update(&mut model, Msg::Edited(Ok("# Plan v2\n".into())));
+    assert_eq!(
+        sent_params(&cmds, "writeArtifact"),
+        json!({ "workdir": "/w", "runId": "r1", "name": "plan.md", "content": "# Plan v2\n",
+                "expectedMtimeMs": 42.0 })
+    );
+    let refused = update(
+        &mut model,
+        Msg::Reply(
+            rpc_then(&cmds, "writeArtifact"),
+            Err(RpcError {
+                code: -32000,
+                message: "artifact 'plan.md' changed on disk since it was read".into(),
+                data: None,
+            }),
+        ),
+    );
+    assert_eq!(methods(&refused), ["statArtifact"]);
+    assert!(
+        model
+            .notice
+            .as_ref()
+            .unwrap()
+            .contains("e opens your edit again")
+    );
+    let read = Then::Artifact {
+        run_id: "r1".into(),
+        name: "plan.md".into(),
+    };
+    update(
+        &mut model,
+        Msg::Reply(
+            read,
+            Ok(json!({ "content": "# Plan (run)\n", "size": 13, "mtimeMs": 43.0 })),
+        ),
+    );
+    let cmds = update(&mut model, key('e'));
+    assert_eq!(
+        cmds,
+        [Cmd::Suspend(External::Editor {
+            text: "# Plan v2\n".into(),
+            suffix: ".md"
+        })]
+    );
+    let cmds = update(&mut model, Msg::Edited(Ok("# Plan v3\n".into())));
+    assert_eq!(sent_params(&cmds, "writeArtifact")["expectedMtimeMs"], 43.0);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_typed_path_is_resolved_against_the_start_folder_and_home() {
+    let mut model = Model::without_workspace(0.0);
+    model.cwd = Some("/home/u/src".into());
+    model.home = Some("/home/u".into());
+    assert_eq!(resolve_path(&model, "~/w/").as_deref(), Some("/home/u/w"));
+    assert_eq!(resolve_path(&model, "~").as_deref(), Some("/home/u"));
+    assert_eq!(
+        resolve_path(&model, "app").as_deref(),
+        Some("/home/u/src/app")
+    );
+    assert_eq!(resolve_path(&model, "/x/../y").as_deref(), Some("/y"));
+    assert_eq!(resolve_path(&model, "/").as_deref(), Some("/"));
+    assert_eq!(
+        resolve_path(&model, "~x").as_deref(),
+        Some("/home/u/src/~x")
+    );
+    assert_eq!(resolve_path(&model, "  "), None);
+}
+
+#[test]
+fn a_typed_folder_opens_once_the_agent_has_it() {
+    let mut model = Model::without_workspace(0.0);
+    model.cwd = Some(std::env::temp_dir().to_string_lossy().into_owned());
+    update(&mut model, key('a'));
+    typed_in_dialog(&mut model, "proj");
+    let cmds = update(&mut model, code(KeyCode::Enter));
+    let path = sent_params(&cmds, "touchRecentWorkspace")["path"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(path.ends_with("proj"));
+    assert!(
+        model.workdir.is_none(),
+        "not before the agent says it is a folder"
+    );
+    let cmds = update(
+        &mut model,
+        Msg::Reply(
+            Then::OpenedPath(path.clone()),
+            Ok(json!({ "recentWorkspaces": [] })),
+        ),
+    );
+    assert_eq!(methods(&cmds), ["touchRecentWorkspace", "listRuns"]);
+    assert_eq!(model.workdir.as_deref(), Some(path.as_str()));
+}
+
+#[test]
+fn the_help_overlay_scrolls_with_the_movement_keys() {
+    let mut model = Model::new("/w".into(), 0.0);
+    update(&mut model, key('?'));
+    update(&mut model, key('j'));
+    update(&mut model, code(KeyCode::PageDown));
+    assert!(model.help);
+    assert_eq!(model.help_scroll, 1 + PAGE as u16);
+    update(&mut model, code(KeyCode::Home));
+    assert_eq!(model.help_scroll, 0);
+    update(&mut model, key('x'));
+    assert!(!model.help);
 }

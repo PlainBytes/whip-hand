@@ -26,10 +26,12 @@ pub fn view(model: &Model, frame: &mut Frame) {
         Route::Doctor => screens::doctor::render(model, frame, body),
         Route::NewRun => screens::new_run::render(model, frame, body),
         Route::Manual => screens::manual::render(model, frame, body),
+        Route::Workflows => screens::workflows::render(model, frame, body),
+        Route::Settings => screens::settings::render(model, frame, body),
     }
     frame.render_widget(footer_line(model), footer);
     if model.help {
-        widgets::help::render(frame, body, model.screen());
+        widgets::help::render(frame, body, model.screen(), model.help_scroll);
     }
     if model.no_color {
         theme::strip_colour(frame.buffer_mut());

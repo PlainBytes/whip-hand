@@ -66,9 +66,12 @@ pub fn render(model: &Model, frame: &mut Frame, area: Rect) {
         } else if model.runs_ui.ongoing {
             "Nothing is running in any recent workspace."
         } else {
-            "No runs in this workspace yet."
+            "No runs in this workspace yet. n starts one; g f lists the workflows (i there sets up a new workspace)."
         };
-        frame.render_widget(Paragraph::new(text).style(theme::dim()).block(block), area);
+        let p = Paragraph::new(text)
+            .style(theme::dim())
+            .wrap(ratatui::widgets::Wrap { trim: true });
+        frame.render_widget(p.block(block), area);
         return;
     }
     let ongoing = model.runs_ui.ongoing;

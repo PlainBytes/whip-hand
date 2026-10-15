@@ -57,7 +57,7 @@ pub fn command(what: &External) -> Command {
             cmd.arg("diff").current_dir(Path::new(cwd));
             cmd
         }
-        External::Editor { .. } => {
+        External::Editor { .. } | External::EditFile { .. } => {
             let (program, args) = editor();
             let mut cmd = Command::new(program);
             cmd.args(args);
@@ -81,10 +81,10 @@ fn editor() -> (String, Vec<String>) {
 /// Hands `text` to the editor in a temporary file and reads it back. The
 /// file has a random name, is created exclusively and only its owner can
 /// read it: the text may be a review nobody else should see.
-pub fn edit(terminal: &mut Term, text: &str, log: &Path) -> Result<String, String> {
+pub fn edit(terminal: &mut Term, text: &str, suffix: &str, log: &Path) -> Result<String, String> {
     let mut file = tempfile::Builder::new()
         .prefix("whiphand-tui-")
-        .suffix(".md")
+        .suffix(suffix)
         .tempfile()
         .map_err(|e| format!("could not make a file to edit: {e}"))?;
     file.write_all(text.as_bytes())
@@ -92,6 +92,7 @@ pub fn edit(terminal: &mut Term, text: &str, log: &Path) -> Result<String, Strin
         .map_err(|e| format!("could not write {}: {e}", file.path().display()))?;
     let what = External::Editor {
         text: String::new(),
+        suffix: "",
     };
     let mut cmd = command(&what);
     cmd.arg(file.path());
@@ -99,6 +100,17 @@ pub fn edit(terminal: &mut Term, text: &str, log: &Path) -> Result<String, Strin
     // By path: an editor may have replaced the file rather than written it.
     std::fs::read_to_string(file.path())
         .map_err(|e| format!("could not read {}: {e}", file.path().display()))
+}
+
+/// The editor on a copy of `path`, so a draft that does not validate never
+/// reaches the file; the copy's text comes back.
+pub fn edit_file(terminal: &mut Term, path: &str, log: &Path) -> Result<String, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("could not read {path}: {e}"))?;
+    let suffix = match Path::new(path).extension().and_then(|e| e.to_str()) {
+        Some("yml") => ".yml",
+        _ => ".yaml",
+    };
+    edit(terminal, &text, suffix, log)
 }
 
 /// Runs `what` on the real terminal and comes back to the TUI.

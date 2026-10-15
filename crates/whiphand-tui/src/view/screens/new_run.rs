@@ -51,7 +51,7 @@ fn render_picker(n: &NewRun, frame: &mut Frame, area: Rect) {
     let mut lines: Vec<Line> = busy_warning(n).into_iter().collect();
     if list.is_empty() {
         lines.push(Line::styled(
-            "No workflows here yet: `whiphand init` sets the workspace up.",
+            "No workflows here yet: g f, then i, sets the workspace up.",
             theme::dim(),
         ));
     }

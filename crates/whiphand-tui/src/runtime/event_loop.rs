@@ -72,8 +72,11 @@ pub fn run(host: &Host, terminal: &mut Term, mut model: Model, log: &Path) -> io
                         // Crossterm's reader would race the program for stdin.
                         drop(events.take());
                         back.push(match &what {
-                            External::Editor { text } => {
-                                Msg::Edited(external::edit(terminal, text, log))
+                            External::Editor { text, suffix } => {
+                                Msg::Edited(external::edit(terminal, text, suffix, log))
+                            }
+                            External::EditFile { path } => {
+                                Msg::Edited(external::edit_file(terminal, path, log))
                             }
                             _ => Msg::External(external::run(terminal, &what, log)),
                         });

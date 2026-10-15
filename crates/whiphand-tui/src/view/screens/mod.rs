@@ -5,4 +5,6 @@ pub mod doctor;
 pub mod manual;
 pub mod new_run;
 pub mod runs;
+pub mod settings;
+pub mod workflows;
 pub mod workspaces;

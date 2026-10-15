@@ -63,6 +63,8 @@ pub fn run(opts: TuiOptions) -> i32 {
         None => model::Model::without_workspace(now),
     };
     model.no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
+    model.cwd = Some(cwd.to_string_lossy().into_owned());
+    model.home = std::env::home_dir().map(|h| h.to_string_lossy().into_owned());
     // Remote access off: the desktop may be running, with its port.
     let host = match Host::start(HostConfig {
         remote: false,
@@ -75,6 +77,7 @@ pub fn run(opts: TuiOptions) -> i32 {
         }
     };
     let log = log_path();
+    model.log_path = Some(log.to_string_lossy().into_owned());
     if let Err(e) = runtime::stderr::redirect(&log) {
         eprintln!(
             "whiphand tui: stderr stays on the terminal ({}: {e})",

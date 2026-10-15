@@ -1,5 +1,7 @@
 //! What `update` asks the runtime to do.
 
+use whiphand_protocol::Scope;
+
 use crate::client::Call;
 
 #[derive(Debug, PartialEq)]
@@ -30,7 +32,11 @@ pub enum External {
     /// `git diff` in a directory: the run's worktree, else the workspace.
     GitDiff { cwd: String },
     /// `$VISUAL`/`$EDITOR` on a field's text; it comes back as `Msg::Edited`.
-    Editor { text: String },
+    /// `suffix` names the file type for the editor's highlighting.
+    Editor { text: String, suffix: &'static str },
+    /// The editor on a copy of a file (a workflow's YAML); the copy's text
+    /// comes back as `Msg::Edited`, and the file itself is left alone.
+    EditFile { path: String },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -95,4 +101,33 @@ pub enum Then {
     ManualDiff(String),
     /// `ptyInput`, `ptyResize`: nothing to do with the answer.
     PtyAck,
+    /// The workflows screen's requests, by the workspace they were for.
+    WorkflowList(String),
+    WorkflowCreated {
+        workdir: String,
+        name: String,
+        scope: Scope,
+    },
+    WorkflowValidated(String),
+    WorkflowSaved(String),
+    WorkflowCloned(String),
+    WorkflowDeleted(String),
+    WorkspaceInit(String),
+    /// `writeArtifact` for a run's artifact.
+    ArtifactWritten {
+        run_id: String,
+        name: String,
+    },
+    /// A path typed on the workspaces screen was touched; open it.
+    OpenedPath(String),
+    /// `configGet`: with a workspace for its config, without for the global.
+    Config(Option<String>),
+    /// `configSet` landed; `prune` asks for `pruneRuns` with this maximum.
+    ConfigSaved {
+        prune: Option<i64>,
+    },
+    Pruned,
+    Models,
+    /// `setUiState`: nothing to do but say a refusal.
+    UiSaved,
 }

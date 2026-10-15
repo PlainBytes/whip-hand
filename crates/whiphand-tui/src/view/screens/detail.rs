@@ -224,7 +224,13 @@ fn render_artifact(view: &ArtifactView, frame: &mut Frame, area: Rect) {
     frame.render_widget(
         Line::from(vec![
             Span::styled(view.name.clone(), theme::bold()),
-            Span::styled("  o pager · q back", theme::dim()),
+            Span::styled(
+                match view.body {
+                    ArtifactBody::Text(_) => "  e edit · o pager · q back",
+                    _ => "  o pager · q back",
+                },
+                theme::dim(),
+            ),
         ]),
         title,
     );

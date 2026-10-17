@@ -110,6 +110,17 @@ fn quitting_with_a_live_run_asks_first() {
 }
 
 #[test]
+fn a_resize_storm_only_asks_for_a_redraw() {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "running" }));
+    model.dirty = false;
+    for _ in 0..1000 {
+        assert!(update(&mut model, Msg::Resize).is_empty());
+    }
+    // The loop draws a dirty model at most once per frame.
+    assert!(model.dirty);
+}
+
+#[test]
 fn a_signal_quits_without_asking() {
     let mut model = Model::new("/w".into(), 0.0);
     running(&mut model, "j1", "r1");

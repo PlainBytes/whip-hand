@@ -486,7 +486,9 @@ by *derivation from the resolved `git`* (`<git>\..\..\usr\bin\sh.exe`, `bin\sh.e
 `bash.exe` in the same places, then `%PROGRAMFILES%\Git`) — never a bare `PATH` lookup for
 `bash`, which on a machine with WSL finds `C:\Windows\System32\bash.exe`, a launcher that
 runs the command inside the WSL filesystem where the workspace and every path we pass mean
-nothing (that path is rejected by name even when found). `whiphand doctor` reports the shell it
+nothing (that path is rejected by name even when found). The step runs with that shell's own
+directory first on `PATH`, so Git's coreutils (`uname`, `seq`, `sleep`) are found beside it; a
+`shell:` the step names gets no such help. `whiphand doctor` reports the shell it
 resolved. With none present, doctor is red and command steps refuse to run, naming the
 remediation; agent steps still work. Write command steps for `/bin/sh`: Git's `sh.exe` is bash in
 POSIX mode and accepts most bashisms, so on Windows it will not catch a bashism, but the Linux

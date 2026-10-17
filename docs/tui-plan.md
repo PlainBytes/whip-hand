@@ -702,9 +702,9 @@ Not done, and why:
 
 - Styled snapshots (light and dark): the snapshots are still text. The colour
   mapping is unit-tested instead.
-- On Windows the console delivers a paste as keys, not as one event, so a
-  multi-line paste into a one-line prompt still submits at its first line
-  break there, and the lines after it reach the screen behind as keys.
+- On Windows the console delivers a paste as keys, not as one event. Keys
+  that are waiting at once, with a line break among them, are taken as one
+  paste; a paste slow enough to arrive in pieces is still keys.
 
 Windows, run on 2026-10-17 from `main` (8bb3a6a), cross-built with
 `cargo xwin` for `x86_64-pc-windows-msvc`, on Windows 11 (build 26200) in a
@@ -735,6 +735,22 @@ taken the same way. In Windows Terminal and in conhost:
   exits silently without it.
 
 Each is in `docs/review-backlog.md` ("TUI on Windows").
+
+Run again the same day from `fix/tui-windows-backlog`, same VM, with a stub
+`claude.cmd` that opens `cmd /k`, so a session stays up until it is told to
+exit. In Windows Terminal and in conhost:
+
+- Pass: detach (`Ctrl-]` then a key), the tab or window titled `whiphand`
+  again after it; reattach, with the replay; a two-line paste into the rename
+  prompt goes in whole (its line break as a space) and submits nothing; a
+  paste onto the runs screen is dropped. Checked in Windows Terminal only:
+  `Ctrl-] Ctrl-]` sends one `^]`; `Ctrl-] e` ends the session and the TUI
+  comes back; `o` lists, with no error; `uname -s; seq 3` in a command step.
+- Not run: the binary on a Windows without the VC++ runtime (the VM has it).
+  `whiphand.exe` links `libcmt` and imports no `VCRUNTIME140.dll`, which the
+  Windows smoke test now checks.
+- In conhost, Ctrl+V reaches the TUI as a key, not a paste; conhost pastes
+  on a right-click, which works.
 - A signal that arrives while `$PAGER` or `$EDITOR` has the terminal is
   handled when the program exits: the TUI waits for it synchronously.
 - crossterm writes the 16 named colours as `38;5;n`. A terminal that knows

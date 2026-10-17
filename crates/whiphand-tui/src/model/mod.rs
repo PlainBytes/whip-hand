@@ -90,6 +90,9 @@ pub struct Attach {
     pub replayed: bool,
     /// The session ended at this time; the TUI comes back shortly.
     pub ended_at: Option<f64>,
+    /// The end of the last output, held back: it may be the start of a
+    /// mode attach drops (`update::attach::strip_modes`).
+    pub carry: Vec<u8>,
 }
 
 /// A run an action is about: its workspace and id.
@@ -184,6 +187,8 @@ pub struct RunsUi {
     pub ongoing: bool,
     /// `listRecentRuns`, for the ongoing view.
     pub recent: Vec<Value>,
+    /// The last `listRecentRuns` failed: an empty list says nothing.
+    pub recent_failed: bool,
 }
 
 /// The workspaces screen's own state.

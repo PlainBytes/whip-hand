@@ -102,6 +102,21 @@ fn a_run_another_host_drives_is_foreign() {
 }
 
 #[test]
+fn the_agent_answers_the_ongoing_view() {
+    let (app, ws) = (tempfile::tempdir().unwrap(), workspace());
+    let host = host(app.path());
+    let mut tui = Tui::start(&host, ws.path());
+    tui.settle();
+    tui.key(KeyCode::Char('o'));
+    tui.settle();
+    assert!(tui.model.runs_ui.ongoing);
+    assert!(!tui.model.runs_ui.recent_failed, "{:?}", tui.model.notice);
+    assert_eq!(tui.model.notice, None);
+    drop(tui);
+    host.shutdown();
+}
+
+#[test]
 fn recents_written_by_both_hosts_survive() {
     let (app, ws) = (tempfile::tempdir().unwrap(), workspace());
     let other = tempfile::tempdir().unwrap();

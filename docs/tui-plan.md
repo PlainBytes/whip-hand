@@ -702,9 +702,9 @@ Not done, and why:
 
 - Styled snapshots (light and dark): the snapshots are still text. The colour
   mapping is unit-tested instead.
-- On Windows the console delivers a paste as keys, not as one event, so a
-  multi-line paste into a one-line prompt still submits at its first line
-  break there, and the lines after it reach the screen behind as keys.
+- On Windows the console delivers a paste as keys, not as one event. Keys
+  that are waiting at once, with a line break among them, are taken as one
+  paste; a paste slow enough to arrive in pieces is still keys.
 
 Windows, run on 2026-10-17 from `main` (8bb3a6a), cross-built with
 `cargo xwin` for `x86_64-pc-windows-msvc`, on Windows 11 (build 26200) in a
@@ -734,7 +734,8 @@ taken the same way. In Windows Terminal and in conhost:
   agent (`limit` 200 over its 100); the Windows CLI needs the VC++ runtime and
   exits silently without it.
 
-Each is in `docs/review-backlog.md` ("TUI on Windows").
+Each is in `docs/review-backlog.md` ("TUI on Windows"), fixed on
+`fix/tui-windows-backlog`; the failing checks are to be run again there.
 - A signal that arrives while `$PAGER` or `$EDITOR` has the terminal is
   handled when the program exits: the TUI waits for it synchronously.
 - crossterm writes the 16 named colours as `38;5;n`. A terminal that knows

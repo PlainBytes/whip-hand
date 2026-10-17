@@ -734,8 +734,23 @@ taken the same way. In Windows Terminal and in conhost:
   agent (`limit` 200 over its 100); the Windows CLI needs the VC++ runtime and
   exits silently without it.
 
-Each is in `docs/review-backlog.md` ("TUI on Windows"), fixed on
-`fix/tui-windows-backlog`; the failing checks are to be run again there.
+Each is in `docs/review-backlog.md` ("TUI on Windows").
+
+Run again the same day from `fix/tui-windows-backlog`, same VM, with a stub
+`claude.cmd` that opens `cmd /k`, so a session stays up until it is told to
+exit. In Windows Terminal and in conhost:
+
+- Pass: detach (`Ctrl-]` then a key), the tab or window titled `whiphand`
+  again after it; reattach, with the replay; a two-line paste into the rename
+  prompt goes in whole (its line break as a space) and submits nothing; a
+  paste onto the runs screen is dropped. Checked in Windows Terminal only:
+  `Ctrl-] Ctrl-]` sends one `^]`; `Ctrl-] e` ends the session and the TUI
+  comes back; `o` lists, with no error; `uname -s; seq 3` in a command step.
+- Not run: the binary on a Windows without the VC++ runtime (the VM has it).
+  `whiphand.exe` links `libcmt` and imports no `VCRUNTIME140.dll`, which the
+  Windows smoke test now checks.
+- In conhost, Ctrl+V reaches the TUI as a key, not a paste; conhost pastes
+  on a right-click, which works.
 - A signal that arrives while `$PAGER` or `$EDITOR` has the terminal is
   handled when the program exits: the TUI waits for it synchronously.
 - crossterm writes the 16 named colours as `38;5;n`. A terminal that knows

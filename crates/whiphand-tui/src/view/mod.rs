@@ -46,7 +46,6 @@ fn header_line(model: &Model) -> Line<'_> {
         Span::raw("  "),
         Span::raw(model.workdir.as_deref().unwrap_or("no workspace")),
         Span::styled(format!("  · {}", model.screen().title()), theme::dim()),
-        Span::styled("  (experimental)", theme::dim()),
     ];
     if model.pending_g {
         spans.push(Span::styled("  g…", theme::waiting()));

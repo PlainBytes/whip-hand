@@ -2,7 +2,7 @@
 source: crates/whiphand-tui/tests/snapshots.rs
 expression: "render(model, size)"
 ---
-"whiphand  /home/dev/shop  · Runs  (experimental)                                "
+"whiphand  /home/dev/shop  · Runs                                                "
 "┌ Ongoing runs, every workspace ───────────────────────────────────────────────┐"
 "│Workspace      Workflow     Run       Status              Step         Elapsed│"
 "│shop           feature      20261010- running · waiting   plan         5m 0s  │"

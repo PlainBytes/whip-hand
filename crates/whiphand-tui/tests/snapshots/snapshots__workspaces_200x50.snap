@@ -2,7 +2,7 @@
 source: crates/whiphand-tui/tests/snapshots.rs
 expression: "render(model, size)"
 ---
-"whiphand  /home/dev/shop  · Workspaces  (experimental)                                                                                                                                                  "
+"whiphand  /home/dev/shop  · Workspaces                                                                                                                                                                  "
 "┌ Workspaces ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
 "│     Path                                                                                                                                                                                   Opened    │"
 "│  ★  /home/dev/api                                                                                                                                                                          2026-10-02│"

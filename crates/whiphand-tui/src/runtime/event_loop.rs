@@ -153,6 +153,7 @@ pub fn run(host: &Host, terminal: &mut Term, mut model: Model, log: &Path) -> io
                 },
                 ev = next_event(&mut events) => match ev {
                     Some(Ok(Event::Key(key))) => vec![Msg::Key(key)],
+                    Some(Ok(Event::Paste(text))) => vec![Msg::Paste(text)],
                     Some(Ok(Event::Resize(..))) => vec![Msg::Resize],
                     Some(Ok(_)) => vec![],
                     Some(Err(e)) => return Err(e),

@@ -144,6 +144,22 @@ impl PtyRing {
         }
     }
 
+    /// Whether the session asked for bracketed paste: the last time it said
+    /// so in what is kept. With no word in it, a trimmed ring may have lost
+    /// the request; the harnesses all make one, so assume they did.
+    pub fn wants_paste(&self) -> bool {
+        const ON: &[u8] = b"\x1b[?2004h";
+        const OFF: &[u8] = b"\x1b[?2004l";
+        let all = self.replay();
+        let last = |needle: &[u8]| all.windows(needle.len()).rposition(|w| w == needle);
+        match (last(ON), last(OFF)) {
+            (Some(on), Some(off)) => on > off,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (None, None) => self.trimmed,
+        }
+    }
+
     /// Everything kept, in order: what attaching replays.
     pub fn replay(&self) -> Vec<u8> {
         self.chunks.iter().flatten().copied().collect()
@@ -303,6 +319,22 @@ mod tests {
         let mut ring = PtyRing::default();
         ring.append(&b64(&"y".repeat(PTY_CAP_BYTES + 1)), None);
         assert_eq!(ring.chunks.len(), 1);
+    }
+
+    #[test]
+    fn bracketed_paste_follows_the_sessions_last_word() {
+        let mut ring = PtyRing::default();
+        assert!(!ring.wants_paste());
+        ring.append(&b64("\x1b[?2004hprompt"), None);
+        assert!(ring.wants_paste());
+        ring.append(&b64("\x1b[?2004l"), None);
+        assert!(!ring.wants_paste());
+        ring.append(&b64("\x1b[?2004h"), None);
+        assert!(ring.wants_paste());
+        // The request may have been trimmed away: a harness made one.
+        let mut ring = PtyRing::default();
+        ring.append(&b64("late"), Some(7));
+        assert!(ring.wants_paste());
     }
 
     #[test]

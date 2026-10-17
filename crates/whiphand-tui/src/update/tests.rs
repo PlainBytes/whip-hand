@@ -650,6 +650,29 @@ fn resume_offers_a_fresh_session_and_more_iterations() {
 }
 
 #[test]
+fn a_paste_goes_into_the_prompt_whole_and_never_fires_keys() {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "succeeded", "name": "old" }));
+    // Not editing: pasted letters are not keys (x would ask to delete).
+    assert!(update(&mut model, Msg::Paste("xR".into())).is_empty());
+    assert!(model.dialog.is_none());
+    update(&mut model, key('R'));
+    // A line break in it does not submit the one-line prompt.
+    assert!(update(&mut model, Msg::Paste(" and\nnew".into())).is_empty());
+    let Some(Dialog::Prompt { input, .. }) = &model.dialog else {
+        panic!()
+    };
+    assert_eq!(input.text(), "old and new");
+}
+
+#[test]
+fn a_paste_extends_the_runs_filter() {
+    let mut model = Model::new("/w".into(), 0.0);
+    update(&mut model, key('/'));
+    update(&mut model, Msg::Paste("fix\nlogin".into()));
+    assert_eq!(model.runs_ui.filter, "fix login");
+}
+
+#[test]
 fn a_resumed_run_becomes_local() {
     let mut model = detail_on(json!({ "runId": "r1", "status": "failed" }));
     let cmds = update(

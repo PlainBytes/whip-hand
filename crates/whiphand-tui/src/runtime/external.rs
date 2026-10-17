@@ -14,7 +14,7 @@ use crossterm::terminal::{
 };
 
 use crate::cmd::External;
-use crate::runtime::terminal::Term;
+use crate::runtime::terminal::{self, Term};
 
 /// A command line from an environment variable: `less -R` is two words.
 fn split(cmd: &str) -> Option<(String, Vec<String>)> {
@@ -119,6 +119,7 @@ pub fn run(terminal: &mut Term, what: &External, log: &Path) -> Result<(), Strin
 }
 
 fn hand_over(terminal: &mut Term, mut cmd: Command, log: &Path) -> Result<(), String> {
+    terminal::paste_off();
     let _ = execute!(io::stdout(), LeaveAlternateScreen, Show);
     let _ = disable_raw_mode();
     super::stderr::restore();
@@ -132,6 +133,7 @@ fn hand_over(terminal: &mut Term, mut cmd: Command, log: &Path) -> Result<(), St
     if let Err(e) = back {
         return Err(format!("could not take the screen back: {e}"));
     }
+    terminal::paste_on();
     // A pager quit with q, or git with nothing to say, is still fine; only
     // a program that would not start is worth a word.
     status.map(|_| ()).map_err(|e| {

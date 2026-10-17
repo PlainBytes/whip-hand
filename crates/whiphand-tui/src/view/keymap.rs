@@ -5,6 +5,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::model::Route;
+use crate::model::input::alt_gr;
 
 /// Where a binding applies. A screen's own bindings are looked up first,
 /// then the global ones; `Goto` is the second key of a `g` chord.
@@ -122,7 +123,8 @@ pub enum Key {
 
 impl Key {
     fn matches(self, ev: &KeyEvent) -> bool {
-        let ctrl = ev.modifiers.contains(KeyModifiers::CONTROL);
+        // AltGr (Ctrl and Alt on Windows) types a character, not a chord.
+        let ctrl = ev.modifiers.contains(KeyModifiers::CONTROL) && alt_gr(ev).is_none();
         match self {
             Key::Char(c) => !ctrl && ev.code == KeyCode::Char(c),
             Key::Ctrl(c) => ctrl && ev.code == KeyCode::Char(c),
@@ -551,5 +553,15 @@ mod tests {
         let r = KeyEvent::from(KeyCode::Char('r'));
         assert_eq!(action(&Route::RunDetail, false, &r), Some(A::Resume));
         assert_eq!(action(&Route::Doctor, false, &r), Some(A::Refresh));
+    }
+
+    #[test]
+    fn alt_gr_keys_are_characters() {
+        // Windows reports AltGr as Ctrl and Alt.
+        let alt_gr = KeyModifiers::CONTROL | KeyModifiers::ALT;
+        let help = KeyEvent::new(KeyCode::Char('?'), alt_gr);
+        assert_eq!(action(&Route::Runs, false, &help), Some(A::Help));
+        let r = KeyEvent::new(KeyCode::Char('r'), alt_gr);
+        assert_ne!(action(&Route::RunDetail, false, &r), Some(A::Refresh));
     }
 }

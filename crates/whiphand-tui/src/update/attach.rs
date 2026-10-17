@@ -93,6 +93,10 @@ pub fn on_size(model: &mut Model, cols: u16, rows: u16) -> Vec<Cmd> {
         a.replayed = true;
         let job = model.jobs.get(&a.job_id);
         let mut out = b"\x1b[2J\x1b[H".to_vec();
+        // The TUI's own bracketed paste gives way to the session's.
+        if !job.is_some_and(|j| j.pty.wants_paste()) {
+            out.extend_from_slice(b"\x1b[?2004l");
+        }
         if job.is_some_and(|j| j.pty.trimmed) {
             out.extend_from_slice(b"[whiphand: earlier output is not shown]\r\n");
         }

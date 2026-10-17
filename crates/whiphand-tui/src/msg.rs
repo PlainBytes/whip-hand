@@ -10,6 +10,8 @@ use crate::cmd::Then;
 #[derive(Debug)]
 pub enum Msg {
     Key(KeyEvent),
+    /// Text pasted into the terminal (bracketed paste), in one piece.
+    Paste(String),
     Resize,
     /// The 100 ms clock, with `Date.now()` so `update` stays pure.
     Tick {

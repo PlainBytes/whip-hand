@@ -272,6 +272,8 @@ pub struct Model {
     pub dirty: bool,
     /// `NO_COLOR` is set: draw without colours.
     pub no_color: bool,
+    /// The colours the terminal can show.
+    pub depth: crate::view::theme::Depth,
 }
 
 impl Model {

@@ -35,6 +35,8 @@ pub fn view(model: &Model, frame: &mut Frame) {
     }
     if model.no_color {
         theme::strip_colour(frame.buffer_mut());
+    } else {
+        theme::reduce(frame.buffer_mut(), model.depth);
     }
 }
 

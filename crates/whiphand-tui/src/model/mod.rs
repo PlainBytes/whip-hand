@@ -90,6 +90,9 @@ pub struct Attach {
     pub replayed: bool,
     /// The session ended at this time; the TUI comes back shortly.
     pub ended_at: Option<f64>,
+    /// The end of the last output, held back: it may be the start of a
+    /// mode attach drops (`update::attach::strip_modes`).
+    pub carry: Vec<u8>,
 }
 
 /// A run an action is about: its workspace and id.

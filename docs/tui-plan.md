@@ -11,7 +11,7 @@ one feature branch and one PR into `main`, with each step one or more commits.
 | 1. Read-only MVP | Done | [#29](https://github.com/PlainBytes/whip-hand/pull/29) |
 | 2. Driving runs | Done | [#33](https://github.com/PlainBytes/whip-hand/pull/33) |
 | 3. Workflows and settings | Done | [#40](https://github.com/PlainBytes/whip-hand/pull/40) |
-| 4. Hardening and release | Done | |
+| 4. Hardening and release | Done | [#42](https://github.com/PlainBytes/whip-hand/pull/42) |
 | 5. Optional extras | Not started | |
 
 ## Context

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### A terminal UI: `whiphand tui`
+
+- `whiphand tui [-C dir]` is a keyboard-only front end for terminals, tmux and SSH, beside the desktop
+  app, on the same in-process agent. It is no longer marked experimental.
+- Follow runs (step tree, log, events, artifacts, diff), start them from a form built from the
+  workflow's inputs, and cancel, resume, rename, lock or delete them.
+- Interactive steps: `t` hands the terminal to the step's session and `Ctrl-]` comes back while it
+  keeps going. Settings picks the detach key and can attach a run started here by itself.
+- Approvals and manual steps with the run's diff, a note and per-file comments.
+- Workflows edited in `$EDITOR` and saved only once they validate; config, run retention, pruning and
+  each runner's models in Settings.
+- A run another whiphand process drives shows as foreign and read-only.
+- A signal or a closed terminal puts the terminal back and stops runs the way quitting does, so they
+  can be resumed. AltGr characters type on Windows, a paste goes into a field whole, and colours are
+  brought down to 256 or 16 when the terminal shows no more.
+
 ### Worktrees start from the up-to-date base
 
 - A run's worktree now starts from the base branch's fetched upstream by default. `worktree.sync: false`

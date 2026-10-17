@@ -2,7 +2,7 @@
 source: crates/whiphand-tui/tests/snapshots.rs
 expression: "render(model, size)"
 ---
-"whiphand  /home/dev/shop  · Workflows  (experimental)                                                                                                                                                   "
+"whiphand  /home/dev/shop  · Workflows                                                                                                                                                                   "
 "┌ Workflows ───────────────────────────────────────────────────────────────────┐┌ feature ─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
 "│  feature                                                              project││project · /home/dev/shop/.whiphand/workflows/feature.yaml                                                             │"
 "│✘ broken                                                               project││                                                                                                                      │"
@@ -51,4 +51,4 @@ expression: "render(model, size)"
 "│                                                                              ││                                                                                                                      │"
 "│                                                                              ││                                                                                                                      │"
 "└──────────────────────────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" r run it  ·  e edit in $EDITOR; checked before it is saved  ·  n new workflow in this workspace  ·  N new global workflow  ·  c clone  ·  x delete  ·  o show the file in $PAGER  ·  i set up this work"
+" r run it  ·  e edit in $EDITOR; checked before it is saved  ·  n new workflow in this workspace  ·  N new global workflow  ·  c clone  ·  x delete  ·  Ctrl-r reload  ·  …  ·  ? help  ·  q back       "

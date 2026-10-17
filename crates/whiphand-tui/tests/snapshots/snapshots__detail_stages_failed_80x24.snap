@@ -2,7 +2,7 @@
 source: crates/whiphand-tui/tests/snapshots.rs
 expression: "render(model, size)"
 ---
-"whiphand  /home/dev/shop  · Run  (experimental)                                 "
+"whiphand  /home/dev/shop  · Run                                                 "
 "20261009-170000-e5f6  develop  failed  1h 2m                                    "
 "stopped at stage 2 of 3 · Add API routes after 2 rejections                     "
 "┌ Steps ───────────────────────────────────────────────────────────────────────┐"
@@ -25,4 +25,4 @@ expression: "render(model, size)"
 "│                                                                              │"
 "│                                                                              │"
 "└──────────────────────────────────────────────────────────────────────────────┘"
-" Tab switch pane  ·  1-4 tabs  ·  h ← collapse  ·  l → expand  ·  f errors only "
+" Tab switch pane  ·  1-4 tabs  ·  h ← collapse  ·  …  ·  ? help  ·  q back      "

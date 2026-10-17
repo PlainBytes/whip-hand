@@ -37,22 +37,15 @@ whiphand run examples/feature.yaml --input feature=x --worktree              # r
 whiphand run develop --input feature=x --no-worktree                         # run in the working folder even if the workflow asks for a worktree
 whiphand run develop --input feature=y --in-worktree 20260907-141233-a3f1   # run again in that run's worktree, on its branch (refused while another run is using it)
 whiphand worktree remove 20260907-141233-a3f1                                # remove a run's worktree (--force discards uncommitted changes); the branch stays
-whiphand tui -C ~/src/shop                                                   # experimental: follow a workspace's runs in the terminal
+whiphand tui -C ~/src/shop                                                   # the terminal UI: follow and drive a workspace's runs
 ```
 
 Workflows live in `.whiphand/workflows/<name>.yaml` (so `whiphand run iterate` works) or anywhere as a
 path. Artifacts land in `.whiphand/runs/<run-id>/` as plain markdown. Workspace defaults live in
 `.whiphand/config.yaml`.
 
-**Terminal UI (experimental).** `whiphand tui` is a keyboard-only front end for terminals, tmux and
-SSH, beside the desktop app. It opens `-C`, else the current folder if it has `.whiphand/`, else a
-list of recent workspaces. For now it is read-only: the runs list (`/` filters, `o` shows what is
-running in every recent workspace), a run's step tree beside its log, events, artifacts and diff
-(`1`-`4`), and `whiphand doctor`. `o` opens an artifact in `$PAGER`, `D` runs `git diff` in the run's
-worktree, and `?` lists every key. A run another whiphand process is driving (the desktop, the CLI)
-shows as *foreign*: you can follow it, and the process that started it answers its prompts. The
-terminal rings and sets its title when a run needs you or ends; `WHIPHAND_TUI_NOTIFY=off` (or
-`bell`) quiets that, and `NO_COLOR` is honoured.
+**Terminal UI.** `whiphand tui` drives runs from a terminal, tmux or an SSH session, beside the
+desktop app. See [Terminal UI](#terminal-ui).
 
 `whiphand init` ships three starter workflows. The two that build something end the same way: a
 human gate that can send the work back with comments for another cycle, not just ship it or kill
@@ -408,6 +401,44 @@ Two differences from the desktop app:
 Runs already in progress replay in full when a browser attaches — the agent keeps a
 per-job transcript of terminal and log output, so checking in halfway through a run
 shows what already happened rather than an empty pane.
+
+## Terminal UI
+
+`whiphand tui` is a keyboard-only front end for people who live in a terminal or work over SSH. It
+runs the same in-process agent as the desktop app, so runs, sessions and approvals behave the same
+in both; it is not a replacement for the desktop app, and the two can be open on one workspace at
+once. It opens `-C`, else the current folder if it has `.whiphand/`, else a list of recent
+workspaces (`a` opens another folder by its path, `p` pins one).
+
+- **Runs.** The runs list (`/` filters, `o` shows what is running in every recent workspace), and a
+  run's step tree beside its log, events, artifacts and diff (`1`-`4`). `n` starts a run from a
+  form built from the workflow's inputs; `c` cancels, `r` resumes, `R` renames, `L` locks and `x`
+  deletes.
+- **Interactive steps.** `t` (or Enter on the step) hands the terminal to the step's session: the
+  agent's PTY is passed straight through, so the harness looks as it does in a plain terminal.
+  `Ctrl-]` comes back to the TUI and the session keeps going; `Ctrl-] e` asks it to end, and
+  `Ctrl-] Ctrl-]` sends a literal `Ctrl-]`. The detach key, and whether a run started here attaches
+  by itself, are in Settings.
+- **Approvals and manual steps.** `m` opens the step waiting on you: instructions, artifacts, the
+  run's diff, a note (`i`) and per-file comments; `a` continues, `b` sends the work back, `X` aborts.
+- **Workflows and settings.** `g f` lists workflows; `e` edits one in `$VISUAL`/`$EDITOR`, and only
+  a draft that validates is saved. `g s` holds the workspace and global config, run retention and
+  pruning, the TUI's own preferences and each runner's models.
+- **Hand-offs.** `o` opens an artifact in `$PAGER`, `e` edits it in `$EDITOR`, `D` runs `git diff`
+  in the run's worktree. `?` lists every key on the screen you are on.
+
+A run another whiphand process is driving (the desktop app, the CLI) shows as *foreign*: you can
+follow it, and the process that started it answers its prompts and cancels it. Quitting with runs
+in progress asks first; the runs stop and can be resumed. A closed terminal or a `kill` stops them
+the same way, after the terminal is put back.
+
+The terminal rings and sets its title when a run needs you or ends, through tmux too;
+`WHIPHAND_TUI_NOTIFY=off` (or `bell`) quiets that. `NO_COLOR` is honoured, and colours are brought
+down to 256 or 16 unless `COLORTERM` says the terminal shows 24-bit colour. While the TUI owns the
+screen, diagnostics go to `tui.log` beside the app state (Settings shows the path).
+
+Desktop-only by design: the file explorer and its viewers, remote access, and an embedded terminal
+pane.
 
 ## Windows
 

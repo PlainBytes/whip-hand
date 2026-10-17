@@ -5,6 +5,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::model::Route;
+use crate::model::input::alt_gr;
 
 /// Where a binding applies. A screen's own bindings are looked up first,
 /// then the global ones; `Goto` is the second key of a `g` chord.
@@ -122,7 +123,8 @@ pub enum Key {
 
 impl Key {
     fn matches(self, ev: &KeyEvent) -> bool {
-        let ctrl = ev.modifiers.contains(KeyModifiers::CONTROL);
+        // AltGr (Ctrl and Alt on Windows) types a character, not a chord.
+        let ctrl = ev.modifiers.contains(KeyModifiers::CONTROL) && alt_gr(ev).is_none();
         match self {
             Key::Char(c) => !ctrl && ev.code == KeyCode::Char(c),
             Key::Ctrl(c) => ctrl && ev.code == KeyCode::Char(c),
@@ -470,7 +472,10 @@ pub fn action(screen: &Route, goto: bool, key: &KeyEvent) -> Option<Action> {
 }
 
 /// The footer's hints for a screen: its own bindings, briefly.
-pub fn hints(screen: &Route) -> String {
+/// The footer's hints in `width` columns: the screen's own keys in table
+/// order, leaving out any that do not fit, then `? help` and `q back`,
+/// which always show. `…` stands for the ones left out; `?` lists them.
+pub fn hints(screen: &Route, width: usize) -> String {
     let own: Vec<String> = BINDINGS
         .iter()
         .filter(|b| b.ctx == Ctx::of(screen))
@@ -489,10 +494,27 @@ pub fn hints(screen: &Route) -> String {
             format!("{label} {help}")
         })
         .collect();
-    let mut parts = own;
-    parts.push("? help".into());
-    parts.push("q back".into());
-    parts.join("  ·  ")
+    const SEP: &str = "  ·  ";
+    let cols = |s: &str| s.chars().count();
+    let tail = ["? help", "q back"].join(SEP);
+    let all: usize = own.iter().map(|h| cols(h) + cols(SEP)).sum();
+    if all + cols(&tail) <= width {
+        let mut parts = own;
+        parts.push(tail);
+        return parts.join(SEP);
+    }
+    // Some must go: those that do not fit, in order, keeping room for `…`.
+    let mut used = cols(&tail) + cols("…") + cols(SEP);
+    let mut parts: Vec<String> = Vec::new();
+    for hint in own {
+        if used + cols(&hint) + cols(SEP) <= width {
+            used += cols(&hint) + cols(SEP);
+            parts.push(hint);
+        }
+    }
+    parts.push("…".into());
+    parts.push(tail);
+    parts.join(SEP)
 }
 
 #[cfg(test)]
@@ -551,5 +573,32 @@ mod tests {
         let r = KeyEvent::from(KeyCode::Char('r'));
         assert_eq!(action(&Route::RunDetail, false, &r), Some(A::Resume));
         assert_eq!(action(&Route::Doctor, false, &r), Some(A::Refresh));
+    }
+
+    #[test]
+    fn hints_fit_the_width_and_always_offer_help() {
+        let wide = hints(&Route::RunDetail, 1000);
+        assert!(!wide.contains('…'));
+        let narrow = hints(&Route::RunDetail, 79);
+        assert!(narrow.chars().count() <= 79, "{narrow}");
+        assert!(narrow.starts_with("Tab switch pane"));
+        // A long hint that does not fit leaves room for shorter ones after it.
+        let runs = hints(&Route::Runs, 79);
+        assert!(
+            !runs.contains("m answer") && runs.contains("c cancel"),
+            "{runs}"
+        );
+        assert!(narrow.ends_with("…  ·  ? help  ·  q back"), "{narrow}");
+        assert_eq!(hints(&Route::RunDetail, 10), "…  ·  ? help  ·  q back");
+    }
+
+    #[test]
+    fn alt_gr_keys_are_characters() {
+        // Windows reports AltGr as Ctrl and Alt.
+        let alt_gr = KeyModifiers::CONTROL | KeyModifiers::ALT;
+        let help = KeyEvent::new(KeyCode::Char('?'), alt_gr);
+        assert_eq!(action(&Route::Runs, false, &help), Some(A::Help));
+        let r = KeyEvent::new(KeyCode::Char('r'), alt_gr);
+        assert_ne!(action(&Route::RunDetail, false, &r), Some(A::Refresh));
     }
 }

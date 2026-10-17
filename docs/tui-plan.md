@@ -9,9 +9,9 @@ one feature branch and one PR into `main`, with each step one or more commits.
 |---|---|---|
 | 0. Groundwork | Done | [#27](https://github.com/PlainBytes/whip-hand/pull/27) |
 | 1. Read-only MVP | Done | [#29](https://github.com/PlainBytes/whip-hand/pull/29) |
-| 2. Driving runs | Done | |
-| 3. Workflows and settings | Done | |
-| 4. Hardening and release | Not started | |
+| 2. Driving runs | Done | [#33](https://github.com/PlainBytes/whip-hand/pull/33) |
+| 3. Workflows and settings | Done | [#40](https://github.com/PlainBytes/whip-hand/pull/40) |
+| 4. Hardening and release | Done | [#42](https://github.com/PlainBytes/whip-hand/pull/42) |
 | 5. Optional extras | Not started | |
 
 ## Context
@@ -346,8 +346,13 @@ scrolls with the movement keys. The plan's full set:
   program for stdin. Agent lines queue in the channel meanwhile. Only absolute
   paths reach the pager, after `--`.
 - **tmux/screen:** notifications are wrapped in tmux DCS passthrough when
-  `$TMUX` is set. Colours degrade to 256/16 based on `COLORTERM` and terminfo.
+  `$TMUX` is set. Colours degrade to 256/16 based on `COLORTERM` and `TERM`
+  (Phase 4: RGB to the nearest of 256 on a `*-256color` terminal, to the
+  nearest named colour elsewhere; Windows Terminal and the console are 24-bit).
   `NO_COLOR` is respected.
+- **Paste:** bracketed paste is on while the TUI owns the screen, off while a
+  program has it, and set the way the session last asked while attached
+  (Phase 4).
 
 ## 8. Running beside the desktop app (two processes, one machine)
 
@@ -632,6 +637,79 @@ Manual matrix, Windows input edge cases, resize storms, `NO_COLOR`. Docs: a
 (the TTY seam's three hosts: CLI inherit, desktop xterm, TUI attach, plus the
 desktop-only list), CHANGELOG, benchmarks. Drop the experimental marker.
 
+**Delivered** (branch `feature/tui-phase4-hardening`):
+
+- No shared-crate changes. One test is added to `whiphand-agent`: a source
+  check over the agent and core (their tests and the parity harness aside)
+  that nothing they start inherits the terminal, and that no `SpawnOptions`
+  leaves a stream to its default, which is `Inherit` (section 7).
+- Signals: SIGTERM, SIGHUP and SIGINT on Unix, and the console closing,
+  Ctrl-Break and shutdown on Windows, quit without asking. The terminal is
+  put back and `Host::shutdown()` gives runs their grace period, so a run
+  ends `cancelled` with its step `interrupted`, ready to resume, instead of
+  staying `running` with a stale lease. On Windows tokio's handler holds the
+  console open until the process exits, within the system's 5 s.
+- Windows keyboard: AltGr arrives as Ctrl and Alt together, and inputs and the
+  key table dropped it as a chord, so `@`, `\` and `{` could not be typed on
+  Hungarian or German layouts (no Windows path in "open folder"). A printable
+  character with both held is now text.
+- Paste: bracketed paste (section 7). A paste goes into the field being
+  edited in one piece; a one-line prompt gets its line breaks as spaces, so
+  a paste never submits it; anywhere else a paste is dropped rather than
+  read as keys. Attaching sets paste mode the way the session last asked
+  for it in its output (assumed on when the ring was trimmed past it).
+- Colour depth (section 7). The theme keeps to the 16 named colours; agents'
+  256-colour and RGB log lines are brought down after the frame is drawn.
+- The footer's hints fit the width: hints that do not fit are left out, in
+  table order, with `…`, and `? help` and `q back` always show. They were
+  cut at 80 columns, and at 200 on the busier screens.
+- Every snapshot model is also drawn at every size up to 30×8 and at very
+  wide or very tall ones; none panicked.
+- Docs: README "Terminal UI", design.md "Frontends", CHANGELOG, benchmarks.
+  `--help` and the header no longer say experimental.
+
+Followed end to end, on Linux, in `whiphand tui` driven through a
+pseudo-terminal: a run of command steps started from the form, then
+`kill -TERM`, `-HUP` and `-INT` in turn (the terminal came back in canonical
+mode with echo, off the alternate screen and with bracketed paste off; the
+run was cancelled with its step interrupted); a two-line paste into the
+rename prompt (one line, not submitted early; the run renamed) and a stray
+paste on the detail (no key fired); a coloured log line under
+`TERM=xterm`, `xterm-256color` and `COLORTERM=truecolor` (no 24-bit
+sequences without the last; indices under 16 with the first); 400 random
+resizes from 1×1 to 220×60 in a burst (still drawing, still answering keys).
+
+Manual matrix, for the PR's reviewer to tick before merging (Linux was run
+here; tmux and SSH need a tmux install and a key in `authorized_keys`, which
+this machine does not have):
+
+- [ ] Windows Terminal: start and follow a run; attach, detach, reattach;
+  AltGr `@` and `\` in "open folder"; paste; resize; close the window with a
+  run going (it shows `cancelled` next time).
+- [ ] conhost: the same.
+- [ ] macOS Terminal (256 colours): the same, and a coloured agent log.
+- [ ] iTerm2: the same.
+- [ ] tmux: notifications (bell, title) and a detach key that tmux does not
+  take.
+- [ ] SSH: the same as a local terminal; closing the connection stops runs as
+  quitting does.
+- [ ] The desktop open on the same workspace: recents survive both, and a
+  desktop run shows as foreign.
+
+Not done, and why:
+
+- Styled snapshots (light and dark): the snapshots are still text. The colour
+  mapping is unit-tested instead.
+- On Windows the console delivers a paste as keys, not as one event, so a
+  multi-line paste into a one-line prompt still submits at its first line
+  break there.
+- A signal that arrives while `$PAGER` or `$EDITOR` has the terminal is
+  handled when the program exits: the TUI waits for it synchronously.
+- crossterm writes the 16 named colours as `38;5;n`. A terminal that knows
+  only the 8/16-colour SGR codes would need a backend of its own; none in the
+  matrix is one.
+- No `:` command palette, as in Phase 3.
+
 ### Phase 5: Optional
 
 Embedded PTY pane (`vt100` + `tui-term`), mouse-driven review, several attached
@@ -682,7 +760,7 @@ desktop work leaves.
 6. **Binary size.** ratatui, crossterm and pulldown-cmark add about 1 to 1.5 MB;
    dropping axum from the CLI path offsets part of it. Recorded in
    `docs/benchmarks.md`: +1.05 MB in Phase 0, +0.56 MB in Phase 1, +0.61 MB in
-   Phase 2, +0.57 MB in Phase 3.
+   Phase 2, +0.57 MB in Phase 3, +0.01 MB in Phase 4.
 
 ## 13. Verification
 

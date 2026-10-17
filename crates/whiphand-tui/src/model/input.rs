@@ -16,6 +16,17 @@ pub enum Edit {
     Ignored,
 }
 
+/// A character typed with AltGr. Windows reports AltGr as Ctrl and Alt
+/// together, so `@`, `\` or `{` on many layouts (Hungarian, German) arrive
+/// with both held; they are text, not a Ctrl chord.
+pub fn alt_gr(key: &KeyEvent) -> Option<char> {
+    let both = KeyModifiers::CONTROL | KeyModifiers::ALT;
+    match key.code {
+        KeyCode::Char(c) if key.modifiers.contains(both) && !c.is_control() => Some(c),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Input {
     /// Never empty.
@@ -73,7 +84,40 @@ impl Input {
         self.lines[self.row].chars().count()
     }
 
+    /// Inserts pasted text at the cursor. A one-line input gets its line
+    /// breaks as spaces, so a paste never submits it.
+    pub fn paste(&mut self, text: &str) {
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        let text: String = text
+            .chars()
+            .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+            .collect();
+        let text = if self.multiline {
+            text
+        } else {
+            text.replace('\n', " ")
+        };
+        for (i, part) in text.split('\n').enumerate() {
+            if i > 0 {
+                let at = self.byte(self.col);
+                let rest = self.lines[self.row].split_off(at);
+                self.row += 1;
+                self.lines.insert(self.row, rest);
+                self.col = 0;
+            }
+            let at = self.byte(self.col);
+            self.lines[self.row].insert_str(at, part);
+            self.col += part.chars().count();
+        }
+    }
+
     pub fn key(&mut self, key: &KeyEvent) -> Edit {
+        if let Some(c) = alt_gr(key) {
+            let at = self.byte(self.col);
+            self.lines[self.row].insert(at, c);
+            self.col += 1;
+            return Edit::Changed;
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => return Edit::Leave,
@@ -204,6 +248,35 @@ mod tests {
         assert!(i.is_blank());
         let ctrl_x = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
         assert_eq!(i.key(&ctrl_x), Edit::Ignored);
+    }
+
+    #[test]
+    fn alt_gr_characters_are_typed_not_chords() {
+        // Windows: AltGr+Q and AltGr+V on a Hungarian layout.
+        let alt_gr = KeyModifiers::CONTROL | KeyModifiers::ALT;
+        let mut i = Input::new("C:", false);
+        for c in ['\\', '@', '{'] {
+            assert_eq!(
+                i.key(&KeyEvent::new(KeyCode::Char(c), alt_gr)),
+                Edit::Changed
+            );
+        }
+        assert_eq!(i.text(), "C:\\@{");
+    }
+
+    #[test]
+    fn a_paste_goes_in_at_the_cursor_and_never_submits_one_line() {
+        let mut i = Input::new("ad", false);
+        press(&mut i, KeyCode::Left);
+        i.paste("b\r\nc");
+        assert_eq!(i.text(), "ab cd");
+        assert_eq!(i.cursor(), (0, 4));
+
+        let mut i = Input::new("ad", true);
+        press(&mut i, KeyCode::Left);
+        i.paste("b\r\nc\u{1b}");
+        assert_eq!(i.lines(), ["ab", "cd"]);
+        assert_eq!(i.cursor(), (1, 1));
     }
 
     #[test]

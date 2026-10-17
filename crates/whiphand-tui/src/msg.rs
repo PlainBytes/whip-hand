@@ -10,6 +10,8 @@ use crate::cmd::Then;
 #[derive(Debug)]
 pub enum Msg {
     Key(KeyEvent),
+    /// Text pasted into the terminal (bracketed paste), in one piece.
+    Paste(String),
     Resize,
     /// The 100 ms clock, with `Date.now()` so `update` stays pure.
     Tick {
@@ -32,4 +34,7 @@ pub enum Msg {
     AttachFailed(String),
     /// The agent's engine thread is gone: its channel closed.
     HostGone,
+    /// A signal (SIGTERM, SIGHUP, SIGINT) or the console closing: quit
+    /// now, without asking; runs get the host's grace period.
+    Terminated,
 }

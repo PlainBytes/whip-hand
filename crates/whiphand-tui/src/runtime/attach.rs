@@ -14,7 +14,7 @@ use crossterm::execute;
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use tokio::sync::mpsc;
 
-use crate::runtime::terminal::Term;
+use crate::runtime::terminal::{self, Term};
 
 /// The terminal handed to a session.
 pub struct Session {
@@ -47,6 +47,8 @@ pub fn enter() -> io::Result<(Session, (u16, u16))> {
             .name("whiphand-tui-attach".into())
             .spawn(move || read_keys(&stop, &tx))?,
     );
+    // Bracketed paste is left on: the replay sets it the way the session
+    // asked for it (`PtyRing::wants_paste`).
     if let Err(e) = execute!(io::stdout(), LeaveAlternateScreen, Show) {
         let _ = execute!(io::stdout(), EnterAlternateScreen, Hide);
         return Err(e);
@@ -63,6 +65,8 @@ impl Session {
             windows::set_mode(mode);
         }
         execute!(io::stdout(), EnterAlternateScreen, Hide)?;
+        // The session may have turned it off.
+        terminal::paste_on();
         // Everything is redrawn: the screen behind is not what ratatui thinks.
         terminal.clear()
     }

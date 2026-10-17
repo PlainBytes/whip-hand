@@ -108,6 +108,7 @@ fn touch(workdir: &str) -> Cmd {
 pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
     match msg {
         Msg::Key(key) => on_key(model, key),
+        Msg::Paste(text) => on_paste(model, &text),
         Msg::Resize => {
             model.dirty = true;
             vec![]
@@ -179,6 +180,8 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.dirty = true;
             attach::on_host_gone(model)
         }
+        // The event loop leaves an attached session as it returns.
+        Msg::Terminated => vec![Cmd::Quit],
     }
 }
 
@@ -213,6 +216,49 @@ fn on_key(model: &mut Model, key: KeyEvent) -> Vec<Cmd> {
             vec![]
         }
     }
+}
+
+/// A paste goes into the text being edited, whole; anywhere else it is
+/// dropped, so pasted letters never fire as keys.
+fn on_paste(model: &mut Model, text: &str) -> Vec<Cmd> {
+    if model.attach.is_some() {
+        return vec![];
+    }
+    let screen = model.screen().clone();
+    let input = if let Some(Dialog::Prompt { input, .. }) = model.dialog.as_mut() {
+        Some(input)
+    } else if model.dialog.is_some() || model.help {
+        None
+    } else if screen == Route::Manual && manual::editing(model) {
+        model.manual.as_mut().and_then(|m| m.focused_input())
+    } else if screen == Route::NewRun && new_run::editing(model) {
+        model
+            .new_run
+            .as_mut()
+            .and_then(|n| n.form.as_mut())
+            .map(|f| &mut f.focused().input)
+    } else {
+        None
+    };
+    if let Some(input) = input {
+        input.paste(text);
+    } else if screen == Route::Runs && model.runs_ui.editing && model.dialog.is_none() {
+        let flat: String = text
+            .chars()
+            .filter_map(|c| match c {
+                '\n' | '\t' => Some(' '),
+                c if c.is_control() => None,
+                c => Some(c),
+            })
+            .collect();
+        model.runs_ui.filter.push_str(&flat);
+        model.runs_ui.selected = 0;
+    } else {
+        return vec![];
+    }
+    model.dirty = true;
+    model.notice = None;
+    vec![]
 }
 
 fn edit_filter(model: &mut Model, key: KeyEvent) {

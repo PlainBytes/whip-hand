@@ -275,7 +275,7 @@ pub fn build_cli() -> Command {
         .subcommand(
             sub(
                 "tui",
-                "[experimental] open the terminal UI: follow the working folder's runs",
+                "open the terminal UI: follow and drive the working folder's runs",
             )
             .arg(dir_option("working folder"))
             .arg(extra()),

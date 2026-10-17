@@ -2,7 +2,7 @@
 source: crates/whiphand-tui/tests/snapshots.rs
 expression: "render(model, size)"
 ---
-"whiphand  /home/dev/shop  · Runs  (experimental)                                "
+"whiphand  /home/dev/shop  · Runs                                                "
 "┌ Runs ─┌ Keys ────────────────────────────────────────────────────────┐───────┐"
 "│Workflo│  ?             this help                                     │Elapsed│"
 "│feature│  q Esc         back; quit from the first screen              │5m 0s  │"
@@ -25,4 +25,4 @@ expression: "render(model, size)"
 "│       │  g s           settings                                      │       │"
 "│       │                                                              │       │"
 "└───────└──────────────────────────────────────────────────────────────┘───────┘"
-" / filter  ·  n new run  ·  m answer the step waiting on you  ·  o ongoing runs "
+" / filter  ·  n new run  ·  c cancel the run  ·  …  ·  ? help  ·  q back        "

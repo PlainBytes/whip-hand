@@ -1,4 +1,4 @@
-//! Raw mode and the alternate screen, and the promise to undo both: on
+//! Raw mode, the alternate screen and bracketed paste, and the promise to undo them: on
 //! drop, and before a panic message prints when the UI thread panics. A
 //! panic elsewhere (an agent request, which the host catches) leaves the
 //! screen alone; its message goes to the log.
@@ -7,6 +7,7 @@ use std::io::{self, Stdout};
 use std::sync::Once;
 
 use crossterm::cursor::{Hide, Show};
+use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -28,7 +29,10 @@ impl TerminalGuard {
         let entered = execute!(io::stdout(), EnterAlternateScreen, Hide)
             .and_then(|()| Terminal::new(CrosstermBackend::new(io::stdout())));
         match entered {
-            Ok(terminal) => Ok(TerminalGuard { terminal }),
+            Ok(terminal) => {
+                paste_on();
+                Ok(TerminalGuard { terminal })
+            }
             Err(e) => {
                 restore();
                 Err(e)
@@ -45,8 +49,21 @@ impl Drop for TerminalGuard {
 
 /// Puts the terminal back as the shell left it. Safe to call twice.
 pub fn restore() {
+    paste_off();
     let _ = disable_raw_mode();
     let _ = execute!(io::stdout(), LeaveAlternateScreen, Show);
+}
+
+/// A paste arrives as one event, not as keys (an Enter in it would submit
+/// a prompt). Best effort: a console that cannot do it types the paste.
+pub fn paste_on() {
+    let _ = execute!(io::stdout(), EnableBracketedPaste);
+}
+
+/// Off whenever another program or a session has the terminal: they ask for
+/// it themselves if they want it.
+pub fn paste_off() {
+    let _ = execute!(io::stdout(), DisableBracketedPaste);
 }
 
 /// A UI-thread panic's message goes to the real stderr, on a usable screen.

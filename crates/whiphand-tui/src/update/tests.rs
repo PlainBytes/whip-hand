@@ -110,6 +110,25 @@ fn quitting_with_a_live_run_asks_first() {
 }
 
 #[test]
+fn a_resize_storm_only_asks_for_a_redraw() {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "running" }));
+    model.dirty = false;
+    for _ in 0..1000 {
+        assert!(update(&mut model, Msg::Resize).is_empty());
+    }
+    // The loop draws a dirty model at most once per frame.
+    assert!(model.dirty);
+}
+
+#[test]
+fn a_signal_quits_without_asking() {
+    let mut model = Model::new("/w".into(), 0.0);
+    running(&mut model, "j1", "r1");
+    assert_eq!(update(&mut model, Msg::Terminated), [Cmd::Quit]);
+    assert!(model.dialog.is_none());
+}
+
+#[test]
 fn a_run_state_change_tracks_the_job_and_refreshes_the_list() {
     let mut model = Model::new("/w".into(), 0.0);
     let cmds = running(&mut model, "j1", "r1");
@@ -639,6 +658,29 @@ fn resume_offers_a_fresh_session_and_more_iterations() {
         .params
         .clone();
     assert_eq!(call["extraIterations"], json!(3));
+}
+
+#[test]
+fn a_paste_goes_into_the_prompt_whole_and_never_fires_keys() {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "succeeded", "name": "old" }));
+    // Not editing: pasted letters are not keys (x would ask to delete).
+    assert!(update(&mut model, Msg::Paste("xR".into())).is_empty());
+    assert!(model.dialog.is_none());
+    update(&mut model, key('R'));
+    // A line break in it does not submit the one-line prompt.
+    assert!(update(&mut model, Msg::Paste(" and\nnew".into())).is_empty());
+    let Some(Dialog::Prompt { input, .. }) = &model.dialog else {
+        panic!()
+    };
+    assert_eq!(input.text(), "old and new");
+}
+
+#[test]
+fn a_paste_extends_the_runs_filter() {
+    let mut model = Model::new("/w".into(), 0.0);
+    update(&mut model, key('/'));
+    update(&mut model, Msg::Paste("fix\nlogin".into()));
+    assert_eq!(model.runs_ui.filter, "fix login");
 }
 
 #[test]

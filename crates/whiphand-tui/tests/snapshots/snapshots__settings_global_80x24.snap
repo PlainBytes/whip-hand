@@ -2,7 +2,7 @@
 source: crates/whiphand-tui/tests/snapshots.rs
 expression: "render(model, size)"
 ---
-"whiphand  /home/dev/shop  · Settings  (experimental)                            "
+"whiphand  /home/dev/shop  · Settings                                            "
 "┌ Settings ────────────────────────────────────────────────────────────────────┐"
 "│ This workspace   Everywhere (global)   Terminal UI   Models   Tab switches   │"
 "│                                                                              │"
@@ -25,4 +25,4 @@ expression: "render(model, size)"
 "│                                                                              │"
 "│                                                                              │"
 "└──────────────────────────────────────────────────────────────────────────────┘"
-" Tab next pane  ·  u use the global value here  ·  P delete runs beyond the maxi"
+" Tab next pane  ·  u use the global value here  ·  …  ·  ? help  ·  q back      "

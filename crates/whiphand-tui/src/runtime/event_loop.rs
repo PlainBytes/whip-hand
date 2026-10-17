@@ -1,4 +1,4 @@
-//! The loop: terminal events, agent lines and a 100 ms tick in, `update`,
+//! The loop: terminal events, agent lines, signals and a 100 ms tick in, `update`,
 //! commands out, and a redraw when something changed (at most one per
 //! 16 ms frame).
 
@@ -18,6 +18,7 @@ use crate::cmd::{Cmd, External};
 use crate::model::Model;
 use crate::msg::Msg;
 use crate::runtime::notify::{self, Mode};
+use crate::runtime::signals::{self, Signals};
 use crate::runtime::terminal::Term;
 use crate::runtime::{attach, external};
 use crate::update::{init, update};
@@ -43,6 +44,7 @@ fn inbound(client: &mut AgentClient, line: &str) -> Option<Msg> {
 /// the caller's guard restores it. `log` is where stderr goes meanwhile.
 pub fn run(host: &Host, terminal: &mut Term, mut model: Model, log: &Path) -> io::Result<()> {
     let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()?;
     let mode = Mode::from_env(std::env::var("WHIPHAND_TUI_NOTIFY").ok().as_deref());
@@ -51,6 +53,13 @@ pub fn run(host: &Host, terminal: &mut Term, mut model: Model, log: &Path) -> io
         let (mut client, mut agent_rx) = AgentClient::connect(host);
         // `None` only while another program has the terminal.
         let mut events = Some(EventStream::new());
+        let mut signals = match Signals::new() {
+            Ok(s) => Some(s),
+            Err(e) => {
+                eprintln!("[whiphand-tui] no signal handlers: {e}");
+                None
+            }
+        };
         let mut tick = tokio::time::interval(TICK);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut cmds = init(&model);
@@ -144,6 +153,7 @@ pub fn run(host: &Host, terminal: &mut Term, mut model: Model, log: &Path) -> io
                 },
                 ev = next_event(&mut events) => match ev {
                     Some(Ok(Event::Key(key))) => vec![Msg::Key(key)],
+                    Some(Ok(Event::Paste(text))) => vec![Msg::Paste(text)],
                     Some(Ok(Event::Resize(..))) => vec![Msg::Resize],
                     Some(Ok(_)) => vec![],
                     Some(Err(e)) => return Err(e),
@@ -165,6 +175,7 @@ pub fn run(host: &Host, terminal: &mut Term, mut model: Model, log: &Path) -> io
                         msgs
                     }
                 },
+                () = signals::next(&mut signals) => vec![Msg::Terminated],
                 _ = tick.tick() => {
                     let mut msgs = vec![Msg::Tick { now_ms: now_ms() }];
                     // No resize events while crossterm is not reading: ask.

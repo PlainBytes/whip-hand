@@ -106,18 +106,28 @@ until the Tauri app exists would mean rewriting the run engine's control flow la
 
 ### Frontends
 
-Three front ends drive the same engine. The CLI inherits the terminal for an
-interactive step; the desktop app and the experimental `whiphand tui`
-(`crates/whiphand-tui`, docs/tui-plan.md) are both in-process clients of the
-agent's `Host`, so they share its jobs, PTYs and scrollback, and behave alike
-by construction. Feature parity between the two UIs is not a goal. Desktop-only
-by design, so not a TUI bug:
+Three front ends drive the same engine, and the TTY seam above is what lets
+each attach the human its own way:
+
+- the **CLI** (`crates/whiphand-cli`) spawns an interactive step with the
+  terminal inherited, so the harness has the user's terminal to itself;
+- the **desktop app** (`apps/desktop`) runs the agent's `Host` in-process; the
+  agent spawns the step in a PTY it owns and the webview shows it in xterm.js;
+- the **TUI** (`whiphand tui`, `crates/whiphand-tui`, docs/tui-plan.md) is one
+  more in-process client of a `Host`. It attaches to the same agent-owned PTY
+  by leaving its own screen and passing the PTY's bytes straight through to
+  the real terminal, and the user's keys back, until a detach key.
+
+The desktop and the TUI share the agent's jobs, PTYs and scrollback, and so
+behave alike by construction; neither forks behaviour the other needs, which
+lives in the shared crates instead. Feature parity between the two UIs is not
+a goal. Desktop-only by design, so not a TUI bug:
 
 - the file explorer and its pdf, mermaid and image viewers;
 - remote access (the TUI's agent runs without it, so it never binds the
   desktop's port);
 - the embedded terminal pane (the TUI attaches to a session full screen
-  instead, from its Phase 2).
+  instead).
 
 ### Adapter interface
 

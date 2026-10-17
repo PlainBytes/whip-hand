@@ -63,6 +63,11 @@ pub fn run(opts: TuiOptions) -> i32 {
         None => model::Model::without_workspace(now),
     };
     model.no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
+    model.depth = view::theme::Depth::from_env(
+        std::env::var("COLORTERM").ok().as_deref(),
+        std::env::var("TERM").ok().as_deref(),
+        std::env::var_os("WT_SESSION").is_some(),
+    );
     model.cwd = Some(cwd.to_string_lossy().into_owned());
     model.home = std::env::home_dir().map(|h| h.to_string_lossy().into_owned());
     // Remote access off: the desktop may be running, with its port.

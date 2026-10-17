@@ -29,12 +29,14 @@ pub fn view(model: &Model, frame: &mut Frame) {
         Route::Workflows => screens::workflows::render(model, frame, body),
         Route::Settings => screens::settings::render(model, frame, body),
     }
-    frame.render_widget(footer_line(model), footer);
+    frame.render_widget(footer_line(model, footer.width), footer);
     if model.help {
         widgets::help::render(frame, body, model.screen(), model.help_scroll);
     }
     if model.no_color {
         theme::strip_colour(frame.buffer_mut());
+    } else {
+        theme::reduce(frame.buffer_mut(), model.depth);
     }
 }
 
@@ -44,7 +46,6 @@ fn header_line(model: &Model) -> Line<'_> {
         Span::raw("  "),
         Span::raw(model.workdir.as_deref().unwrap_or("no workspace")),
         Span::styled(format!("  · {}", model.screen().title()), theme::dim()),
-        Span::styled("  (experimental)", theme::dim()),
     ];
     if model.pending_g {
         spans.push(Span::styled("  g…", theme::waiting()));
@@ -52,7 +53,7 @@ fn header_line(model: &Model) -> Line<'_> {
     Line::from(spans)
 }
 
-fn footer_line(model: &Model) -> Line<'_> {
+fn footer_line(model: &Model, width: u16) -> Line<'_> {
     if let Some(fatal) = &model.fatal {
         return Line::styled(format!(" {fatal}  ·  q quit"), theme::fatal_bar());
     }
@@ -91,5 +92,11 @@ fn footer_line(model: &Model) -> Line<'_> {
     if model.runs_ui.editing && *model.screen() == Route::Runs {
         return Line::styled(" type to filter  ·  Enter keep  ·  Esc clear", theme::dim());
     }
-    Line::styled(format!(" {}", keymap::hints(model.screen())), theme::dim())
+    Line::styled(
+        format!(
+            " {}",
+            keymap::hints(model.screen(), usize::from(width).saturating_sub(1))
+        ),
+        theme::dim(),
+    )
 }

@@ -26,6 +26,18 @@ fn snapshot(name: &str, model: &Model) {
     for size in SIZES {
         insta::assert_snapshot!(format!("{name}_{}x{}", size.0, size.1), render(model, size));
     }
+    survives_any_size(name, model);
+}
+
+/// A terminal can be made tiny, or very wide and short, mid-resize: every
+/// screen draws at any size without a panic. Not compared, only drawn.
+fn survives_any_size(name: &str, model: &Model) {
+    let odd = [(200, 1), (200, 3), (1, 50), (3, 50), (300, 100)];
+    let small = (1..=30).flat_map(|w| (1..=8).map(move |h| (w, h)));
+    for size in small.chain(odd) {
+        let drawn = std::panic::catch_unwind(|| render(model, size));
+        assert!(drawn.is_ok(), "{name} panicked at {}x{}", size.0, size.1);
+    }
 }
 
 fn now() -> f64 {

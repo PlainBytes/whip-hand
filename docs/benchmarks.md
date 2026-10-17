@@ -236,4 +236,24 @@ The workflows and settings screens, and core's YAML parser and workflow
 types now reached from the TUI, account for the growth. Startup is
 unchanged: the one new request at start (`getAppState`, for the TUI's
 preferences) answers after the runs list is up.
+
+### TUI Phase 4: hardening and release
+
+`cargo build --release -p whiphand-cli` on Linux x86_64 (Ryzen 9 5900X),
+`main` at 33fc751 (after the Phase 3 merge) against the Phase 4 branch
+(docs/tui-plan.md, Phase 4), both built alone in one fresh target directory.
+Measured as for Phase 1, at 5 ms resolution.
+
+| Metric | `main` after TUI Phase 3 | TUI Phase 4 | Change |
+|---|---:|---:|---:|
+| CLI binary | 5.47 MB | 5.48 MB | +0.01 MB |
+| `whiphand tui`: spawn to the populated runs list | 22 ms | 22 ms | 0 |
+| `whiphand tui`: peak RSS (VmHWM) | 8.1 MB | 8.2 MB | +0.1 MB |
+
+The signal handlers, bracketed paste and the colour mapping are small.
+Build the CLI on its own to measure it: `cargo build --release -p whiphand-agent
+-p whiphand-cli` in one command unifies the agent's default `remote` feature
+into the CLI and adds 0.45 MB (axum). Built that way the Phase 4 binary is
+5.93 MB, which matches Phase 3's TUI column (5.92 MB): that column most likely
+came from the combined build, so compare within each table.
 <!-- results:end -->

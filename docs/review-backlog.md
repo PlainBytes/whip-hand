@@ -178,3 +178,54 @@ have not been re-checked against the Rust code.
   that list was built in the first place) is still not done. A follow-up pass could re-run the
   same density measurement across the full tree and repeat the trim on whatever it finds ·
   effort: M.
+
+## TUI on Windows (manual validation, 2026-10-17)
+
+Found running `whiphand tui` from `main` (8bb3a6a, cross-built for
+`x86_64-pc-windows-msvc`) in Windows Terminal and conhost on Windows 11 (build
+26200) under QEMU; the run is recorded in `docs/tui-plan.md`, Phase 4.
+
+- **high · `crates/whiphand-tui/src/runtime/attach.rs` (`write`) +
+  `crates/whiphand-tui/src/update/attach.rs` (`on_stdin`) · the detach key never
+  fires under ConPTY.** A pseudoconsole's first output is `ESC[?9001h ESC[?1004h`
+  (win32-input-mode, focus reporting); attach forwards it verbatim, the TUI's own
+  console host takes it as the TUI asking for win32-input-mode, and from then on
+  keys reach the attach reader as `ESC[Vk;Sc;Uc;Kd;Cs;Rc_` text. `Ctrl-]` is
+  `ESC[221;27;29;1;8;1_`, never the byte `0x1d`, so `on_stdin` passes it to the
+  session (it shows as `^]`) and so does the key after it. Seen in Windows
+  Terminal and conhost, with the session's console holding only its own
+  processes (not the TUI's) · proposed fix: drop `?9001h` (and `?1004h`) from the
+  output attach forwards, replay included, and write `?9001l` on leave; a test
+  feeds `on_stdin` the win32-input-mode form of `Ctrl-]` · effort: S.
+- **high · release packaging (`scripts/package/cli.mjs`, no `.cargo/config.toml`)
+  · the Windows CLI needs the VC++ runtime.** `whiphand-windows-x86_64.exe`
+  (v0.5.0 too) imports `VCRUNTIME140.dll`; on a clean Windows 11 it exits
+  `0xC0000135` with no message at all, even for `--version`. CI's runners have the
+  runtime, so nothing there catches it · proposed fix: link the CRT statically for
+  `x86_64-pc-windows-msvc` (`-C target-feature=+crt-static`), and check the
+  release binary's imports in CI · effort: S.
+- **med · `crates/whiphand-tui/src/update/mod.rs:38` · `o` (ongoing runs in every
+  workspace) always fails, on every OS.** It asks `listRecentRuns` for
+  `limit: 200`; the agent's schema caps it at 100
+  (`crates/whiphand-agent/src/schema.rs:587`), so the call is refused and the view
+  says "Nothing is running in any recent workspace" under the error · proposed
+  fix: ask for 100, and say the list could not be read when the call fails ·
+  effort: S.
+- **med · `crates/whiphand-tui` paste on Windows · the rest of a multi-line paste
+  runs as keys.** The recorded gap is that a paste into a one-line prompt
+  submits at its first line break; after that, the remaining lines reach the
+  screen behind as commands (`second line` opened the ongoing view and the
+  new-run form; `c` or `x` would cancel or delete) · proposed fix: while a
+  prompt that a paste submitted is closing, drop key events that arrive within
+  the same read, or treat a burst of key events containing Enter as a paste ·
+  effort: M.
+- **low · command steps on Windows run Git's `sh.exe` without `usr\bin` on PATH**
+  (`crates/whiphand-core/src/process/shell.rs`), so `uname`, `seq`, `sleep` and the
+  rest of Git's coreutils are "command not found" unless the user's PATH has them;
+  `doctor` says command steps "run through …/usr/bin/sh.exe", which suggests they
+  would · proposed fix: prepend the shell's own directory to the step's PATH, or
+  say in `doctor` and the docs that only builtins are guaranteed · effort: S.
+- **low · attach leaves the session's title on the terminal.** After a session
+  the tab or window keeps the session's title (`C:\WINDOWS\system32\cmd.exe`)
+  instead of `whiphand` · proposed fix: set the TUI's title again on leave ·
+  effort: S.

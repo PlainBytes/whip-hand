@@ -545,7 +545,8 @@ Not done, and why:
   covers was run against the stub instead. The sign-off check uses the
   `feature-development` template: `examples/feature.yaml` has no approval step.
 - Windows attach input is type-checked and clippy-clean, not run: CI has no
-  console to attach. Keys without a character (arrows, F-keys) are turned
+  console to attach. (Run by hand on 2026-10-17, Phase 4: typing reaches the
+  session, but detach never fires.) Keys without a character (arrows, F-keys) are turned
   into VT sequences by a table that is unit-tested on every platform. The
   attach test is Unix-only (its stub is `sh`).
 - tmux and SSH were not tried (Phase 4's manual matrix).
@@ -685,8 +686,9 @@ this machine does not have):
 
 - [ ] Windows Terminal: start and follow a run; attach, detach, reattach;
   AltGr `@` and `\` in "open folder"; paste; resize; close the window with a
-  run going (it shows `cancelled` next time).
-- [ ] conhost: the same.
+  run going (it shows `cancelled` next time). Run on 2026-10-17 (below):
+  everything passes except detach, which never fires, and paste.
+- [ ] conhost: the same. Run on 2026-10-17: the same results.
 - [ ] macOS Terminal (256 colours): the same, and a coloured agent log.
 - [ ] iTerm2: the same.
 - [ ] tmux: notifications (bell, title) and a detach key that tmux does not
@@ -702,7 +704,37 @@ Not done, and why:
   mapping is unit-tested instead.
 - On Windows the console delivers a paste as keys, not as one event, so a
   multi-line paste into a one-line prompt still submits at its first line
-  break there.
+  break there, and the lines after it reach the screen behind as keys.
+
+Windows, run on 2026-10-17 from `main` (8bb3a6a), cross-built with
+`cargo xwin` for `x86_64-pc-windows-msvc`, on Windows 11 (build 26200) in a
+QEMU VM (WinBoat), with Git for Windows and a stub `claude.cmd` (the attach
+test's stub, ported to cmd). Keys were sent through QEMU's monitor, so they
+arrive as hardware scancodes, AltGr as the right Alt key; screenshots were
+taken the same way. In Windows Terminal and in conhost:
+
+- Pass: start, help, a run started from the form and followed to the end, its
+  step tree and log; colours (named, 256 and RGB lines); line editing in an
+  attached session (Backspace, Home, End, arrows) and the TUI coming back when
+  the session ends, the artifact harvested through the `.cmd` stub; AltGr
+  `@`, `\` and `{` on the Hungarian layout in "open folder"; Ctrl-Break and
+  closing the tab or window with a run going (the run is `cancelled`, its
+  step interrupted). Checked in Windows Terminal only: maximize, snap and
+  quarter-snap redraws; no `whiphand`, `sh` or `ping` left after the close;
+  `r` resumes the cancelled run to the end; `Q` puts the console back with
+  echo on; the bell when a run ends.
+- Fail: detach. A pseudoconsole asks for win32-input-mode (`ESC[?9001h`) in
+  its first output, attach passes that to the real console, and keys then
+  reach the attach reader as `ESC[…_` sequences, so `Ctrl-]` is never the byte
+  `0x1d` and goes to the session with the key after it. Detach, reattach,
+  `Ctrl-] Ctrl-]` and `Ctrl-] e` are blocked on it.
+- Fail: a two-line paste renamed the run to its first line, then ran the
+  second as keys.
+- Found on the way, not Windows-specific: `o` (ongoing runs) is refused by the
+  agent (`limit` 200 over its 100); the Windows CLI needs the VC++ runtime and
+  exits silently without it.
+
+Each is in `docs/review-backlog.md` ("TUI on Windows").
 - A signal that arrives while `$PAGER` or `$EDITOR` has the terminal is
   handled when the program exits: the TUI waits for it synchronously.
 - crossterm writes the 16 named colours as `38;5;n`. A terminal that knows

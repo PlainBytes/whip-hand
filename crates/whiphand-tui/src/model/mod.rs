@@ -187,6 +187,8 @@ pub struct RunsUi {
     pub ongoing: bool,
     /// `listRecentRuns`, for the ongoing view.
     pub recent: Vec<Value>,
+    /// The last `listRecentRuns` failed: an empty list says nothing.
+    pub recent_failed: bool,
 }
 
 /// The workspaces screen's own state.

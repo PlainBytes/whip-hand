@@ -179,6 +179,8 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.dirty = true;
             attach::on_host_gone(model)
         }
+        // The event loop leaves an attached session as it returns.
+        Msg::Terminated => vec![Cmd::Quit],
     }
 }
 

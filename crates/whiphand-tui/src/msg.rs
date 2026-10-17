@@ -32,4 +32,7 @@ pub enum Msg {
     AttachFailed(String),
     /// The agent's engine thread is gone: its channel closed.
     HostGone,
+    /// A signal (SIGTERM, SIGHUP, SIGINT) or the console closing: quit
+    /// now, without asking; runs get the host's grace period.
+    Terminated,
 }

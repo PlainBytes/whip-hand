@@ -110,6 +110,14 @@ fn quitting_with_a_live_run_asks_first() {
 }
 
 #[test]
+fn a_signal_quits_without_asking() {
+    let mut model = Model::new("/w".into(), 0.0);
+    running(&mut model, "j1", "r1");
+    assert_eq!(update(&mut model, Msg::Terminated), [Cmd::Quit]);
+    assert!(model.dialog.is_none());
+}
+
+#[test]
 fn a_run_state_change_tracks_the_job_and_refreshes_the_list() {
     let mut model = Model::new("/w".into(), 0.0);
     let cmds = running(&mut model, "j1", "r1");

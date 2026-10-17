@@ -152,10 +152,9 @@ pub fn run(host: &Host, terminal: &mut Term, mut model: Model, log: &Path) -> io
                     }
                 },
                 ev = next_event(&mut events) => match ev {
-                    Some(Ok(Event::Key(key))) => vec![Msg::Key(key)],
-                    Some(Ok(Event::Paste(text))) => vec![Msg::Paste(text)],
-                    Some(Ok(Event::Resize(..))) => vec![Msg::Resize],
-                    Some(Ok(_)) => vec![],
+                    #[cfg(windows)]
+                    Some(Ok(Event::Key(key))) => key_burst(key)?,
+                    Some(Ok(event)) => event_msgs(event),
                     Some(Err(e)) => return Err(e),
                     None => return Ok(()),
                 },
@@ -197,6 +196,40 @@ pub fn run(host: &Host, terminal: &mut Term, mut model: Model, log: &Path) -> io
             }
         }
     })
+}
+
+fn event_msgs(event: Event) -> Vec<Msg> {
+    match event {
+        Event::Key(key) => vec![Msg::Key(key)],
+        Event::Paste(text) => vec![Msg::Paste(text)],
+        Event::Resize(..) => vec![Msg::Resize],
+        _ => vec![],
+    }
+}
+
+/// A key, and the keys already waiting behind it: a paste, when they read as
+/// one (`paste::from_burst`). Read with crossterm's own `poll` and `read`,
+/// which share the stream's reader; polling the stream itself here would
+/// leave its wake-up with a waker nobody waits on.
+#[cfg(windows)]
+fn key_burst(first: crossterm::event::KeyEvent) -> io::Result<Vec<Msg>> {
+    let mut keys = vec![first];
+    let mut after = Vec::new();
+    while crossterm::event::poll(Duration::ZERO)? {
+        match crossterm::event::read()? {
+            Event::Key(key) => keys.push(key),
+            event => {
+                after = event_msgs(event);
+                break;
+            }
+        }
+    }
+    let mut msgs = match crate::runtime::paste::from_burst(&keys) {
+        Some(text) => vec![Msg::Paste(text)],
+        None => keys.into_iter().map(Msg::Key).collect(),
+    };
+    msgs.extend(after);
+    Ok(msgs)
 }
 
 /// Terminal events; none while another program or a session has the

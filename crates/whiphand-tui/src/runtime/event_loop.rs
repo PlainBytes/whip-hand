@@ -114,6 +114,8 @@ pub fn run(host: &Host, terminal: &mut Term, mut model: Model, log: &Path) -> io
                         if let Some(session) = attached.take() {
                             session.leave(terminal)?;
                             events = Some(EventStream::new());
+                            // The session may have set its own: sent again below.
+                            title.clear();
                         }
                     }
                     Cmd::Stdout(bytes) => {
@@ -148,6 +150,7 @@ pub fn run(host: &Host, terminal: &mut Term, mut model: Model, log: &Path) -> io
                             session.leave(terminal)?;
                         }
                         events = Some(EventStream::new());
+                        title.clear();
                         vec![Msg::AttachFailed("the terminal stopped sending keys".into())]
                     }
                 },

@@ -89,7 +89,6 @@ AI harnesses
 ✔ claude 2.1.263
   · not logged in — run `claude` and use /login
 ✔ copilot 1.0.83
-  · copilot will not signal when it needs you; set "beep": true in ~/.copilot/settings.json
 ✔ opencode 1.17.13
 
 Support tools
@@ -169,8 +168,8 @@ hide: [fd, jq]     # drop built-ins you do not care about
 Every key is validated and unknown ones are rejected, so a typo tells you rather than
 silently doing nothing. Overriding a built-in changes its label, group, url and
 `optional`, but detection for `claude`, `copilot` and `opencode` always goes through their
-adapters — that is where their setup advice (copilot's `beep` note, opencode's PATH note)
-comes from.
+adapters — that is where their setup advice (login notes, opencode's PATH note) comes
+from.
 
 It is a **separate file from `config.yaml` on purpose**: `config.yaml` is rewritten
 wholesale whenever settings are saved, so anything unrecognized in it would be lost.

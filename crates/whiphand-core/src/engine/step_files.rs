@@ -57,6 +57,12 @@ pub fn opencode_plugin_index_path(run_dir: &str, step_id: &str) -> String {
     node_path::join(&[&opencode_plugin_path(run_dir, step_id), "index.mjs"])
 }
 
+/// copilot's plugin directory for a step, mounted with `--plugin-dir`: it
+/// carries the hooks that write the step's await-state file.
+pub fn copilot_plugin_path(run_dir: &str, step_id: &str) -> String {
+    node_path::join(&[run_dir, &format!(".copilot-plugin-{step_id}")])
+}
+
 /// Why a live session is waiting on the human.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AwaitReason {
@@ -101,6 +107,9 @@ pub fn parse_await_state(raw: &str) -> Option<AwaitReason> {
         Some(JsValue::Str(t)) => match t.as_str() {
             "idle_prompt" => Some(AwaitReason::Away),
             "permission_prompt" | "worker_permission_prompt" => Some(AwaitReason::Permission),
+            // A question the agent put to the human (copilot's `ask_user`, an
+            // MCP elicitation): the human owes the next move.
+            "elicitation_dialog" => Some(AwaitReason::Turn),
             _ => None,
         },
         _ => None,

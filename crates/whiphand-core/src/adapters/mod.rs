@@ -138,7 +138,7 @@ impl Adapter {
         }
     }
 
-    /// The doctor probe plus the runner's own notes (login, beep, PATH).
+    /// The doctor probe plus the runner's own notes (login, PATH).
     pub async fn detect(self) -> DetectResult {
         self.detect_with(&AuthDeps::live()).await
     }
@@ -147,13 +147,7 @@ impl Adapter {
         let probed = probe_runner(&self.doctor()).await;
         match self {
             Adapter::Claude => with_note(probed, claude_auth_note(deps)),
-            Adapter::Copilot => {
-                let probed = with_note(probed, copilot_auth_note(deps));
-                if !probed.installed {
-                    return probed;
-                }
-                probed.with_notes(copilot::beep_note(deps))
-            }
+            Adapter::Copilot => with_note(probed, copilot_auth_note(deps)),
             Adapter::Opencode => {
                 let probed = if probed.installed {
                     match opencode_auth_note(deps).await {

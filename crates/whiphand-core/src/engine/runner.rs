@@ -33,7 +33,7 @@ use crate::engine::frames::{execution_fields, frame_identity, identity_key, loop
 use crate::engine::frontend::Frontend;
 use crate::engine::guidance::headless_prompt;
 use crate::engine::manual::{ManualExtras, build_manual_request, note_artifact, review_artifact};
-use crate::engine::progress::{ProgressParser, progress_error_message};
+use crate::engine::progress::{ProgressParser, progress_error_message, stderr_error_message};
 use crate::engine::resume::{DoneExecution, ResumePlan, stage_budget_key};
 use crate::engine::spec::{self, write_spec_files};
 use crate::engine::stages::{DEFAULT_STAGE_RETRIES, discover_stages, next_stage, odd_stage_names};
@@ -1324,6 +1324,9 @@ impl<F: Frontend> Run<'_, F> {
             let name = if stream == ChildStream::Stdout {
                 "stdout"
             } else {
+                if let Some(error) = format.and_then(|fmt| stderr_error_message(fmt, line)) {
+                    *last_error.borrow_mut() = Some(error);
+                }
                 "stderr"
             };
             self.emit(obj! { "type" => "step:log", "stepId" => step_id, "stream" => name, "line" => line });

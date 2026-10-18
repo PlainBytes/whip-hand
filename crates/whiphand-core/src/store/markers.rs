@@ -190,6 +190,10 @@ pub fn is_opencode_support_file_name(name: &str) -> bool {
     is_step_state_name(name, "guidance.md") || name.starts_with(".opencode-plugin-")
 }
 
+pub fn is_copilot_support_file_name(name: &str) -> bool {
+    name.starts_with(".copilot-plugin-")
+}
+
 pub fn is_spawn_file_name(name: &str) -> bool {
     [
         "prompt",
@@ -226,6 +230,8 @@ mod tests {
         assert!(!is_end_marker_name("..done"));
         assert!(is_spawn_file_name(".a.system-prompt.md"));
         assert!(is_opencode_support_file_name(".opencode-plugin-a"));
+        assert!(is_copilot_support_file_name(".copilot-plugin-a"));
+        assert!(!is_copilot_support_file_name("copilot-plugin-a"));
     }
 
     #[test]

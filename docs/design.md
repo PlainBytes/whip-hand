@@ -49,7 +49,7 @@ doctor` reports the installed versions.
 | Continue most recent | `-c, --continue` | `--continue` | `-c, --continue` |
 | Deny specific tools | `--disallowedTools <tools...>` | `--deny-tool[=tools...]` | `permission` config, per pattern (`allow`/`ask`/`deny`) |
 | Restrict to a tool allowlist | `--allowedTools <tools...>` | `--allow-tool[=tools...]`, `--available-tools[=tools...]` | `permission` config (same mechanism, no separate allowlist flag) |
-| Reasoning effort | `--effort low\|medium\|high\|xhigh\|max` | `--effort none\|low\|medium\|high\|xhigh\|max` | `--variant <v>` (`run` only; the TUI has none — set via the agent config's own `variant` field instead) |
+| Reasoning effort | `--effort low\|medium\|high\|xhigh\|max` | `--reasoning-effort none\|minimal\|low\|medium\|high\|xhigh\|max` (`--effort` is an undocumented alias) | `--variant <v>` (`run` only; the TUI has none — set via the agent config's own `variant` field instead) |
 | Extra working directories | `--add-dir <dirs...>` | `--add-dir <dir>`, `-C <dir>` | `permission.external_directory`, per pattern |
 | Structured output | `--output-format text\|json\|stream-json` (NDJSON needs `--verbose`) | `--output-format json --stream on` (JSONL, one object per line) | `run --format json` (NDJSON) |
 | Transcript export | — (use resume harvest, below) | — (use resume harvest, below) | `opencode export <id>` (not used by whiphand) |
@@ -278,13 +278,27 @@ frontend that can watch the filesystem combines them (`agent/frontend.ts`):
   *your turn*, `PermissionRequest` → *needs permission*, `UserPromptSubmit`
   removes the file, and `Notification` dumps its raw payload, from which the
   agent maps `notification_type` (`idle_prompt` → *waiting for you*, claude's own
-  judgement that the human has been silent about a minute). Inline settings
+  judgement that the human has been silent about a minute; `elicitation_dialog`,
+  a question put to the human, → *your turn*). Inline settings
   **merge** with the user's own, so their hooks still run alongside these.
   Every hook command ends `; exit 0` — a `Stop` hook exiting nonzero blocks the
   agent from stopping, and a `PermissionRequest` one exiting 2 denies the tool.
+- **copilot's hooks, from a plugin mounted for the one session.** copilot reads
+  hooks from plugins, and `--plugin-dir=<runDir>/.copilot-plugin-<stepId>` mounts
+  one for this launch only (core writes its `.plugin/plugin.json` and
+  `hooks/hooks.json` as spawn files). They write the same `.await` file:
+  `agentStop` → *your turn*; `notification` dumps its payload, which carries
+  claude's `notification_type` (`permission_prompt` when a tool waits for
+  approval, `elicitation_dialog` when the agent asks a question through its
+  `ask_user` tool); `userPromptSubmitted` and `postToolUse` remove the file,
+  since either means the human answered. `permissionRequest` is deliberately
+  not used: it also fires for a tool a flag already approves (the marker's
+  `touch`), which would report a prompt nobody sees. Each entry has a `bash`
+  command for POSIX and a `powershell` one for Windows, and each swallows its
+  own failure and exits 0. The user's own hooks keep running alongside.
 - **The terminal bell (runner-agnostic).** A standalone BEL in the PTY stream
-  means *wants attention*. This is copilot's only channel, since it has no hooks
-  (and its `beep` setting is off by default — `whiphand doctor` says so). BEL is also
+  means *wants attention*. It is the fallback for a runner whose hooks did not
+  run (copilot only rings it with `"beep": true`, off by default). BEL is also
   the terminator of an OSC sequence, and claude emits OSC title and hyperlink
   sequences constantly, so `agent/bel.ts` tracks OSC state and counts only bells
   that stand alone.
@@ -323,7 +337,8 @@ A `writes: false` step (plan, review) gets two independent layers, because a pro
 the model not to edit files is a request, not a control:
 
 1. **CLI-native tool denial** — `--disallowedTools "Write Edit NotebookEdit"` (claude) /
-   `--deny-tool` plus a restricted `--available-tools` (copilot) / opencode's `permission`
+   `--deny-tool=write` interactively and an allowlist of `shell`, `url` and a write to the
+   artifact alone headlessly (copilot) / opencode's `permission`
    config, which takes a different shape again: rather than a flag, the agent config sent
    through `OPENCODE_CONFIG_CONTENT` sets `edit: {"*": "deny"}` for a read-only step and
    `{"*": "allow"}` for a writing one. Bash stays allowed either way, same as claude and
@@ -1179,6 +1194,11 @@ when a run is started without one. It happens before the first step — delibera
 a name minted at the end could not feed a worktree or a branch — through an optional
 `suggestName` adapter method whose reply is captured with the same `SpawnSpec.capture`
 plumbing command steps use. Its absence on an adapter *is* the capability check.
+
+The capture is the runner's whole stdout, so the prompt reaches it on stdin wherever the
+runner reads one: copilot narrates reading a prompt file ("Reading prompt.txt…", then the
+tool's own lines) on stdout, and that narration would become the name. copilot's
+`suggestName` therefore takes the prompt on stdin with `-s` and no tools at all.
 
 It is best-effort in every direction: a runner that cannot answer, a failed spawn, a
 20-second timeout, or a reply with nothing usable in it all leave the run unnamed. It never

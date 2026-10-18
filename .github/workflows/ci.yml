@@ -203,16 +203,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri
-      # tauri_build::build() copies bundle.resources on every cargo
-      # invocation, `cargo check` included — and the web resource is a
-      # gitignored build output that only `npm run package` produces. This job
-      # asks whether the Rust crate still compiles; whether a bundle can be
-      # assembled is the `package` job below. So drop the bundle input rather
-      # than fabricate an empty one. TAURI_CONFIG is an RFC 7386 merge patch,
-      # so null removes the key.
+      # tauri_build::build() copies bundle.resources and bundle.externalBin
+      # on every cargo invocation, `cargo check` included — and the web
+      # resource and the CLI sidecar are gitignored build outputs that only
+      # `npm run package` produces. This job asks whether the Rust crate still
+      # compiles; whether a bundle can be assembled is the `package` job
+      # below. So drop the bundle inputs rather than fabricate empty ones.
+      # TAURI_CONFIG is an RFC 7386 merge patch, so null removes the key.
       - name: The Rust crate still compiles
         env:
-          TAURI_CONFIG: '{"bundle":{"resources":null}}'
+          TAURI_CONFIG: '{"bundle":{"resources":null,"externalBin":null}}'
         run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
 
   # The root Cargo workspace (crates/*): core, protocol, agent, CLI and the
@@ -240,6 +240,13 @@ jobs:
       # The TUI links the agent without remote access; keep that build honest.
       - run: cargo clippy -p whiphand-agent --no-default-features --all-targets -- -D warnings
       - run: cargo test -p whiphand-agent --no-default-features
+      # The Linux CLI ships static (scripts/package/cli.mjs); a dependency
+      # that cannot build for musl should fail here, not at release time.
+      - name: The CLI builds static for Linux
+        if: runner.os == 'Linux'
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          cargo build -p whiphand-cli --target x86_64-unknown-linux-musl
 
   # The full `npm run package` pipeline — the CLI and the Tauri bundle — on
   # push to main only, not on PRs: ~4 minutes per platform is too slow for a
@@ -264,8 +271,13 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
       - uses: dtolnay/rust-toolchain@stable
+      - name: Add the static Linux target
+        if: runner.os == 'Linux'
+        run: rustup target add x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: apps/desktop/src-tauri
+          workspaces: |
+            . -> target
+            apps/desktop/src-tauri -> target
       - run: npm ci
       - run: npm run package

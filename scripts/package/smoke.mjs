@@ -28,7 +28,23 @@ function check(label, fn) {
   }
 }
 
-export function smokeCli() {
+/**
+ * Whether an ELF64 file names a program interpreter (PT_INTERP), i.e. needs
+ * a dynamic loader, and so some distribution's libc, to start.
+ */
+export function hasInterpreter(bytes) {
+  assert.equal(bytes.toString('latin1', 1, 4), 'ELF', 'not an ELF file');
+  const phoff = Number(bytes.readBigUInt64LE(0x20));
+  const phentsize = bytes.readUInt16LE(0x36);
+  const phnum = bytes.readUInt16LE(0x38);
+  for (let i = 0; i < phnum; i++) {
+    if (bytes.readUInt32LE(phoff + i * phentsize) === 3) return true;
+  }
+  return false;
+}
+
+/** `static`: the Linux build is the musl one (cli.mjs without `--host`). */
+export function smokeCli({ static: isStatic = true } = {}) {
   const whiphand = path.join(distDir, `whiphand${exeSuffix}`);
   process.stdout.write('smoke: whiphand\n');
 
@@ -79,6 +95,34 @@ export function smokeCli() {
       fs.rmSync(workdir, { recursive: true, force: true });
     }
   });
+
+  check('tui is a command', () => {
+    const { stdout } = runSync([whiphand, 'tui', '--help'], { stdio: ['ignore', 'pipe', 'inherit'], check: true });
+    assert.match(stdout, /terminal UI/);
+  });
+
+  check('bare whiphand off a terminal is the usage error, not the TUI', () => {
+    const { status, stderr } = runSync([whiphand], { stdio: ['ignore', 'pipe', 'pipe'] });
+    assert.equal(status, 1);
+    assert.match(stderr, /Usage: whiphand/);
+  });
+
+  check('desktop says where to get the app when it is missing', () => {
+    const missing = path.join(os.tmpdir(), 'whiphand-smoke-no-desktop', `whiphand-desktop${exeSuffix}`);
+    const { status, stderr } = runSync([whiphand, 'desktop'], {
+      stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, WHIPHAND_DESKTOP: missing },
+    });
+    assert.equal(status, 1);
+    assert.match(stderr, /not installed/);
+  });
+
+  // Linux only: the shipped binary is static, so it runs on any distribution
+  // rather than only on the glibc of the runner that built it.
+  if (process.platform === 'linux' && isStatic) {
+    check('the binary is static (no program interpreter)', () => {
+      assert.ok(!hasInterpreter(fs.readFileSync(whiphand)), 'needs a dynamic loader');
+    });
+  }
 
   // Windows only: the C runtime is linked in (.cargo/config.toml). A binary
   // importing it exits silently on a Windows without the VC++ redistributable,

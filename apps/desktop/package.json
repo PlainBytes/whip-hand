@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -noEmit -p tsconfig.json && vite build",
     "test": "vitest run",
+    "pretauri": "node ../../scripts/package/sidecar.mjs",
     "tauri": "tauri",
     "build:web": "vite build --config vite.web.config.ts"
   },

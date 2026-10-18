@@ -6,6 +6,7 @@ apps/*/src-tauri/target/
 apps/*/src-tauri/gen/
 dist/
 apps/*/src-tauri/resources/
+apps/*/src-tauri/binaries/
 .worktrees/
 .whiphand/
 # The core parity corpus keeps workspace trees whose .whiphand/ is the fixture.

@@ -280,6 +280,7 @@ pub fn build_cli() -> Command {
             .arg(dir_option("working folder"))
             .arg(extra()),
         )
+        .subcommand(sub("desktop", "start the desktop app").arg(extra()))
 }
 
 /// The flags string commander prints for an option: `-C <dir>`, `--input <pair...>`.

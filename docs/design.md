@@ -118,6 +118,13 @@ each attach the human its own way:
   by leaving its own screen and passing the PTY's bytes straight through to
   the real terminal, and the user's keys back, until a detach key.
 
+The CLI and the TUI are one executable, `whiphand`: `whiphand tui`, or bare
+`whiphand` when both stdin and stdout are a terminal (from a script or a pipe,
+bare `whiphand` stays the usage error). It ships on its own (a static Linux
+binary, a Windows exe, a `whiphand-cli` .deb, winget) and inside the desktop
+bundle as a sidecar. The desktop's own executable is `whiphand-desktop`, and
+`whiphand desktop` starts it, so `whiphand` is the one name a user types.
+
 The desktop and the TUI share the agent's jobs, PTYs and scrollback, and so
 behave alike by construction; neither forks behaviour the other needs, which
 lives in the shared crates instead. Feature parity between the two UIs is not
@@ -1432,7 +1439,9 @@ Releases are started by hand from GitHub Actions:
    the branch on `main`, enter the version (`0.1.4`), and run it.
 3. **Wait for the build** (about 10–15 minutes). `.github/workflows/release.yml` checks that
    the version matches the code, then builds Linux and Windows into a draft release: the CLI
-   binaries, the desktop bundles, `latest.json` for Tauri's updater, and a `SHA256SUMS` file.
+   binaries (`whiphand-linux-x86_64`, static, and `whiphand-windows-x86_64.exe`), the
+   `whiphand-cli` .deb, the desktop bundles (which carry the same CLI as a sidecar),
+   `latest.json` for Tauri's updater, and a `SHA256SUMS` file.
    It publishes the release as `v0.1.4` only once everything is uploaded, with notes
    generated from the merged PRs. You can edit the title and notes afterwards.
 
@@ -1441,6 +1450,22 @@ version can't be released twice, even after deleting the release. A mistake ship
 patch version. If the build fails partway, nothing is published and the draft stays hidden:
 re-run the failed jobs from the run page, or run the workflow again with the same version,
 which reuses the draft.
+
+Once the release is public, the `winget` job opens the PR to
+[microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) that adds the new version of
+`PlainBytes.Whiphand` (the Windows CLI, as a portable exe). It is skipped until an operator has
+set it up, once:
+
+1. Fork `microsoft/winget-pkgs` under the account that will open the PRs.
+2. Submit the first version by hand: `wingetcreate new
+   https://github.com/PlainBytes/whip-hand/releases/download/v<version>/whiphand-windows-x86_64.exe`,
+   with identifier `PlainBytes.Whiphand`, installer type `portable` and command `whiphand`.
+   The job can only add versions to a package that exists.
+3. Add a classic token of that account with `public_repo` as the `WINGET_TOKEN` secret.
+
+A winget failure never touches the release, which is already published by then; rerun the job.
+The standalone CLI does not update itself: winget, apt or the install scripts do it, while the
+copy inside the desktop bundle updates with the app.
 
 Only the `.AppImage` and the Windows NSIS installer self-update. The `.deb` prompts with a
 link to the release page instead, since Tauri's updater cannot install into a `.deb`.

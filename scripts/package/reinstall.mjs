@@ -87,9 +87,10 @@ if (debVersion !== version) {
 }
 
 // Read the dpkg name out of the artifact instead of hardcoding `whiphand`. It
-// comes from `[package] name` in src-tauri/Cargo.toml, lowercased, and is *not*
-// the filename — so a future rename removes the package that is actually
-// installed rather than orphaning it.
+// comes from productName in tauri.conf.json, lowercased (renaming the crate to
+// whiphand-desktop left it `whiphand`), and is *not* the filename — so a
+// future rename removes the package that is actually installed rather than
+// orphaning it.
 const packageName = capture(['dpkg-deb', '-f', deb, 'Package']);
 
 process.stdout.write(`\nreinstalling ${packageName} from ${path.basename(deb)}\n\n`);

@@ -10,9 +10,34 @@ reviews it in a loop until the review comes back clean.
 
 ## Install
 
-Requires a Rust toolchain for the `whiphand` CLI, Node ≥ 24 to build the desktop
-app's UI and run the test scripts, and at least one of
-`claude` / `copilot` / `opencode` on PATH.
+Whiphand comes in two shapes, from the same [releases](https://github.com/PlainBytes/whip-hand/releases):
+
+- **`whiphand`**: the CLI and the terminal UI in one file, for terminals, tmux and SSH. Linux
+  x86_64 (static, so any distribution) and Windows x86_64.
+- **The desktop app** (`whiphand-desktop`): a `.deb`, an `.AppImage` or a Windows installer. The
+  `.deb` and the Windows installer also install `whiphand`, so installing the app gets you both.
+
+Either way you need at least one of `claude` / `copilot` / `opencode` on PATH; `whiphand doctor`
+checks.
+
+```bash
+# Linux: the binary into ~/.local/bin, checked against the release's SHA256SUMS
+curl -fsSL https://raw.githubusercontent.com/PlainBytes/whip-hand/main/scripts/install/install.sh | sh
+
+# Linux, as a package (conflicts with the desktop .deb, which carries the same /usr/bin/whiphand)
+sudo apt install ./whiphand-cli_<version>_amd64.deb
+
+# Windows: into %LOCALAPPDATA%\Programs\whiphand, added to your PATH
+irm https://raw.githubusercontent.com/PlainBytes/whip-hand/main/scripts/install/install.ps1 | iex
+winget install PlainBytes.Whiphand    # once its first version is accepted into winget-pkgs
+```
+
+`WHIPHAND_VERSION=0.5.1` picks a release for either script, and `WHIPHAND_INSTALL_DIR` the folder.
+Or download `whiphand-linux-x86_64` / `whiphand-windows-x86_64.exe` from the release yourself and
+check it against `SHA256SUMS`.
+
+From source, you need a Rust toolchain for the CLI, and Node ≥ 24 to build the desktop app's UI
+and run the test scripts:
 
 ```bash
 npm install
@@ -37,15 +62,17 @@ whiphand run examples/feature.yaml --input feature=x --worktree              # r
 whiphand run develop --input feature=x --no-worktree                         # run in the working folder even if the workflow asks for a worktree
 whiphand run develop --input feature=y --in-worktree 20260907-141233-a3f1   # run again in that run's worktree, on its branch (refused while another run is using it)
 whiphand worktree remove 20260907-141233-a3f1                                # remove a run's worktree (--force discards uncommitted changes); the branch stays
-whiphand tui -C ~/src/shop                                                   # the terminal UI: follow and drive a workspace's runs
+whiphand                                                                     # the terminal UI, on the current folder
+whiphand tui -C ~/src/shop                                                   # the terminal UI on another workspace
+whiphand desktop                                                             # start the desktop app
 ```
 
 Workflows live in `.whiphand/workflows/<name>.yaml` (so `whiphand run iterate` works) or anywhere as a
 path. Artifacts land in `.whiphand/runs/<run-id>/` as plain markdown. Workspace defaults live in
 `.whiphand/config.yaml`.
 
-**Terminal UI.** `whiphand tui` drives runs from a terminal, tmux or an SSH session, beside the
-desktop app. See [Terminal UI](#terminal-ui).
+**Terminal UI.** `whiphand` on its own (or `whiphand tui`) drives runs from a terminal, tmux or an
+SSH session, beside the desktop app. See [Terminal UI](#terminal-ui).
 
 `whiphand init` ships three starter workflows. The two that build something end the same way: a
 human gate that can send the work back with comments for another cycle, not just ship it or kill
@@ -403,11 +430,15 @@ shows what already happened rather than an empty pane.
 
 ## Terminal UI
 
-`whiphand tui` is a keyboard-only front end for people who live in a terminal or work over SSH. It
+`whiphand tui`, or plain `whiphand` in a terminal, is a keyboard-only front end for people who live
+in a terminal or work over SSH. It
 runs the same in-process agent as the desktop app, so runs, sessions and approvals behave the same
 in both; it is not a replacement for the desktop app, and the two can be open on one workspace at
 once. It opens `-C`, else the current folder if it has `.whiphand/`, else a list of recent
-workspaces (`a` opens another folder by its path, `p` pins one).
+workspaces (`a` opens another folder by its path, `p` pins one). Plain `whiphand` opens the TUI
+only when both its input and output are a terminal; from a script or a pipe it prints the usage
+as before. `whiphand desktop` starts the desktop app, looking beside `whiphand`, then on PATH
+(and on Windows in the installer's folders); `WHIPHAND_DESKTOP` names the executable outright.
 
 - **Runs.** The runs list (`/` filters, `o` shows what is running in every recent workspace), and a
   run's step tree beside its log, events, artifacts and diff (`1`-`4`). `n` starts a run from a
@@ -486,19 +517,26 @@ Both artifacts can be built as self-contained executables that need no repo, no
 
 ```bash
 npm run package:cli       # dist/whiphand (dist/whiphand.exe on Windows) — the CLI, a native Rust binary
+npm run package:cli-deb   # Linux: dist/whiphand-cli_<version>_amd64.deb, from dist/whiphand
 npm run package:desktop   # dist/*.deb + dist/*.AppImage on Linux, an NSIS installer on Windows
-npm run package           # both
+npm run package           # the CLI and the desktop app
 npm run reinstall         # Ubuntu: build the .deb, then apt-remove and reinstall it
 ```
 
-`dist/whiphand` is the Rust CLI (`crates/whiphand-cli`), about 3.5 MB with the starter
-workflows compiled in. Copy it anywhere on PATH and run `whiphand` as usual. `claude` / `copilot` / `opencode` are still runtime prerequisites;
+`dist/whiphand` is the Rust CLI (`crates/whiphand-cli`), about 5.5 MB with the starter
+workflows compiled in. Copy it anywhere on PATH and run `whiphand` as usual. On Linux it is
+built for musl (`rustup target add x86_64-unknown-linux-musl` once), so it is static and runs on
+any distribution; `node scripts/package/cli.mjs --host` builds for this machine's glibc instead.
+`claude` / `copilot` / `opencode` are still runtime prerequisites;
 `whiphand doctor` reports them, along with everything else this machine needs.
 
 `npm run package:desktop` builds the browser UI that remote access serves as a Tauri
 resource, then has Tauri's bundler produce a `.deb` to install and an `.AppImage` to run
 from anywhere (an NSIS installer on Windows). The agent is compiled into the app, so
-there is no Node runtime or sidecar to ship. `npm run package:cli` finishes by smoke-testing
+there is no Node runtime to ship. The one sidecar is the `whiphand` CLI itself
+(`scripts/package/sidecar.mjs`), which the `.deb` installs as `/usr/bin/whiphand` beside
+`/usr/bin/whiphand-desktop`, and the Windows installer beside the app with its folder added
+to the user's PATH (removed again on uninstall). `npm run package:cli` finishes by smoke-testing
 the binary it built (`scripts/package/smoke.mjs`), so a broken CLI is not produced silently.
 
 `npm run reinstall` is the Ubuntu edit/install/verify loop in one command: it builds the
@@ -507,15 +545,16 @@ for the two apt steps, so expect a password prompt). The removal is not just tid
 the version is pinned across builds, so `apt-get install` over an already-installed
 `0.1.0` is a no-op and the new bundle would silently not land.
 
-**These are built natively and link this machine's glibc**, so they run on the Ubuntu
-release that built them, not on older ones. Building for wider reach means building in
+**The desktop bundles are built natively and link this machine's glibc**, so they run on the
+Ubuntu release that built them, not on older ones (the CLI inside them is the static one). Building for wider reach means building in
 an older-glibc container.
 
 **Releases are started by hand from GitHub Actions**: bump the version
 (`npm run bump -- 0.1.4`) in a PR and merge it, then on GitHub go to
 **Actions → Release → Run workflow** on `main` and enter `0.1.4`. Releases are immutable, so
 a version can only be released once. See `docs/design.md` for the full release,
-auto-update, and updater-signing-key process, and for how to roll back a bad release.
+auto-update, and updater-signing-key process, for setting up winget, and for how to roll
+back a bad release.
 
 **Windows downloads are unsigned.** There is no code-signing certificate yet — the seam for
 one exists (`WHIPHAND_SIGN_COMMAND` for `whiphand.exe`, Tauri's `bundle.windows.signCommand`

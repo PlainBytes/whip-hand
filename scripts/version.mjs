@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * `0.1.0` lives in places that nothing keeps in sync automatically:
- * `apps/desktop/package.json`, `src-tauri/Cargo.toml` and
+ * `apps/desktop/package.json`, `packages/test-support/package.json`,
+ * `src-tauri/Cargo.toml` and
  * `src-tauri/tauri.conf.json`, and the Rust crates' own manifests. The Tauri
  * updater compares `tauri.conf.json`'s version against `latest.json`, and
  * `whiphand --version` and the agent's `hello` print whiphand-core's crate
@@ -9,12 +10,12 @@
  * untidiness.
  *
  * Every Rust crate (`src-tauri`, `crates/whiphand-core`, the `whiphand` CLI in
- * `crates/whiphand-cli`, `crates/whiphand-protocol` and
- * `crates/whiphand-agent`) carries the version in its Cargo.toml and again in
- * every Cargo.lock that records it: not a place a human would edit, but one
- * `cargo` rewrites if it drifts. The desktop links the agent in-process, so
- * src-tauri's lockfile records core, protocol and agent too, beside the
- * workspace's. One table (`CARGO_CRATES`) handles all of them.
+ * `crates/whiphand-cli`, `crates/whiphand-protocol`, `crates/whiphand-agent`,
+ * `crates/whiphand-tui` and the process guard in `crates/job-guard`) carries
+ * the version in its Cargo.toml and again in every Cargo.lock that records
+ * it: not a place a human would edit, but one `cargo` rewrites if it drifts.
+ * The desktop links the agent in-process, so src-tauri's lockfile records
+ * core, protocol, agent and the guard too, beside the workspace's. One table (`CARGO_CRATES`) handles all of them.
  *
  * `package-lock.json` records each workspace's version and that same pin
  * again. `npm ci` tolerates it lagging, but the next `npm install` rewrites
@@ -38,15 +39,18 @@ const SEMVER = /^\d+\.\d+\.\d+$/;
 
 const PACKAGE_JSON_FILES = [
   'apps/desktop/package.json',
+  'packages/test-support/package.json',
 ];
 const TAURI_LOCK = 'apps/desktop/src-tauri/Cargo.lock';
 /** Every Rust crate that ships the app's version: its manifest, the lockfiles recording it, and its package name there. */
 const CARGO_CRATES = [
-  { toml: 'apps/desktop/src-tauri/Cargo.toml', locks: [TAURI_LOCK], name: 'whiphand' },
+  { toml: 'apps/desktop/src-tauri/Cargo.toml', locks: [TAURI_LOCK], name: 'whiphand-desktop' },
   { toml: 'crates/whiphand-core/Cargo.toml', locks: ['Cargo.lock', TAURI_LOCK], name: 'whiphand-core' },
   { toml: 'crates/whiphand-cli/Cargo.toml', locks: ['Cargo.lock'], name: 'whiphand-cli' },
   { toml: 'crates/whiphand-protocol/Cargo.toml', locks: ['Cargo.lock', TAURI_LOCK], name: 'whiphand-protocol' },
   { toml: 'crates/whiphand-agent/Cargo.toml', locks: ['Cargo.lock', TAURI_LOCK], name: 'whiphand-agent' },
+  { toml: 'crates/whiphand-tui/Cargo.toml', locks: ['Cargo.lock'], name: 'whiphand-tui' },
+  { toml: 'crates/job-guard/Cargo.toml', locks: ['Cargo.lock', TAURI_LOCK], name: 'whiphand-job' },
 ];
 const TAURI_CONF = 'apps/desktop/src-tauri/tauri.conf.json';
 const PACKAGE_LOCK = 'package-lock.json';

@@ -5,7 +5,8 @@
  *
  * This script does not bundle anything itself — Tauri's own bundler does
  * that. `prepareDesktopBuild()` is the handoff: build the web UI the agent's
- * remote access serves, as a Tauri resource. The agent itself is compiled
+ * remote access serves, as a Tauri resource, and the `whiphand` CLI the app
+ * installs beside itself, as a sidecar (sidecar.mjs). The agent itself is compiled
  * into the app (crates/whiphand-agent). It is exported separately from the
  * `tauri build` invocation below because release.yml needs exactly this
  * half: the release build hands the actual `tauri build` off to
@@ -16,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { runInherited } from '../lib/exec.mjs';
 import { repoRoot, distDir } from './common.mjs';
+import { prepareSidecar } from './sidecar.mjs';
 import { buildWebResource } from './web-resource.mjs';
 
 /**
@@ -33,7 +35,9 @@ export function prepareDesktopBuild() {
   const bundleExtensions = isWindows ? ['exe', 'exe.sig'] : ['deb', 'AppImage', 'AppImage.sig'];
 
   const webResource = buildWebResource();
-  process.stdout.write(`\n  resource  ${path.relative(repoRoot, webResource)}\n\n`);
+  process.stdout.write(`\n  resource  ${path.relative(repoRoot, webResource)}\n`);
+  const sidecar = prepareSidecar();
+  process.stdout.write(`  sidecar   ${path.relative(repoRoot, sidecar)}\n\n`);
 
   return { isWindows, bundleFormats, bundleExtensions };
 }

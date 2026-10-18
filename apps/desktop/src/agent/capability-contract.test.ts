@@ -11,7 +11,9 @@ import { fileURLToPath } from 'node:url';
  *   1. every command the transport invokes is registered in lib.rs;
  *   2. the shell plugin grants nothing that could spawn a process, now the
  *      agent is in-process, but keeps `open`;
- *   3. no sidecar binary or node-pty resource is bundled.
+ *   3. no node-pty resource is bundled, and the one sidecar is the `whiphand`
+ *      CLI the app installs for the user (scripts/package/sidecar.mjs), not
+ *      a process the app runs: with 2., it could not start it.
  */
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -51,8 +53,8 @@ describe('InProcessTransport ↔ Tauri contract', () => {
     expect(permissionIds).toContain('shell:allow-open');
   });
 
-  it('bundles no sidecar and no node-pty', () => {
-    expect(tauriConfig.bundle.externalBin).toBeUndefined();
+  it('bundles only the CLI as a sidecar, and no node-pty', () => {
+    expect(tauriConfig.bundle.externalBin).toEqual(['binaries/whiphand']);
     expect(tauriConfig.bundle.resources).toEqual(['resources/web/**/*']);
   });
 });

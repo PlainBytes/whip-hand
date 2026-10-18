@@ -114,4 +114,8 @@ export const uiActions: Record<string, Record<string, string>> = {
     _command: 'exempt:another-front-end',
     '-C': 'sidebar:workspaceSwitcher',
   },
+  // `whiphand desktop` starts this app; inside it there is nothing to map.
+  desktop: {
+    _command: 'exempt:starts-this-app',
+  },
 };

@@ -1671,6 +1671,7 @@ dependencies = [
  "tokio-util",
  "whiphand-core",
  "whiphand-tui",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1694,7 +1695,7 @@ dependencies = [
 
 [[package]]
 name = "whiphand-job"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "windows-sys 0.59.0",
 ]
@@ -1710,7 +1711,7 @@ dependencies = [
 
 [[package]]
 name = "whiphand-tui"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "ansi-to-tui",
  "base64",

@@ -116,7 +116,7 @@ AI harnesses
 ✔ claude 2.1.263
   · not logged in — run `claude` and use /login
 ✔ copilot 1.0.83
-✔ opencode 1.17.13
+✔ opencode 2.0.32
 
 Support tools
 ✔ git 2.53.0
@@ -137,7 +137,7 @@ An installed tool that has no login gets a note under its row, with the fix. The
 |---|---|---|
 | claude | ``not logged in — run `claude` and use /login`` | `~/.claude/.credentials.json` (or under `CLAUDE_CONFIG_DIR`), `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, Bedrock/Vertex/Foundry, or an `apiKeyHelper` / key in `~/.claude/settings.json`. Not checked on macOS (the login is in the Keychain). |
 | copilot | ``not logged in — run `copilot login` `` | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN`; `COPILOT_PROVIDER_BASE_URL` (bring your own key); or a login recorded in `~/.copilot/config.json` |
-| opencode | ``no provider credentials — run `opencode auth login` `` | a credential in `auth.json` under `$XDG_DATA_HOME/opencode`, or a provider key `opencode auth list` finds in the environment |
+| opencode | ``no provider credentials — only opencode's free models will work; run `opencode auth login` `` | a credential in `auth.json` under `$XDG_DATA_HOME/opencode`, or a provider key `opencode auth list` finds in the environment |
 | gh | ``not logged in — run `gh auth login` `` | `gh auth token --hostname github.com` finds a token (keyring, `hosts.yml` or `GH_TOKEN`) |
 
 These checks are local: nothing is sent to a server and no token is read into the output, so an
@@ -151,7 +151,7 @@ Two more notes cover an install that is present but not doing its job:
   ``rtk is installed but no Claude Code hook calls it — run `rtk init -g` to set it up``. A settings file that
   cannot be read or parsed gives no note; project-level settings are not consulted.
 - **Minimum version** — a harness older than the oldest version whiphand's adapter was verified against (claude
-  2.1.260, copilot 1.0.83, opencode 1.17.13) gets ``older than <version>, the oldest version whiphand is tested with
+  2.1.260, copilot 1.0.83, opencode 2.0.30) gets ``older than <version>, the oldest version whiphand is tested with
   — update it``. A version doctor cannot read as plain numbers gets no note.
 
 Run inside a project (or with `-C <dir>`; the desktop passes the open workspace), doctor also checks

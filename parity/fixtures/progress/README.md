@@ -37,6 +37,20 @@ OPENCODE_CONFIG_CONTENT='{"agent":{"whiphand":{"mode":"primary","permission":{"e
   > opencode-json.ndjson
 ```
 
+`opencode-json-v2.ndjson` is the same prompt recorded with `opencode` 2.0.32 on 2026-10-18,
+with one of Zen's free models and 2.0's native config keys:
+
+```bash
+OPENCODE_CONFIG_CONTENT='{"agents":{"whiphand":{"mode":"primary","permissions":[{"action":"edit","resource":"*","effect":"allow"}]}}}' \
+  opencode run --standalone --format json --agent whiphand -m opencode/deepseek-v4.1-flash-free \
+  'Read package.json, then write the value of its "name" field to ./fixture-opencode.txt' \
+  > opencode-json-v2.ndjson
+```
+
+Its last turn has a `step_start` and no `step_finish`: 2.0's `run` stops forwarding step
+events once the prompt request returns, so the closing one is usually lost. That is why
+turns are counted on `step_start`.
+
 Both runs wrote `/tmp/fixture.txt` (or, for opencode, `./fixture-opencode.txt`)
 successfully — worth re-confirming when regenerating, since it is what proves the
 structured-output flags do not disturb the artifact write that a real step depends on.
@@ -49,14 +63,14 @@ Deliberately kept as recorded, noise included — the noise is half of what is b
 tested. The claude capture carries `SessionStart` hook events (from whatever hooks the
 recording machine had configured), `thinking_tokens` pings, a `rate_limit_event` and
 `tool_result` echoes. The copilot capture carries `session.*` lifecycle events,
-`assistant.reasoning_delta` and `assistant.message_delta` streams. The opencode capture
-carries a `step_start` line ahead of each turn, which parses to `null` the same way. All
-of it must parse to `null`.
+`assistant.reasoning_delta` and `assistant.message_delta` streams. All of it must parse
+to `null`. (The opencode captures' `step_start` lines are not noise: each one starts a
+turn.)
 
 Absolute paths from the recording machine are kept, except that the home directory is
 anonymised to `/home/user`; the tests match on suffixes. The opencode capture's paths
-sit under `/tmp/oc-check2`, the throwaway project the recording used — there is no home
-directory in it to anonymise.
+sit under `/tmp/oc-check2` (`/tmp/oc-check-v2` for the 2.0 one), the throwaway projects the recordings used — there is no home
+directory in them to anonymise.
 
 `opencode-error.ndjson` holds the only stdout opencode 1.18.31 produced for two failed
 runs on 2026-09-14: a Zen model that is listed but not deployed (after opencode's own

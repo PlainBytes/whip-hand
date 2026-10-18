@@ -71,7 +71,7 @@ impl Adapter {
                 url: "https://opencode.ai",
                 argv: ["opencode", "--version"],
                 optional: true,
-                min_version: "2.0.0",
+                min_version: "2.0.30",
             },
         }
     }

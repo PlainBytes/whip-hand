@@ -234,5 +234,5 @@ pub async fn opencode_auth_note(deps: &AuthDeps) -> Result<Option<String>, NoAns
     let connected = list
         .iter()
         .any(|p| is_record(p) && p.get("connections").as_arr().is_some_and(|c| !c.is_empty()));
-    Ok((!connected).then(|| "no provider credentials — run `opencode auth login`".into()))
+    Ok((!connected).then(|| "no provider credentials — only opencode's free models will work; run `opencode auth login`".into()))
 }

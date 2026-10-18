@@ -1,8 +1,10 @@
-//! The opencode adapter (`adapters/opencode.ts`; see its module doc for the
-//! OpenCode 2.0 behaviours every choice here answers to). opencode cannot be
-//! handed a session id, so its interactive spawn's plugin reports the one it
-//! minted (`sessionIdCapture`), and every spawn carries its whole agent config
-//! in `OPENCODE_CONFIG_CONTENT`, booted `--standalone` so that config applies.
+//! The opencode adapter, for OpenCode 2.0.30+ (older 2.0 releases ignore the
+//! config's `instructions`, so the guidance never reaches the model, and up to
+//! 2.0.18 leave `--prompt` unsubmitted). opencode cannot be handed a session id, so its
+//! interactive spawn's plugin reports the one it minted (`sessionIdCapture`),
+//! and every spawn carries its whole agent config in `OPENCODE_CONFIG_CONTENT`,
+//! booted `--standalone` so that config applies. The config uses 2.0's own
+//! keys (`agents`, `permissions`, `plugins`), not the 1.x ones 2.0 migrates.
 
 use std::time::UNIX_EPOCH;
 
@@ -76,30 +78,37 @@ struct PermissionOpts<'a> {
     marker_path: Option<&'a str>,
 }
 
-fn agent_permission(opts: &PermissionOpts) -> Result<JsObject, String> {
-    let mut edit = obj! { "*" => if opts.edit_allowed { "allow" } else { "deny" } };
+fn rule(action: &str, resource: &str, effect: &str) -> JsValue {
+    obj! { "action" => action, "resource" => resource, "effect" => effect }.into()
+}
+
+/// An ordered ruleset: opencode applies the last rule that matches.
+fn agent_permissions(opts: &PermissionOpts) -> Result<Vec<JsValue>, String> {
+    let mut rules = vec![rule(
+        "edit",
+        "*",
+        if opts.edit_allowed { "allow" } else { "deny" },
+    )];
     if !opts.edit_allowed
         && let Some(pattern) = relative_run_dir_pattern(opts.workdir, opts.run_dir)
     {
-        edit.set(&pattern, "allow");
+        rules.push(rule("edit", &pattern, "allow"));
     }
-    let mut external = JsObject::new();
-    external.set(&format!("{}/*", to_fwd(opts.run_dir)), "allow");
-    let mut permission = obj! { "edit" => edit, "external_directory" => external };
+    rules.push(rule(
+        "external_directory",
+        &format!("{}/*", to_fwd(opts.run_dir)),
+        "allow",
+    ));
     if let Some(marker) = opts.marker_path {
-        let mut bash = JsObject::new();
-        bash.set(
-            &format!("touch {}", sh_quote(&to_workspace(marker, opts.workdir))?),
-            "allow",
-        );
-        permission.set("bash", bash);
+        let touch = format!("touch {}", sh_quote(&to_workspace(marker, opts.workdir))?);
+        rules.push(rule("shell", &touch, "allow"));
     }
-    Ok(permission)
+    Ok(rules)
 }
 
 struct ConfigOpts<'a> {
     agent_name: &'a str,
-    permission: JsObject,
+    permissions: Vec<JsValue>,
     model: Option<&'a str>,
     instructions_path: Option<&'a str>,
     plugin_path: Option<&'a str>,
@@ -110,18 +119,18 @@ fn config_content(opts: ConfigOpts) -> String {
     if let Some(m) = opts.model {
         agent_body.set("model", m);
     }
-    agent_body.set("permission", opts.permission);
+    agent_body.set("permissions", opts.permissions);
     let mut root = JsObject::new();
     if let Some(p) = opts.instructions_path {
         root.set("instructions", vec![JsValue::from(to_fwd(p))]);
     }
     if let Some(p) = opts.plugin_path {
-        root.set("plugin", vec![JsValue::from(p)]);
+        root.set("plugins", vec![JsValue::from(p)]);
     }
     root.set("default_agent", opts.agent_name);
-    let mut agent = JsObject::new();
-    agent.set(opts.agent_name, agent_body);
-    root.set("agent", agent);
+    let mut agents = JsObject::new();
+    agents.set(opts.agent_name, agent_body);
+    root.set("agents", agents);
     jsval::stringify_compact(&root.into())
 }
 
@@ -147,13 +156,46 @@ import {{ promises as fs }} from 'node:fs';
 const SESSION_FILE = {session_file};
 const AWAIT_FILE = {await_file};
 let rootId = {known};
-const subIds = new Set();
-const isRoot = (id) => typeof id === 'string' && id === rootId && !subIds.has(id);
+const isRoot = (id) => typeof id === 'string' && id === rootId;
+const adopt = async (id) => {{
+  if (rootId !== null || typeof id !== 'string') return;
+  rootId = id;
+  await fs.writeFile(SESSION_FILE, rootId);
+}};
 const writeAwait = async (reason) => {{
-  try {{ await fs.writeFile(AWAIT_FILE, JSON.stringify({{ r: reason }})); }} catch {{}}
+  await fs.writeFile(AWAIT_FILE, JSON.stringify({{ r: reason }}));
 }};
 const clearAwait = async () => {{
-  try {{ await fs.rm(AWAIT_FILE, {{ force: true }}); }} catch {{}}
+  await fs.rm(AWAIT_FILE, {{ force: true }});
+}};
+const handle = async (event) => {{
+  const data = event.data ?? {{}};
+  switch (event.type) {{
+    case 'session.created':
+      if (!data.parentID) await adopt(data.sessionID);
+      break;
+    // 2.0.18 never shows plugins session.created; the root runs first.
+    case 'session.execution.started':
+      await adopt(data.sessionID);
+      if (isRoot(data.sessionID)) await clearAwait();
+      break;
+    case 'session.execution.succeeded':
+    case 'session.execution.failed':
+    case 'session.execution.interrupted':
+      if (isRoot(data.sessionID)) await writeAwait('turn');
+      break;
+    case 'permission.asked':
+      if (isRoot(data.sessionID)) await writeAwait('permission');
+      break;
+    case 'form.created':
+      if (isRoot(data.form?.sessionID)) await writeAwait('permission');
+      break;
+    case 'permission.replied':
+    case 'form.replied':
+    case 'form.cancelled':
+      if (isRoot(data.sessionID)) await clearAwait();
+      break;
+  }}
 }};
 
 export default {{
@@ -161,51 +203,15 @@ export default {{
   setup(ctx) {{
     const controller = new AbortController();
     (async () => {{
-      try {{
-        // Write session file immediately if we already know the id (resume case)
-        if (rootId !== null) {{
-          try {{ await fs.writeFile(SESSION_FILE, rootId); }} catch {{}}
-        }}
-        for await (const event of ctx.event.subscribe({{ signal: controller.signal }})) {{
-          const props = event.properties ?? event.data ?? {{}};
-          switch (event.type) {{
-            case 'session.created': {{
-              const info = props.info ?? props;
-              if (info.parentID) {{ subIds.add(info.id); break; }}
-              if (rootId === null) rootId = info.id;
-              if (info.id === rootId) await fs.writeFile(SESSION_FILE, rootId);
-              break;
-            }}
-            case 'session.status': {{
-              if (!isRoot(props.sessionID)) break;
-              const status = props.status?.type;
-              if (status === 'idle') await writeAwait('turn');
-              else if (status === 'busy') await clearAwait();
-              break;
-            }}
-            case 'session.idle':
-              if (isRoot(props.sessionID)) await writeAwait('turn');
-              break;
-            case 'permission.asked':
-            case 'permission.v2.asked':
-            case 'question.asked':
-            case 'question.v2.asked':
-              if (isRoot(props.sessionID)) await writeAwait('permission');
-              break;
-            case 'permission.replied':
-            case 'permission.v2.replied':
-            case 'question.replied':
-            case 'question.v2.replied':
-            case 'question.rejected':
-            case 'question.v2.rejected':
-              if (isRoot(props.sessionID)) await clearAwait();
-              break;
-          }}
-        }}
-      }} catch {{
-        // A plugin fault must never break the user's session.
+      // Write session file immediately if we already know the id (resume case)
+      if (rootId !== null) {{
+        try {{ await fs.writeFile(SESSION_FILE, rootId); }} catch {{}}
       }}
-    }})();
+      for await (const event of ctx.event.subscribe({{ signal: controller.signal }})) {{
+        // A plugin fault must never break the user's session, nor end this loop.
+        try {{ await handle(event); }} catch {{}}
+      }}
+    }})().catch(() => {{}});
     return () => controller.abort();
   }},
 }};
@@ -223,7 +229,7 @@ pub fn interactive(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
     let resumed = ctx.is_resumed(&step.id);
     let config = config_content(ConfigOpts {
         agent_name: AGENT_NAME,
-        permission: agent_permission(&PermissionOpts {
+        permissions: agent_permissions(&PermissionOpts {
             edit_allowed: step.writes,
             workdir: &ctx.workdir,
             run_dir: &ctx.run_dir,
@@ -276,7 +282,7 @@ pub fn interactive(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
 pub fn headless(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
     let config = config_content(ConfigOpts {
         agent_name: AGENT_NAME,
-        permission: agent_permission(&PermissionOpts {
+        permissions: agent_permissions(&PermissionOpts {
             edit_allowed: step.writes,
             workdir: &ctx.workdir,
             run_dir: &ctx.run_dir,
@@ -305,7 +311,7 @@ pub fn headless(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
 pub fn harvest(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
     let config = config_content(ConfigOpts {
         agent_name: AGENT_NAME,
-        permission: agent_permission(&PermissionOpts {
+        permissions: agent_permissions(&PermissionOpts {
             edit_allowed: true,
             workdir: &ctx.workdir,
             run_dir: &ctx.run_dir,
@@ -331,12 +337,12 @@ pub fn harvest(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
 }
 
 pub fn suggest_name(prompt: &str, ctx: &RunCtx, capture_path: &str) -> JsObject {
-    let mut agent = JsObject::new();
-    agent.set(
+    let mut agents = JsObject::new();
+    agents.set(
         NAME_AGENT_NAME,
-        obj! { "mode" => "primary", "permission" => obj! { "*" => "deny" } },
+        obj! { "mode" => "primary", "permissions" => vec![rule("*", "*", "deny")] },
     );
-    let config = jsval::stringify_compact(&obj! { "agent" => agent }.into());
+    let config = jsval::stringify_compact(&obj! { "agents" => agents }.into());
     let path = node_path::join(&[&ctx.run_dir, SUGGEST_PROMPT_NAME]);
     let argv = vec![
         "opencode".to_string(),
@@ -416,8 +422,56 @@ mod tests {
                 .prop("env")
                 .get("OPENCODE_CONFIG_CONTENT")
                 .to_js_string();
-            let external = format!("\"{}/*\":\"allow\"", to_fwd(&c.run_dir));
+            let external = format!(
+                "{{\"action\":\"external_directory\",\"resource\":\"{}/*\",\"effect\":\"allow\"}}",
+                to_fwd(&c.run_dir)
+            );
             assert!(config.replace(' ', "").contains(&external), "{config}");
         }
+    }
+
+    #[test]
+    fn a_read_only_step_denies_edits_before_allowing_the_run_dir_and_marker() {
+        let root = tempfile::tempdir().unwrap();
+        let c = ctx(root.path(), root.path());
+        let mut s = step("opencode", StepMode::Interactive);
+        s.writes = false;
+        let spec = interactive(&s, &c).unwrap();
+        let config = jsval::parse(
+            &spec
+                .prop("env")
+                .get("OPENCODE_CONFIG_CONTENT")
+                .to_js_string(),
+        )
+        .unwrap();
+        let rules: Vec<(String, String, String)> = config
+            .get("agents")
+            .get(AGENT_NAME)
+            .get("permissions")
+            .as_arr()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                let f = |k| r.get(k).as_str().unwrap().to_string();
+                (f("action"), f("resource"), f("effect"))
+            })
+            .collect();
+        let actions: Vec<(&str, &str)> = rules
+            .iter()
+            .map(|(a, _, e)| (a.as_str(), e.as_str()))
+            .collect();
+        assert_eq!(
+            actions,
+            [
+                ("edit", "deny"),
+                ("edit", "allow"),
+                ("external_directory", "allow"),
+                ("shell", "allow"),
+            ]
+        );
+        assert_eq!(rules[0].1, "*");
+        assert!(rules[3].1.starts_with("touch "), "{rules:?}");
+        assert!(config.get("plugins").as_arr().is_some_and(|p| p.len() == 1));
+        assert_eq!(config.get("default_agent").as_str(), Some(AGENT_NAME));
     }
 }

@@ -41,7 +41,7 @@ doctor` reports the installed versions.
 
 | Capability | `claude` | `copilot` | `opencode` |
 |---|---|---|---|
-| Interactive session, seeded with a prompt | `claude "<prompt>"` | `copilot` (interactive by default; a prompt can auto-execute) | `opencode --prompt "<p>"` (auto-submits on the home screen) |
+| Interactive session, seeded with a prompt | `claude "<prompt>"` | `copilot` (interactive by default; a prompt can auto-execute) | `opencode --prompt "<p>"` (auto-submits on the home screen, 2.0.19+) |
 | Headless / non-interactive | `-p`, `--print` | `-p`, `--prompt <text>` | `run [message..]` |
 | Model selection | `--model <alias\|full-id>` (e.g. `opus`, `claude-opus-5`) | `--model <id>` | `-m provider/model` |
 | Pin a specific session id | `--session-id <uuid>` (must be a valid UUID) | `--session-id <id>` (1.0.83+: mints, same as claude) | — (cannot be minted; see below) |
@@ -311,18 +311,22 @@ frontend that can watch the filesystem combines them (`agent/frontend.ts`):
   that stand alone.
 - **opencode's plugin (precise, and doing double duty).** opencode has no hooks, but it does
   have an in-process plugin API — a small generated `.mjs` module, delivered via
-  `OPENCODE_CONFIG_CONTENT`'s `plugin: ["file://…"]` and written to disk by core before the
+  `OPENCODE_CONFIG_CONTENT`'s `plugins: ["<dir>"]` and written to disk by core before the
   spawn (`SpawnSpec.files`, since adapters themselves never touch the filesystem). It
   subscribes to opencode's own event stream and writes the same `.await` file claude's hooks
   write, using the same JSON body `parseAwaitState` already reads — no agent-side change
-  needed for a third runner to report through this channel. `session.status: idle` on the
-  *root* session → `turn`; `permission.asked`/`question.asked` → `permission`; the
-  complementary events (`busy`, `*.replied`, `question.rejected`) clear it.
+  needed for a third runner to report through this channel. On the *root* session,
+  `session.execution.succeeded`/`failed`/`interrupted` → `turn`; `permission.asked` and
+  `form.created` (a question it asked) → `permission`; `session.execution.started`,
+  `permission.replied`, `form.replied` and `form.cancelled` clear it. These are OpenCode 2.0's
+  events: 1.x's `session.status`, `session.idle` and `question.*` never reach a 2.0 plugin.
   This is also the channel that solves session-identity capture (see "The capture variant"
   above): the same plugin writes the session id to a second file the instant the root
   session is created, since a plugin has direct filesystem access no tool permission gates.
-  Subagent sessions (`session.created` with a `parentID`) are tracked and always excluded —
-  their own status chatter must never flap the root session's await-state. Every handler is
+  Subagent sessions (`session.created` with a `parentID`) are never adopted as the root —
+  their own status chatter must never flap the root session's await-state. 2.0.18 does not
+  show plugins `session.created` at all, so the first `session.execution.started`, which is
+  always the root's, adopts the id there. Every handler is
   wrapped in its own try/catch: a plugin fault must degrade to "no await-state reported",
   never take the human's live session down with it.
 

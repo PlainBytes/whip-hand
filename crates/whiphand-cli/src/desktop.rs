@@ -3,6 +3,7 @@
 //! CLI beside it as `whiphand`.
 
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::process::{Command, Stdio};
 
 use crate::io::err_line;
@@ -57,13 +58,8 @@ pub fn launch() -> i32 {
         err_line(NOT_INSTALLED);
         return 1;
     };
-    let mut cmd = Command::new(&app);
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    detach(&mut cmd);
-    match cmd.spawn() {
-        Ok(_) => 0,
+    match spawn(&app) {
+        Ok(()) => 0,
         Err(e) => {
             err_line(&format!("Error: could not start {}: {e}", app.display()));
             1
@@ -71,18 +67,52 @@ pub fn launch() -> i32 {
     }
 }
 
-/// Its own process group, so the terminal's Ctrl-C and hangup don't reach it.
+/// In its own process group, so the terminal's Ctrl-C and hangup don't
+/// reach it. Rust opens its descriptors close-on-exec, so the app holds
+/// nothing of ours.
 #[cfg(unix)]
-fn detach(cmd: &mut Command) {
+fn spawn(app: &Path) -> std::io::Result<()> {
     use std::os::unix::process::CommandExt;
-    cmd.process_group(0);
+    Command::new(app)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map(drop)
 }
 
-/// No console, and out of this console's Ctrl-C group.
+/// Through the shell, not `Command`: `Command` hands the child every
+/// inheritable handle this process has, so the app would keep open the pipe
+/// a caller reads us through (`whiphand desktop | more`, a script capturing
+/// the output), and the caller would wait for the app to exit. ShellExecute
+/// inherits nothing, and the app gets no console of ours.
 #[cfg(windows)]
-fn detach(cmd: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+fn spawn(app: &Path) -> std::io::Result<()> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let wide = |s: &OsStr| s.encode_wide().chain(Some(0)).collect::<Vec<u16>>();
+    let verb = wide(OsStr::new("open"));
+    let file = wide(app.as_os_str());
+    // SAFETY: both strings are NUL-terminated and outlive the call; the
+    // other pointers may be null.
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // Anything above 32 is success; below it, an error code.
+    if result as isize > 32 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }

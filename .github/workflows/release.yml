@@ -199,9 +199,11 @@ jobs:
     env:
       WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
     steps:
+      # Pinned to a commit, not the moving v2 tag: this third-party action is
+      # handed a token that can open PRs as the account.
       - name: Submit the new version to winget
         if: env.WINGET_TOKEN != ''
-        uses: vedantmgoyal9/winget-releaser@v2
+        uses: vedantmgoyal9/winget-releaser@b7370d4d152efdce803a26cc6ca9eee58cb2ad54 # v2
         with:
           identifier: PlainBytes.Whiphand
           release-tag: ${{ needs.prepare.outputs.tag }}

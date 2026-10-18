@@ -74,6 +74,13 @@ fn command_for(plan: &LaunchPlan) -> Command {
     cmd
 }
 
+/// The `PWD` a child started in `cwd` should see. The inherited one names
+/// whiphand's own directory, and some runners (opencode's `run`) take their
+/// project root from `$PWD` before the real working directory.
+pub fn pwd_for(cwd: &std::path::Path) -> PathBuf {
+    std::path::absolute(cwd).unwrap_or_else(|_| cwd.to_path_buf())
+}
+
 /// `spawnRunner`: plans the launch, spawns, and puts the child in the
 /// container. `group` (POSIX) makes the child lead its own process group;
 /// an interactive child that inherits the terminal must not.
@@ -86,7 +93,7 @@ pub fn spawn_runner(
     let plan = plan_launch(argv, &LaunchDeps::default()).map_err(io::Error::other)?;
     let mut cmd = command_for(&plan);
     if let Some(cwd) = &opts.cwd {
-        cmd.current_dir(cwd);
+        cmd.current_dir(cwd).env("PWD", pwd_for(cwd));
     }
     cmd.envs(&opts.env);
     let inherits = matches!(opts.stdin, StdinFrom::Inherit)
@@ -219,7 +226,7 @@ pub async fn exec_runner(
     })?;
     let mut cmd = command_for(&plan);
     if let Some(cwd) = &opts.cwd {
-        cmd.current_dir(cwd);
+        cmd.current_dir(cwd).env("PWD", pwd_for(cwd));
     }
     cmd.envs(&opts.env);
     if argv.first().is_some_and(|c| is_git(c)) {
@@ -569,6 +576,22 @@ mod tests {
             err.message,
             "Command failed: sh -c echo no >&2; exit 4\nno\n"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_child_given_a_cwd_sees_it_as_pwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let (stdout, _) = exec_runner(
+            &["sh".into(), "-c".into(), "printf %s \"$PWD\"".into()],
+            ExecOptions {
+                cwd: Some(dir.path().into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(stdout, dir.path().to_str().unwrap());
     }
 
     #[cfg(unix)]

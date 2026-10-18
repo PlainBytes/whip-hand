@@ -16,6 +16,25 @@
   `install.sh` / `install.ps1` (they check the download against `SHA256SUMS`), and winget
   (`PlainBytes.Whiphand`).
 
+### opencode steps work with OpenCode 2.0
+
+- Interactive opencode steps report when the session is waiting for you again, and the session id is
+  captured as soon as the session starts. The plugin was listening for OpenCode 1.x events that 2.0
+  no longer sends, so it captured nothing, and harvest had to guess the session from
+  `opencode session list`.
+- The config whiphand passes opencode uses 2.0's own `agents`, `permissions` and `plugins` keys
+  instead of the 1.x ones 2.0 still migrates.
+- Headless opencode steps count every turn. opencode 2.0 usually leaves out the last turn's
+  `step_finish`, so the count was one short. That turn's cost is still missing, because opencode never
+  prints it.
+- `whiphand doctor` asks for opencode 2.0.30 or newer. Older 2.0 releases ignore the instructions
+  whiphand gives an interactive session, so the model is never told how to end the step, and up to
+  2.0.18 the step's prompt sits in the input box unsent.
+- Runners now see `$PWD` set to the folder they run in. opencode's `run` takes its project from
+  `$PWD`, so `whiphand run -C <dir>` started elsewhere had opencode treat the step's own folder as
+  outside the project and reject reading it. The "no provider credentials" note now says that opencode's
+  free models still work without a login.
+
 ### Copilot steps are more reliable
 
 - A copilot step that fails now says why. The reason copilot reports (an unavailable model, an exceeded

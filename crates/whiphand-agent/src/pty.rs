@@ -111,6 +111,7 @@ mod unix {
     use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
     use tokio::sync::{mpsc, oneshot};
     use whiphand_core::process::exec::LaunchPlan;
+    use whiphand_core::process::launch::pwd_for;
 
     use super::{PtyCommand, Signal, Spawned};
 
@@ -172,6 +173,7 @@ mod unix {
         let mut builder = CommandBuilder::new(&plan.file);
         builder.args(&plan.args);
         builder.cwd(cmd.cwd);
+        builder.env("PWD", pwd_for(std::path::Path::new(cmd.cwd)));
         for (k, v) in cmd.env {
             builder.env(k, v);
         }

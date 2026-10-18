@@ -179,7 +179,9 @@ fn parse_copilot(event: &JsObject) -> Option<JsObject> {
 }
 
 /// opencode reports no cumulative summary, so its parser keeps running
-/// totals across one spawn's lines.
+/// totals across one spawn's lines. Turns are counted on `step_start`: 2.0's
+/// `run` stops forwarding step events once the prompt request returns, so
+/// the last turn's `step_finish` (and its cost) is usually never printed.
 #[derive(Default)]
 struct OpencodeTotals {
     turns: f64,
@@ -188,8 +190,20 @@ struct OpencodeTotals {
 }
 
 impl OpencodeTotals {
+    fn usage(&self) -> JsObject {
+        let mut out = obj! { "kind" => "usage", "turns" => self.turns };
+        if self.saw_cost {
+            out.set("costUsd", self.cost_usd);
+        }
+        out
+    }
+
     fn parse(&mut self, event: &JsObject) -> Option<JsObject> {
         match event.str_prop("type") {
+            Some("step_start") => {
+                self.turns += 1.0;
+                Some(self.usage())
+            }
             Some("tool_use") => {
                 let part = record_or(event.prop("part"));
                 tool_progress(
@@ -200,16 +214,11 @@ impl OpencodeTotals {
             Some("text") => text_progress(record_or(event.prop("part")).prop("text")),
             Some("step_finish") => {
                 let part = record_or(event.prop("part"));
-                self.turns += 1.0;
                 if let JsValue::Num(c) = number_or(part.prop("cost")) {
                     self.saw_cost = true;
                     self.cost_usd += c;
                 }
-                let mut out = obj! { "kind" => "usage", "turns" => self.turns };
-                if self.saw_cost {
-                    out.set("costUsd", self.cost_usd);
-                }
-                Some(out)
+                Some(self.usage())
             }
             _ => None,
         }

@@ -438,12 +438,11 @@ mod tests {
                 .stdin(std::process::Stdio::piped())
                 .spawn()
                 .unwrap();
-            child
-                .stdin
-                .take()
-                .unwrap()
-                .write_all(stdin.as_bytes())
-                .unwrap();
+            // A hook that never reads its stdin may exit before the write.
+            match child.stdin.take().unwrap().write_all(stdin.as_bytes()) {
+                Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+                other => other.unwrap(),
+            }
             assert!(child.wait().unwrap().success(), "{event}");
         };
         let state = || {

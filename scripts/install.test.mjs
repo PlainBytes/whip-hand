@@ -41,10 +41,13 @@ async function install(base, { os: osName = 'Linux', arch = 'x86_64', env = {} }
   fs.writeFileSync(path.join(shims, 'uname'),
     `#!/bin/sh\ncase "$1" in -s) echo ${osName} ;; -m) echo ${arch} ;; esac\n`, { mode: 0o755 });
   const dir = path.join(scratch, 'bin');
+  // Windows names it `Path`; a second `PATH` beside it may not be the one sh sees.
+  const pathKey = Object.keys(process.env).find(key => key.toUpperCase() === 'PATH') ?? 'PATH';
+  const { [pathKey]: inherited, ...rest } = process.env;
   const child = spawnRunner(['sh', script], {
     env: {
-      ...process.env,
-      PATH: `${shims}${path.delimiter}${process.env.PATH}`,
+      ...rest,
+      PATH: `${shims}${path.delimiter}${inherited}`,
       WHIPHAND_RELEASES_URL: base,
       WHIPHAND_INSTALL_DIR: dir.split(path.sep).join('/'),
       ...env,
@@ -98,15 +101,18 @@ test('install.sh installs nothing when the checksum does not match', async () =>
 
 test('install.sh refuses a machine there is no build for', async () => {
   const server = await serve(release('/latest/download'));
-  for (const machine of [{ os: 'Darwin', arch: 'arm64', why: /Linux build/ }, { os: 'Linux', arch: 'aarch64', why: /only x86_64/ }]) {
-    const run = await install(server.base, machine);
-    try {
-      assert.notEqual(run.status, 0);
-      assert.match(run.output, machine.why);
-      assert.ok(!fs.existsSync(path.join(run.dir, 'whiphand')));
-    } finally {
-      run.cleanup();
+  try {
+    for (const machine of [{ os: 'Darwin', arch: 'arm64', why: /Linux build/ }, { os: 'Linux', arch: 'aarch64', why: /only x86_64/ }]) {
+      const run = await install(server.base, machine);
+      try {
+        assert.notEqual(run.status, 0);
+        assert.match(run.output, machine.why);
+        assert.ok(!fs.existsSync(path.join(run.dir, 'whiphand')));
+      } finally {
+        run.cleanup();
+      }
     }
+  } finally {
+    server.close();
   }
-  server.close();
 });

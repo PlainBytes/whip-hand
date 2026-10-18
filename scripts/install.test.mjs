@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnRunner } from './lib/exec.mjs';
 
 // scripts/install/install.sh against a release served from here. A `uname`
-// shim first on PATH says which machine this is, so every case runs the same
+// shell function says which machine this is, so every case runs the same
 // on both CI legs (Git's sh on Windows).
 
 const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'install/install.sh');
@@ -36,18 +36,12 @@ function release(prefix, { sums = `${sha256(BINARY)}  ${ASSET}\n` } = {}) {
 /** Runs install.sh as a machine reporting `os`/`arch`; resolves `{ status, output, dir }`. */
 async function install(base, { os: osName = 'Linux', arch = 'x86_64', env = {} } = {}) {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'whiphand-install-'));
-  const shims = path.join(scratch, 'shims');
-  fs.mkdirSync(shims);
-  fs.writeFileSync(path.join(shims, 'uname'),
-    `#!/bin/sh\ncase "$1" in -s) echo ${osName} ;; -m) echo ${arch} ;; esac\n`, { mode: 0o755 });
   const dir = path.join(scratch, 'bin');
-  // Windows names it `Path`; a second `PATH` beside it may not be the one sh sees.
-  const pathKey = Object.keys(process.env).find(key => key.toUpperCase() === 'PATH') ?? 'PATH';
-  const { [pathKey]: inherited, ...rest } = process.env;
-  const child = spawnRunner(['sh', script], {
+  // A function, not a uname on PATH: Git's sh.exe puts its own /usr/bin first.
+  const machine = `uname() { case "$1" in -s) echo ${osName} ;; -m) echo ${arch} ;; esac; }`;
+  const child = spawnRunner(['sh', '-c', `${machine}; . "$0"`, script.split(path.sep).join('/')], {
     env: {
-      ...rest,
-      PATH: `${shims}${path.delimiter}${inherited}`,
+      ...process.env,
       WHIPHAND_RELEASES_URL: base,
       WHIPHAND_INSTALL_DIR: dir.split(path.sep).join('/'),
       ...env,

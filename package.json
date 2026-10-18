@@ -17,6 +17,7 @@
     "verify": "bash scripts/verify.sh",
     "package": "npm run package:cli && npm run package:desktop",
     "package:cli": "node scripts/package/cli.mjs",
+    "package:cli-deb": "node scripts/package/cli-deb.mjs",
     "package:desktop": "node scripts/package/desktop.mjs",
     "reinstall": "node scripts/package/reinstall.mjs",
     "bump": "node scripts/version.mjs"

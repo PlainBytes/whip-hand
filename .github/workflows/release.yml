@@ -4,7 +4,8 @@ name: Release
 #
 # The repo has immutable releases on: once a release is published, nothing can
 # be uploaded to it. So everything goes into a draft first, and the draft is
-# published only after both builds and the checksums are attached.
+# published only after both builds and the checksums are attached. winget
+# hears about it last, once the release is public.
 on:
   workflow_dispatch:
     inputs:
@@ -113,6 +114,10 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
       - uses: dtolnay/rust-toolchain@stable
+      # The Linux CLI is built static, for musl (scripts/package/cli.mjs).
+      - name: Add the static Linux target
+        if: runner.os == 'Linux'
+        run: rustup target add x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
@@ -121,6 +126,7 @@ jobs:
       - run: npm ci
 
       # A native Rust binary (crates/whiphand-cli): cargo build, then the smoke test.
+      # The same binary goes into the desktop bundle as its `whiphand` sidecar.
       - name: Build the CLI
         run: npm run package:cli
       - name: Upload the CLI binary
@@ -133,6 +139,15 @@ jobs:
           [ -f "$src.exe" ] && src="$src.exe"
           cp "$src" "$CLI_NAME"
           gh release upload "$TAG" "$CLI_NAME" --clobber
+
+      # The CLI and TUI without the desktop app, as a .deb of their own.
+      - name: Build and upload the CLI .deb
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run package:cli-deb
+          gh release upload "$TAG" dist/whiphand-cli_*_amd64.deb --clobber
 
       - name: Build the web resource
         id: prepare
@@ -172,3 +187,23 @@ jobs:
       # From here on the release is immutable, with every asset already attached.
       - name: Publish the release
         run: gh api -X PATCH "repos/$GH_REPO/releases/$ID" -F draft=false --silent
+
+  # The CLI on winget (PlainBytes.Whiphand, a portable exe): opens the PR to
+  # microsoft/winget-pkgs that adds this version. The first version is
+  # submitted by hand, and this job is skipped until the WINGET_TOKEN secret
+  # exists (README, "Releases"). A failure here leaves the release itself
+  # published and whole.
+  winget:
+    needs: [prepare, publish]
+    runs-on: ubuntu-latest
+    env:
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+    steps:
+      - name: Submit the new version to winget
+        if: env.WINGET_TOKEN != ''
+        uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: PlainBytes.Whiphand
+          release-tag: ${{ needs.prepare.outputs.tag }}
+          installers-regex: 'whiphand-windows-x86_64\.exe$'
+          token: ${{ secrets.WINGET_TOKEN }}

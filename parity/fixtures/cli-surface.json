@@ -247,6 +247,11 @@
           "short": "-C"
         }
       ]
+    },
+    {
+      "name": "desktop",
+      "args": [],
+      "options": []
     }
   ]
 }

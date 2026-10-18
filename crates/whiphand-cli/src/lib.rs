@@ -3,12 +3,14 @@
 
 pub mod cli;
 pub mod commands;
+pub mod desktop;
 pub mod io;
 pub mod prompt;
 pub mod render;
 pub mod tty;
 
 use std::ffi::OsString;
+use std::io::IsTerminal;
 
 use clap::ArgMatches;
 
@@ -109,6 +111,11 @@ pub fn run_cli(args: Vec<OsString>) -> i32 {
         ));
         return 0;
     }
+    // Bare `whiphand` on a terminal is the TUI; anywhere else (a script, a
+    // pipe) it is the usage error it always was.
+    if args.len() == 1 && std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        return whiphand_tui::run(whiphand_tui::TuiOptions { dir: None });
+    }
     let cli = build_cli();
     let matches = match cli.clone().try_get_matches_from(&args) {
         Ok(m) => m,
@@ -133,6 +140,9 @@ pub fn run_cli(args: Vec<OsString>) -> i32 {
     if let Some(("tui", m)) = matches.subcommand() {
         let dir = string(m, "C").map(Into::into);
         return whiphand_tui::run(whiphand_tui::TuiOptions { dir });
+    }
+    if let Some(("desktop", _)) = matches.subcommand() {
+        return desktop::launch();
     }
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()

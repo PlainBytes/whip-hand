@@ -63,6 +63,9 @@ fn await_hooks(await_path: &str) -> Result<JsObject, String> {
     let sh = sh_quote(&to_fwd_abs(await_path))?;
     let ps = ps_quote(await_path);
     let turn = r#"{"r":"turn"}"#;
+    // No `"` in a PowerShell command: Windows PowerShell drops embedded
+    // double quotes from a native argument, leaving `{r:turn}`.
+    let ps_turn = "'{_r_:_turn_}'.Replace('_', [char]34)";
     let clear = || {
         hook(
             format!("rm -f {sh} >/dev/null 2>&1; exit 0"),
@@ -74,7 +77,7 @@ fn await_hooks(await_path: &str) -> Result<JsObject, String> {
         "hooks" => obj! {
             "agentStop" => hook(
                 format!("printf '{turn}' > {sh} 2>/dev/null; exit 0"),
-                format!("try {{ [IO.File]::WriteAllText({ps}, '{turn}') }} catch {{}}; exit 0"),
+                format!("try {{ [IO.File]::WriteAllText({ps}, {ps_turn}) }} catch {{}}; exit 0"),
             ),
             "notification" => hook(
                 format!("cat > {sh} 2>/dev/null; exit 0"),
@@ -397,7 +400,9 @@ mod tests {
         for (_, entries) in events.iter() {
             let entry = entries.as_arr().unwrap()[0].as_obj().unwrap();
             assert!(entry.str_prop("bash").unwrap().ends_with("; exit 0"));
-            assert!(entry.str_prop("powershell").unwrap().ends_with("; exit 0"));
+            let ps = entry.str_prop("powershell").unwrap();
+            assert!(ps.ends_with("; exit 0"));
+            assert!(!ps.contains('"'), "{ps}");
         }
     }
 

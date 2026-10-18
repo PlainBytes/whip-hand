@@ -34,8 +34,8 @@ const IDLE_POLL_TICKS: u32 = 50;
 pub const PAGE: usize = 10;
 /// How long a passing message stays.
 const TOAST_MS: f64 = 6_000.0;
-/// The ongoing view's reach.
-const RECENT_RUNS_LIMIT: u32 = 200;
+/// The ongoing view's reach: the most `listRecentRuns` takes.
+const RECENT_RUNS_LIMIT: u32 = 100;
 
 fn list_runs(workdir: &str) -> Cmd {
     Cmd::Rpc(Call::new::<ListRuns>(
@@ -126,6 +126,9 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                 Err(e) => {
                     if let Then::ArtifactWritten { run_id, name } = &then {
                         return detail::on_write_refused(model, run_id, name, &e.message);
+                    }
+                    if then == Then::RecentRuns {
+                        model.runs_ui.recent_failed = true;
                     }
                     if !detail::on_error(model, &then, &e.message)
                         && !new_run::on_error(model, &then, &e.message)
@@ -874,10 +877,14 @@ fn on_reply(model: &mut Model, then: Then, value: Value) -> Vec<Cmd> {
         Then::RecentRuns => match client::decode::<ListRecentRuns>(value) {
             Ok(runs) => {
                 model.runs_ui.recent = runs.0;
+                model.runs_ui.recent_failed = false;
                 let len = model.visible_rows().len();
                 model.runs_ui.selected = model.runs_ui.selected.min(len.saturating_sub(1));
             }
-            Err(e) => model.notice = Some(e),
+            Err(e) => {
+                model.runs_ui.recent_failed = true;
+                model.notice = Some(e);
+            }
         },
         Then::Doctor => match client::decode::<Doctor>(value) {
             Ok(rows) => model.doctor.rows = Some(rows),

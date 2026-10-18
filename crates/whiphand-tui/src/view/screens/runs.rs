@@ -63,6 +63,8 @@ pub fn render(model: &Model, frame: &mut Frame, area: Rect) {
             "Loading…"
         } else if !model.runs_ui.filter.is_empty() {
             "No run matches the filter."
+        } else if model.runs_ui.ongoing && model.runs_ui.recent_failed {
+            "The ongoing runs could not be read."
         } else if model.runs_ui.ongoing {
             "Nothing is running in any recent workspace."
         } else {

@@ -65,6 +65,7 @@ fn start(model: &mut Model, job_id: String) -> Vec<Cmd> {
         escape: false,
         replayed: false,
         ended_at: None,
+        carry: Vec::new(),
     });
     vec![Cmd::Attach]
 }
@@ -73,6 +74,36 @@ fn detach(model: &mut Model) -> Vec<Cmd> {
     model.attach = None;
     model.dirty = true;
     vec![Cmd::Detach]
+}
+
+/// Modes a session's output sets that are dropped on the way to the real
+/// terminal. A pseudoconsole's first output asks for win32-input-mode; passed
+/// on, the TUI's own console would send keys as `ESC [ … _` records, and the
+/// detach key would never be its byte. Focus reporting (`?1004h`), asked for
+/// in the same breath, is passed on: its events reach the Windows reader as
+/// records it skips, and a POSIX program in the session may want them.
+const DROPPED: &[&[u8]] = &[b"\x1b[?9001h"];
+
+/// `bytes` without the modes in `DROPPED`. A tail that may be the start of
+/// one is kept in `carry` and goes out in front of the next output.
+pub fn strip_modes(carry: &mut Vec<u8>, bytes: &[u8]) -> Vec<u8> {
+    let mut all = std::mem::take(carry);
+    all.extend_from_slice(bytes);
+    let mut out = Vec::with_capacity(all.len());
+    let mut i = 0;
+    while i < all.len() {
+        let rest = &all[i..];
+        if let Some(mode) = DROPPED.iter().find(|m| rest.starts_with(m)) {
+            i += mode.len();
+        } else if DROPPED.iter().any(|m| m.starts_with(rest)) {
+            *carry = rest.to_vec();
+            break;
+        } else {
+            out.push(all[i]);
+            i += 1;
+        }
+    }
+    out
 }
 
 /// The real terminal's size: on attaching, and when it changes meanwhile.
@@ -100,7 +131,8 @@ pub fn on_size(model: &mut Model, cols: u16, rows: u16) -> Vec<Cmd> {
         if job.is_some_and(|j| j.pty.trimmed) {
             out.extend_from_slice(b"[whiphand: earlier output is not shown]\r\n");
         }
-        out.extend(job.map(|j| j.pty.replay()).unwrap_or_default());
+        let replay = job.map(|j| j.pty.replay()).unwrap_or_default();
+        out.extend(strip_modes(&mut a.carry, &replay));
         cmds.push(Cmd::Stdout(out));
     }
     cmds
@@ -178,9 +210,16 @@ pub fn auto(model: &mut Model, job_id: &str) -> Vec<Cmd> {
 }
 
 /// Output of `job_id`'s session: straight to the terminal when attached to it.
-pub fn on_output(model: &Model, job_id: &str, bytes: Vec<u8>) -> Vec<Cmd> {
-    match &model.attach {
-        Some(a) if a.job_id == job_id && a.replayed => vec![Cmd::Stdout(bytes)],
+pub fn on_output(model: &mut Model, job_id: &str, bytes: Vec<u8>) -> Vec<Cmd> {
+    match model.attach.as_mut() {
+        Some(a) if a.job_id == job_id && a.replayed => {
+            let out = strip_modes(&mut a.carry, &bytes);
+            if out.is_empty() {
+                vec![]
+            } else {
+                vec![Cmd::Stdout(out)]
+            }
+        }
         _ => vec![],
     }
 }
@@ -263,7 +302,7 @@ mod tests {
     fn attaching_sizes_the_pty_and_replays_what_it_printed() {
         let mut model = attached();
         // Live output before the replay would land out of order: held back.
-        assert!(on_output(&model, "j1", b"early".to_vec()).is_empty());
+        assert!(on_output(&mut model, "j1", b"early".to_vec()).is_empty());
         let cmds = on_size(&mut model, 120, 40);
         let Cmd::Rpc(resize) = &cmds[0] else { panic!() };
         assert_eq!(
@@ -277,10 +316,45 @@ mod tests {
         // A later resize only resizes; output now flows through.
         assert_eq!(on_size(&mut model, 100, 30).len(), 1);
         assert_eq!(
-            on_output(&model, "j1", b"x".to_vec()),
+            on_output(&mut model, "j1", b"x".to_vec()),
             [Cmd::Stdout(b"x".to_vec())]
         );
-        assert!(on_output(&model, "j2", b"x".to_vec()).is_empty());
+        assert!(on_output(&mut model, "j2", b"x".to_vec()).is_empty());
+    }
+
+    /// What a Windows pseudoconsole prints first.
+    const CONPTY_PREAMBLE: &[u8] = b"\x1b[?9001h\x1b[?1004h";
+
+    #[test]
+    fn win32_input_mode_never_reaches_the_terminal() {
+        let mut model = attached();
+        let job = model.jobs.get_mut("j1").unwrap();
+        job.pty.started("plan", 80, 24);
+        job.pty.append(&STANDARD.encode(CONPTY_PREAMBLE), Some(0));
+        job.pty.append(&STANDARD.encode("$ "), Some(1));
+        let cmds = on_size(&mut model, 80, 24);
+        let Cmd::Stdout(replay) = &cmds[1] else {
+            panic!()
+        };
+        assert!(replay.ends_with(b"\x1b[?1004h$ "), "{replay:?}");
+        assert!(!replay.windows(8).any(|w| w == b"\x1b[?9001"));
+        // Live, and split across two outputs.
+        assert_eq!(
+            on_output(&mut model, "j1", b"a\x1b[?90".to_vec()),
+            [Cmd::Stdout(b"a".to_vec())]
+        );
+        assert_eq!(
+            on_output(&mut model, "j1", b"01hb".to_vec()),
+            [Cmd::Stdout(b"b".to_vec())]
+        );
+        // A prefix that turns out to be something else goes out whole.
+        assert!(on_output(&mut model, "j1", b"\x1b[?".to_vec()).is_empty());
+        assert_eq!(
+            on_output(&mut model, "j1", b"25h".to_vec()),
+            [Cmd::Stdout(b"\x1b[?25h".to_vec())]
+        );
+        // And the detach key is its byte again.
+        assert_eq!(on_stdin(&mut model, &[DETACH, b'x']), [Cmd::Detach]);
     }
 
     #[test]

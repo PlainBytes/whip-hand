@@ -64,6 +64,9 @@ impl Session {
         if let Some(mode) = self.mode.take() {
             windows::set_mode(mode);
         }
+        // Win32-input-mode and focus reporting, should the session have
+        // got either to the terminal; a terminal ignores modes it lacks.
+        write(b"\x1b[?9001l\x1b[?1004l");
         execute!(io::stdout(), EnterAlternateScreen, Hide)?;
         // The session may have turned it off.
         terminal::paste_on();

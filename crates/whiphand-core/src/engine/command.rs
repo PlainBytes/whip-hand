@@ -6,7 +6,8 @@
 use std::collections::HashSet;
 
 use crate::adapters::common::strings;
-use crate::jsval::{JsObject, ObjExt};
+use crate::engine::spec;
+use crate::jsval::{JsObject, JsValue, ObjExt};
 use crate::node_path;
 use crate::obj;
 use crate::path_form::to_fwd_abs;
@@ -41,6 +42,17 @@ fn assert_fits_env(env_name: &str, key: &str, value: &str) -> Result<(), Templat
         )));
     }
     Ok(())
+}
+
+/// `PATH` with the directory of the shell in front, in Windows form. A bare
+/// `usr\bin\sh.exe` finds Git's coreutils (`uname`, `seq`, `sleep`) only
+/// there; Git's own launchers put it on PATH, and so does this.
+fn path_with_shell_dir(shell: &str, path: Option<&str>) -> String {
+    let dir = node_path::win32_dirname(&shell.replace('/', "\\"));
+    match path.filter(|p| !p.is_empty()) {
+        Some(p) => format!("{dir};{p}"),
+        None => dir,
+    }
 }
 
 /// The spawn spec a command step resolves to.
@@ -120,6 +132,30 @@ pub fn command_spec(
     Ok(spec)
 }
 
+/// `spec` as it is spawned. On Windows the shell found for the step (not one
+/// the step names) has its directory put in front of PATH. The spec the
+/// step's events record goes without: PATH is the whole of the user's.
+pub fn spawned(step: &CommandStep, mut spec: JsObject) -> JsObject {
+    if !cfg!(windows) || step.shell.is_some() {
+        return spec;
+    }
+    let Some(shell) = spec::argv(&spec).into_iter().next() else {
+        return spec;
+    };
+    if let Some(env) = spec.get_mut("env").and_then(JsValue::as_obj_mut) {
+        let key = env
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case("PATH"))
+            .map(str::to_string);
+        let path = match key {
+            Some(k) => env.remove(&k).map(|v| v.to_js_string()),
+            None => std::env::var("PATH").ok(),
+        };
+        env.set("PATH", path_with_shell_dir(&shell, path.as_deref()));
+    }
+    spec
+}
+
 /// The header a captured command artifact opens with.
 pub fn capture_header(step: &CommandStep, argv_last: &str, frame: Option<&Frame>) -> String {
     let where_ = match frame {
@@ -135,4 +171,26 @@ pub fn capture_header(step: &CommandStep, argv_last: &str, frame: Option<&Frame>
 
 pub fn capture_footer(exit_code: i32) -> String {
     format!("\n(exit code: {exit_code})\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::path_with_shell_dir;
+
+    #[test]
+    fn the_shells_directory_goes_in_front_of_path() {
+        let shell = "C:/Program Files/Git/usr/bin/sh.exe";
+        assert_eq!(
+            path_with_shell_dir(shell, Some(r"C:\Windows\system32;C:\bin")),
+            r"C:\Program Files\Git\usr\bin;C:\Windows\system32;C:\bin"
+        );
+        assert_eq!(
+            path_with_shell_dir(shell, None),
+            r"C:\Program Files\Git\usr\bin"
+        );
+        assert_eq!(
+            path_with_shell_dir(shell, Some("")),
+            r"C:\Program Files\Git\usr\bin"
+        );
+    }
 }

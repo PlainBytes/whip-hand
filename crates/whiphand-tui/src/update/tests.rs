@@ -190,6 +190,22 @@ fn an_error_reply_becomes_a_notice() {
     assert_eq!(model.notice.as_deref(), Some("boom"));
 }
 
+#[test]
+fn an_ongoing_view_that_cannot_be_read_does_not_look_empty() {
+    let mut model = Model::new("/w".into(), 0.0);
+    update(&mut model, key('o'));
+    let error = RpcError {
+        code: -32602,
+        message: "limit: too big".into(),
+        data: None,
+    };
+    update(&mut model, Msg::Reply(Then::RecentRuns, Err(error)));
+    assert!(model.runs_ui.recent_failed);
+    assert_eq!(model.notice.as_deref(), Some("limit: too big"));
+    update(&mut model, Msg::Reply(Then::RecentRuns, Ok(json!([]))));
+    assert!(!model.runs_ui.recent_failed);
+}
+
 // ----------------------------------------------------------------- routing
 
 #[test]
@@ -278,7 +294,11 @@ fn the_filter_narrows_the_runs_and_esc_clears_it() {
 #[test]
 fn the_ongoing_view_lists_running_runs_of_every_workspace() {
     let mut model = Model::new("/w".into(), 0.0);
-    assert_eq!(methods(&update(&mut model, key('o'))), ["listRecentRuns"]);
+    let cmds = update(&mut model, key('o'));
+    assert_eq!(methods(&cmds), ["listRecentRuns"]);
+    let Cmd::Rpc(list) = &cmds[0] else { panic!() };
+    // The agent refuses more.
+    assert_eq!(list.params["limit"], 100);
     update(
         &mut model,
         Msg::Reply(

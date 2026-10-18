@@ -27,7 +27,7 @@ use crate::engine::attachments::{
     AttachmentSource, PlannedAttachment, copy_attachments, validate_attachments,
 };
 use crate::engine::auto_name::auto_name_run;
-use crate::engine::command::{capture_footer, capture_header, command_spec};
+use crate::engine::command::{self, capture_footer, capture_header, command_spec};
 use crate::engine::enabled::{dropped_ref_sentence, dropped_refs, prune_disabled};
 use crate::engine::frames::{execution_fields, frame_identity, identity_key, loop_refs_js};
 use crate::engine::frontend::Frontend;
@@ -1612,6 +1612,7 @@ impl<F: Frontend> Run<'_, F> {
             return Ok(self.fail(&f, Some(&step.id)));
         }
         self.emit(obj! { "type" => "step:spawn", "stepId" => step.id.as_str(), "spec" => spec.clone(), "phase" => "main" });
+        let spec = command::spawned(step, spec);
         let last_error = RefCell::new(None);
         let (exit, timed_out, _) = self
             .spawn_with(

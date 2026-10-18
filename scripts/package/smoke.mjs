@@ -80,6 +80,16 @@ export function smokeCli() {
     }
   });
 
+  // Windows only: the C runtime is linked in (.cargo/config.toml). A binary
+  // importing it exits silently on a Windows without the VC++ redistributable,
+  // and CI's runners have it, so nothing else would notice.
+  if (process.platform === 'win32') {
+    check('the binary does not import the VC++ runtime', () => {
+      const bytes = fs.readFileSync(whiphand).toString('latin1').toLowerCase();
+      assert.ok(!bytes.includes('vcruntime140'), 'imports VCRUNTIME140.dll');
+    });
+  }
+
   // Windows only: the packaged build must be able to contain a real run. Without
   // its Job Object (or a POSIX shell to run the command in) this exits 1.
   if (process.platform === 'win32') {

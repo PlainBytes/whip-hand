@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### The terminal UI ships on its own
+
+- Plain `whiphand` in a terminal opens the TUI. From a script or a pipe it prints the usage, as
+  before.
+- `whiphand desktop` starts the desktop app.
+- **The desktop executable is now `whiphand-desktop`.** The desktop `.deb` and the Windows installer
+  now also install the `whiphand` CLI beside it, and the Windows installer adds its folder to your
+  PATH. Menu entries and shortcuts are updated by the upgrade.
+- The Linux CLI is a static binary, so it runs on any distribution, an old SSH server's included,
+  not only on the Ubuntu release that built it.
+- New ways to get the CLI and TUI without the desktop app: a `whiphand-cli` `.deb` on each release,
+  `install.sh` / `install.ps1` (they check the download against `SHA256SUMS`), and winget
+  (`PlainBytes.Whiphand`).
+
 ### Copilot steps are more reliable
 
 - A copilot step that fails now says why. The reason copilot reports (an unavailable model, an exceeded

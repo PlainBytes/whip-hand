@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Copilot steps are more reliable
+
+- A copilot step that fails now says why. The reason copilot reports (an unavailable model, an exceeded
+  quota, a missing login) is added to "exited with code 1", from its JSON stream or its `Error:` line.
+- Interactive copilot steps report when the session is waiting for you (your turn, a permission prompt,
+  a question it asked), as claude and opencode steps already did. The report comes from hooks in a
+  plugin mounted for that one session, and copilot's `beep` setting is no longer needed. The doctor
+  note asking for it is gone.
+- Harvest no longer passes the step's `--model` again. The resumed session keeps the model it ran with,
+  so a model copilot replaced with a fallback during the session no longer fails the harvest.
+- Run auto-naming with copilot gets the name alone. Before, copilot's narration of reading the prompt
+  file ended up in the name.
+- Headless and harvest spawns pass `--no-ask-user`, and effort is passed as the documented
+  `--reasoning-effort`.
+
 ### A terminal UI: `whiphand tui`
 
 - `whiphand tui [-C dir]` is a keyboard-only front end for terminals, tmux and SSH, beside the desktop

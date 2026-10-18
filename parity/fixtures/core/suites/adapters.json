@@ -177,6 +177,7 @@
 {"op":"parseAwaitState","raw":"{\"r\":\"away\"}"},
 {"op":"parseAwaitState","raw":"{\"r\":\"attention\"}"},
 {"op":"parseAwaitState","raw":"{\"notification_type\":\"idle_prompt\"}"},
+{"op":"parseAwaitState","raw":"{\"notification_type\":\"elicitation_dialog\",\"title\":\"Question\"}"},
 {"op":"parseAwaitState","raw":"{\"notification_type\":\"permission_prompt\",\"message\":\"x\"}"},
 {"op":"parseAwaitState","raw":"{\"notification_type\":\"worker_permission_prompt\"}"},
 {"op":"parseAwaitState","raw":"{\"notification_type\":\"auth_success\"}"},

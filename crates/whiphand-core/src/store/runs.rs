@@ -21,8 +21,9 @@ use crate::store::journal::write_manifest_atomic;
 use crate::store::markers::{
     FENCE_MARKER_NAME, LOCK_MARKER_NAME, NAME_MARKER_NAME, RUN_LOG_NAME, RunFence,
     SUGGEST_CAPTURE_NAME, SUGGEST_PROMPT_NAME, WORKFLOW_SNAPSHOT_NAME, is_await_state_name,
-    is_end_marker_name, is_opencode_support_file_name, is_run_locked, is_session_capture_name,
-    is_spawn_file_name, read_fence, read_run_name, set_run_name, write_fence,
+    is_copilot_support_file_name, is_end_marker_name, is_opencode_support_file_name, is_run_locked,
+    is_session_capture_name, is_spawn_file_name, read_fence, read_run_name, set_run_name,
+    write_fence,
 };
 use crate::store::schema::parse_manifest;
 use crate::time;
@@ -302,6 +303,7 @@ fn is_bookkeeping_file(name: &str) -> bool {
         || is_await_state_name(name)
         || is_session_capture_name(name)
         || is_opencode_support_file_name(name)
+        || is_copilot_support_file_name(name)
         || is_spawn_file_name(name)
         || name == SUGGEST_PROMPT_NAME
 }

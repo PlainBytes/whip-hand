@@ -5372,7 +5372,7 @@ dependencies = [
 
 [[package]]
 name = "whiphand-job"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "windows-sys 0.59.0",
 ]

@@ -17,6 +17,7 @@ const FILES = {
     // The desktop links the agent in-process: these are its path dependencies.
     + '[[package]]\nname = "whiphand-agent"\nversion = "0.1.0"\n\n'
     + '[[package]]\nname = "whiphand-core"\nversion = "0.1.0"\n\n'
+    + '[[package]]\nname = "whiphand-job"\nversion = "0.1.0"\n\n'
     + '[[package]]\nname = "whiphand-protocol"\nversion = "0.1.0"\n',
   'crates/whiphand-core/Cargo.toml':
     '[package]\nname = "whiphand-core"\nversion = "0.1.0"\nedition = "2024"\n\n[dependencies]\nregex = "1"\n',
@@ -26,11 +27,14 @@ const FILES = {
     '[package]\nname = "whiphand-protocol"\nversion = "0.1.0"\nedition = "2024"\n\n[dependencies]\nserde = "1"\n',
   'crates/whiphand-agent/Cargo.toml':
     '[package]\nname = "whiphand-agent"\nversion = "0.1.0"\nedition = "2024"\n\n[dependencies]\nserde = "1"\n',
+  'crates/job-guard/Cargo.toml':
+    '[package]\nname = "whiphand-job"\nversion = "0.1.0"\nedition = "2021"\n',
+  'packages/test-support/package.json': '{\n  "name": "@whiphand/test-support",\n  "version": "0.1.0",\n  "private": true\n}\n',
   'crates/whiphand-tui/Cargo.toml':
     '[package]\nname = "whiphand-tui"\nversion = "0.1.0"\nedition = "2024"\n\n[dependencies]\nserde = "1"\n',
   'Cargo.lock':
     '[[package]]\nname = "whiphand-cli"\nversion = "0.1.0"\n\n[[package]]\nname = "whiphand-core"\nversion = "0.1.0"\n\n'
-    + '[[package]]\nname = "whiphand-job"\nversion = "0.9.0"\n\n'
+    + '[[package]]\nname = "whiphand-job"\nversion = "0.1.0"\n\n'
     + '[[package]]\nname = "whiphand-protocol"\nversion = "0.1.0"\n\n'
     + '[[package]]\nname = "whiphand-agent"\nversion = "0.1.0"\n\n'
     + '[[package]]\nname = "whiphand-tui"\nversion = "0.1.0"\n',
@@ -50,7 +54,7 @@ const FILES = {
       '': { name: 'whiphand', workspaces: ['packages/*', 'apps/*'] },
       'apps/desktop': { version: '0.1.0' },
       'node_modules/commander': { version: '14.0.0', license: 'MIT' },
-      'packages/test-support': { name: '@whiphand/test-support', version: '0.0.7' },
+      'packages/test-support': { name: '@whiphand/test-support', version: '0.1.0' },
     },
   }, null, 2)}\n`,
 };
@@ -96,6 +100,8 @@ test('--check exits non-zero and lists every mismatch', () => {
       assert.match(stderr, /Cargo\.toml: 0\.1\.0/);
       assert.match(stderr, /src-tauri\/Cargo\.lock \(whiphand-desktop\): 0\.1\.0/);
       assert.match(stderr, /crates\/whiphand-tui\/Cargo\.toml: 0\.1\.0/);
+      assert.match(stderr, /crates\/job-guard\/Cargo\.toml: 0\.1\.0/);
+      assert.match(stderr, /packages\/test-support\/package\.json: 0\.1\.0/);
       assert.match(stderr, /crates\/whiphand-core\/Cargo\.toml: 0\.1\.0/);
       assert.match(stderr, /^  Cargo\.lock \(whiphand-core\): 0\.1\.0/m);
       assert.match(stderr, /package-lock\.json \(apps\/desktop\): 0\.1\.0/);
@@ -139,7 +145,12 @@ test('writing a version updates every location, including Cargo.lock and package
     assert.match(cliToml, /version = "0\.2\.0"/);
     assert.match(workspaceLock, /name = "whiphand-protocol"\nversion = "0\.2\.0"/);
     assert.match(workspaceLock, /name = "whiphand-agent"\nversion = "0\.2\.0"/);
-    assert.match(workspaceLock, /name = "whiphand-job"\nversion = "0\.9\.0"/);
+    assert.match(workspaceLock, /name = "whiphand-job"\nversion = "0\.2\.0"/);
+    assert.match(cargoLock, /name = "whiphand-job"\nversion = "0\.2\.0"/);
+    const jobToml = fs.readFileSync(path.join(root, 'crates/job-guard/Cargo.toml'), 'utf8');
+    assert.match(jobToml, /version = "0\.2\.0"/);
+    const supportPkg = JSON.parse(fs.readFileSync(path.join(root, 'packages/test-support/package.json'), 'utf8'));
+    assert.equal(supportPkg.version, '0.2.0');
 
     const tauriConf = JSON.parse(fs.readFileSync(path.join(root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'));
     assert.equal(tauriConf.version, '0.2.0');
@@ -148,8 +159,7 @@ test('writing a version updates every location, including Cargo.lock and package
     const lock = JSON.parse(lockText);
     assert.equal(lock.packages['apps/desktop'].version, '0.2.0');
     assert.equal(lock.packages['node_modules/commander'].version, '14.0.0');
-    // A private workspace that does not ship keeps its own version.
-    assert.equal(lock.packages['packages/test-support'].version, '0.0.7');
+    assert.equal(lock.packages['packages/test-support'].version, '0.2.0');
     assert.equal(lockText, `${JSON.stringify(lock, null, 2)}\n`);
 
     const checkOut = run(root, ['--check', '0.2.0']);

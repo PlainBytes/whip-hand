@@ -240,27 +240,111 @@ impl ProgressParser {
     }
 }
 
-/// The reason a runner gave for failing, when a structured line carries one
-/// (only opencode reports errors this way).
-pub fn progress_error_message(format: ProgressFormat, line: &str) -> Option<String> {
-    if format != ProgressFormat::OpencodeJson {
-        return None;
-    }
-    let event = parse_json_record(line)?;
-    if event.str_prop("type") != Some("error") {
-        return None;
-    }
-    let error = record_or(event.prop("error"));
-    let from_data = record_or(error.prop("data")).prop("message").clone();
-    let message = [
-        from_data,
-        error.prop("message").clone(),
-        error.prop("name").clone(),
-    ]
-    .into_iter()
-    .find(|v| !v.is_nullish())?;
-    match message {
-        JsValue::Str(s) if !s.trim_matches(is_js_whitespace).is_empty() => Some(collapse(&s)),
+/// A non-blank string value, whitespace collapsed.
+fn message_of(value: &JsValue) -> Option<String> {
+    match value {
+        JsValue::Str(s) if !s.trim_matches(is_js_whitespace).is_empty() => Some(collapse(s)),
         _ => None,
+    }
+}
+
+/// The reason a runner gave for failing, when a structured line carries one:
+/// opencode's `error` event, copilot's `session.error` (quota, auth, model)
+/// or a `session.shutdown` that ended in an error.
+pub fn progress_error_message(format: ProgressFormat, line: &str) -> Option<String> {
+    match format {
+        ProgressFormat::ClaudeStreamJson => None,
+        ProgressFormat::CopilotJsonl => {
+            let event = parse_json_record(line)?;
+            let data = record_or(event.prop("data"));
+            match event.str_prop("type") {
+                Some("session.error") => message_of(data.prop("message")),
+                Some("session.shutdown") if data.str_prop("shutdownType") == Some("error") => {
+                    message_of(data.prop("errorReason"))
+                }
+                _ => None,
+            }
+        }
+        ProgressFormat::OpencodeJson => {
+            let event = parse_json_record(line)?;
+            if event.str_prop("type") != Some("error") {
+                return None;
+            }
+            let error = record_or(event.prop("error"));
+            let from_data = record_or(error.prop("data")).prop("message").clone();
+            let message = [
+                from_data,
+                error.prop("message").clone(),
+                error.prop("name").clone(),
+            ]
+            .into_iter()
+            .find(|v| !v.is_nullish())?;
+            message_of(&message)
+        }
+    }
+}
+
+/// The reason a runner gave for failing on stderr: copilot reports what
+/// stops it before any structured output (an unavailable `--model`, a
+/// missing login) as one `Error: …` line.
+pub fn stderr_error_message(format: ProgressFormat, line: &str) -> Option<String> {
+    if format != ProgressFormat::CopilotJsonl {
+        return None;
+    }
+    let rest = line
+        .trim_start_matches(is_js_whitespace)
+        .strip_prefix("Error:")?;
+    message_of(&JsValue::Str(rest.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copilot_errors_come_from_session_error_and_failed_shutdowns() {
+        let f = ProgressFormat::CopilotJsonl;
+        let quota = r#"{"type":"session.error","data":{"errorType":"quota","message":"You have exceeded your monthly quota (Request ID: E316)"}}"#;
+        assert_eq!(
+            progress_error_message(f, quota).as_deref(),
+            Some("You have exceeded your monthly quota (Request ID: E316)")
+        );
+        let crash = r#"{"type":"session.shutdown","data":{"shutdownType":"error","errorReason":"boom\n  twice"}}"#;
+        assert_eq!(
+            progress_error_message(f, crash).as_deref(),
+            Some("boom twice")
+        );
+        for quiet in [
+            r#"{"type":"session.shutdown","data":{"shutdownType":"routine","errorReason":"x"}}"#,
+            r#"{"type":"session.error","data":{"message":"  "}}"#,
+            r#"{"type":"session.error","data":"oops"}"#,
+            r#"{"type":"session.warning","data":{"message":"w"}}"#,
+            "not json",
+        ] {
+            assert_eq!(progress_error_message(f, quiet), None, "{quiet}");
+        }
+        assert_eq!(
+            progress_error_message(ProgressFormat::ClaudeStreamJson, quota),
+            None
+        );
+    }
+
+    #[test]
+    fn copilot_stderr_errors_are_its_error_lines_only() {
+        let f = ProgressFormat::CopilotJsonl;
+        assert_eq!(
+            stderr_error_message(
+                f,
+                r#"Error: Model "gpt-x" from --model flag is not available."#
+            )
+            .as_deref(),
+            Some(r#"Model "gpt-x" from --model flag is not available."#)
+        );
+        assert_eq!(stderr_error_message(f, "Error:   "), None);
+        assert_eq!(stderr_error_message(f, "warning: Error: nested"), None);
+        assert_eq!(
+            stderr_error_message(ProgressFormat::OpencodeJson, "Error: x"),
+            None
+        );
     }
 }

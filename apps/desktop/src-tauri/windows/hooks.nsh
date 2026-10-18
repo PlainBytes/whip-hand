@@ -24,6 +24,16 @@
   SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
 !macroend
 
+; Up to 0.5 the app itself was whiphand.exe, and Tauri's installer deletes the
+; previous main binary by the name it recorded, after copying the new files in:
+; that would delete the CLI sidecar, which is whiphand.exe now. Forgetting the
+; old name keeps it, and the sidecar's copy writes over the old app instead.
+!macro NSIS_HOOK_PREINSTALL
+  ReadRegStr $0 SHCTX "${UNINSTKEY}" "MainBinaryName"
+  StrCmp $0 "whiphand.exe" 0 +2
+    DeleteRegValue SHCTX "${UNINSTKEY}" "MainBinaryName"
+!macroend
+
 !macro NSIS_HOOK_POSTINSTALL
   !insertmacro WHIPHAND_SET_PATH `if ($$e -notcontains $$d) { Set-ItemProperty -LiteralPath $$k -Name Path -Type ExpandString -Value (($$e + $$d) -join ';') }`
 !macroend

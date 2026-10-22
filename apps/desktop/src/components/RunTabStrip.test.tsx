@@ -255,6 +255,27 @@ describe('RunTabStrip', () => {
         expect(sentMethods(transport)).toEqual([]);
       });
 
+      it('switches tabs from the xterm helper textarea, while the other shortcuts stay dead there', () => {
+        mixed();
+        renderStrip();
+        const host = document.createElement('div');
+        host.className = 'xterm';
+        const helper = document.createElement('textarea');
+        helper.className = 'xterm-helper-textarea';
+        host.appendChild(helper);
+        document.body.appendChild(host);
+        press(CTRL_TAB, helper); expect(active()).toBe('r1');
+        press(NEXT, helper); expect(active()).toBe('r1');
+        press(PREV, helper); expect(active()).toBe('r1');
+        press(ALT('KeyN', 'Dead'), helper); expect(active()).toBe('r1');
+        // A plain textarea still blocks it.
+        const plain = document.createElement('textarea');
+        document.body.appendChild(plain);
+        press(CTRL_TAB, plain); expect(active()).toBe('r1');
+        host.remove();
+        plain.remove();
+      });
+
       it('cycles every workspace\'s tabs with Ctrl+Shift+Tab, through openWorkspace', async () => {
         mixed();
         const { transport } = renderStrip();

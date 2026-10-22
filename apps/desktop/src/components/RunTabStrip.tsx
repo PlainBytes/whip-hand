@@ -16,6 +16,9 @@ import { RunStatusIcon, stateLabel, type RunStatus } from './OngoingRuns.tsx';
 import { WorkspaceDot } from './WorkspaceDot.tsx';
 import { isTabHere, tabWorkspace, useDiscardDraft } from './use-discard-draft.tsx';
 
+/** Ctrl+Tab chords stay live while a terminal has focus; TerminalPanel stops xterm from eating them. */
+const TERMINAL_PASSTHROUGH = { allowInTerminal: true };
+
 /** TabList values are strings, so the Runs tab (activeTabKey null) needs one that no run key can be. */
 const RUNS_TAB_VALUE = '\u0000runs';
 
@@ -247,8 +250,8 @@ export function RunTabStrip() {
   }
 
   useGlobalShortcut(NEXT_TAB, () => step(1));
-  useGlobalShortcut(WORKSPACE_NEXT_TAB, stepInWorkspace);
-  useGlobalShortcut(ALL_NEXT_TAB, () => step(1));
+  useGlobalShortcut(WORKSPACE_NEXT_TAB, stepInWorkspace, true, TERMINAL_PASSTHROUGH);
+  useGlobalShortcut(ALL_NEXT_TAB, () => step(1), true, TERMINAL_PASSTHROUGH);
   useGlobalShortcut(PREVIOUS_TAB, () => step(-1));
   useGlobalShortcut(CLOSE_TAB, () => {
     if (isModalOpen()) return;

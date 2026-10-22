@@ -54,9 +54,15 @@ describe('isTypingTarget', () => {
   });
 });
 
-function Harness({ onFire, enabled }: { onFire: () => void; enabled?: boolean }) {
-  useGlobalShortcut({ key: 'k', mod: true }, onFire, enabled);
-  return <input aria-label="field" />;
+function Harness({ onFire, enabled, allowInTerminal }: { onFire: () => void; enabled?: boolean; allowInTerminal?: boolean }) {
+  useGlobalShortcut({ key: 'k', mod: true }, onFire, enabled, allowInTerminal === undefined ? undefined : { allowInTerminal });
+  return (
+    <div>
+      <input aria-label="field" />
+      <textarea aria-label="plain" />
+      <div className="xterm"><textarea aria-label="helper" className="xterm-helper-textarea" /></div>
+    </div>
+  );
 }
 
 describe('useGlobalShortcut', () => {
@@ -71,6 +77,28 @@ describe('useGlobalShortcut', () => {
     const onFire = vi.fn();
     render(<Harness onFire={onFire} />);
     fireEvent.keyDown(screen.getByLabelText('field'), { key: 'k', ctrlKey: true });
+    expect(onFire).not.toHaveBeenCalled();
+  });
+
+  it('stays out of the way inside a terminal by default', () => {
+    const onFire = vi.fn();
+    render(<Harness onFire={onFire} />);
+    fireEvent.keyDown(screen.getByLabelText('helper'), { key: 'k', ctrlKey: true });
+    expect(onFire).not.toHaveBeenCalled();
+  });
+
+  it('fires from the xterm helper textarea when allowInTerminal is set', () => {
+    const onFire = vi.fn();
+    render(<Harness onFire={onFire} allowInTerminal />);
+    fireEvent.keyDown(screen.getByLabelText('helper'), { key: 'k', ctrlKey: true });
+    expect(onFire).toHaveBeenCalledTimes(1);
+  });
+
+  it('still blocks plain inputs and textareas when allowInTerminal is set', () => {
+    const onFire = vi.fn();
+    render(<Harness onFire={onFire} allowInTerminal />);
+    fireEvent.keyDown(screen.getByLabelText('field'), { key: 'k', ctrlKey: true });
+    fireEvent.keyDown(screen.getByLabelText('plain'), { key: 'k', ctrlKey: true });
     expect(onFire).not.toHaveBeenCalled();
   });
 

@@ -458,8 +458,9 @@ as before. `whiphand desktop` starts the desktop app, looking beside `whiphand`,
   in the run's worktree. `?` lists every key on the screen you are on.
 
 A run another whiphand process is driving (the desktop app, the CLI) shows as *foreign*: you can
-follow it, and the process that started it answers its prompts and cancels it. Quitting with runs
-in progress asks first; the runs stop and can be resumed. A closed terminal or a `kill` stops them
+follow it, and the process that started it answers its prompts and cancels it. Quitting always
+asks first; with runs in progress the question warns they will be cancelled, and they can be
+resumed. A closed terminal or a `kill` stops them
 the same way, after the terminal is put back.
 
 The terminal rings and sets its title when a run needs you or ends, through tmux too;

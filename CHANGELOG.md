@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### The TUI always asks before it quits
+
+- Quitting the TUI by key now asks first even when no run is in progress. It used to exit at once, so
+  a burst of `q` on the first screen could close it. With runs in progress the question still warns
+  that they will be cancelled and can be resumed.
+- A repeated `q` stops at the question; only `y` confirms.
+- A signal or a dead host still quits without asking.
+
 ### Read-only steps always write their artifact, and worktree runs stay in the worktree
 
 - A read-only claude step may now use Write and Edit on its own artifact and on nothing else. It

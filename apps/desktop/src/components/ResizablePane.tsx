@@ -10,7 +10,10 @@
  *
  * `axis="height"` is the top pane of a column: the handle sits below it, drags
  * with `clientY` and the arrow keys are Up/Down. With `fit` the size is applied
- * as `maxHeight`, so the pane still shrinks to fit shorter content.
+ * as `maxHeight`, so the pane still shrinks to fit shorter content. That size
+ * is only a cap, so a `fit` pane's drags and key steps start from what is on
+ * screen (its measured size), never from the stored cap, and `aria-valuenow`
+ * reports the rendered size.
  *
  * The size is clamped to [minSize, maxFraction × parent size] so the sibling
  * always keeps its share, and persisted per `storageKey` so each view
@@ -138,9 +141,14 @@ export function ResizablePane({
     return () => observer.disconnect();
   }, [measure]);
 
-  /** The size an interaction starts from: pixels, else what is on screen. */
-  const currentSize = (): number =>
-    size ?? paneRef.current?.getBoundingClientRect()[dimension] ?? measured;
+  const onScreenSize = (): number =>
+    paneRef.current?.getBoundingClientRect()[dimension] ?? measured;
+
+  /**
+   * The size an interaction starts from. With `fit` the stored size is only a
+   * cap, so start from what is on screen; otherwise pixels, else what is on screen.
+   */
+  const currentSize = (): number => (fit ? onScreenSize() : (size ?? onScreenSize()));
 
   const commit = (next: number) => {
     const clamped = clamp(next);
@@ -204,7 +212,7 @@ export function ResizablePane({
   };
 
   const lit = active || dragging;
-  const shown = size ?? measured;
+  const shown = fit ? measured : (size ?? measured);
   const rendered = size ?? fallback;
 
   const paneStyle: CSSProperties = vertical

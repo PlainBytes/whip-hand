@@ -880,6 +880,12 @@ describe('layout', () => {
     expect(screen.getByTestId('step-band-push')).toHaveStyle({ flexWrap: 'nowrap', overflowX: 'auto' });
   });
 
+  it('keeps a track from shrinking, so a short strip scrolls instead of squeezing it', () => {
+    render(<RunStepper steps={bandedRows()} />);
+    expect(screen.getByTestId('step-band-one').style.flexShrink).toBe('0');
+    expect(screen.getByTestId('step-band-push').style.flexShrink).toBe('0');
+  });
+
   it('scrolls a loop body too, inside its dashed container', () => {
     render(<RunStepper steps={loopRun(1)} />);
     const container = screen.getByTestId('step-loop-do-review');

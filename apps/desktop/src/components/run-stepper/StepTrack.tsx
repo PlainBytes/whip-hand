@@ -18,6 +18,9 @@ export function StepTrack({ testid, children }: { testid?: string; children: Rea
         flexWrap: 'nowrap',
         overflowX: 'auto',
         minWidth: 0,
+        // A scroll container's automatic minimum height is 0, so a column parent
+        // would squeeze it instead of scrolling.
+        flexShrink: 0,
         // Keeps the scrollbar off the pill outlines.
         paddingBottom: 4,
       }}

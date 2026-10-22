@@ -200,13 +200,56 @@ describe('ResizablePane', () => {
       expect(window.localStorage.getItem(HKEY)).toBe('260');
     });
 
+    /** The parent is 1000px tall; the pane itself renders 200px. */
+    function stubPaneAt200() {
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+        const height = this === paneEl() ? 200 : 1000;
+        return { width: 0, height, top: 0, left: 0, right: 0, bottom: height, x: 0, y: 0, toJSON: () => ({}) };
+      });
+    }
+
     it('applies the size as maxHeight with fit', () => {
+      stubPaneAt200();
       renderHeight({ fit: true });
       expect(paneEl().style.maxHeight).toBe('200px');
       expect(paneEl().style.height).toBe('');
       fireEvent.keyDown(separator(), { key: 'ArrowDown' });
       expect(paneEl().style.maxHeight).toBe('216px');
       expect(paneEl().style.height).toBe('');
+    });
+
+    describe('fit with a stored cap above the rendered size', () => {
+      beforeEach(() => {
+        window.localStorage.setItem(HKEY, '460');
+        stubPaneAt200();
+      });
+
+      it('starts a drag from the measured size, not the cap', () => {
+        renderHeight({ fit: true });
+        fireEvent.pointerDown(separator(), { button: 0, clientY: 300, pointerId: 1 });
+        fireEvent.pointerMove(separator(), { clientY: 270, pointerId: 1 });
+        expect(paneEl().style.maxHeight).toBe('170px');
+        fireEvent.pointerUp(separator(), { clientY: 270, pointerId: 1 });
+        expect(window.localStorage.getItem(HKEY)).toBe('170');
+      });
+
+      it('steps ArrowUp from the measured size', () => {
+        renderHeight({ fit: true });
+        fireEvent.keyDown(separator(), { key: 'ArrowUp' });
+        expect(paneEl().style.maxHeight).toBe('184px');
+      });
+
+      it('reports the measured size as aria-valuenow', () => {
+        renderHeight({ fit: true });
+        expect(separator()).toHaveAttribute('aria-valuenow', '200');
+      });
+
+      it('without fit, a drag still starts from the stored size', () => {
+        renderHeight();
+        fireEvent.pointerDown(separator(), { button: 0, clientY: 300, pointerId: 1 });
+        fireEvent.pointerMove(separator(), { clientY: 270, pointerId: 1 });
+        expect(paneEl().style.height).toBe('430px');
+      });
     });
 
     describe('with a string default', () => {

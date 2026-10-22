@@ -238,6 +238,81 @@ describe('RunTabStrip', () => {
       press(PREV); expect(active()).toBe('r2');
     });
 
+    describe('Ctrl+Tab and Ctrl+Shift+Tab', () => {
+      const CTRL_TAB = { key: 'Tab', code: 'Tab', ctrlKey: true };
+      const CTRL_SHIFT_TAB = { key: 'Tab', code: 'Tab', ctrlKey: true, shiftKey: true };
+      const active = () => useAppStore.getState().activeTabKey;
+      const mixed = () => seed([tab('r1'), tab('r2', { workdir: '/ws/b' }), tab('r3')], null);
+
+      it('cycles only this workspace\'s tabs and never switches workspace', () => {
+        mixed();
+        const { transport } = renderStrip();
+        press(CTRL_TAB); expect(active()).toBe('r1');
+        press(CTRL_TAB); expect(active()).toBe('r3');
+        press(CTRL_TAB); expect(active()).toBeNull();
+        press(CTRL_TAB); expect(active()).toBe('r1');
+        expect(useAppStore.getState().workspacePath).toBe('/ws/a');
+        expect(sentMethods(transport)).toEqual([]);
+      });
+
+      it('cycles every workspace\'s tabs with Ctrl+Shift+Tab, through openWorkspace', async () => {
+        mixed();
+        const { transport } = renderStrip();
+        press(CTRL_SHIFT_TAB); expect(active()).toBe('r1');
+        press(CTRL_SHIFT_TAB);
+        const req = await touchRequest(transport);
+        expect(req).toMatchObject({ params: { path: '/ws/b' } });
+        transport.emitLine({ id: req.id, result: { recentWorkspaces: [{ path: '/ws/b', lastOpenedAt: 'now' }] } });
+        await waitFor(() => expect(active()).toBe('r2'));
+        expect(useAppStore.getState().workspacePath).toBe('/ws/b');
+      });
+
+      it('wraps from the last tab of all workspaces back to the Runs list', () => {
+        seed([tab('r1'), tab('r2')], 'r2');
+        renderStrip();
+        press(CTRL_SHIFT_TAB); expect(active()).toBeNull();
+      });
+
+      it('keeps the active tab and workspace when openWorkspace refuses on Ctrl+Shift+Tab', async () => {
+        seed([tab('r1'), tab('r2', { workdir: '/ws/b' })], 'r1');
+        useAppStore.setState({ filesDirty: true });
+        renderStrip();
+        press(CTRL_SHIFT_TAB);
+        await waitFor(() => expect(useAppStore.getState().pendingWorkspaceSwitch).toBe('/ws/b'));
+        act(() => settlePendingWorkspaceSwitch(false));
+        await waitFor(() => expect(useAppStore.getState().pendingWorkspaceSwitch).toBeNull());
+        expect(active()).toBe('r1');
+        expect(useAppStore.getState().workspacePath).toBe('/ws/a');
+      });
+
+      it('stays on the Runs list with no tabs in this workspace', () => {
+        seed([tab('r2', { workdir: '/ws/b' })], null);
+        renderStrip();
+        press(CTRL_TAB); expect(active()).toBeNull();
+      });
+
+      it('does nothing while a dialog is open', async () => {
+        const id = useAppStore.getState().createDraft({ workdir: '/ws/a' });
+        useAppStore.getState().openDraftTab(id);
+        useAppStore.getState().updateDraft(id, { name: 'work' });
+        renderStrip();
+        fireEvent.click(screen.getByRole('button', { name: 'Close work' }));
+        expect(await screen.findByRole('dialog')).toBeInTheDocument();
+        press(CTRL_TAB);
+        press(CTRL_SHIFT_TAB);
+        expect(active()).toBe(id);
+      });
+
+      it('ignores plain Tab, Shift+Tab and Ctrl+Alt+Tab', () => {
+        seed([tab('r1')], null);
+        renderStrip();
+        press({ key: 'Tab', code: 'Tab' });
+        press({ key: 'Tab', code: 'Tab', shiftKey: true });
+        press({ key: 'Tab', code: 'Tab', ctrlKey: true, altKey: true });
+        expect(active()).toBeNull();
+      });
+    });
+
     it('closes the active tab with Ctrl+Alt+W, and ignores it on the Runs tab', () => {
       seed([tab('r1'), tab('r2')], 'r1');
       renderStrip();

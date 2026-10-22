@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Ctrl+Tab cycles run tabs
+
+- Ctrl+Tab moves to the next tab of the current workspace on the Runs page, and Ctrl+Shift+Tab
+  to the next tab across all workspaces (Ctrl, not Cmd, on macOS). Ctrl+PageUp/PageDown still work.
+
 ### Read-only steps always write their artifact, and worktree runs stay in the worktree
 
 - A read-only claude step may now use Write and Edit on its own artifact and on nothing else. It

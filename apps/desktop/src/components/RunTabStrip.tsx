@@ -10,7 +10,7 @@ import type { AnyTab, DraftTab, RunTab } from '../lib/run-tabs.ts';
 import { basename } from '../lib/workspace-identity.ts';
 import { useGlobalShortcut } from '../lib/use-global-shortcut.ts';
 import {
-  CLOSE_TAB, NEW_RUN_TAB, NEXT_TAB, PREVIOUS_TAB, RUNS_LIST_TAB, isModalOpen, shortcutLabel,
+  ALL_NEXT_TAB, CLOSE_TAB, NEW_RUN_TAB, NEXT_TAB, PREVIOUS_TAB, RUNS_LIST_TAB, WORKSPACE_NEXT_TAB, isModalOpen, shortcutLabel,
 } from '../lib/tab-shortcuts.ts';
 import { RunStatusIcon, stateLabel, type RunStatus } from './OngoingRuns.tsx';
 import { WorkspaceDot } from './WorkspaceDot.tsx';
@@ -236,7 +236,19 @@ export function RunTabStrip() {
     if (next !== undefined) void select(next);
   }
 
+  // Ctrl+Tab: forward through the Runs list and this workspace's tabs only, so it never switches workspace.
+  function stepInWorkspace(): void {
+    if (isModalOpen()) return;
+    const { tabs: open, activeTabKey: active } = useAppStore.getState();
+    const values = [RUNS_TAB_VALUE, ...open.filter(isTabHere).map(candidate => candidate.key)];
+    const current = values.indexOf(active ?? RUNS_TAB_VALUE);
+    const next = values[(Math.max(current, 0) + 1) % values.length];
+    if (next !== undefined) void select(next);
+  }
+
   useGlobalShortcut(NEXT_TAB, () => step(1));
+  useGlobalShortcut(WORKSPACE_NEXT_TAB, stepInWorkspace);
+  useGlobalShortcut(ALL_NEXT_TAB, () => step(1));
   useGlobalShortcut(PREVIOUS_TAB, () => step(-1));
   useGlobalShortcut(CLOSE_TAB, () => {
     if (isModalOpen()) return;
@@ -303,7 +315,7 @@ export function RunTabStrip() {
           <Menu>
             <MenuTrigger disableButtonEnhancement>
               <Tooltip
-                content={`All tabs (${shortcutLabel(PREVIOUS_TAB)} / ${shortcutLabel(NEXT_TAB)} to cycle)`}
+                content={`All tabs (${shortcutLabel(PREVIOUS_TAB)} / ${shortcutLabel(NEXT_TAB)} to cycle; ${shortcutLabel(WORKSPACE_NEXT_TAB)} this workspace, ${shortcutLabel(ALL_NEXT_TAB)} all)`}
                 relationship="label"
               >
                 <Button appearance="subtle" size="small" icon={<MoreHorizontal20Regular />} />

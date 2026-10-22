@@ -1,6 +1,6 @@
 [package]
 name = "whiphand-desktop"
-version = "0.6.2"
+version = "0.6.3"
 description = "Whiphand desktop shell"
 edition = "2021"
 

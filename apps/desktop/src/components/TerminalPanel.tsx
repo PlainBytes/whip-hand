@@ -78,6 +78,7 @@ export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProp
   const ptyExited = useAppStore(state => state.jobs[jobId]?.ptyExited ?? false);
   const ptyExitCode = useAppStore(state => state.jobs[jobId]?.ptyExitCode);
   const ptyExitReason = useAppStore(state => state.jobs[jobId]?.ptyExitReason);
+  const windowsPty = useAppStore(state => state.agentWindowsPty);
   // A session whiphand closed on purpose always exits 0; reporting that
   // code would read like a crash, so say what actually happened instead.
   const endedDeliberately = ptyExitReason === 'ended';
@@ -143,6 +144,14 @@ export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProp
     // across a panel's lifetime in practice.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId]);
+
+  // Tells xterm the pty is ConPTY so it handles its repaints and reflow. Live
+  // option, so a hello that lands after mount still takes effect; jobId is a
+  // dependency because the mount effect builds a fresh terminal per job.
+  useEffect(() => {
+    const handle = handleRef.current;
+    if (handle) handle.term.options.windowsPty = windowsPty;
+  }, [windowsPty, jobId]);
 
   // Replay whatever the store already buffered, then keep writing new chunks
   // as they arrive via the same pump. Converts the absolute "chunks written"

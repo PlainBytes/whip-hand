@@ -26,7 +26,7 @@ import { addDegradation, type RunDegradation } from '../lib/run-degradations.ts'
 import {
   findWorkspaceKey, sameWorkspace, toNative, type WorkspaceRef,
 } from '../shared/path-form.ts';
-import type { AppState as AppStateData } from '../shared/protocol.gen.ts';
+import type { AppState as AppStateData, WindowsPty } from '../shared/protocol.gen.ts';
 import type { LogRow } from '../shared/log-rows.ts';
 import { mergeUsage, progressActionText, summarizeEvent } from '../shared/log-rows.ts';
 import { preselect, type PendingAttachment, type RunAgain } from '../lib/new-run-draft.ts';
@@ -889,6 +889,9 @@ export interface AppState {
 
   agentStatus: ConnectionStatus;
   setAgentStatus: (status: ConnectionStatus) => void;
+  /** What the agent's hello reported about its PTY backend; undefined off Windows or before hello. */
+  agentWindowsPty: WindowsPty | undefined;
+  setAgentWindowsPty: (windowsPty: WindowsPty | undefined) => void;
 
   workflows: ListWorkflowsResult;
   setWorkflows: (workflows: ListWorkflowsResult) => void;
@@ -1178,6 +1181,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   agentStatus: 'connecting',
   setAgentStatus: status => set({ agentStatus: status }),
+  agentWindowsPty: undefined,
+  setAgentWindowsPty: windowsPty => set({ agentWindowsPty: windowsPty }),
 
   workflows: [],
   setWorkflows: workflows => set({ workflows }),

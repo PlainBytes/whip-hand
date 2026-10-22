@@ -35,6 +35,43 @@ describe('AgentClient', () => {
     respondHello(transport); // clears the pending hello request cleanly
   });
 
+  it('keeps the hello result and reports it, including windowsPty', async () => {
+    const seen: unknown[] = [];
+    client.onHello(h => seen.push(h));
+    await client.connect();
+    expect(client.hello).toBeUndefined();
+
+    const windowsPty = { backend: 'conpty', buildNumber: 26100 };
+    const req = transport.sentRequest(0);
+    transport.emitLine({ id: req.id, result: { version: '0.1.0', protocolVersion: 1, windowsPty } });
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+
+    expect(client.hello?.windowsPty).toEqual(windowsPty);
+    expect(seen[0]).toMatchObject({ windowsPty });
+  });
+
+  it('reports a hello without windowsPty as such', async () => {
+    const seen: Array<{ windowsPty?: unknown }> = [];
+    client.onHello(h => seen.push(h));
+    await client.connect();
+    respondHello(transport);
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+    expect(seen[0].windowsPty).toBeUndefined();
+  });
+
+  it('stays connected and reports nothing when hello fails', async () => {
+    const seen: unknown[] = [];
+    client.onHello(h => seen.push(h));
+    await client.connect();
+    const req = transport.sentRequest(0);
+    transport.emitLine({ id: req.id, error: { message: 'boom' } });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(client.status).toBe('connected');
+    expect(seen).toEqual([]);
+    expect(client.hello).toBeUndefined();
+  });
+
   it('correlates concurrent requests to their responses by incrementing id', async () => {
     await client.connect();
     respondHello(transport);

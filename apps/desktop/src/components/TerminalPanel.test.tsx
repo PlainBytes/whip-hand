@@ -42,7 +42,7 @@ function makeFakeHandle() {
   const term = {
     get cols() { return cols; },
     get rows() { return rows; },
-    options: {} as { disableStdin?: boolean },
+    options: {} as { disableStdin?: boolean; windowsPty?: { backend: 'conpty'; buildNumber: number } },
     open: vi.fn(),
     onData: vi.fn((cb: (data: string) => void) => {
       dataCb = cb;
@@ -110,13 +110,46 @@ describe('TerminalPanel', () => {
     vi.mocked(createTerminal).mockReturnValue(handle as unknown as TerminalHandle);
     FakeResizeObserver.instances = [];
     vi.stubGlobal('ResizeObserver', FakeResizeObserver);
-    useAppStore.setState({ jobs: {} });
+    useAppStore.setState({ jobs: {}, agentWindowsPty: undefined });
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
     useAppStore.setState({ jobs: {} });
+  });
+
+  it('sets, updates and clears term.options.windowsPty from the store', () => {
+    const conpty = { backend: 'conpty', buildNumber: 26100 } as const;
+    renderPanel('job-w');
+    expect(handle.term.options.windowsPty).toBeUndefined();
+
+    act(() => useAppStore.getState().setAgentWindowsPty(conpty));
+    expect(handle.term.options.windowsPty).toEqual(conpty);
+
+    act(() => useAppStore.getState().setAgentWindowsPty({ backend: 'conpty', buildNumber: 19045 }));
+    expect(handle.term.options.windowsPty).toEqual({ backend: 'conpty', buildNumber: 19045 });
+
+    act(() => useAppStore.getState().setAgentWindowsPty(undefined));
+    expect(handle.term.options.windowsPty).toBeUndefined();
+  });
+
+  it('carries a hello windowsPty from the agent into the terminal option, and clears it on a later hello without one', async () => {
+    const { transport } = renderPanel('job-w3');
+    await act(async () => {}); // connect() fires the hello
+    const send = (id: number, result: object) => act(async () => transport.emitLine({ id, result }));
+    const req = transport.sentRequest(0);
+    await send(req.id, { version: '0.1.0', protocolVersion: 1, windowsPty: { backend: 'conpty', buildNumber: 26100 } });
+    expect(handle.term.options.windowsPty).toEqual({ backend: 'conpty', buildNumber: 26100 });
+    act(() => useAppStore.getState().setAgentWindowsPty(undefined));
+    expect(handle.term.options.windowsPty).toBeUndefined();
+  });
+
+  it('applies a windowsPty already in the store when the panel mounts', () => {
+    const conpty = { backend: 'conpty', buildNumber: 26100 } as const;
+    useAppStore.setState({ agentWindowsPty: conpty });
+    renderPanel('job-w2');
+    expect(handle.term.options.windowsPty).toEqual(conpty);
   });
 
   it('mounts the terminal into the container and disposes it on unmount', () => {

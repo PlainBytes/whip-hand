@@ -34,6 +34,7 @@ use whiphand_core::store::runs::{RunSummary, get_run, list_runs, rename_run};
 use whiphand_core::types::Scope;
 use whiphand_core::workspace::{list_workflows, resolve_workflow_path};
 use whiphand_core::yaml_emit::stringify_yaml;
+use whiphand_protocol::{HelloResult, WindowsPty, WindowsPtyBackend};
 
 use crate::host::{Agent, ClientKind, RequestCtx};
 
@@ -95,12 +96,43 @@ pub fn exists(method: &str) -> bool {
     METHODS.contains(&method)
 }
 
+fn hello_result(build_number: Option<u32>) -> Value {
+    let result = HelloResult {
+        version: CORE_VERSION.to_string(),
+        protocol_version: 1,
+        windows_pty: build_number.map(|build_number| WindowsPty {
+            backend: WindowsPtyBackend::Conpty,
+            build_number,
+        }),
+    };
+    serde_json::to_value(result).expect("hello result serializes")
+}
+
+/// The OS build number, from `RtlGetVersion`: `GetVersionEx` reports a
+/// compatibility-shimmed version for an app whose manifest does not opt in.
+#[cfg(windows)]
+fn windows_build_number() -> Option<u32> {
+    use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
+    use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
+    // SAFETY: a zeroed OSVERSIONINFOW with its size field set is the documented input.
+    unsafe {
+        let mut info: OSVERSIONINFOW = std::mem::zeroed();
+        info.dwOSVersionInfoSize = std::mem::size_of::<OSVERSIONINFOW>() as u32;
+        (RtlGetVersion(&mut info) == 0).then_some(info.dwBuildNumber)
+    }
+}
+
+#[cfg(not(windows))]
+fn windows_build_number() -> Option<u32> {
+    None
+}
+
 pub async fn call(agent: &Rc<Agent>, ctx: RequestCtx, method: &str, p: Value) -> R {
     if let Some(result) = crate::job_handlers::call(agent, ctx, method, &p).await {
         return result;
     }
     match method {
-        "hello" => Ok(json!({ "version": CORE_VERSION, "protocolVersion": 1 })),
+        "hello" => Ok(hello_result(windows_build_number())),
         "listWorkflows" => list_workflows_h(&p),
         "getWorkflow" => get_workflow(&p),
         "createWorkflow" => {
@@ -764,4 +796,30 @@ fn list_recent_runs(agent: &Rc<Agent>, p: &Value) -> Value {
     });
     all.truncate(limit);
     Value::Array(all)
+}
+
+#[cfg(test)]
+mod hello_tests {
+    use super::*;
+
+    #[test]
+    fn hello_omits_windows_pty_off_windows() {
+        let v = hello_result(None);
+        assert_eq!(v, json!({ "version": CORE_VERSION, "protocolVersion": 1 }));
+        assert_eq!(
+            v.to_string(),
+            format!(r#"{{"version":"{CORE_VERSION}","protocolVersion":1}}"#)
+        );
+        #[cfg(not(windows))]
+        assert_eq!(windows_build_number(), None);
+    }
+
+    #[test]
+    fn hello_reports_conpty_build() {
+        let v = hello_result(Some(22631));
+        assert_eq!(
+            v["windowsPty"],
+            json!({ "backend": "conpty", "buildNumber": 22631 })
+        );
+    }
 }

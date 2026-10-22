@@ -101,7 +101,14 @@ function normalizeString(value: string, dir: string, runId: string): string {
   // Emitted paths are workspace-relative or forward-slash absolute (`C:/Users/…` on Windows),
   // so the native spelling of `dir` alone would leave the Windows temp dir in place.
   return value.split(dir).join('<dir>').split(posix(dir)).join('<dir>')
+    .split(claudeRuleForm(dir)).join('<dir>')
     .split(runId).join('<runId>').replace(UUID_RE, '<uuid>');
+}
+
+/** Claude permission rules spell `C:\x` as `//c/x`; on POSIX `dir` itself already covers them. */
+function claudeRuleForm(dir: string): string {
+  const drive = /^([A-Za-z]):[\\/]/.exec(dir);
+  return drive ? `/${drive[1].toLowerCase()}${posix(dir).slice(2)}` : dir;
 }
 
 interface SpawnSpecLike {

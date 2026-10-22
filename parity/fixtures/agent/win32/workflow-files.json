@@ -5,7 +5,11 @@
       "response": {
         "result": {
           "version": "<VERSION>",
-          "protocolVersion": 1
+          "protocolVersion": 1,
+          "windowsPty": {
+            "backend": "conpty",
+            "buildNumber": "<BUILD>"
+          }
         }
       }
     },

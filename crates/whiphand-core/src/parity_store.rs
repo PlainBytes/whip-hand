@@ -64,6 +64,19 @@ pub fn normalize_text(text: &str, ws: &str) -> String {
         .replace(escaped, "<WS>")
         .replace(ws, "<WS>")
         .replace(&ws.replace('\\', "/"), "<WS>");
+    // Claude permission rules spell a Windows path the POSIX way (`//c/x` for
+    // `C:\x`), so `/c/x` is the workspace there as `/tmp/x` is on POSIX.
+    let out = match ws.as_bytes() {
+        [d, b':', ..] if d.is_ascii_alphabetic() => out.replace(
+            &format!(
+                "/{}{}",
+                (*d as char).to_ascii_lowercase(),
+                ws[2..].replace('\\', "/")
+            ),
+            "<WS>",
+        ),
+        _ => out,
+    };
     // A separator is one backslash per escape level; a run at the token's end
     // only escapes the closing quote, so it stays.
     let out = WS_TOKEN.replace_all(&out, |c: &regex::Captures| fold_separators(&c[0]));
@@ -379,5 +392,22 @@ pub fn run_store_op(op: &Value, repo: &Path) -> Option<Value> {
         "runs" => Some(runs_op(op, repo)),
         "runLog" => Some(run_log_op(op)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_text;
+
+    #[test]
+    fn a_claude_rule_path_folds_to_the_same_token_on_every_os() {
+        assert_eq!(
+            normalize_text("Write(//tmp/w/p/a.md)", "/tmp/w"),
+            "Write(/<WS>/p/a.md)"
+        );
+        assert_eq!(
+            normalize_text("Write(//c/Temp/w/p/a.md)", "C:\\Temp\\w"),
+            "Write(/<WS>/p/a.md)"
+        );
     }
 }

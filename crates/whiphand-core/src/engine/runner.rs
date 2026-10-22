@@ -52,7 +52,7 @@ use crate::js::Record;
 use crate::jsval::{JsObject, JsValue, ObjExt};
 use crate::node_path;
 use crate::obj;
-use crate::path_form::to_workspace;
+use crate::path_form::{same_path, to_workspace};
 use crate::process::git::{
     GitResult, diff_snapshots, head_position, head_sha, paths_from_status_lines, paths_outside,
     snapshot_tree,
@@ -230,6 +230,13 @@ fn stage_frame_key(f: &StageFrame) -> String {
         f.attempt,
         crate::jsval::stringify_compact(&loop_refs_js(&outer))
     )
+}
+
+/// What the git guard saw before a step: the execution tree, and in a
+/// worktree run the main checkout as well.
+struct TreeBefore {
+    tree: String,
+    main: Option<String>,
 }
 
 struct State {
@@ -1007,7 +1014,7 @@ impl<F: Frontend> Run<'_, F> {
     async fn guard_before(
         &self,
         step: &Step,
-    ) -> (Option<String>, Option<Option<String>>, Option<String>) {
+    ) -> (Option<TreeBefore>, Option<Option<String>>, Option<String>) {
         if !matches!(step, Step::Agent(_) | Step::Command(_)) {
             return (None, None, None);
         }
@@ -1015,6 +1022,10 @@ impl<F: Frontend> Run<'_, F> {
         let dir = Path::new(&tree);
         match snapshot_tree(dir).await {
             GitResult::Ok(tree) => {
+                let tree = TreeBefore {
+                    tree,
+                    main: self.main_checkout_before(step).await,
+                };
                 let agent_held = matches!(step, Step::Agent(a) if a.allow_commits != Some(true));
                 if !agent_held {
                     return (Some(tree), None, None);
@@ -1061,6 +1072,26 @@ impl<F: Frontend> Run<'_, F> {
         }
     }
 
+    /// In a worktree run, the main checkout as a step found it: a step that
+    /// reaches past its worktree (an absolute path into the checkout the run
+    /// was started from) changes files no tree guard would otherwise see.
+    async fn main_checkout_before(&self, step: &Step) -> Option<String> {
+        if same_path(&self.workspace, &self.tree()) {
+            return None;
+        }
+        match snapshot_tree(Path::new(&self.workspace)).await {
+            GitResult::Ok(snapshot) => Some(snapshot),
+            GitResult::NotARepo => None,
+            GitResult::Unavailable(reason) => {
+                self.emit(obj! {
+                    "type" => "run:degraded", "capability" => "git-guard", "stepId" => step.id(),
+                    "reason" => format!("the main checkout is not guarded: {reason}"),
+                });
+                None
+            }
+        }
+    }
+
     async fn check_head(&self, step: &AgentStep, head: Option<Option<String>>) -> Option<String> {
         let before = head?;
         let now = head_position(Path::new(&self.tree())).await;
@@ -1098,7 +1129,7 @@ impl<F: Frontend> Run<'_, F> {
     async fn finish_step(
         &self,
         step: &Step,
-        before: Option<String>,
+        before: Option<TreeBefore>,
         verdict_override: Option<&'static str>,
     ) -> Result<Outcome, String> {
         let id = step.id();
@@ -1118,7 +1149,7 @@ impl<F: Frontend> Run<'_, F> {
                     ));
                 }
             };
-            let changed = diff_snapshots(&before, &tree);
+            let changed = diff_snapshots(&before.tree, &tree);
             if !changed.is_empty() {
                 let files: Vec<JsValue> = paths_from_status_lines(&changed)
                     .into_iter()
@@ -1155,10 +1186,24 @@ impl<F: Frontend> Run<'_, F> {
                     }
                 }
             }
+            if let Some(main) = &before.main
+                && let GitResult::Ok(now) = snapshot_tree(Path::new(&self.workspace)).await
+            {
+                let changed = diff_snapshots(main, &now);
+                if !changed.is_empty() {
+                    return Ok(self.fail(
+                        &format!(
+                            "step '{id}' changed the main checkout instead of the run's worktree: {}",
+                            paths_from_status_lines(&changed).join(", ")
+                        ),
+                        Some(id),
+                    ));
+                }
+            }
         }
         let artifact = self.st.borrow().ctx.artifacts.get(id).cloned();
         if let Some(path) = &artifact {
-            if let Err(e) = assert_artifact(path) {
+            if let Err(e) = assert_artifact(path, &to_workspace(path, &self.workspace)) {
                 self.emit(obj! {
                     "type" => "step:artifact-missing", "stepId" => id, "path" => path.as_str(), "reason" => e.reason,
                 });
@@ -1430,7 +1475,7 @@ impl<F: Frontend> Run<'_, F> {
         if step.mode == StepMode::Headless {
             eff.prompt = format!(
                 "{}\n\nWrite your '{}' artifact to: {}",
-                headless_prompt(&step.id, step.writes, &eff.prompt),
+                headless_prompt(&step.id, step.writes, &self.ctx(), &eff.prompt),
                 step.output,
                 to_workspace(&artifact, &self.tree())
             );
@@ -2126,7 +2171,7 @@ impl<F: Frontend> Run<'_, F> {
         outer: Option<&Frame>,
         completed: &mut HashSet<String>,
     ) -> Result<Option<Outcome>, String> {
-        if let Err(e) = assert_artifact(&stage.path) {
+        if let Err(e) = assert_artifact(&stage.path, &to_workspace(&stage.path, &self.workspace)) {
             let base = stage.path.rsplit(['/', '\\']).next().unwrap_or(&stage.path);
             return Ok(Some(self.fail(
                 &format!(

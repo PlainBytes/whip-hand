@@ -1,103 +1,19 @@
 //! A run that continues in an earlier run's worktree: where its steps run, what it records, and
 //! what it refuses before it has a run directory.
 
+mod common;
+
 use std::path::Path;
 
+use common::{Plain, big_stack, config, repo, sh};
 use tokio_util::sync::CancellationToken;
-use whiphand_core::config::{WorkspaceConfig, default_config};
-use whiphand_core::engine::frontend::{EventSink, Frontend, LocalFuture};
-use whiphand_core::engine::manual::ManualResponse;
 use whiphand_core::engine::runner::{RunError, RunOptions, RunResult, run_workflow};
-use whiphand_core::engine::spec;
 use whiphand_core::engine::worktree::{busy_run, record_from_manifest};
 use whiphand_core::js::Record;
-use whiphand_core::jsval::JsObject;
-use whiphand_core::process::launch::{
-    LineSink, Out, PipeOptions, SpawnOptions, StdinFrom, pipe_child, spawn_runner,
-};
 use whiphand_core::schema::parse_workflow;
 use whiphand_core::store::journal::{JournalInit, JournalOptions, RunJournal};
 use whiphand_core::store::runs::{get_run, list_runs};
 use whiphand_core::types::Scope;
-
-/// `run_workflow`'s future is too big for a test thread's default stack in a debug build.
-fn big_stack<F: std::future::Future<Output = ()>>(test: impl FnOnce() -> F + Send + 'static) {
-    std::thread::Builder::new()
-        .stack_size(64 << 20)
-        .spawn(move || {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(test())
-        })
-        .unwrap()
-        .join()
-        .unwrap();
-}
-
-struct Plain;
-
-impl Frontend for Plain {
-    fn on_event(&self, _event: &JsObject, _seq: u64, _ts: &str) {}
-
-    fn spawn_headless<'a>(
-        &'a self,
-        spec_obj: &'a JsObject,
-        cancel: CancellationToken,
-        on_line: Option<LineSink<'a>>,
-    ) -> LocalFuture<'a, Result<i32, String>> {
-        Box::pin(async move {
-            let opts = SpawnOptions {
-                cwd: Some(spec::cwd(spec_obj).into()),
-                env: spec::env(spec_obj),
-                stdin: spec::stdin_file(spec_obj)
-                    .map_or(StdinFrom::Null, |f| StdinFrom::File(f.into())),
-                stdout: Out::Piped,
-                stderr: Out::Piped,
-            };
-            let child =
-                spawn_runner(&spec::argv(spec_obj), opts, None, true).map_err(|e| e.to_string())?;
-            pipe_child(
-                child,
-                PipeOptions {
-                    on_line,
-                    cancel: Some(cancel),
-                    abort_exit_code: None,
-                    ..PipeOptions::default()
-                },
-            )
-            .await
-            .map_err(|e| e.to_string())
-        })
-    }
-
-    fn run_interactive<'a>(
-        &'a self,
-        _spec: &'a JsObject,
-        _cancel: CancellationToken,
-        _emit: EventSink<'a>,
-    ) -> LocalFuture<'a, Result<i32, String>> {
-        Box::pin(async { Ok(0) })
-    }
-
-    fn can_run_manual(&self) -> bool {
-        true
-    }
-
-    fn run_manual<'a>(
-        &'a self,
-        _request: &'a JsObject,
-        _cancel: CancellationToken,
-    ) -> LocalFuture<'a, Result<ManualResponse, String>> {
-        Box::pin(async {
-            Ok(ManualResponse {
-                choice: "continue".into(),
-                ..ManualResponse::default()
-            })
-        })
-    }
-}
 
 const WORKFLOW: &str = "name: w
 worktree:
@@ -108,33 +24,6 @@ steps:
     kind: command
     run: echo hi >> marker.txt
 ";
-
-fn sh(dir: &Path, args: &[&str]) {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "{args:?}");
-}
-
-fn repo() -> tempfile::TempDir {
-    let d = tempfile::tempdir().unwrap();
-    sh(d.path(), &["init", "-q"]);
-    sh(d.path(), &["config", "user.name", "T"]);
-    sh(d.path(), &["config", "user.email", "t@example.com"]);
-    std::fs::write(d.path().join("f"), "x").unwrap();
-    sh(d.path(), &["add", "."]);
-    sh(d.path(), &["commit", "-q", "-m", "i"]);
-    d
-}
-
-fn config() -> WorkspaceConfig {
-    let mut config = default_config();
-    config.runs.max_retained = None;
-    config.runs.auto_name = false;
-    config
-}
 
 fn options(ws: &Path, continue_in: Option<&str>, worktree: Option<bool>) -> RunOptions {
     RunOptions {

@@ -347,22 +347,23 @@ is not used anywhere in this codebase any more.
 A `writes: false` step (plan, review) gets two independent layers, because a prompt asking
 the model not to edit files is a request, not a control:
 
-1. **CLI-native tool denial** — `--disallowedTools "Write Edit NotebookEdit"` (claude) /
-   `--deny-tool=write` interactively and an allowlist of `shell`, `url` and a write to the
-   artifact alone headlessly (copilot) / opencode's `permission`
-   config, which takes a different shape again: rather than a flag, the agent config sent
-   through `OPENCODE_CONFIG_CONTENT` sets `edit: {"*": "deny"}` for a read-only step and
-   `{"*": "allow"}` for a writing one. Bash stays allowed either way, same as claude and
-   copilot — the guidance forbids shell writes, and layer 2 backs that up regardless of tool.
-   Unlike the other two adapters, this permission map carries **no run-directory carve-out**:
-   testing against the installed 1.17.13 binary found that a per-path `edit` override never
-   matches a path outside the project root once a competing `"*"` rule is also present in
-   the same map, regardless of whether the override is more specific — the opposite of the
-   documented "last matching rule wins". A scoped exception for the run directory would
-   therefore silently fail to unlock harvest's write whenever the run directory sits outside
-   the project. opencode's `harvest()` sidesteps the whole problem the same way claude's
-   `--allowedTools=Write` and copilot's `--allow-all-tools` harvest already do: unconditional
-   trust for that one dedicated, single-purpose spawn, never a path-scoped rule.
+1. **CLI-native tool denial, with the artifact let through.** Every runner denies file edits
+   except to the step's own artifact, which the step must still be able to write with its
+   file-writing tool. A shell heredoc is no substitute: a user's hook or policy may block the
+   shell (one Windows run lost its review that way). claude headless gets
+   `--disallowedTools=NotebookEdit` plus a `--settings` file allowing only
+   `Write(//<artifact>)` and `Edit(//<artifact>)`. A deny rule beats every allow rule, so Write
+   and Edit can't be denied outright. Claude matches Windows paths in POSIX form, so the rule
+   spells `D:\x` as `//d/x`. Interactive claude keeps `--disallowedTools "Write Edit
+   NotebookEdit"`, because its artifact comes from the harvest spawn. Copilot uses
+   `--deny-tool=write` interactively, and headlessly an allowlist of `shell`, `url` and
+   `write(<artifact>)`. Opencode's agent config denies `edit` on `*` and then allows the run
+   directory: as a cwd-relative pattern when the run directory is inside the tree, and as an
+   absolute one when it is outside (a worktree run). Tested on 2.0.30 and 2.1.2, a `../`
+   pattern never matches. Bash stays allowed for every runner. The guidance forbids shell
+   writes, and layer 2 backs that up whatever tool was used. Each harvest spawn trusts its one
+   dedicated write unconditionally (claude `--allowedTools=Write`, copilot `--allow-all-tools`)
+   and names the step's framed artifact path, which is nested under its loop and stage.
 2. **Git working-tree assertion** — `whiphand` snapshots the working tree before the step runs;
    if anything changed outside the run's own artifact directory, the step fails and names
    what changed. This is the same idea as Archon's `mutates_checkout` field (see "Background"
@@ -382,6 +383,16 @@ workspace that is not a repository is skipped silently, and git failing where th
 snapshot worked is a `run:degraded` `git-guard` record, as everywhere else. Each step compares
 against HEAD *as it began*, so a resumed run never trips over a commit the interrupted attempt
 made — that commit is the human's to have noticed.
+
+**In a worktree run, the main checkout is guarded too.** Every prompt, input and artifact path an
+agent sees lives under the main checkout's `.whiphand/runs`, so an agent can easily take the main
+checkout for the project. One planner wrote main-checkout absolute paths into its Verify commands,
+and the executor then built and edited the main checkout while the worktree stayed empty. So the
+guidance names the worktree and the main checkout, and says the main checkout is not the agent's.
+Before every agent and command step, the engine also snapshots the main checkout beside the
+execution tree, excluding `.whiphand/` as everywhere else. A step that changed it fails with
+`changed the main checkout instead of the run's worktree`, naming the files. A human editing the
+main checkout during a run trips this guard as well: what changed is named, and the human decides.
 
 Layer 2 exists precisely because layer 1 can be bypassed by a model that ignores its tool
 policy, or by a future adapter whose `toolDenial` capability turns out to be unreliable —

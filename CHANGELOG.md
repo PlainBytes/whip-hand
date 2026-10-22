@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Read-only steps always write their artifact, and worktree runs stay in the worktree
+
+- A read-only claude step may now use Write and Edit on its own artifact and on nothing else. It
+  used to need a shell heredoc, which a user's hook or policy could block. When that happened the
+  step "succeeded" without its artifact and the run failed.
+- A read-only opencode step in a worktree run can write its artifact in the run folder.
+- An interactive step inside a loop or stage now has its artifact harvested to the path the engine
+  checks (`<loop>/iter-N/…`), not to the top of the run folder.
+- In a worktree run, a step that changes the main checkout instead of the worktree now fails and
+  names the files, and agents are told which tree is theirs.
+- "Expected artifact was not written" now names the artifact by its workspace-relative path.
+
 ### The terminal UI ships on its own
 
 - Plain `whiphand` in a terminal opens the TUI. From a script or a pipe it prints the usage, as

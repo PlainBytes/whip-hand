@@ -1,8 +1,8 @@
 //! The claude adapter (`adapters/claude.ts`).
 
 use crate::adapters::common::{
-    add_dir_args, file, flag_args, harvest_prompt, lf, prompt_pointer, require_session_id,
-    spawn_spec,
+    add_dir_args, artifact_of, file, flag_args, harvest_prompt, lf, prompt_pointer,
+    require_session_id, spawn_spec,
 };
 use crate::engine::guidance::interactive_guidance;
 use crate::engine::step_files::{
@@ -18,6 +18,9 @@ use crate::template::build_prompt;
 use crate::types::AgentStep;
 
 pub const CLAUDE_WRITE_TOOLS: &str = "Write,Edit,NotebookEdit";
+/// What a read-only headless step still denies outright: its file tools stay
+/// allowed for the artifact alone (see `artifact_settings`).
+const CLAUDE_NOTEBOOK_TOOL: &str = "NotebookEdit";
 const READONLY_ALLOWED: &str = "Read,Grep,Glob,Bash";
 const WRITES_ALLOWED: &str = "Bash,Write,Edit,NotebookEdit";
 /// `/exit` quits claude cleanly, letting it persist the session harvest resumes.
@@ -33,6 +36,35 @@ fn effort_args(step: &AgentStep) -> Vec<String> {
 
 fn session_id(step: &AgentStep, ctx: &RunCtx) -> Result<String, String> {
     require_session_id(step, ctx, "minted")
+}
+
+/// `native_abs` as a claude permission-rule path: `//` marks it absolute, and
+/// claude matches Windows paths in POSIX form, so `D:\x` is `//d/x`.
+fn permission_path(native_abs: &str) -> String {
+    let fwd = to_fwd_abs(native_abs);
+    let b = fwd.as_bytes();
+    if b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic() {
+        return format!("//{}{}", fwd[..1].to_ascii_lowercase(), &fwd[2..]);
+    }
+    if fwd.starts_with("//") {
+        fwd
+    } else {
+        format!("/{fwd}")
+    }
+}
+
+/// A read-only headless step's settings: Write and Edit allowed for its
+/// artifact and nothing else, so it never has to write it through a shell
+/// that a hook or policy may block. A deny rule would beat any allow, so the
+/// tools are left out of `--disallowedTools` and are scoped here instead.
+fn artifact_settings(artifact: &str) -> JsObject {
+    let path = permission_path(artifact);
+    obj! {
+        "permissions" => obj! { "allow" => vec![
+            JsValue::from(format!("Write({path})")),
+            JsValue::from(format!("Edit({path})")),
+        ] },
+    }
 }
 
 /// Everything asked of the session's settings, passed by path: the one
@@ -120,7 +152,7 @@ pub fn headless(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
     } else {
         vec![
             format!("--allowedTools={READONLY_ALLOWED}"),
-            format!("--disallowedTools={CLAUDE_WRITE_TOOLS}"),
+            format!("--disallowedTools={CLAUDE_NOTEBOOK_TOOL}"),
         ]
     };
     let mut argv: Vec<String> = [
@@ -141,8 +173,19 @@ pub fn headless(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
     let text = lf(
         &build_prompt(&step.prompt, step.inputs.as_deref().unwrap_or(&[]), ctx).map_err(|e| e.0)?,
     );
+    let mut files = vec![file(&prompt, &text)];
+    if !step.writes {
+        let settings = step_file_path(&ctx.run_dir, &step.id, SETTINGS)?;
+        let settings_text = format!(
+            "{}\n",
+            jsval::stringify(&artifact_settings(&artifact_of(step, ctx)).into(), Some(2))
+                .unwrap_or_default()
+        );
+        argv.extend(["--settings".into(), to_fwd_abs(&settings)]);
+        files.push(file(&settings, &settings_text));
+    }
     let mut spec = spawn_spec(ctx, &argv, false, JsObject::new());
-    spec.set("files", vec![file(&prompt, &text)]);
+    spec.set("files", files);
     spec.set("stdinFile", prompt.as_str());
     spec.set("progress", obj! { "format" => "claude-stream-json" });
     Ok(spec)
@@ -211,5 +254,45 @@ mod tests {
             assert_eq!(argv.iter().filter(|a| **a == want).count(), 1, "{argv:?}");
             assert!(!argv.iter().any(|a| a == "--add-dir"), "{argv:?}");
         }
+    }
+
+    #[test]
+    fn permission_paths_are_absolute_posix_rules() {
+        assert_eq!(permission_path("/w/runs/r1/a.md"), "//w/runs/r1/a.md");
+        assert_eq!(permission_path("D:\\w\\runs\\a.md"), "//d/w/runs/a.md");
+        assert_eq!(permission_path("\\\\?\\C:\\w\\a.md"), "//c/w/a.md");
+    }
+
+    #[test]
+    fn a_read_only_headless_step_may_write_its_artifact_and_nothing_else() {
+        let root = tempfile::tempdir().unwrap();
+        let mut c = ctx(root.path(), root.path());
+        let artifact = format!("{}/loop/iter-1/out.md", c.run_dir);
+        c.artifacts.insert("s".into(), artifact.clone());
+        let mut s = step("claude", StepMode::Headless);
+        s.writes = false;
+        let spec = headless(&s, &c).unwrap();
+        let ro = argv(&spec);
+        assert!(
+            ro.contains(&"--disallowedTools=NotebookEdit".to_string()),
+            "{ro:?}"
+        );
+        let settings = step_file_path(&c.run_dir, "s", SETTINGS).unwrap();
+        assert!(
+            ro.windows(2)
+                .any(|w| w[0] == "--settings" && w[1] == to_fwd_abs(&settings))
+        );
+        let files = spec.prop("files").as_arr().unwrap();
+        let content = files[1].get("content").to_js_string();
+        let rule = permission_path(&artifact);
+        assert!(content.contains(&format!("\"Write({rule})\"")), "{content}");
+        assert!(content.contains(&format!("\"Edit({rule})\"")), "{content}");
+
+        s.writes = true;
+        let rw = argv(&headless(&s, &c).unwrap());
+        assert!(
+            !rw.iter()
+                .any(|a| a == "--settings" || a.starts_with("--disallowedTools"))
+        );
     }
 }

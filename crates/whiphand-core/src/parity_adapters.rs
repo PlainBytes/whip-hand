@@ -414,7 +414,7 @@ pub fn run_adapter_op(op: &Value, repo: &Path) -> Option<Value> {
             let step = agent_step(&op["step"]);
             normalize(json!({
                 "interactive": interactive_guidance(&step, &ctx).expect("guidance"),
-                "headless": headless_prompt(&step.id, step.writes, "TASK"),
+                "headless": headless_prompt(&step.id, step.writes, &ctx, "TASK"),
             }))
         }
         "parseAwaitState" => {

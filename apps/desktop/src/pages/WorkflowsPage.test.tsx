@@ -218,7 +218,7 @@ describe('WorkflowsPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /new workflow/i }));
     expect(await screen.findByLabelText(/name/i)).toHaveValue('');
-    expect(screen.getByRole('radio', { name: /this workspace/i })).toBeChecked();
+    expect(await screen.findByRole('radio', { name: /this workspace/i })).toBeChecked();
   });
 
   it('a successful create closes the dialog and reloads the list', async () => {

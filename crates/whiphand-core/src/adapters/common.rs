@@ -6,6 +6,7 @@
 //! verbatim in `events.ndjson` (see `engine::spec` for the typed view).
 
 use crate::jsval::{JsObject, JsValue};
+use crate::node_path;
 use crate::obj;
 use crate::path_form::{relative_within, to_workspace};
 use crate::run_ctx::RunCtx;
@@ -71,9 +72,18 @@ pub fn lf(content: &str) -> String {
     content.replace("\r\n", "\n").replace('\r', "\n")
 }
 
+/// The step's artifact, where the engine will check for it: nested under its
+/// loop and stage frames, so never just `<run dir>/<output>` inside one.
+pub fn artifact_of(step: &AgentStep, ctx: &RunCtx) -> String {
+    ctx.artifacts
+        .get(&step.id)
+        .cloned()
+        .unwrap_or_else(|| node_path::join(&[&ctx.run_dir, &step.output]))
+}
+
 /// The prompt every resume-based harvest sends.
 pub fn harvest_prompt(step: &AgentStep, ctx: &RunCtx) -> String {
-    let path = to_workspace(&format!("{}/{}", ctx.run_dir, step.output), &ctx.workdir);
+    let path = to_workspace(&artifact_of(step, ctx), &ctx.workdir);
     format!(
         "Write the final '{}' artifact we agreed on in this conversation to {path}. \
          Write only the artifact content to that file, then reply with just: done",
@@ -149,6 +159,21 @@ mod tests {
         assert_eq!(
             add_dir_args(&outside),
             vec![format!("--add-dir={}", outside.run_dir)]
+        );
+    }
+
+    #[test]
+    fn a_nested_steps_harvest_names_its_framed_artifact() {
+        let root = tempfile::tempdir().unwrap();
+        let mut c = ctx(root.path(), root.path());
+        let step = super::test_support::step("claude", crate::types::StepMode::Interactive);
+        assert!(harvest_prompt(&step, &c).contains(" .whiphand/runs/r1/out.md."));
+        let nested = format!("{}/fix/iter-2/out.md", c.run_dir);
+        c.artifacts.insert("s".into(), nested);
+        let prompt = harvest_prompt(&step, &c);
+        assert!(
+            prompt.contains(" .whiphand/runs/r1/fix/iter-2/out.md."),
+            "{prompt}"
         );
     }
 }

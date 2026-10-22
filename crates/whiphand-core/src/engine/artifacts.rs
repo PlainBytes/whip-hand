@@ -48,11 +48,12 @@ pub fn ensure_artifact_dir(artifact: &str) -> std::io::Result<()> {
     }
 }
 
-/// The artifact exists and is not blank.
-pub fn assert_artifact(path: &str) -> Result<(), ArtifactError> {
+/// The artifact exists and is not blank. `shown` is how messages name it:
+/// workspace-relative where the caller has a workspace (invariant 2).
+pub fn assert_artifact(path: &str, shown: &str) -> Result<(), ArtifactError> {
     let Ok(bytes) = std::fs::read(path) else {
         return Err(ArtifactError {
-            message: format!("expected artifact was not written: {path}"),
+            message: format!("expected artifact was not written: {shown}"),
             reason: "absent",
         });
     };
@@ -61,7 +62,7 @@ pub fn assert_artifact(path: &str) -> Result<(), ArtifactError> {
         .is_empty()
     {
         return Err(ArtifactError {
-            message: format!("artifact is empty: {path}"),
+            message: format!("artifact is empty: {shown}"),
             reason: "empty",
         });
     }

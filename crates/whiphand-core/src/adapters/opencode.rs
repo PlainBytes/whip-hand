@@ -62,11 +62,17 @@ fn opencode_spec(ctx: &RunCtx, argv: &[String], interactive: bool, config: Strin
     )
 }
 
-/// `edit`'s own patterns only match a target relative to opencode's cwd.
-fn relative_run_dir_pattern(workdir: &str, run_dir: &str) -> Option<String> {
+/// The `edit` pattern for the run dir: relative to opencode's cwd when the run
+/// dir is inside it, absolute when it is not (a worktree run). A `../`
+/// pattern never matches, so without the absolute form a read-only step in a
+/// worktree could not write its artifact.
+fn run_dir_edit_pattern(workdir: &str, run_dir: &str) -> Option<String> {
     let rel = node_path::relative(workdir, run_dir);
-    if rel.is_empty() || rel.starts_with("..") || node_path::is_absolute(&rel) {
+    if rel.is_empty() {
         return None;
+    }
+    if rel.starts_with("..") || node_path::is_absolute(&rel) {
+        return Some(format!("{}/*", to_fwd(run_dir)));
     }
     Some(format!("{}/*", to_fwd(&rel)))
 }
@@ -90,7 +96,7 @@ fn agent_permissions(opts: &PermissionOpts) -> Result<Vec<JsValue>, String> {
         if opts.edit_allowed { "allow" } else { "deny" },
     )];
     if !opts.edit_allowed
-        && let Some(pattern) = relative_run_dir_pattern(opts.workdir, opts.run_dir)
+        && let Some(pattern) = run_dir_edit_pattern(opts.workdir, opts.run_dir)
     {
         rules.push(rule("edit", &pattern, "allow"));
     }
@@ -473,5 +479,28 @@ mod tests {
         assert!(rules[3].1.starts_with("touch "), "{rules:?}");
         assert!(config.get("plugins").as_arr().is_some_and(|p| p.len() == 1));
         assert_eq!(config.get("default_agent").as_str(), Some(AGENT_NAME));
+    }
+
+    #[test]
+    fn a_read_only_step_in_a_worktree_may_edit_the_run_dir_by_its_absolute_path() {
+        let root = tempfile::tempdir().unwrap();
+        let tree = root.path().join(".whiphand/worktrees/r1");
+        let c = ctx(root.path(), &tree);
+        let mut s = step("opencode", StepMode::Headless);
+        s.writes = false;
+        let spec = headless(&s, &c).unwrap();
+        let config = jsval::parse(
+            &spec
+                .prop("env")
+                .get("OPENCODE_CONFIG_CONTENT")
+                .to_js_string(),
+        )
+        .unwrap();
+        let rules = config.get("agents").get(AGENT_NAME).get("permissions");
+        let allow = rules.as_arr().unwrap()[1].clone();
+        assert_eq!(allow.get("action").as_str(), Some("edit"));
+        assert_eq!(allow.get("effect").as_str(), Some("allow"));
+        let want = format!("{}/*", to_fwd(&c.run_dir));
+        assert_eq!(allow.get("resource").as_str(), Some(want.as_str()));
     }
 }

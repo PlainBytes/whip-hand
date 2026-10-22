@@ -480,7 +480,7 @@ fn adoptable(path: &str, started_at: Option<&str>) -> bool {
     if mtime + 1000.0 < began {
         return false;
     }
-    assert_artifact(path).is_ok()
+    assert_artifact(path, path).is_ok()
 }
 
 /// Rows the manifest calls `done` that never recorded their artifact: adopt

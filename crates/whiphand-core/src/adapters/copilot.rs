@@ -1,8 +1,8 @@
 //! The copilot adapter (`adapters/copilot.ts`).
 
 use crate::adapters::common::{
-    add_dir_args, file, flag_args, harvest_prompt, lf, prompt_pointer, require_session_id,
-    spawn_spec,
+    add_dir_args, artifact_of, file, flag_args, harvest_prompt, lf, prompt_pointer,
+    require_session_id, spawn_spec,
 };
 use crate::engine::guidance::interactive_guidance;
 use crate::engine::step_files::{
@@ -151,11 +151,7 @@ pub fn interactive(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
 }
 
 pub fn headless(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
-    let artifact = ctx
-        .artifacts
-        .get(&step.id)
-        .cloned()
-        .unwrap_or_else(|| node_path::join(&[&ctx.run_dir, &step.output]));
+    let artifact = artifact_of(step, ctx);
     let prompt = step_file_path(&ctx.run_dir, &step.id, PROMPT)?;
     let mut argv = vec![
         "copilot".to_string(),

@@ -9,6 +9,10 @@
   that they will be cancelled and can be resumed.
 - A repeated `q` stops at the question; only `y` confirms.
 - A signal or a dead host still quits without asking.
+### Ctrl+Tab cycles run tabs
+
+- Ctrl+Tab moves to the next tab of the current workspace on the Runs page, and Ctrl+Shift+Tab
+  to the next tab across all workspaces (Ctrl, not Cmd, on macOS). Ctrl+PageUp/PageDown still work.
 
 ### Read-only steps always write their artifact, and worktree runs stay in the worktree
 

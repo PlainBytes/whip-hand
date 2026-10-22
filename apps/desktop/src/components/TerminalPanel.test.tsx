@@ -194,6 +194,33 @@ describe('TerminalPanel', () => {
     });
   });
 
+  describe('Ctrl+Tab passes through to the tab shortcuts', () => {
+    const ptyInputs = (transport: MockTransport) =>
+      transport.sent
+        .map(line => JSON.parse(line) as { method: string; params: unknown })
+        .filter(r => r.method === 'ptyInput');
+
+    it.each([
+      ['Ctrl+Tab', { ctrlKey: true }],
+      ['Ctrl+Shift+Tab', { ctrlKey: true, shiftKey: true }],
+    ])('tells xterm to skip %s on every event type and sends nothing to the pty', (_name, init) => {
+      const { transport } = renderPanel('job-ctab');
+      for (const type of ['keydown', 'keypress', 'keyup'] as const) {
+        expect(handle.emitKey(type, { key: 'Tab', code: 'Tab', ...init })).toBe(false);
+      }
+      expect(ptyInputs(transport)).toHaveLength(0);
+    });
+
+    it.each([
+      ['Tab', {}],
+      ['Shift+Tab', { shiftKey: true }],
+      ['Alt+Tab', { altKey: true }],
+    ])('leaves %s to xterm', (_name, init) => {
+      renderPanel('job-tab');
+      expect(handle.emitKey('keydown', { key: 'Tab', code: 'Tab', ...init })).toBe(true);
+    });
+  });
+
   it('replays buffered ptyData already in the store on mount, in order, decoded to bytes', () => {
     useAppStore.getState().applyPtyStarted({ jobId: 'job-3', stepId: 'triage', cols: 80, rows: 24 });
     useAppStore.getState().applyPtyData({ jobId: 'job-3', data: encodeToBase64('hello ') });

@@ -53,24 +53,39 @@ export function isTypingTarget(target: EventTarget | null): boolean {
   return target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
 }
 
+/** True for xterm.js's hidden helper textarea, which receives the keys typed into a terminal. */
+function isTerminalTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && target.closest('.xterm') !== null;
+}
+
+export interface GlobalShortcutOptions {
+  /**
+   * Fire even when the keystroke comes from a terminal's helper textarea.
+   * Only for chords a shell gives no meaning (Ctrl+Tab); every other input,
+   * textarea, select and contenteditable still blocks the shortcut.
+   */
+  allowInTerminal?: boolean;
+}
+
 /**
  * @param enabled Whether the shortcut is live. A disabled shortcut is not
  *   merely inert: it never subscribes, so the keystroke is not swallowed
  *   either. That matters because this hook calls preventDefault on every
  *   match — a shortcut that cannot act on a keypress must not consume it.
  */
-export function useGlobalShortcut(shortcut: Shortcut, handler: () => void, enabled = true): void {
+export function useGlobalShortcut(shortcut: Shortcut, handler: () => void, enabled = true, options: GlobalShortcutOptions = {}): void {
+  const { allowInTerminal = false } = options;
   const { key, mod, shift, alt, code } = shortcut;
   useEffect(() => {
     if (!enabled) return;
     function onKeyDown(event: KeyboardEvent): void {
       if (event.defaultPrevented || event.isComposing) return;
-      if (isTypingTarget(event.target)) return;
+      if (isTypingTarget(event.target) && !(allowInTerminal && isTerminalTarget(event.target))) return;
       if (!matchesShortcut(event, { key, mod, shift, alt, code })) return;
       event.preventDefault();
       handler();
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [key, mod, shift, alt, code, handler, enabled]);
+  }, [key, mod, shift, alt, code, handler, enabled, allowInTerminal]);
 }

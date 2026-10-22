@@ -1,15 +1,22 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
 import '@xterm/xterm/css/xterm.css';
 
 /**
- * Thin factory around `@xterm/xterm` + `@xterm/addon-fit`, kept in its own
+ * Thin factory around `@xterm/xterm` + its addons, kept in its own
  * module so TerminalPanel.tsx never imports xterm directly: jsdom can't do
  * real canvas rendering, so TerminalPanel's tests mock this module boundary
  * (`vi.mock('./xterm-runtime.ts')`) instead of fighting xterm's DOM/canvas
- * requirements. Nothing here needs its own tests — it's a direct pass-through
- * to the library, with fixed options chosen to read well embedded in either
- * Fluent light or dark surroundings.
+ * requirements. xterm-runtime.test.ts covers this module's own wiring (the
+ * options and addons that make xterm agree with a real pty's output), with
+ * fixed options chosen to read well embedded in either Fluent light or dark
+ * surroundings.
+ *
+ * Fidelity to a real pty (ConPTY especially) rests on two choices: no
+ * `convertEol` (the pty's own line discipline already maps LF; forcing CR LF
+ * breaks LF-as-"down, same column"), and the Unicode 11 width table, which
+ * matches ConPTY and Claude for glyphs like ⏺, spinner frames and emoji.
  */
 export interface TerminalHandle {
   term: Terminal;
@@ -36,9 +43,12 @@ export function createTerminal(initial: { cols?: number; rows?: number }): Termi
     fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
     fontSize: 13,
     theme: TERMINAL_THEME,
-    convertEol: true,
+    // Required by the Unicode11 addon's `term.unicode` API.
+    allowProposedApi: true,
   });
   const fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
+  term.loadAddon(new Unicode11Addon());
+  term.unicode.activeVersion = '11';
   return { term, fitAddon };
 }

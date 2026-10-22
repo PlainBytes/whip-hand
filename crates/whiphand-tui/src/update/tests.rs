@@ -96,7 +96,6 @@ fn starts_with_hello_then_the_workspace() {
 #[test]
 fn quitting_with_a_live_run_asks_first() {
     let mut model = Model::new("/w".into(), 0.0);
-    assert_eq!(update(&mut model, key('q')), [Cmd::Quit]);
     running(&mut model, "j1", "r1");
     assert!(update(&mut model, key('q')).is_empty());
     assert!(matches!(
@@ -107,6 +106,55 @@ fn quitting_with_a_live_run_asks_first() {
     assert!(model.dialog.is_none());
     update(&mut model, key('Q'));
     assert_eq!(update(&mut model, key('y')), [Cmd::Quit]);
+}
+
+fn quit_dialog_is_up(model: &Model) -> bool {
+    matches!(model.dialog, Some(Dialog::Confirm { ask: Ask::Quit, .. }))
+}
+
+#[test]
+fn quitting_with_nothing_running_still_asks() {
+    let mut model = Model::new("/w".into(), 0.0);
+    assert!(update(&mut model, key('q')).is_empty());
+    assert!(quit_dialog_is_up(&model));
+    match &model.dialog {
+        Some(Dialog::Confirm { question, .. }) => assert_eq!(question, "Quit whiphand? (y/n)"),
+        other => panic!("{other:?}"),
+    }
+    // A second q dismisses the question rather than answering it.
+    assert!(update(&mut model, key('q')).is_empty());
+    assert!(model.dialog.is_none());
+    // Enter does not confirm.
+    update(&mut model, key('q'));
+    assert!(update(&mut model, code(KeyCode::Enter)).is_empty());
+    assert!(model.dialog.is_none());
+    update(&mut model, key('q'));
+    assert_eq!(update(&mut model, key('y')), [Cmd::Quit]);
+    update(&mut model, key('q'));
+    assert_eq!(update(&mut model, key('Y')), [Cmd::Quit]);
+}
+
+#[test]
+fn capital_q_and_esc_on_the_first_screen_ask_too() {
+    let mut model = Model::new("/w".into(), 0.0);
+    assert!(update(&mut model, key('Q')).is_empty());
+    assert!(quit_dialog_is_up(&model));
+    update(&mut model, key('n'));
+    assert!(update(&mut model, code(KeyCode::Esc)).is_empty());
+    assert!(quit_dialog_is_up(&model));
+}
+
+#[test]
+fn the_quit_question_names_the_live_runs() {
+    assert_eq!(actions::quit_question(0), "Quit whiphand? (y/n)");
+    assert_eq!(
+        actions::quit_question(1),
+        "1 run in progress will be cancelled; it can be resumed. Quit? (y/n)"
+    );
+    assert_eq!(
+        actions::quit_question(2),
+        "2 runs in progress will be cancelled; they can be resumed. Quit? (y/n)"
+    );
 }
 
 #[test]
@@ -564,7 +612,9 @@ fn a_foreign_run_that_ends_notifies_from_the_poll() {
 fn ctrl_c_quits_like_q() {
     let mut model = Model::new("/w".into(), 0.0);
     let ctrl_c = Msg::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
-    assert_eq!(update(&mut model, ctrl_c), [Cmd::Quit]);
+    assert!(update(&mut model, ctrl_c).is_empty());
+    assert!(quit_dialog_is_up(&model));
+    assert_eq!(update(&mut model, key('y')), [Cmd::Quit]);
 }
 
 #[test]
@@ -623,7 +673,9 @@ fn ctrl_c_cancels_the_run_in_focus_else_quits() {
         &mut model,
         json!([{ "runId": "r1", "status": "succeeded" }]),
     );
-    assert_eq!(update(&mut model, ctrl('c')), [Cmd::Quit]);
+    assert!(update(&mut model, ctrl('c')).is_empty());
+    assert!(quit_dialog_is_up(&model));
+    assert_eq!(update(&mut model, key('y')), [Cmd::Quit]);
     runs(&mut model, json!([{ "runId": "r1", "status": "running" }]));
     running(&mut model, "j1", "r1");
     update(&mut model, ctrl('c'));

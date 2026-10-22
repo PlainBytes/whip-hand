@@ -219,8 +219,12 @@ fn cancel_question(model: &mut Model, row: &Row, job_id: String) -> Vec<Cmd> {
     confirm(model, question, ask)
 }
 
-/// The quit question, as the footer has always asked it.
+/// The quit question: a plain one with no live run, else the warning that
+/// the live runs will be cancelled.
 pub fn quit_question(live: usize) -> String {
+    if live == 0 {
+        return "Quit whiphand? (y/n)".into();
+    }
     let (runs, they) = if live == 1 {
         ("run", "it")
     } else {

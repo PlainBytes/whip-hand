@@ -38,7 +38,16 @@ export type WorkflowFieldProblem = { stepId?: string, field?: string, phrase: st
 
 export type Empty = Record<string, never>;
 
-export type HelloResult = { version: string, protocolVersion: 1, };
+export type WindowsPtyBackend = "conpty";
+
+export type WindowsPty = { backend: WindowsPtyBackend, buildNumber: number, };
+
+export type HelloResult = { version: string, protocolVersion: 1, 
+/**
+ * Set only by a Windows agent: its PTY runs on ConPTY, whose repainting
+ * xterm's `windowsPty` option has to be told about.
+ */
+windowsPty?: WindowsPty, };
 
 export type WorkdirParams = { workdir: string, };
 

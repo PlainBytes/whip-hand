@@ -252,6 +252,8 @@ function normalize(t: Transcript, root: string): Transcript {
     if (key === 'pidScope' && typeof value === 'string') return '<SCOPE>';
     // The release being tested, as `hello` and `run:env` report it.
     if (key === 'whiphandVersion' || (key === 'version' && 'protocolVersion' in this)) return '<VERSION>';
+    // The Windows build `hello` reports ConPTY on: the runner image's, not ours.
+    if (key === 'buildNumber' && 'backend' in this) return '<BUILD>';
     return value;
   };
   let text = JSON.stringify(t, replacer);

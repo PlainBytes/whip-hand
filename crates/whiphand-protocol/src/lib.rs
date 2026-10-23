@@ -161,6 +161,24 @@ pub struct HelloResult {
     pub version: String,
     #[ts(type = "1")]
     pub protocol_version: u32,
+    /// Set only by a Windows agent: its PTY runs on ConPTY, whose repainting
+    /// xterm's `windowsPty` option has to be told about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub windows_pty: Option<WindowsPty>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum WindowsPtyBackend {
+    Conpty,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowsPty {
+    pub backend: WindowsPtyBackend,
+    pub build_number: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]

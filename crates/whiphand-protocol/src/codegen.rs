@@ -31,6 +31,8 @@ fn declarations() -> Vec<String> {
         FileComment,
         WorkflowFieldProblem,
         Empty,
+        WindowsPtyBackend,
+        WindowsPty,
         HelloResult,
         WorkdirParams,
         WorkflowListEntry,

@@ -67,6 +67,7 @@ export function createHighRateQueue(apply: (items: HighRateNotification[]) => vo
  */
 export function AgentClientProvider({ client, children }: { client: AgentClient; children: ReactNode }) {
   const setAgentStatus = useAppStore(state => state.setAgentStatus);
+  const setAgentWindowsPty = useAppStore(state => state.setAgentWindowsPty);
   const applyWhiphandEvent = useAppStore(state => state.applyWhiphandEvent);
   const applyHighRateBatch = useAppStore(state => state.applyHighRateBatch);
   const applyRunStateChanged = useAppStore(state => state.applyRunStateChanged);
@@ -89,6 +90,7 @@ export function AgentClientProvider({ client, children }: { client: AgentClient;
     };
     const unsubscribers = [
       client.onStatusChange(setAgentStatus),
+      client.onHello(hello => setAgentWindowsPty(hello.windowsPty)),
       client.onNotification('whiphandEvent', params => {
         if (params.event.type === 'step:log') highRate.push({ method: 'whiphandEvent', params });
         else ordered(applyWhiphandEvent)(params);

@@ -1428,3 +1428,14 @@ describe('run tabs', () => {
     expect(useAppStore.getState().activeTabKey).toBe('r1');
   });
 });
+
+describe('agentWindowsPty', () => {
+  it('starts undefined, takes a ConPTY report and clears again', () => {
+    useAppStore.setState({ agentWindowsPty: undefined });
+    expect(useAppStore.getState().agentWindowsPty).toBeUndefined();
+    useAppStore.getState().setAgentWindowsPty({ backend: 'conpty', buildNumber: 26100 });
+    expect(useAppStore.getState().agentWindowsPty).toEqual({ backend: 'conpty', buildNumber: 26100 });
+    useAppStore.getState().setAgentWindowsPty(undefined);
+    expect(useAppStore.getState().agentWindowsPty).toBeUndefined();
+  });
+});

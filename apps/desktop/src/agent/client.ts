@@ -1,6 +1,7 @@
 import type { Transport } from './transport.ts';
 import { perfEnabled, recordRpc } from '../lib/perf-probe.ts';
 import type {
+  HelloResult,
   MethodMap,
   MethodName,
   NotificationMap,
@@ -50,6 +51,8 @@ export class AgentClient {
   private readonly pending = new Map<number, PendingRequest>();
   private readonly notificationHandlers = new Map<string, Set<(params: unknown) => void>>();
   private readonly statusHandlers = new Set<(status: ConnectionStatus) => void>();
+  private readonly helloHandlers = new Set<(hello: HelloResult) => void>();
+  private lastHello: HelloResult | undefined;
 
   private currentStatus: ConnectionStatus = 'connecting';
   private retries = 0;
@@ -84,6 +87,11 @@ export class AgentClient {
     }
   }
 
+  /** The most recent successful hello result, or undefined before one arrives. */
+  get hello(): HelloResult | undefined {
+    return this.lastHello;
+  }
+
   request<M extends MethodName>(method: M, params: MethodMap[M]['params']): Promise<MethodMap[M]['result']> {
     const id = this.nextId++;
     const line = JSON.stringify({ id, method, params });
@@ -115,6 +123,15 @@ export class AgentClient {
     return () => this.statusHandlers.delete(cb);
   }
 
+  /**
+   * Called with every successful hello result, including those of a
+   * re-handshake after a reconnect. A failed hello reports nothing.
+   */
+  onHello(cb: (hello: HelloResult) => void): () => void {
+    this.helloHandlers.add(cb);
+    return () => this.helloHandlers.delete(cb);
+  }
+
   /** Stop retrying and kill the transport. The client is not usable after this. */
   dispose(): void {
     this.disposed = true;
@@ -132,7 +149,13 @@ export class AgentClient {
     // Best-effort liveness/version handshake: a slow or failing hello
     // shouldn't block the UI from treating the transport as up, and its
     // own failure doesn't warrant tearing the connection down again.
-    void this.request('hello', {}).catch(() => {});
+    void this.request('hello', {})
+      .then(hello => {
+        if (this.disposed) return;
+        this.lastHello = hello;
+        this.helloHandlers.forEach(cb => cb(hello));
+      })
+      .catch(() => {});
   }
 
   private handleExit(code: number | null): void {

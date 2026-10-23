@@ -202,8 +202,10 @@ impl AgentClient {
 - Host death (`Host::is_running() == false`, sink dropped): show a fatal banner
   and offer a restart, as the desktop's reattach in `agent.rs` does. Never
   continue silently.
-- Shutdown: when quitting with running jobs, confirm first ("2 runs in progress
-  will be cancelled; they can be resumed"), then call `Host::shutdown()`, which
+- Shutdown: quitting by key always confirms first. With running jobs the question
+  warns ("2 runs in progress will be cancelled; they can be resumed"); with none
+  it is a plain "Quit whiphand?". Only `y` confirms. A signal or a dead host quits
+  without asking. Then call `Host::shutdown()`, which
   grants the 3 s grace period for final state.
 
 ## 4. Event loop and rendering
@@ -338,7 +340,7 @@ scrolls with the movement keys. The plan's full set:
   prints.
 - **Ctrl-C in the UI** is a key (raw mode). It maps to a "cancel focused run?"
   confirmation, not to process exit; with no live run in focus it asks the
-  quit question instead.
+  quit question instead (which is asked whether or not any run is live).
 - **External programs:** `external.rs` leaves raw mode and the alt-screen, gives
   stderr back to the terminal, runs the program with inherited stdio, waits,
   re-enters, redirects stderr again and forces a full redraw. crossterm's
@@ -798,7 +800,7 @@ desktop work leaves.
 2. **Foreign runs are read-only.** Users may expect to approve a desktop-started
    run from the TUI. Clear messaging now; owner-side IPC is a later feature.
 3. **Run lifetime.** Closing the terminal stops the in-process `Host`, the same
-   as quitting the desktop. Mitigation: quit confirmation, tmux guidance,
+   as quitting the desktop. Mitigation: quit confirmation (asked every time), tmux guidance,
    `resumeRun`.
 4. **A third UI to maintain, while the desktop keeps moving.** Mitigation: the
    track rules above. The coverage test makes every protocol change visible

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### The TUI always asks before it quits
+
+- Quitting the TUI by key now asks first even when no run is in progress. It used to exit at once, so
+  a burst of `q` on the first screen could close it. With runs in progress the question still warns
+  that they will be cancelled and can be resumed.
+- A repeated `q` stops at the question; only `y` confirms.
+- A signal or a dead host still quits without asking.
 ### Ctrl+Tab cycles run tabs
 
 - Ctrl+Tab moves to the next tab of the current workspace on the Runs page, and Ctrl+Shift+Tab

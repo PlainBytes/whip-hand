@@ -489,9 +489,10 @@ pub fn switch_workspace(model: &mut Model, path: String) -> Vec<Cmd> {
     vec![touch(&path), list_runs(&path)]
 }
 
-/// Quits at once when nothing would be lost; otherwise asks first.
+/// Asks before quitting, whether or not any run is live; quits at once only
+/// when the host is gone or the protocol doesn't match (`fatal`).
 fn quit(model: &mut Model) -> Vec<Cmd> {
-    if model.live_jobs() > 0 && model.fatal.is_none() {
+    if model.fatal.is_none() {
         model.dialog = Some(Dialog::Confirm {
             question: actions::quit_question(model.live_jobs()),
             ask: Ask::Quit,

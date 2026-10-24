@@ -85,6 +85,8 @@ fn declarations() -> Vec<String> {
         WorkingDiffFile,
         WorkingDiff,
         GetWorkingDiffResult,
+        ListWorkDirsParams,
+        ListWorkDirsResult,
         ArtifactEncoding,
         ArtifactRefParams,
         ReadArtifactParams,

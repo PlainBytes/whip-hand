@@ -105,7 +105,12 @@ export type StartRunParams = { workdir: string, workflow: string, inputs?: Recor
 /**
  * A run id whose worktree this run continues in; refused with `worktree`.
  */
-continueIn?: string, };
+continueIn?: string, 
+/**
+ * The work directory: a workspace-relative folder the run works in, for a workspace
+ * whose root is not the repository. Absent is the workspace itself.
+ */
+subdir?: string, };
 
 export type JobIdResult = { jobId: string, };
 
@@ -158,6 +163,19 @@ export type WorkingDiffFile = { path: string, oldPath?: string, status: DiffStat
 export type WorkingDiff = { files: Array<WorkingDiffFile>, filesTruncated?: number, patchesOmitted?: number, };
 
 export type GetWorkingDiffResult = WorkingDiff | null;
+
+export type ListWorkDirsParams = { workdir: string, };
+
+export type ListWorkDirsResult = { 
+/**
+ * The workspace is inside a git repository: there is nothing to choose.
+ */
+rootIsRepo: boolean, 
+/**
+ * The git repositories below the workspace, workspace-relative `/`-form, sorted.
+ * Empty when `root_is_repo`.
+ */
+repos: Array<string>, };
 
 export type ArtifactEncoding = "utf8" | "base64";
 
@@ -214,6 +232,10 @@ worktree?: boolean,
  * A run id whose worktree the run continues in.
  */
 continueIn?: string, 
+/**
+ * The work directory chosen; absent is the workspace itself.
+ */
+subdir?: string, 
 /**
  * As typed, not yet a number.
  */
@@ -394,6 +416,7 @@ export interface MethodMap {
   getRun: { params: GetRunParams; result: GetRunResult };
   readRunLog: { params: ReadRunLogParams; result: ReadRunLogResult };
   getWorkingDiff: { params: GetWorkingDiffParams; result: GetWorkingDiffResult };
+  listWorkDirs: { params: ListWorkDirsParams; result: ListWorkDirsResult };
   readArtifact: { params: ReadArtifactParams; result: ReadArtifactResult };
   writeArtifact: { params: WriteArtifactParams; result: WriteArtifactResult };
   statArtifact: { params: StatArtifactParams; result: StatArtifactResult };

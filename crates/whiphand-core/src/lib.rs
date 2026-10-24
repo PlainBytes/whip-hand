@@ -36,6 +36,7 @@ pub mod store;
 pub mod template;
 pub mod time;
 pub mod types;
+pub mod work_dir;
 pub mod workflow_name;
 pub mod workflow_write;
 pub mod workspace;

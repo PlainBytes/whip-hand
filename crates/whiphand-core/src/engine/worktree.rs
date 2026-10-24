@@ -13,6 +13,7 @@ use crate::process::git::{
 };
 use crate::store::runs::{get_run, list_runs};
 use crate::types::{Workflow, WorktreeSetting};
+use crate::work_dir::run_repo_dir;
 
 /// What a run asked for, before rendering: `None` = run in the workspace.
 #[derive(Clone, Debug, PartialEq)]
@@ -211,7 +212,11 @@ fn folder_name(run_id: &str, slug: &str) -> String {
 }
 
 /// After auto-naming, before `run:start`. `branch` and `base` are rendered with the final scope.
+/// Git is asked in `repo` (the run's work directory); the worktree folder goes below
+/// `workspace`, which holds `.whiphand/`.
+#[allow(clippy::too_many_arguments)]
 pub async fn create(
+    repo: &Path,
     workspace: &Path,
     run_id: &str,
     slug: &str,
@@ -221,28 +226,28 @@ pub async fn create(
     pf: &Preflight,
 ) -> Result<Created, String> {
     let invalid = || format!("worktree: '{branch}' is not a valid branch name");
-    match check_ref_format(workspace, branch).await {
+    match check_ref_format(repo, branch).await {
         GitResult::Ok(true) => {}
         GitResult::Ok(false) => return Err(invalid()),
-        GitResult::NotARepo => return Err(not_a_repo(workspace)),
+        GitResult::NotARepo => return Err(not_a_repo(repo)),
         GitResult::Unavailable(reason) => return Err(git_unavailable(reason)),
     }
-    match branch_exists(workspace, branch).await {
+    match branch_exists(repo, branch).await {
         GitResult::Ok(false) => {}
         GitResult::Ok(true) => {
             return Err(format!("worktree: branch '{branch}' already exists"));
         }
-        GitResult::NotARepo => return Err(not_a_repo(workspace)),
+        GitResult::NotARepo => return Err(not_a_repo(repo)),
         GitResult::Unavailable(reason) => return Err(git_unavailable(reason)),
     }
-    let local_sha = resolve_base(workspace, base).await?;
-    let start = choose_start(workspace, base, local_sha, sync).await;
+    let local_sha = resolve_base(repo, base).await?;
+    let start = choose_start(repo, base, local_sha, sync).await;
     let parent = worktrees_parent(&workspace.to_string_lossy())
         .map_err(|e| format!("worktree: cannot create {WORKTREES_DIR}: {e}"))?;
     let path = node_path::join(&[&parent, &folder_name(run_id, slug)]);
-    match worktree_add(workspace, Path::new(&path), branch, &start.sha).await {
+    match worktree_add(repo, Path::new(&path), branch, &start.sha).await {
         GitResult::Ok(()) => {}
-        GitResult::NotARepo => return Err(not_a_repo(workspace)),
+        GitResult::NotARepo => return Err(not_a_repo(repo)),
         GitResult::Unavailable(reason) => return Err(git_unavailable(reason)),
     }
     let path = to_fwd_abs(&path);
@@ -293,10 +298,10 @@ pub enum RemoveWorktree {
     Failed(String),
 }
 
-fn git_sync(workspace: &str, args: &[&str]) -> Result<std::process::Output, String> {
+fn git_sync(dir: &str, args: &[&str]) -> Result<std::process::Output, String> {
     std::process::Command::new("git")
         .arg("-C")
-        .arg(workspace)
+        .arg(dir)
         .args(args)
         .output()
         .map_err(|e| format!("git could not be run: {e}"))
@@ -311,11 +316,12 @@ fn first_line(bytes: &[u8]) -> String {
         .to_string()
 }
 
-/// `git worktree remove [--force] <path>`, then `git worktree prune`. Never deletes the branch.
+/// `git worktree remove [--force] <path>`, then `git worktree prune`, asked in `repo`: the
+/// run's work directory ([`run_repo_dir`]). Never deletes the branch.
 /// Synchronous: retention is, so this does not go through `exec_runner`.
-pub fn remove_sync(workspace: &str, record: &WorktreeRecord, force: bool) -> RemoveWorktree {
+pub fn remove_sync(repo: &str, record: &WorktreeRecord, force: bool) -> RemoveWorktree {
     let path = to_native(&record.path, "");
-    let prune = || git_sync(workspace, &["worktree", "prune"]);
+    let prune = || git_sync(repo, &["worktree", "prune"]);
     if !Path::new(&path).exists() {
         return match prune() {
             Ok(out) if out.status.success() => RemoveWorktree::Absent,
@@ -332,7 +338,7 @@ pub fn remove_sync(workspace: &str, record: &WorktreeRecord, force: bool) -> Rem
     }
     args.push("--");
     args.push(&path);
-    let out = match git_sync(workspace, &args) {
+    let out = match git_sync(repo, &args) {
         Ok(out) => out,
         Err(reason) => return RemoveWorktree::Failed(reason),
     };
@@ -469,8 +475,8 @@ fn normalize_path(p: &str) -> String {
     p.replace('\\', "/").trim_end_matches('/').to_string()
 }
 
-/// Where a run's steps ran, as a native path: its worktree, or the workspace itself
-/// when it had none. A recorded worktree that is gone is an error, not the workspace.
+/// Where a run's steps ran, as a native path: its worktree, or its work directory
+/// (the workspace itself, or the folder below it the run chose) when it had none. A recorded worktree that is gone is an error, not the workspace.
 pub fn execution_tree(
     workspace: &str,
     config: &WorkspaceConfig,
@@ -478,7 +484,7 @@ pub fn execution_tree(
 ) -> Result<String, String> {
     let run = get_run(workspace, config, run_id).ok_or_else(|| format!("no run '{run_id}'"))?;
     let Some(record) = record_from_manifest(&run.obj) else {
-        return Ok(workspace.to_string());
+        return Ok(run_repo_dir(workspace, &run.obj));
     };
     let tree = record.native_tree();
     if Path::new(&tree).is_dir() {
@@ -807,9 +813,18 @@ mod tests {
     async fn create_names_the_folder_after_the_slug() {
         let r = repo();
         let pf = preflight(r.path(), "HEAD").await.unwrap();
-        let created = create(r.path(), "r1", "fix-login", "b1", "HEAD", true, &pf)
-            .await
-            .unwrap();
+        let created = create(
+            r.path(),
+            r.path(),
+            "r1",
+            "fix-login",
+            "b1",
+            "HEAD",
+            true,
+            &pf,
+        )
+        .await
+        .unwrap();
         assert!(
             created.record.path.ends_with("/worktrees/r1-fix-login"),
             "{}",
@@ -826,11 +841,11 @@ mod tests {
         let pf = preflight(&sub, "HEAD").await.unwrap();
         assert_eq!(pf.prefix, "sub/");
 
-        let e = create(&sub, "r1", "r1", "bad..name", "HEAD", true, &pf)
+        let e = create(&sub, &sub, "r1", "r1", "bad..name", "HEAD", true, &pf)
             .await
             .unwrap_err();
         assert!(e.contains("not a valid branch name"), "{e}");
-        let created = create(&sub, "r1", "r1", "master-or-main", "HEAD", true, &pf)
+        let created = create(&sub, &sub, "r1", "r1", "master-or-main", "HEAD", true, &pf)
             .await
             .unwrap();
         assert_eq!(created.fallback, None);
@@ -840,7 +855,7 @@ mod tests {
         assert!(Path::new(&rec.native_tree()).is_dir());
         check(&rec).await.unwrap();
 
-        let e = create(&sub, "r2", "r2", "master-or-main", "HEAD", true, &pf)
+        let e = create(&sub, &sub, "r2", "r2", "master-or-main", "HEAD", true, &pf)
             .await
             .unwrap_err();
         assert!(e.contains("already exists"), "{e}");

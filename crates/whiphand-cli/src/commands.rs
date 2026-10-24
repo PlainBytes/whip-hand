@@ -28,6 +28,7 @@ use whiphand_core::schema::{
 };
 use whiphand_core::store::runs::{get_run, rename_run};
 use whiphand_core::types::{OnFindings, Scope, Workflow};
+use whiphand_core::work_dir::run_repo_dir;
 use whiphand_core::workspace::{parse_input_pairs, resolve_workflow_path};
 use whiphand_core::yaml_emit::stringify_yaml;
 
@@ -170,7 +171,7 @@ pub fn worktree_remove(run_id: &str, force: bool, dir: &str) -> CmdResult {
             others.join(", ")
         )
     };
-    match remove_sync(&workdir, &record, force) {
+    match remove_sync(&run_repo_dir(&workdir, &run.obj), &record, force) {
         RemoveWorktree::Removed => {
             out_line(&format!(
                 "removed {}; branch {} kept{also_used}",
@@ -661,6 +662,7 @@ pub async fn run(a: RunArgs) -> CmdResult {
             _ => None,
         },
         continue_in: a.in_worktree.clone(),
+        subdir: None,
         degradations: opened.degradations.clone(),
     };
     let result = run_workflow(&opts, &tty).await;

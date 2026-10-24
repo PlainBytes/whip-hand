@@ -50,6 +50,7 @@ async fn run(ws: &std::path::Path, escape: bool) -> RunResult {
         cancel: CancellationToken::new(),
         worktree: None,
         continue_in: None,
+        subdir: None,
         degradations: Vec::new(),
     };
     run_workflow(&opts, &Plain).await.unwrap()

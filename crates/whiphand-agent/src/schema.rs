@@ -361,6 +361,7 @@ fn run_draft() -> S {
         "dryRun" => Bool,
         "worktree" => o(Bool),
         "continueIn" => o(Str),
+        "subdir" => o(Str),
         "maxIterations" => o(Str),
         "attachments" => Arr(b(object! { "path" => StrMin1, "pasted" => o(Bool) })),
         "createdAt" => Str,
@@ -472,6 +473,7 @@ pub fn remote_params(method: &str) -> Option<S> {
         "attachments" => o(Arr(b(object!(Strictness::Strict; "name" => StrMin1, "base64" => Str)))),
         "worktree" => o(Bool),
         "continueIn" => o(StrMin1),
+        "subdir" => o(Str),
     })
 }
 
@@ -481,7 +483,7 @@ pub fn params(method: &str) -> Option<S> {
         "hello" | "getAppState" | "listJobs" | "remoteAccessGet" | "remoteAccessRotateToken" => {
             empty_default()
         }
-        "listWorkflows" | "initWorkspace" | "listRuns" => workdir(),
+        "listWorkflows" | "initWorkspace" | "listRuns" | "listWorkDirs" => workdir(),
         "getWorkingDiff" => object! { "workdir" => StrMin1, "runId" => o(StrMin1) },
         "getWorkflow" | "deleteWorkflow" => object! {
             "workdir" => StrMin1, "name" => WorkflowName, "scope" => o(SCOPE),
@@ -518,6 +520,7 @@ pub fn params(method: &str) -> Option<S> {
             )))),
             "worktree" => o(Bool),
             "continueIn" => o(StrMin1),
+            "subdir" => o(Str),
         },
         "resumeRun" => object! {
             "workdir" => StrMin1,

@@ -349,6 +349,15 @@
       }
     },
     {
+      "step": "listWorkDirs {}",
+      "response": {
+        "error": {
+          "code": -32602,
+          "message": "invalid params: workdir: Invalid input: expected string, received undefined"
+        }
+      }
+    },
+    {
       "step": "readArtifact {\"workdir\":\"w\",\"runId\":\"r\",\"name\":\"n\",\"encoding\":\"hex\"}",
       "response": {
         "error": {

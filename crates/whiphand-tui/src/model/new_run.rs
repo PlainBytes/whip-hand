@@ -288,6 +288,8 @@ impl Form {
                 Some(_) => None,
                 None => Some(self.worktree),
             },
+            // The TUI does not offer a work directory yet: the workspace itself.
+            subdir: None,
         })
     }
 

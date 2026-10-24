@@ -75,6 +75,7 @@ use crate::types::{
     ATTACHMENTS_REF, AgentStep, CommandStep, ManualStep, OnFindings, STAGE_REF, Scope, Step,
     StepMode, Workflow,
 };
+use crate::work_dir::{repo_dir, subdir_from_manifest, validate_subdir};
 use crate::yaml_emit::stringify_yaml;
 
 /// The crate version, which `scripts/version.mjs` keeps equal to the TS `CORE_VERSION`.
@@ -102,6 +103,10 @@ pub struct RunOptions {
     /// Run in the worktree this earlier run recorded, instead of creating one. The workflow's
     /// own `worktree:` key is ignored.
     pub continue_in: Option<String>,
+    /// The work directory: a workspace-relative folder steps run in and git is asked about,
+    /// for a workspace whose root is not the repository. `None` is the workspace itself. A
+    /// resumed or continued run keeps the one it started with.
+    pub subdir: Option<String>,
     /// `(capability, reason)` the frontend already knows.
     pub degradations: Vec<(String, String)>,
 }
@@ -261,6 +266,9 @@ struct Run<'a, F: Frontend> {
     /// Home of `.whiphand/`: run dirs, config and workflows. The execution
     /// tree is `tree()`.
     workspace: String,
+    /// The run's work directory: the workspace, or the folder below it the run chose.
+    /// A worktree run's main checkout.
+    repo_dir: String,
     run_id: String,
     run_dir: String,
     workflow: &'a Workflow,
@@ -313,11 +321,12 @@ async fn preflight_worktree(
 
 /// The record a run continued in `source`'s worktree gets, or why it cannot be used. Whether
 /// another run is in it is asked later, under the claim lock.
+/// The worktree `source` recorded, and the work directory it ran in.
 async fn continue_record(
     workspace: &str,
     config: &WorkspaceConfig,
     source: &str,
-) -> Result<WorktreeRecord, RunError> {
+) -> Result<(WorktreeRecord, Option<String>), RunError> {
     let refuse = |m: String| RunError::Workflow(vec![m]);
     let run =
         get_run(workspace, config, source).ok_or_else(|| refuse(format!("no run '{source}'")))?;
@@ -331,7 +340,7 @@ async fn continue_record(
         )));
     }
     record.continued_from = Some(source.to_string());
-    Ok(record)
+    Ok((record, subdir_from_manifest(&run.obj)))
 }
 
 /// Runs a workflow to its end, or continues a stopped one (`opts.resume`).
@@ -398,9 +407,20 @@ pub async fn run_workflow<F: Frontend>(
         }
     }
     let workdir = node_path::resolve(&opts.workdir);
-    let mut tree = workdir.clone();
+    let asked_subdir = validate_subdir(&workdir, opts.subdir.as_deref())
+        .map_err(|e| RunError::Workflow(vec![e]))?;
+    let mut subdir = asked_subdir.clone();
+    if let Some(plan) = &opts.resume {
+        subdir = subdir_from_manifest(&plan.manifest);
+        if opts.subdir.is_some() && asked_subdir != subdir {
+            return Err(RunError::Workflow(vec![
+                "a resumed run keeps the work directory it started in".into(),
+            ]));
+        }
+    }
     let mut requested: Option<(WorktreeRequest, Preflight)> = None;
     let mut continued: Option<WorktreeRecord> = None;
+    let mut continued_subdir: Option<Option<String>> = None;
     if let Some(source) = &opts.continue_in {
         if opts.worktree.is_some() {
             return Err(RunError::Workflow(vec![
@@ -412,16 +432,28 @@ pub async fn run_workflow<F: Frontend>(
                 "a resumed run keeps the working tree it started in".into(),
             ]));
         }
-        let record = continue_record(&workdir, config, source).await?;
-        tree = record.native_tree();
+        let (record, source_subdir) = continue_record(&workdir, config, source).await?;
+        if opts.subdir.is_some() && asked_subdir != source_subdir {
+            return Err(RunError::Workflow(vec![
+                "a run continued in another run's worktree keeps that run's work directory".into(),
+            ]));
+        }
         continued = Some(record);
+        continued_subdir = Some(source_subdir);
     }
+    if let Some(source_subdir) = continued_subdir {
+        subdir = source_subdir;
+    }
+    let repo = repo_dir(&workdir, subdir.as_deref());
+    let mut tree = continued
+        .as_ref()
+        .map_or_else(|| repo.clone(), WorktreeRecord::native_tree);
     match &opts.resume {
         None => {
             if continued.is_some() {
                 // The worktree exists already: nothing to create.
             } else if let Some(request) = worktree::resolve_request(workflow, opts.worktree) {
-                requested = Some(preflight_worktree(request, &inputs, &workdir).await?);
+                requested = Some(preflight_worktree(request, &inputs, &repo).await?);
             }
         }
         Some(plan) => {
@@ -440,7 +472,7 @@ pub async fn run_workflow<F: Frontend>(
                 tree = record.native_tree();
             } else if let Some(request) = worktree::resolve_request(workflow, None) {
                 // A run that failed while creating its worktree: creation runs again.
-                requested = Some(preflight_worktree(request, &inputs, &workdir).await?);
+                requested = Some(preflight_worktree(request, &inputs, &repo).await?);
             }
         }
     }
@@ -571,6 +603,7 @@ pub async fn run_workflow<F: Frontend>(
                 run_id: run_id.clone(),
                 workflow: workflow.name.clone(),
                 workdir: workdir.clone(),
+                subdir: subdir.clone(),
                 dry_run: opts.dry_run,
                 workflow_source: opts.workflow_source.map(|s| s.as_str().to_string()),
                 inputs: inputs
@@ -619,6 +652,7 @@ pub async fn run_workflow<F: Frontend>(
         frontend,
         journal,
         workspace: workdir.clone(),
+        repo_dir: repo,
         run_id: run_id.clone(),
         run_dir: run_dir.clone(),
         workflow,
@@ -798,6 +832,7 @@ impl<F: Frontend> Run<'_, F> {
         let branch = render("branch", &request.branch)?;
         let base = render("base", &request.base)?;
         let created = worktree::create(
+            Path::new(&self.repo_dir),
             Path::new(&self.workspace),
             &self.run_id,
             &scope.run_slug,
@@ -1076,10 +1111,10 @@ impl<F: Frontend> Run<'_, F> {
     /// reaches past its worktree (an absolute path into the checkout the run
     /// was started from) changes files no tree guard would otherwise see.
     async fn main_checkout_before(&self, step: &Step) -> Option<String> {
-        if same_path(&self.workspace, &self.tree()) {
+        if same_path(&self.repo_dir, &self.tree()) {
             return None;
         }
-        match snapshot_tree(Path::new(&self.workspace)).await {
+        match snapshot_tree(Path::new(&self.repo_dir)).await {
             GitResult::Ok(snapshot) => Some(snapshot),
             GitResult::NotARepo => None,
             GitResult::Unavailable(reason) => {
@@ -1187,7 +1222,7 @@ impl<F: Frontend> Run<'_, F> {
                 }
             }
             if let Some(main) = &before.main
-                && let GitResult::Ok(now) = snapshot_tree(Path::new(&self.workspace)).await
+                && let GitResult::Ok(now) = snapshot_tree(Path::new(&self.repo_dir)).await
             {
                 let changed = diff_snapshots(main, &now);
                 if !changed.is_empty() {

@@ -33,6 +33,8 @@ pub struct StartParams {
     pub attachments: Vec<AttachmentSource>,
     pub worktree: Option<bool>,
     pub continue_in: Option<String>,
+    /// The work directory below the workspace; `None` is the workspace itself.
+    pub subdir: Option<String>,
 }
 
 /// What `resumeRun` hands it.
@@ -162,6 +164,7 @@ pub async fn run_job(agent: Rc<Agent>, job: Rc<Job>, params: StartParams, opened
             cancel: job.cancel.clone(),
             worktree: params.worktree,
             continue_in: params.continue_in,
+            subdir: params.subdir,
             degradations: opened.degradations.clone(),
         };
         let result = run_workflow(&opts, &frontend)
@@ -219,6 +222,7 @@ pub async fn resume_job(
             cancel: job.cancel.clone(),
             worktree: None,
             continue_in: None,
+            subdir: None,
             degradations: opened.degradations.clone(),
         };
         let result = run_workflow(&opts, &frontend)

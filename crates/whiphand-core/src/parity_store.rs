@@ -178,6 +178,7 @@ fn journal_op(op: &Value) -> Value {
         run_id: run_id.clone(),
         workflow: opt_str(op, "workflow").unwrap_or_default(),
         workdir: wsp.clone(),
+        subdir: None,
         dry_run: op["dryRun"].as_bool().unwrap_or(false),
         workflow_source: opt_str(op, "workflowSource"),
         inputs: js_obj(&op["inputs"]),

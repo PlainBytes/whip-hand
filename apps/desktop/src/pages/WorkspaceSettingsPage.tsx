@@ -16,6 +16,7 @@ import {
 import { Save20Regular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { Page } from '../components/Page.tsx';
+import { DismissibleWarning } from '../components/DismissibleWarning.tsx';
 import { useAppStore } from '../state/store.ts';
 import { spinInteger } from '../lib/spin-value.ts';
 import type { WorkspaceConfig, OnFindings } from '../shared/types.ts';
@@ -210,11 +211,9 @@ export function WorkspaceSettingsPage() {
   return (
     <Page header={header}>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 480 }}>
-      <MessageBar intent="warning">
-        <MessageBarBody>
-          Saving rewrites the config file — comments in a hand-edited config file are not preserved.
-        </MessageBarBody>
-      </MessageBar>
+      <DismissibleWarning dismissKey="workspace-settings-rewrite" persist>
+        Saving rewrites the config file — comments in a hand-edited config file are not preserved.
+      </DismissibleWarning>
       {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
 
       <Field label="Default runner">

@@ -8,6 +8,7 @@ import { spinInteger } from '../lib/spin-value.ts';
 import type { RemoteAccessGetResult } from '../shared/protocol.gen.ts';
 import { errorMessage } from '../lib/error-message.ts';
 import { remoteUrl } from '../shared/wire.ts';
+import { DismissibleWarning } from './DismissibleWarning.tsx';
 
 // Only pulled in once the user actually turns remote access on, so the QR
 // renderer stays out of the initial bundle for everyone who never does.
@@ -84,12 +85,10 @@ export function RemoteAccessCard() {
         />
 
         {view.enabled && (
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              <MessageBarTitle>Anyone with this link can run commands on this computer.</MessageBarTitle>
-              {' '}The connection is unencrypted, so use it only on a network you trust.
-            </MessageBarBody>
-          </MessageBar>
+          <DismissibleWarning dismissKey="remote-access-exposure">
+            <MessageBarTitle>Anyone with this link can run commands on this computer.</MessageBarTitle>
+            {' '}The connection is unencrypted, so use it only on a network you trust.
+          </DismissibleWarning>
         )}
 
         {view.error && (
@@ -97,12 +96,10 @@ export function RemoteAccessCard() {
         )}
 
         {view.enabled && !view.webRootPresent && (
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              The browser interface has not been built, so the address below will not load a page.
-              Run <code>npm run build:web -w desktop</code>.
-            </MessageBarBody>
-          </MessageBar>
+          <DismissibleWarning dismissKey="remote-web-root-missing">
+            The browser interface has not been built, so the address below will not load a page.
+            Run <code>npm run build:web -w desktop</code>.
+          </DismissibleWarning>
         )}
 
         {view.listening && url && (

@@ -136,7 +136,7 @@ pub fn build_cli() -> Command {
                 )
                 .arg(
                     value(
-                        "in",
+                        "subdir",
                         "dir",
                         "work in this folder below the workspace, typically one of the repositories in a workspace \
                          whose root is not one; runs, workflows and worktrees stay in the workspace",

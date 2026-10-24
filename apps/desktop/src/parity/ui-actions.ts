@@ -43,7 +43,7 @@ export const uiActions: Record<string, Record<string, string>> = {
     // stage of this feature), driving startRun's `continueIn`.
     '--in-worktree': 'run-detail:continueInWorktreeButton',
     // NewRunForm's "Work directory" Dropdown, driving startRun's `subdir`.
-    '--in': 'new-run-form:workDirDropdown',
+    '--subdir': 'new-run-form:workDirDropdown',
     // NewRunForm's "Name (optional)" Field/Input, driving startRun's `name`.
     '--name': 'new-run-form:nameInput',
     // RunDetailPage's "Resume" button, shown for a failed, interrupted or

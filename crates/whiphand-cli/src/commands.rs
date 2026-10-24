@@ -396,7 +396,7 @@ pub struct RunArgs {
     pub worktree: bool,
     pub no_worktree: bool,
     pub in_worktree: Option<String>,
-    /// `--in`: the work directory below the workspace.
+    /// `--subdir`: the work directory below the workspace.
     pub subdir: Option<String>,
 }
 
@@ -431,7 +431,7 @@ fn usage_problem(a: &RunArgs) -> Option<&'static str> {
     }
     if a.subdir.is_some() && a.resume.is_some() {
         return Some(
-            "--resume returns to the work directory the run started in; --in only applies to a new run",
+            "--resume returns to the work directory the run started in; --subdir only applies to a new run",
         );
     }
     if a.resume.is_some() {
@@ -534,7 +534,7 @@ pub async fn run(a: RunArgs) -> CmdResult {
         && !dirs.repos.is_empty()
     {
         err_line(&format!(
-            "  ⚠ the workspace is not a git repository; to work in one of the repositories below it, pass --in <dir> ({})",
+            "  ⚠ the workspace is not a git repository; to work in one of the repositories below it, pass --subdir <dir> ({})",
             dirs.repos.join(", ")
         ));
     }

@@ -5,12 +5,12 @@
 ### Work in one repository of a folder that holds several
 
 - A workspace whose root is not a git repository can now run each workflow in one of the
-  repositories below it: `whiphand run --in <dir>`, or *Work directory* in the desktop's New run
+  repositories below it: `whiphand run --subdir <dir>`, or *Work directory* in the desktop's New run
   form and the TUI's new-run form, which list the repositories they find. Steps run there, and the git guard, the diff and
   worktrees use that repository; runs, workflows and worktree folders stay in the workspace.
 - The form starts from the workspace's last choice; with the root chosen, the worktree switch is
   off, since there is no repository to branch from. The CLI names the repositories when a run
-  starts at such a root without `--in`.
+  starts at such a root without `--subdir`.
 - Run lists and the run header name a run's work directory, and "Open repository" opens it.
 - A resumed run, or one continued in another run's worktree, keeps the work directory it started in.
 

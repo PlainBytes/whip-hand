@@ -992,7 +992,7 @@ fn in_runs_a_worktree_from_the_repository_below_the_workspace() {
     let e = Env::new();
     multi_repo_workspace(&e);
     worktree_workflow(&e, "worktree: true\n", "echo hi > new.txt");
-    let out = e.run(&["run", "wt", "--in", "api"]);
+    let out = e.run(&["run", "wt", "--subdir", "api"]);
     assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
     let run = e.only_run();
     let id = run_id(&run);
@@ -1005,7 +1005,7 @@ fn in_runs_a_worktree_from_the_repository_below_the_workspace() {
             .is_file()
     );
     assert!(git(&e.ws().join("api"), &["branch", "--list"]).contains(&format!("whiphand/{id}")));
-    assert!(!out.stderr().contains("pass --in"), "{}", out.stderr());
+    assert!(!out.stderr().contains("pass --subdir"), "{}", out.stderr());
 }
 
 #[test]
@@ -1016,7 +1016,7 @@ fn a_run_at_a_root_that_is_not_a_repository_names_the_ones_below_it() {
     let out = e.run(&["run", "wt"]);
     assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
     assert!(
-        out.stderr().contains("pass --in <dir> (api)"),
+        out.stderr().contains("pass --subdir <dir> (api)"),
         "{}",
         out.stderr()
     );
@@ -1027,7 +1027,7 @@ fn in_outside_the_workspace_is_a_usage_error_without_a_run() {
     let e = Env::new();
     multi_repo_workspace(&e);
     worktree_workflow(&e, "", "true");
-    let out = e.run(&["run", "wt", "--in", "../elsewhere"]);
+    let out = e.run(&["run", "wt", "--subdir", "../elsewhere"]);
     assert_eq!(out.code(), 2, "{}", out.stderr());
     assert!(
         out.stderr().contains("work directory '../elsewhere'"),
@@ -1040,7 +1040,7 @@ fn in_outside_the_workspace_is_a_usage_error_without_a_run() {
 #[test]
 fn in_with_resume_is_refused() {
     let e = Env::new();
-    let out = e.run(&["run", "--resume", "r1", "--in", "api"]);
+    let out = e.run(&["run", "--resume", "r1", "--subdir", "api"]);
     assert_ne!(out.code(), 0);
     assert!(
         out.stderr().contains("cannot be used with"),

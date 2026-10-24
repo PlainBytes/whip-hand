@@ -72,6 +72,16 @@ describe('RemoteAccessCard', () => {
     expect(screen.getByText(/unencrypted/i)).toBeInTheDocument();
   });
 
+  it('lets the security warning be dismissed', async () => {
+    const { transport } = renderCard();
+    await settle(transport, ON);
+
+    await screen.findByText(/can run commands on this computer/i);
+    // The exposure warning renders first; a missing web root would add a second.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Dismiss' })[0]!);
+    expect(screen.queryByText(/can run commands on this computer/i)).not.toBeInTheDocument();
+  });
+
   it('keeps the token hidden until asked', async () => {
     const { transport } = renderCard();
     await settle(transport, ON);

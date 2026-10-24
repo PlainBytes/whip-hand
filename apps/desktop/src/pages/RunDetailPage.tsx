@@ -43,6 +43,7 @@ import { DangerButton } from '../components/DangerButton.tsx';
 import { OpenInEditorButton } from '../components/OpenInEditorButton.tsx';
 import { WorktreeInfoButton } from '../components/WorktreeInfoButton.tsx';
 import { Page } from '../components/Page.tsx';
+import { DismissibleWarning } from '../components/DismissibleWarning.tsx';
 import { AWAIT_LABEL } from '../lib/await-copy.ts';
 import { TerminalPanel } from '../components/TerminalPanel.tsx';
 import { RunStepper } from '../components/RunStepper.tsx';
@@ -1410,14 +1411,15 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
       {/* Shown, not just logged: a capability that degraded is part of the run's summary. */}
       {degradations.length > 0 && (
         <div style={{ flexShrink: 0, paddingTop: 8 }}>
-          <MessageBar intent="warning" data-testid="run-degraded">
-            <MessageBarBody>
-              <MessageBarTitle>Degraded</MessageBarTitle>
-              {degradations.map(d => (
-                <div key={`${d.capability}:${d.stepId ?? ''}`} data-testid="run-degradation">{degradationLine(d)}</div>
-              ))}
-            </MessageBarBody>
-          </MessageBar>
+          <DismissibleWarning
+            dismissKey={`degraded:${degradations.map(d => `${d.capability}:${d.stepId ?? ''}`).join(',')}`}
+            data-testid="run-degraded"
+          >
+            <MessageBarTitle>Degraded</MessageBarTitle>
+            {degradations.map(d => (
+              <div key={`${d.capability}:${d.stepId ?? ''}`} data-testid="run-degradation">{degradationLine(d)}</div>
+            ))}
+          </DismissibleWarning>
         </div>
       )}
 

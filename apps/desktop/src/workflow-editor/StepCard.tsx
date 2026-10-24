@@ -1,5 +1,5 @@
 import {
-  Button, Dropdown, Field, Input, MessageBar, MessageBarBody, Option, Textarea, Tooltip,
+  Button, Dropdown, Field, Input, Option, Textarea, Tooltip,
 } from '@fluentui/react-components';
 import {
   ArrowDown20Regular, ArrowUp20Regular, ChevronDown20Regular, ChevronRight20Regular,
@@ -13,6 +13,7 @@ import { convertStep, StepRail } from './StepRail.tsx';
 import { useStepLayoutStyles } from './step-layout.ts';
 import { nonNegativeOrUndefined, numberOrUndefined } from './number-field.ts';
 import { DangerButton } from '../components/DangerButton.tsx';
+import { DismissibleWarning } from '../components/DismissibleWarning.tsx';
 
 const KIND_OPTIONS: StepKind[] = ['agent', 'command', 'manual', 'approval', 'loop', 'stages'];
 
@@ -152,7 +153,7 @@ export function StepCard({
 
       {readerNote && (
         <div style={{ padding: '0 10px 8px' }}>
-          <MessageBar intent="warning"><MessageBarBody>{readerNote}</MessageBarBody></MessageBar>
+          <DismissibleWarning dismissKey={readerNote}>{readerNote}</DismissibleWarning>
         </div>
       )}
 

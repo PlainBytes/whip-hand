@@ -6,10 +6,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle,
-  MessageBar, MessageBarActions, MessageBarBody, Spinner, Tab, TabList, Text,
+  MessageBar, MessageBarBody, Spinner, Tab, TabList, Text,
 } from '@fluentui/react-components';
 import { DocumentText48Regular, Edit20Regular, Save20Regular, Dismiss20Regular } from '@fluentui/react-icons';
 import { CodeEditor } from './CodeEditor.tsx';
+import { DismissibleWarning } from './DismissibleWarning.tsx';
 import { EmptyState } from './EmptyState.tsx';
 import { countOccurrences } from '../markdown/find.ts';
 import { FindBar } from '../markdown/FindBar.tsx';
@@ -735,23 +736,21 @@ export function FilePreview({
       )}
 
       {diskChanged && (
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            This file changed on disk while you were editing it.
-            {reloadBlocked && ` ${reloadBlocked.reason}`}
-          </MessageBarBody>
-          {/*
-            * Withdrawn once reloading is known to be impossible: a button
-            * that has already failed for a reason that will not change is
-            * worse than no button, since pressing it looks like nothing
-            * happening. A retryable failure keeps it.
-            */}
-          {(reloadBlocked === null || reloadBlocked.retryable) && (
-            <MessageBarActions>
-              <Button size="small" onClick={() => void reload({ overwriteDraft: true })}>Reload</Button>
-            </MessageBarActions>
+        <DismissibleWarning
+          dismissKey={`disk-changed:${path}`}
+          /*
+           * Withdrawn once reloading is known to be impossible: a button
+           * that has already failed for a reason that will not change is
+           * worse than no button, since pressing it looks like nothing
+           * happening. A retryable failure keeps it.
+           */
+          actions={(reloadBlocked === null || reloadBlocked.retryable) && (
+            <Button size="small" onClick={() => void reload({ overwriteDraft: true })}>Reload</Button>
           )}
-        </MessageBar>
+        >
+          This file changed on disk while you were editing it.
+          {reloadBlocked && ` ${reloadBlocked.reason}`}
+        </DismissibleWarning>
       )}
 
       {findOpen && findable && (

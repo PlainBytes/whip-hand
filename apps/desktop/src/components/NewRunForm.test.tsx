@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup as cleanupDom, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup as cleanupDom, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { NewRunForm } from './NewRunForm.tsx';
 import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
@@ -565,6 +565,21 @@ describe('NewRunForm disabled steps', () => {
     // enabled reader's loss is worth naming.
     expect(warning).toHaveTextContent("review is disabled. commit-message reads it; it'll run without it.");
     expect(warning).toHaveTextContent("sign-off is disabled. commit-message reads it; it'll run without it.");
+  });
+
+  it('can be dismissed, and comes back when the workflow is picked again', async () => {
+    const { transport } = renderNewRunForm();
+    await respond(transport, 'listWorkflows', [DISABLED_LOOP_WORKFLOW, SCRIPTED_WORKFLOW]);
+    await respond(transport, 'listRuns', []);
+    await selectWorkflow(transport, 'feature-development');
+
+    const warning = await screen.findByTestId('disabled-steps-warning');
+    fireEvent.click(within(warning).getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByTestId('disabled-steps-warning')).not.toBeInTheDocument();
+
+    await selectWorkflow(transport, 'ship-feature');
+    await selectWorkflow(transport, 'feature-development');
+    expect(await screen.findByTestId('disabled-steps-warning')).toBeInTheDocument();
   });
 
   it('shows no warning at all when nothing is disabled', async () => {

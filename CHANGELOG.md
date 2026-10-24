@@ -14,6 +14,13 @@
 - Run lists and the run header name a run's work directory, and "Open repository" opens it.
 - A resumed run, or one continued in another run's worktree, keeps the work directory it started in.
 
+### Warnings can be dismissed
+
+- Every warning bar in the desktop app now has a close button. A dismissed warning stays hidden
+  while its condition holds and comes back when the condition recurs or changes.
+- The "Saving rewrites the config file" note on workspace settings stays dismissed across restarts.
+- Errors, and the "agent down" banner, still cannot be dismissed.
+
 ### The TUI always asks before it quits
 
 - Quitting the TUI by key now asks first even when no run is in progress. It used to exit at once, so

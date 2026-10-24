@@ -28,7 +28,7 @@ use whiphand_core::schema::{
 };
 use whiphand_core::store::runs::{get_run, rename_run};
 use whiphand_core::types::{OnFindings, Scope, Workflow};
-use whiphand_core::work_dir::run_repo_dir;
+use whiphand_core::work_dir::{list_work_dirs, run_repo_dir, validate_subdir};
 use whiphand_core::workspace::{parse_input_pairs, resolve_workflow_path};
 use whiphand_core::yaml_emit::stringify_yaml;
 
@@ -396,6 +396,8 @@ pub struct RunArgs {
     pub worktree: bool,
     pub no_worktree: bool,
     pub in_worktree: Option<String>,
+    /// `--in`: the work directory below the workspace.
+    pub subdir: Option<String>,
 }
 
 fn attachment_refusal(problems: &[String]) -> i32 {
@@ -426,6 +428,11 @@ fn usage_problem(a: &RunArgs) -> Option<&'static str> {
     }
     if a.worktree && a.no_worktree {
         return Some("--worktree and --no-worktree contradict each other; pass one");
+    }
+    if a.subdir.is_some() && a.resume.is_some() {
+        return Some(
+            "--resume returns to the work directory the run started in; --in only applies to a new run",
+        );
     }
     if a.resume.is_some() {
         // The run's own snapshot decides what executes.
@@ -512,6 +519,25 @@ pub async fn run(a: RunArgs) -> CmdResult {
     }
 
     let config = workspace_config(&workdir)?;
+
+    if let Err(message) = validate_subdir(&workdir, a.subdir.as_deref()) {
+        err_line(&format!("✘ {message}"));
+        return Ok(USAGE_ERROR);
+    }
+    // A new run at a root that is not a repository, with some below it, is told about them.
+    if a.subdir.is_none()
+        && a.resume.is_none()
+        && a.in_worktree.is_none()
+        && !a.json
+        && let Ok(dirs) = list_work_dirs(Path::new(&workdir)).await
+        && !dirs.root_is_repo
+        && !dirs.repos.is_empty()
+    {
+        err_line(&format!(
+            "  ⚠ the workspace is not a git repository; to work in one of the repositories below it, pass --in <dir> ({})",
+            dirs.repos.join(", ")
+        ));
+    }
 
     let mut plan: Option<ResumePlan> = None;
     if let Some(run_id) = &a.resume {
@@ -662,7 +688,7 @@ pub async fn run(a: RunArgs) -> CmdResult {
             _ => None,
         },
         continue_in: a.in_worktree.clone(),
-        subdir: None,
+        subdir: a.subdir.clone(),
         degradations: opened.degradations.clone(),
     };
     let result = run_workflow(&opts, &tty).await;
@@ -675,7 +701,8 @@ pub async fn run(a: RunArgs) -> CmdResult {
         Ok(r) => Ok(if r.ok { 0 } else { 1 }),
         // A file that changed between the check above and the run's own.
         Err(RunError::Attachment(problems)) => Ok(attachment_refusal(&problems)),
-        // The engine refuses a missing, gone or busy worktree before it makes a run.
+        // The engine refuses a missing, gone or busy worktree, or a work directory the
+        // continued run did not use, before it makes a run.
         Err(RunError::Workflow(problems)) if a.in_worktree.is_some() => {
             for p in &problems {
                 err_line(&format!("✘ {p}"));

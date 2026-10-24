@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Work in one repository of a folder that holds several
+
+- A workspace whose root is not a git repository can now run each workflow in one of the
+  repositories below it: `whiphand run --in <dir>`, or *Work directory* in the desktop's New run
+  form, which lists the repositories it finds. Steps run there, and the git guard, the diff and
+  worktrees use that repository; runs, workflows and worktree folders stay in the workspace.
+- The form starts from the workspace's last choice; with the root chosen, the worktree switch is
+  off, since there is no repository to branch from. The CLI names the repositories when a run
+  starts at such a root without `--in`.
+- Run lists and the run header name a run's work directory, and "Open repository" opens it.
+- A resumed run, or one continued in another run's worktree, keeps the work directory it started in.
+
 ### The TUI always asks before it quits
 
 - Quitting the TUI by key now asks first even when no run is in progress. It used to exit at once, so

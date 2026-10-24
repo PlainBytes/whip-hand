@@ -52,6 +52,12 @@
           "long": "--in-worktree"
         },
         {
+          "flags": "--in <dir>",
+          "required": true,
+          "hasDefault": false,
+          "long": "--in"
+        },
+        {
           "flags": "--dry-run",
           "required": false,
           "hasDefault": true,

@@ -19,6 +19,7 @@ import {
 import { Attach20Regular, Document20Regular } from '@fluentui/react-icons';
 import { AutoGrowTextarea } from './AutoGrowTextarea.tsx';
 import { Page } from './Page.tsx';
+import { DismissibleWarning } from './DismissibleWarning.tsx';
 import { useDiscardDraft } from './use-discard-draft.tsx';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useCapabilities } from '../capabilities.tsx';
@@ -550,18 +551,20 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
           <MessageBar intent="error" style={NARROW}><MessageBarBody>{loadError}</MessageBarBody></MessageBar>
         )}
         {anotherRunActive && (
-          <MessageBar intent="warning" style={NARROW}>
-            <MessageBarBody>Another run is already in progress in this workspace.</MessageBarBody>
-          </MessageBar>
+          <DismissibleWarning dismissKey="another-run-active" style={NARROW}>
+            Another run is already in progress in this workspace.
+          </DismissibleWarning>
         )}
 
         {sourceRun?.status === 'running' && (
-          <MessageBar intent="warning" style={NARROW} data-testid="continue-in-running-warning">
-            <MessageBarBody>
-              Run {sourceRun.name ?? sourceRun.runId} is still running in that worktree. Core will refuse to
-              start until it finishes.
-            </MessageBarBody>
-          </MessageBar>
+          <DismissibleWarning
+            dismissKey={`continue-in-running:${sourceRun.runId}`}
+            style={NARROW}
+            data-testid="continue-in-running-warning"
+          >
+            Run {sourceRun.name ?? sourceRun.runId} is still running in that worktree. Core will refuse to
+            start until it finishes.
+          </DismissibleWarning>
         )}
 
         <Field label="Workflow" style={NARROW}>
@@ -600,14 +603,16 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
               const disabled = disabledSummary(selectedWorkflow);
               if (!disabled) return null;
               return (
-                <MessageBar intent="warning" style={NARROW} data-testid="disabled-steps-warning">
-                  <MessageBarBody>
-                    <Text>Disabled: {disabled.names.join(', ')}.</Text>
-                    {disabled.consequences.map(sentence => (
-                      <Text key={sentence} block>{sentence}</Text>
-                    ))}
-                  </MessageBarBody>
-                </MessageBar>
+                <DismissibleWarning
+                  dismissKey={`disabled-steps:${selectedKey}:${disabled.names.join(',')}`}
+                  style={NARROW}
+                  data-testid="disabled-steps-warning"
+                >
+                  <Text>Disabled: {disabled.names.join(', ')}.</Text>
+                  {disabled.consequences.map(sentence => (
+                    <Text key={sentence} block>{sentence}</Text>
+                  ))}
+                </DismissibleWarning>
               );
             })()}
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { WorkspaceSettingsPage } from './WorkspaceSettingsPage.tsx';
 import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
@@ -74,6 +74,20 @@ describe('WorkspaceSettingsPage', () => {
 
   afterEach(() => {
     useAppStore.setState({ workspacePath: null, doctorResult: null, config: null, appState: null, restoreDone: false });
+    localStorage.clear();
+  });
+
+  it('remembers a dismissed rewrite warning across visits — it never changes, so it should not nag', async () => {
+    const first = renderWorkspaceSettingsPage();
+    await respond(first.transport, 'configGet', SCRIPTED_CONFIG);
+    fireEvent.click(await screen.findByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText(/Saving rewrites the config file/)).not.toBeInTheDocument();
+    cleanup();
+
+    const second = renderWorkspaceSettingsPage();
+    await respond(second.transport, 'configGet', SCRIPTED_CONFIG);
+    await screen.findByRole('button', { name: 'Save' });
+    expect(screen.queryByText(/Saving rewrites the config file/)).not.toBeInTheDocument();
   });
 
   it('renders values from configGet and disables Save until an edit is made', async () => {

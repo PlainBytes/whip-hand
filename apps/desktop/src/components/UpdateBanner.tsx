@@ -12,6 +12,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Button, MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle } from '@fluentui/react-components';
 import { Dismiss20Regular } from '@fluentui/react-icons';
 import { useAppStore } from '../state/store.ts';
+import { DismissibleWarning } from './DismissibleWarning.tsx';
 import { createTauriUpdater, type AvailableUpdate, type InstallKind, type Updater } from '../lib/updater.ts';
 import { errorMessage } from '../lib/error-message.ts';
 
@@ -32,7 +33,6 @@ export function UpdateBanner({
   checkDelayMs = CHECK_DELAY_MS,
 }: { updater?: Updater; enabled?: boolean; checkDelayMs?: number } = {}) {
   const [phase, setPhase] = useState<Phase>({ kind: 'unchecked' });
-  const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
   const hasActiveRun = useAppStore(state => Object.values(state.jobs).some(job => job.status === 'running'));
 
   const runCheck = useCallback((manual: boolean) => {
@@ -81,23 +81,14 @@ export function UpdateBanner({
 
   if (phase.kind === 'error') {
     return (
-      <MessageBar intent="warning">
-        <MessageBarBody>
-          <MessageBarTitle>Could not check for updates</MessageBarTitle>
-          {phase.message}
-        </MessageBarBody>
-        <MessageBarActions
-          containerAction={
-            <Button
-              appearance="transparent"
-              icon={<Dismiss20Regular />}
-              onClick={() => setPhase({ kind: 'unchecked' })}
-            />
-          }
-        >
-          <Button size="small" onClick={() => runCheck(true)}>Retry</Button>
-        </MessageBarActions>
-      </MessageBar>
+      <DismissibleWarning
+        dismissKey="update-error"
+        onDismiss={() => setPhase({ kind: 'unchecked' })}
+        actions={<Button size="small" onClick={() => runCheck(true)}>Retry</Button>}
+      >
+        <MessageBarTitle>Could not check for updates</MessageBarTitle>
+        {phase.message}
+      </DismissibleWarning>
     );
   }
 
@@ -110,7 +101,6 @@ export function UpdateBanner({
   }
 
   if (phase.kind !== 'available') return null;
-  if (dismissedVersion === phase.update.version) return null;
 
   const canInstall = phase.installKind === 'appimage' || phase.installKind === 'nsis';
   const onInstall = (): void => {
@@ -121,29 +111,19 @@ export function UpdateBanner({
   };
 
   return (
-    <MessageBar intent="warning">
-      <MessageBarBody>
-        <MessageBarTitle>Update available</MessageBarTitle>
-        Whiphand {phase.update.version} is available.
-        {canInstall && hasActiveRun && ' Installing will wait until the current run finishes.'}
-      </MessageBarBody>
-      <MessageBarActions
-        containerAction={
-          <Button
-            appearance="transparent"
-            icon={<Dismiss20Regular />}
-            onClick={() => setDismissedVersion(phase.update.version)}
-          />
-        }
-      >
-        {canInstall ? (
-          <Button size="small" appearance="primary" disabled={hasActiveRun} onClick={onInstall}>
-            Install and restart
-          </Button>
-        ) : (
-          <Button size="small" onClick={() => void updater.openReleasePage()}>Open release page</Button>
-        )}
-      </MessageBarActions>
-    </MessageBar>
+    <DismissibleWarning
+      dismissKey={`update-available:${phase.update.version}`}
+      actions={canInstall ? (
+        <Button size="small" appearance="primary" disabled={hasActiveRun} onClick={onInstall}>
+          Install and restart
+        </Button>
+      ) : (
+        <Button size="small" onClick={() => void updater.openReleasePage()}>Open release page</Button>
+      )}
+    >
+      <MessageBarTitle>Update available</MessageBarTitle>
+      Whiphand {phase.update.version} is available.
+      {canInstall && hasActiveRun && ' Installing will wait until the current run finishes.'}
+    </DismissibleWarning>
   );
 }

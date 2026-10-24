@@ -224,6 +224,15 @@ describe('FilePreview editing', () => {
     expect(await screen.findByText(/changed on disk/i)).toBeInTheDocument();
   }
 
+  it('lets the notice be dismissed without touching the draft', async () => {
+    const fs = fsWith({ '/ws/a.md': '# Title' });
+    await raiseDiskNotice(fs, '# Theirs');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText(/changed on disk/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox')).toHaveValue('mine');
+  });
+
   it('says why a Reload could not be applied, and offers it again when it might work', async () => {
     const fs = fsWith({ '/ws/a.md': '# Title' });
     await raiseDiskNotice(fs, '# Theirs');

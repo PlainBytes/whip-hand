@@ -6,7 +6,7 @@
 
 - A workspace whose root is not a git repository can now run each workflow in one of the
   repositories below it: `whiphand run --in <dir>`, or *Work directory* in the desktop's New run
-  form, which lists the repositories it finds. Steps run there, and the git guard, the diff and
+  form and the TUI's new-run form, which list the repositories they find. Steps run there, and the git guard, the diff and
   worktrees use that repository; runs, workflows and worktree folders stay in the workspace.
 - The form starts from the workspace's last choice; with the root chosen, the worktree switch is
   off, since there is no repository to branch from. The CLI names the repositories when a run

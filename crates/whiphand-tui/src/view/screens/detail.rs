@@ -52,6 +52,9 @@ fn header(model: &Model, d: &RunDetail) -> Text<'static> {
     if r.waiting {
         first.push(Span::styled("  waiting on you", theme::waiting()));
     }
+    if let Some(subdir) = manifest.get("subdir").and_then(|s| s.as_str()) {
+        first.push(Span::styled(format!("  in {subdir}"), theme::dim()));
+    }
     if let Some(branch) = manifest
         .pointer("/worktree/branch")
         .and_then(|b| b.as_str())

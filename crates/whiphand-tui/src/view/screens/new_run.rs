@@ -23,7 +23,7 @@ fn scope(entry: &WorkflowListEntry) -> &'static str {
 }
 
 fn busy_warning(n: &NewRun) -> Option<Line<'static>> {
-    n.workspace_busy.then(|| {
+    n.busy().then(|| {
         Line::styled(
             " Another run is already in progress in this workspace.",
             theme::waiting(),
@@ -146,7 +146,28 @@ fn field_lines(form: &Form, i: usize, field: &Field) -> Vec<Line<'static>> {
         ])]
     };
     match &field.kind {
+        FieldKind::WorkDir => {
+            let (value, hint) = match &form.subdir {
+                Some(sub) => (sub.clone(), "  Enter: next repository"),
+                None => (
+                    "workspace root (no git)".to_string(),
+                    "  Enter: pick a repository",
+                ),
+            };
+            vec![Line::from(vec![
+                label.clone(),
+                Span::raw(value),
+                Span::styled(hint, theme::dim()),
+            ])]
+        }
         FieldKind::DryRun => toggle(form.dry_run, "resolve every step without running it"),
+        FieldKind::Worktree if form.worktree_unavailable() => vec![Line::from(vec![
+            label.clone(),
+            Span::styled(
+                "[ ] no worktree: the workspace root is not a git repository",
+                theme::dim(),
+            ),
+        ])],
         FieldKind::Worktree => toggle(
             form.worktree,
             "changes land on a new branch in .whiphand/worktrees/",

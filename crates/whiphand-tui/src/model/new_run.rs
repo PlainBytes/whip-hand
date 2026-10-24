@@ -56,6 +56,8 @@ pub fn workspace_memory(workspaces: &Map<String, Value>, workdir: &str) -> Optio
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum FieldKind {
+    /// Only where the workspace root is not a repository but holds some.
+    WorkDir,
     Input {
         key: String,
         required: bool,
@@ -89,12 +91,13 @@ impl Field {
     pub fn is_text(&self) -> bool {
         !matches!(
             self.kind,
-            FieldKind::DryRun | FieldKind::Worktree | FieldKind::Start
+            FieldKind::WorkDir | FieldKind::DryRun | FieldKind::Worktree | FieldKind::Start
         )
     }
 
     pub fn label(&self) -> &str {
         match &self.kind {
+            FieldKind::WorkDir => "work directory",
             FieldKind::Input { key, .. } => key,
             FieldKind::Name => "name",
             FieldKind::MaxIterations => "max iterations",
@@ -130,6 +133,10 @@ pub struct Form {
     pub worktree: bool,
     /// Set: the worktree toggle gives way to this read-only target.
     pub continue_in: Option<ContinueIn>,
+    /// The repositories the work directory field cycles through; empty when it is not offered.
+    pub repos: Vec<String>,
+    /// The work directory chosen; `None` is the workspace itself.
+    pub subdir: Option<String>,
     /// Steps that will not run, and what that drops, as the desktop says it.
     pub disabled: Option<(Vec<String>, Vec<String>)>,
     /// Why the last start was refused.
@@ -222,8 +229,40 @@ impl Form {
             dry_run: false,
             worktree,
             continue_in: continue_in.cloned(),
+            repos: Vec::new(),
+            subdir: None,
             error: None,
         }
+    }
+
+    /// Offers the work directory field, first, starting at `last` when it is still one of
+    /// `repos`. Not for a run continuing in another's worktree: it works where that one did.
+    pub fn offer_work_dirs(&mut self, repos: &[String], last: Option<&str>) {
+        if self.continue_in.is_some() || repos.is_empty() || !self.repos.is_empty() {
+            return;
+        }
+        self.repos = repos.to_vec();
+        self.subdir = last
+            .filter(|l| repos.iter().any(|r| r == l))
+            .map(str::to_string);
+        self.fields
+            .insert(0, Field::new(FieldKind::WorkDir, "", false));
+        // The field the cursor was on keeps it.
+        self.focus += 1;
+    }
+
+    /// The workspace root, then each repository, round again.
+    pub fn cycle_work_dir(&mut self) {
+        let next = match &self.subdir {
+            None => 0,
+            Some(s) => self.repos.iter().position(|r| r == s).map_or(0, |i| i + 1),
+        };
+        self.subdir = self.repos.get(next).cloned();
+    }
+
+    /// The root offered as the work directory is not a repository: no worktree there.
+    pub fn worktree_unavailable(&self) -> bool {
+        !self.repos.is_empty() && self.subdir.is_none()
     }
 
     pub fn focused(&mut self) -> &mut Field {
@@ -286,10 +325,9 @@ impl Form {
             continue_in: self.continue_in.as_ref().map(|c| c.run_id.clone()),
             worktree: match self.continue_in {
                 Some(_) => None,
-                None => Some(self.worktree),
+                None => Some(self.worktree && !self.worktree_unavailable()),
             },
-            // The TUI does not offer a work directory yet: the workspace itself.
-            subdir: None,
+            subdir: self.subdir.clone(),
         })
     }
 
@@ -320,13 +358,41 @@ pub struct NewRun {
     pub starting: bool,
     /// Started: the detail opens once the job knows its run id.
     pub job_id: Option<String>,
-    /// Another run is going in this workspace, outside a worktree.
-    pub workspace_busy: bool,
+    /// The work directory of each run going in this workspace outside a worktree
+    /// (`None`: the workspace itself).
+    pub running_in: Vec<Option<String>>,
+    /// `None` until `listWorkDirs` answers, or when it could not.
+    pub work_dirs: Option<p::ListWorkDirsResult>,
     /// Opened from the workflows screen: this workflow's form opens as soon
     /// as the list and the prefill are in.
     pub workflow: Option<String>,
     /// The app state has answered: `memory` is what it is.
     pub memory_loaded: bool,
+}
+
+impl NewRun {
+    /// The repositories a run here may work in: none when the workspace is one.
+    pub fn repos(&self) -> &[String] {
+        match &self.work_dirs {
+            Some(w) if !w.root_is_repo => &w.repos,
+            _ => &[],
+        }
+    }
+
+    /// Another run is going outside a worktree where this one would work. A run
+    /// continuing in a worktree does not touch the workspace.
+    pub fn busy(&self) -> bool {
+        let subdir = self.form.as_ref().and_then(|f| f.subdir.clone());
+        self.continue_in.is_none() && self.running_in.contains(&subdir)
+    }
+
+    /// The workspace's last work directory, as the agent remembered it.
+    pub fn last_subdir(&self) -> Option<&str> {
+        self.memory
+            .as_ref()
+            .and_then(|m| m.get("lastSubdir"))
+            .and_then(Value::as_str)
+    }
 }
 
 #[cfg(test)]
@@ -488,6 +554,58 @@ steps:
         let params = form.params("/w").unwrap();
         assert_eq!(params.continue_in.as_deref(), Some("r1"));
         assert_eq!(params.worktree, None);
+    }
+
+    #[test]
+    fn the_work_directory_starts_at_the_last_choice_and_cycles_through_the_root() {
+        let repos = ["api".to_string(), "web".to_string()];
+        let mut form = Form::new(&entry("feature", Scope::Project, feature()), None, None);
+        form.focus = 2;
+        form.offer_work_dirs(&repos, Some("web"));
+        assert_eq!(form.fields[0].kind, FieldKind::WorkDir);
+        assert_eq!(form.focus, 3, "the cursor stays on its field");
+        assert_eq!(form.subdir.as_deref(), Some("web"));
+        form.cycle_work_dir();
+        assert_eq!(form.subdir, None);
+        assert!(form.worktree_unavailable());
+        form.fields[1].input.set("checkout");
+        let params = form.params("/w").unwrap();
+        assert_eq!(params.subdir, None);
+        assert_eq!(params.worktree, Some(false), "no worktree at the root");
+        form.cycle_work_dir();
+        let params = form.params("/w").unwrap();
+        assert_eq!(params.subdir.as_deref(), Some("api"));
+        assert_eq!(
+            params.worktree,
+            Some(true),
+            "the workflow's own worktree again"
+        );
+    }
+
+    #[test]
+    fn a_gone_last_choice_is_the_root_and_a_continuing_run_has_no_choice() {
+        let repos = ["api".to_string()];
+        let mut form = Form::new(&entry("feature", Scope::Project, feature()), None, None);
+        form.offer_work_dirs(&repos, Some("gone"));
+        assert_eq!(form.subdir, None);
+        let target = ContinueIn {
+            run_id: "r1".into(),
+            branch: None,
+            path: None,
+        };
+        let mut continuing = Form::new(
+            &entry("feature", Scope::Project, feature()),
+            None,
+            Some(&target),
+        );
+        continuing.offer_work_dirs(&repos, Some("api"));
+        assert!(
+            continuing
+                .fields
+                .iter()
+                .all(|f| f.kind != FieldKind::WorkDir)
+        );
+        assert_eq!(continuing.subdir, None);
     }
 
     #[test]

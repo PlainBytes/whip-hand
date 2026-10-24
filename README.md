@@ -99,8 +99,9 @@ existing workspace keeps its old copies until you replace them. See `docs/design
 
 **Several repositories in one workspace.** For work across repositories, open the folder that holds
 them (`~/src` with `~/src/api` and `~/src/web` in it) as the workspace. When that folder is not a git
-repository itself, each run can pick a **work directory**: `--in api`, or the New Run dialog's *Work
-directory*, which lists the repositories it finds one or two levels down. Steps run there, and the
+repository itself, each run can pick a **work directory**: `--in api`, or *work directory* in the
+desktop's New Run dialog and the terminal UI's new-run form, which list the repositories found one
+or two levels down. Steps run there, and the
 git guard, the diff and worktrees use that repository, as if it had been opened on its own; runs,
 workflows, config and worktree folders stay in the workspace's `.whiphand/`, and the Files view
 keeps showing the whole folder. Leaving the choice at the workspace root works as it always did,

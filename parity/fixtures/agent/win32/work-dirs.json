@@ -1,0 +1,54 @@
+{
+  "responses": [
+    {
+      "step": "nothing below",
+      "response": {
+        "result": {
+          "rootIsRepo": false,
+          "repos": []
+        }
+      }
+    },
+    {
+      "step": "repos",
+      "response": {
+        "result": {
+          "rootIsRepo": false,
+          "repos": [
+            "api",
+            "group/web"
+          ]
+        }
+      }
+    },
+    {
+      "step": "inside a repo",
+      "response": {
+        "result": {
+          "rootIsRepo": true,
+          "repos": []
+        }
+      }
+    },
+    {
+      "step": "subdir outside",
+      "response": {
+        "error": {
+          "code": -32000,
+          "message": "work directory '../x' must be a folder inside the workspace"
+        }
+      }
+    },
+    {
+      "step": "subdir missing",
+      "response": {
+        "error": {
+          "code": -32000,
+          "message": "work directory 'missing' is not a folder in the workspace"
+        }
+      }
+    }
+  ],
+  "notifications": {},
+  "terminals": {}
+}

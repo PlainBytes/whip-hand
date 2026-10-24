@@ -11,6 +11,7 @@ use crate::engine::worktree::{
 };
 use crate::store::runs::{HEARTBEAT_STALE_MS, get_run, is_safe_run_id, list_runs};
 use crate::time;
+use crate::work_dir::run_repo_dir;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DeleteRun {
@@ -46,7 +47,7 @@ pub fn delete_run(
     if let Some(record) = record
         && sharing_runs(workdir, config, &record.path, &[run_id.to_string()]).is_empty()
     {
-        match remove_sync(workdir, &record, false) {
+        match remove_sync(&run_repo_dir(workdir, &detail.obj), &record, false) {
             RemoveWorktree::Removed | RemoveWorktree::Absent => {}
             RemoveWorktree::Dirty(_) => return Ok(DeleteRun::Refused("worktree-dirty")),
             RemoveWorktree::Failed(reason) => return Err(std::io::Error::other(reason)),
@@ -121,7 +122,7 @@ pub fn prune_runs(workdir: &str, config: &WorkspaceConfig, max: Option<u64>) -> 
                 Some((_, true)) => {}
                 // One skip reason covers every pruned run sharing the worktree.
                 Some((_, false)) => continue,
-                None => match remove_sync(workdir, &record, false) {
+                None => match remove_sync(&run_repo_dir(workdir, &run.obj), &record, false) {
                     RemoveWorktree::Removed | RemoveWorktree::Absent => {
                         handled.push((record.path.clone(), true));
                     }

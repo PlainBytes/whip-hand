@@ -46,6 +46,15 @@ describe('OpenInEditorButton', () => {
     await waitFor(() => expect(openInEditor).toHaveBeenCalledWith('/ws', '', { kind: 'vscode' }));
   });
 
+  it('opens a run\'s work directory when it has no worktree', async () => {
+    const openInEditor = vi.fn().mockResolvedValue(undefined);
+    renderButton({ host: 'desktop', localFiles: true, openInEditor }, { worktree: undefined, subdir: 'api' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open repository in Visual Studio Code' }));
+
+    await waitFor(() => expect(openInEditor).toHaveBeenCalledWith('/ws', 'api', { kind: 'vscode' }));
+  });
+
   it('falls back to vscode when no editor is stored', async () => {
     const openInEditor = vi.fn().mockResolvedValue(undefined);
     renderButton({ host: 'desktop', localFiles: true, openInEditor });

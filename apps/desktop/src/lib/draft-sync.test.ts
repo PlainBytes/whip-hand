@@ -39,7 +39,7 @@ describe('draft and tab wire conversion', () => {
   it('round-trips every field a draft holds', () => {
     const draft = {
       id: 'd1', workdir: '/ws', identityKey: 'k', workflowRef: 'global:ship', values: { a: '1' }, name: 'n', dryRun: true,
-      worktreeChoice: false, continueIn: 'run-9', maxIterationsRaw: '3', baselineValues: {},
+      worktreeChoice: false, continueIn: 'run-9', subdir: 'api', maxIterationsRaw: '3', baselineValues: {},
       attachments: [{ key: 0, path: '/f' }, { key: 1, path: '/stash/pasted-1.png', pasted: true }],
       createdAt: Date.parse('2026-01-01T00:00:00Z'), updatedAt: Date.parse('2026-01-02T00:00:00Z'),
     };
@@ -52,6 +52,7 @@ describe('draft and tab wire conversion', () => {
     expect(saved).not.toHaveProperty('name');
     expect(saved).not.toHaveProperty('worktree');
     expect(saved).not.toHaveProperty('continueIn');
+    expect(saved).not.toHaveProperty('subdir');
     expect(saved).not.toHaveProperty('maxIterations');
   });
 

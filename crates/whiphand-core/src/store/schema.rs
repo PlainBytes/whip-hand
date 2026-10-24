@@ -149,6 +149,7 @@ fn manifest_schema() -> S {
         req("runId", str1()),
         req("workflow", str1()),
         req("workdir", str1()),
+        opt("subdir", str1()),
         req("dryRun", S::Bool),
         opt("pid", int(IntRule::Any)),
         opt("pidScope", str0()),

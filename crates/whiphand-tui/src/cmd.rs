@@ -95,6 +95,7 @@ pub enum Then {
     /// asked: a reply for one the user has left is dropped.
     Workflows(u64),
     Started(u64),
+    WorkDirs(u64),
     /// `resolveManual` for a job.
     Resolved(String),
     /// `getWorkingDiff` for a job's manual step.

@@ -22,6 +22,8 @@ export interface RunSummary {
   name?: string;
   /** Present only for a run that executes in its own git worktree; `path` is workspace-relative. */
   worktree?: { path: string; branch: string; continuedFrom?: string };
+  /** The workspace-relative folder the run worked in; absent when it worked in the workspace itself. */
+  subdir?: string;
   [key: string]: unknown;
 }
 

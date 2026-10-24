@@ -164,6 +164,7 @@ pub fn remember_run(
     workspace: &str,
     workflow: &str,
     inputs: &Map<String, Value>,
+    subdir: Option<&str>,
     identity_key: Option<&str>,
 ) {
     let workspaces = state["workspaces"]
@@ -181,8 +182,8 @@ pub fn remember_run(
     )
     .unwrap_or(workspace)
     .to_string();
-    // `{ ...memory, identityKey?, lastWorkflow, lastInputs }`: an existing key
-    // keeps its place, a new one goes last.
+    // `{ ...memory, identityKey?, lastWorkflow, lastInputs, lastSubdir? }`: an existing key
+    // keeps its place, a new one goes last. No `lastSubdir` is the workspace itself.
     let mut memory = workspaces
         .get(&key)
         .and_then(Value::as_object)
@@ -202,6 +203,14 @@ pub fn remember_run(
         .unwrap_or_default();
     last_inputs.insert(workflow.into(), Value::Object(inputs.clone()));
     memory.insert("lastInputs".into(), Value::Object(last_inputs));
+    match subdir {
+        Some(sub) => {
+            memory.insert("lastSubdir".into(), json!(sub));
+        }
+        None => {
+            memory.remove("lastSubdir");
+        }
+    }
     workspaces.insert(key, Value::Object(memory));
 }
 
@@ -394,12 +403,19 @@ mod tests {
     fn remembering_appends_new_keys_and_keeps_old_ones_in_place() {
         let mut state = empty_app_state();
         let inputs: Map<String, Value> = [("a".to_string(), json!("1"))].into_iter().collect();
-        remember_run(&mut state, "/w", "feature", &inputs, Some("k"));
+        remember_run(&mut state, "/w", "feature", &inputs, None, Some("k"));
         assert_eq!(
             state["workspaces"]["/w"],
             json!({ "lastInputs": { "feature": { "a": "1" } }, "identityKey": "k", "lastWorkflow": "feature" })
         );
-        remember_run(&mut state, "/elsewhere", "bugfix", &Map::new(), Some("k"));
+        remember_run(
+            &mut state,
+            "/elsewhere",
+            "bugfix",
+            &Map::new(),
+            None,
+            Some("k"),
+        );
         let keys: Vec<_> = state["workspaces"]["/w"]
             .as_object()
             .unwrap()
@@ -408,6 +424,15 @@ mod tests {
             .collect();
         assert_eq!(keys, ["lastInputs", "identityKey", "lastWorkflow"]);
         assert_eq!(state["workspaces"]["/w"]["lastWorkflow"], "bugfix");
+    }
+
+    #[test]
+    fn remembering_keeps_the_last_work_directory_and_forgets_it_for_the_root() {
+        let mut state = empty_app_state();
+        remember_run(&mut state, "/w", "feature", &Map::new(), Some("api"), None);
+        assert_eq!(state["workspaces"]["/w"]["lastSubdir"], "api");
+        remember_run(&mut state, "/w", "feature", &Map::new(), None, None);
+        assert!(state["workspaces"]["/w"].get("lastSubdir").is_none());
     }
 
     #[test]
@@ -491,7 +516,7 @@ mod tests {
                     for i in 0..50 {
                         store
                             .mutate(|s| {
-                                remember_run(s, &format!("/{who}{i}"), "w", &Map::new(), None)
+                                remember_run(s, &format!("/{who}{i}"), "w", &Map::new(), None, None)
                             })
                             .unwrap();
                     }

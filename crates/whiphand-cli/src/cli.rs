@@ -134,6 +134,15 @@ pub fn build_cli() -> Command {
                     )
                     .conflicts_with_all(["worktree", "no-worktree", "resume"]),
                 )
+                .arg(
+                    value(
+                        "subdir",
+                        "dir",
+                        "work in this folder below the workspace, typically one of the repositories in a workspace \
+                         whose root is not one; runs, workflows and worktrees stay in the workspace",
+                    )
+                    .conflicts_with("resume"),
+                )
                 .arg(flag("dry-run", "resolve and print every step argv without spawning"))
                 .arg(variadic("input", "pair", "workflow input as key=value"))
                 .arg(variadic(

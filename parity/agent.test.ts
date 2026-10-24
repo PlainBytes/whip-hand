@@ -77,7 +77,7 @@ const fixtureFile = (name: string): string => path.join(FIXTURES, `${name.replac
 
 test('agent regression: the scenarios call every method', () => {
   const methods = protocolMethods();
-  assert.equal(methods.length, 45);
+  assert.equal(methods.length, 46);
   const called = new Set(SCENARIOS.flatMap(s => s.steps.flatMap(step => ('call' in step ? [step.call] : []))));
   assert.deepEqual(methods.filter(m => !called.has(m)), []);
 });

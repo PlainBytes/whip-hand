@@ -32,6 +32,7 @@ use whiphand_core::store::retention::{DeleteRun, delete_run, prune_runs};
 use whiphand_core::store::run_log::{ReadRunLogParams, read_run_log};
 use whiphand_core::store::runs::{RunSummary, get_run, list_runs, rename_run};
 use whiphand_core::types::Scope;
+use whiphand_core::work_dir::list_work_dirs;
 use whiphand_core::workspace::{list_workflows, resolve_workflow_path};
 use whiphand_core::yaml_emit::stringify_yaml;
 use whiphand_protocol::{HelloResult, WindowsPty, WindowsPtyBackend};
@@ -65,6 +66,7 @@ const METHODS: &[&str] = &[
     "getRun",
     "readRunLog",
     "getWorkingDiff",
+    "listWorkDirs",
     "readArtifact",
     "writeArtifact",
     "statArtifact",
@@ -274,6 +276,10 @@ pub async fn call(agent: &Rc<Agent>, ctx: RequestCtx, method: &str, p: Value) ->
             };
             let diff = working_diff_files(Path::new(&tree), MAX_DIFF_FILES).await?;
             Ok(serde_json::to_value(diff).expect("a diff serializes"))
+        }
+        "listWorkDirs" => {
+            let dirs = list_work_dirs(Path::new(&workdir(&p))).await?;
+            Ok(json!({ "rootIsRepo": dirs.root_is_repo, "repos": dirs.repos }))
         }
         "readArtifact" => read_artifact(&p),
         "statArtifact" => {

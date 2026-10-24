@@ -6,7 +6,7 @@ use serde_json::Value;
 use whiphand_protocol::{self as p, JobStatus};
 
 use super::{PAGE, detail, get_app_state, step};
-use crate::client::{self, Call, ListWorkflows, StartRun};
+use crate::client::{self, Call, ListWorkDirs, ListWorkflows, StartRun};
 use crate::cmd::{Cmd, External, Then};
 use crate::model::input::Edit;
 use crate::model::new_run::{ContinueIn, FieldKind, Form, NewRun, find_entry, workspace_memory};
@@ -39,26 +39,36 @@ pub fn open_continuing(model: &mut Model, workdir: String, target: ContinueIn) -
 fn open_at(model: &mut Model, workdir: String, continue_in: Option<ContinueIn>) -> Vec<Cmd> {
     // As the desktop warns: a run going here outside a worktree, not a dry one.
     // A run in a worktree does not touch the workspace, so no warning there.
-    let workspace_busy = continue_in.is_none()
-        && model.runs.iter().any(|r| {
+    let running_in = model
+        .runs
+        .iter()
+        .filter(|r| {
             r.get("status").and_then(Value::as_str) == Some("running")
                 && r.get("dryRun") != Some(&Value::Bool(true))
                 && r.get("worktree").is_none()
-        });
+        })
+        .map(|r| r.get("subdir").and_then(Value::as_str).map(str::to_string))
+        .collect();
     model.new_run_generation += 1;
     let generation = model.new_run_generation;
     model.new_run = Some(NewRun {
         generation,
         workdir: workdir.clone(),
-        workspace_busy,
+        running_in,
         continue_in,
         ..NewRun::default()
     });
     model.route.push(Route::NewRun);
     vec![
         Cmd::Rpc(Call::new::<ListWorkflows>(
-            p::WorkdirParams { workdir },
+            p::WorkdirParams {
+                workdir: workdir.clone(),
+            },
             Then::Workflows(generation),
+        )),
+        Cmd::Rpc(Call::new::<ListWorkDirs>(
+            p::ListWorkDirsParams { workdir },
+            Then::WorkDirs(generation),
         )),
         get_app_state(),
     ]
@@ -122,7 +132,9 @@ fn pick(model: &mut Model) {
         model.notice = Some(format!("{} does not parse: {error}", entry.name));
         return;
     }
-    n.form = Some(Form::new(entry, n.memory.as_ref(), n.continue_in.as_ref()));
+    let mut form = Form::new(entry, n.memory.as_ref(), n.continue_in.as_ref());
+    form.offer_work_dirs(n.repos(), n.last_subdir());
+    n.form = Some(form);
 }
 
 fn start(model: &mut Model) -> Vec<Cmd> {
@@ -171,10 +183,13 @@ pub fn act(model: &mut Model, action: Action) -> Option<Vec<Cmd>> {
                 pick(model);
                 return Some(vec![]);
             };
-            let field = form.focused();
-            match field.kind {
+            let kind = form.focused().kind.clone();
+            match kind {
                 FieldKind::Start => return Some(start(model)),
+                FieldKind::WorkDir => form.cycle_work_dir(),
                 FieldKind::DryRun => form.dry_run = !form.dry_run,
+                // The workspace root offers no worktree to switch on.
+                FieldKind::Worktree if form.worktree_unavailable() => {}
                 FieldKind::Worktree => form.worktree = !form.worktree,
                 _ => form.editing = true,
             }
@@ -233,7 +248,9 @@ pub fn on_edited(model: &mut Model, text: &str) {
 
 /// This screen's replies; any other's value comes back untouched.
 pub fn on_reply(model: &mut Model, then: &Then, value: Value) -> Result<Vec<Cmd>, Value> {
-    let (Then::Workflows(generation) | Then::Started(generation)) = then else {
+    let (Then::Workflows(generation) | Then::Started(generation) | Then::WorkDirs(generation)) =
+        then
+    else {
         return Err(value);
     };
     // The screen that asked is gone (left, or opened again since). A run it
@@ -253,6 +270,18 @@ pub fn on_reply(model: &mut Model, then: &Then, value: Value) -> Result<Vec<Cmd>
                 auto_pick(model);
             }
             Err(e) => model.notice = Some(e),
+        },
+        Then::WorkDirs(_) => match client::decode::<ListWorkDirs>(value) {
+            Ok(dirs) => {
+                n.work_dirs = Some(dirs);
+                // A form already up gains the field.
+                let (repos, last) = (n.repos().to_vec(), n.last_subdir().map(str::to_string));
+                if let Some(form) = n.form.as_mut() {
+                    form.offer_work_dirs(&repos, last.as_deref());
+                }
+            }
+            // No list means no choice: the run works in the workspace.
+            Err(_) => n.work_dirs = None,
         },
         Then::Started(_) => {
             n.starting = false;
@@ -276,6 +305,10 @@ pub fn on_reply(model: &mut Model, then: &Then, value: Value) -> Result<Vec<Cmd>
 
 /// A refused `startRun` stays on the form, saying why; whether it was one.
 pub fn on_error(model: &mut Model, then: &Then, message: &str) -> bool {
+    // An agent without `listWorkDirs`, or a failed scan: the run works in the workspace.
+    if matches!(then, Then::WorkDirs(_)) {
+        return true;
+    }
     let Then::Started(generation) = then else {
         return false;
     };

@@ -15,6 +15,7 @@ use whiphand_core::js::Record;
 use whiphand_core::node_path;
 use whiphand_core::schema::parse_workflow;
 use whiphand_core::store::runs::get_run;
+use whiphand_core::work_dir::validate_subdir;
 use whiphand_core::workspace::resolve_workflow_path;
 
 use crate::host::{Agent, RequestCtx};
@@ -231,6 +232,8 @@ fn start_run(agent: &Rc<Agent>, p: &Value) -> R {
         validate_attachments(&attachments, &workflow, config.runs.max_attachment_mb)
             .map_err(|problems| problems.join("\n"))?;
     }
+    // Refused here, before a job exists, like an unusable attachment.
+    let subdir = validate_subdir(&workdir, p["subdir"].as_str())?;
     let inputs = inputs_of(p);
     let job = agent
         .jobs
@@ -244,6 +247,7 @@ fn start_run(agent: &Rc<Agent>, p: &Value) -> R {
         attachments,
         worktree: p["worktree"].as_bool(),
         continue_in: p["continueIn"].as_str().map(str::to_string),
+        subdir: subdir.clone(),
     };
     let identity = opened.identity_key.clone();
     tokio::task::spawn_local(run_job(agent.clone(), job.clone(), params, opened));
@@ -254,7 +258,14 @@ fn start_run(agent: &Rc<Agent>, p: &Value) -> R {
         .map(|(k, v)| (k.to_string(), json!(v)))
         .collect();
     let _ = agent.app_state.mutate(|state| {
-        crate::app_state::remember_run(state, &workdir, &workflow, &remembered, Some(&identity));
+        crate::app_state::remember_run(
+            state,
+            &workdir,
+            &workflow,
+            &remembered,
+            subdir.as_deref(),
+            Some(&identity),
+        );
     });
     Ok(json!({ "jobId": job.job_id }))
 }

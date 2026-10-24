@@ -54,6 +54,7 @@ methods! {
     ReadRunLog = "readRunLog" (p::ReadRunLogParams) -> p::ReadRunLogResult;
     GetJobScrollback = "getJobScrollback" (p::GetJobScrollbackParams) -> p::GetJobScrollbackResult;
     GetWorkingDiff = "getWorkingDiff" (p::GetWorkingDiffParams) -> p::GetWorkingDiffResult;
+    ListWorkDirs = "listWorkDirs" (p::ListWorkDirsParams) -> p::ListWorkDirsResult;
     ReadArtifact = "readArtifact" (p::ReadArtifactParams) -> p::ReadArtifactResult;
     StatArtifact = "statArtifact" (p::StatArtifactParams) -> p::StatArtifactResult;
     Doctor = "doctor" (p::DoctorParams) -> p::DoctorResult;

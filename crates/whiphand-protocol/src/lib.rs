@@ -463,6 +463,11 @@ pub struct StartRunParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub continue_in: Option<String>,
+    /// The work directory: a workspace-relative folder the run works in, for a workspace
+    /// whose root is not the repository. Absent is the workspace itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub subdir: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -702,6 +707,23 @@ pub struct WorkingDiff {
 #[ts(type = "WorkingDiff | null")]
 pub struct GetWorkingDiffResult(pub Option<WorkingDiff>);
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ListWorkDirsParams {
+    pub workdir: String,
+}
+
+/// What a workspace offers as a run's work directory.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ListWorkDirsResult {
+    /// The workspace is inside a git repository: there is nothing to choose.
+    pub root_is_repo: bool,
+    /// The git repositories below the workspace, workspace-relative `/`-form, sorted.
+    /// Empty when `root_is_repo`.
+    pub repos: Vec<String>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum ArtifactEncoding {
@@ -852,6 +874,10 @@ pub struct WorkspaceMemory {
     /// Workflow name to its last inputs.
     #[ts(type = "Record<string, Record<string, string>>")]
     pub last_inputs: serde_json::Map<String, Value>,
+    /// The work directory the last run started here used; absent for the workspace itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_subdir: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -959,6 +985,10 @@ pub struct RunDraft {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub continue_in: Option<String>,
+    /// The work directory chosen; absent is the workspace itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub subdir: Option<String>,
     /// As typed, not yet a number.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -1428,6 +1458,7 @@ pub const METHODS: &[(&str, &str, &str)] = &[
         "GetWorkingDiffParams",
         "GetWorkingDiffResult",
     ),
+    ("listWorkDirs", "ListWorkDirsParams", "ListWorkDirsResult"),
     ("readArtifact", "ReadArtifactParams", "ReadArtifactResult"),
     (
         "writeArtifact",
@@ -1611,7 +1642,7 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), METHODS.len());
-        assert_eq!(METHODS.len(), 45);
+        assert_eq!(METHODS.len(), 46);
         assert_eq!(NOTIFICATIONS.len(), 11);
     }
 }

@@ -20,6 +20,7 @@ use crate::store::markers::WORKFLOW_SNAPSHOT_NAME;
 use crate::store::runs::{get_run, is_safe_run_id};
 use crate::template::{Frame, LoopFrame, Stage, StageFrame};
 use crate::types::{Scope, Step, Workflow};
+use crate::work_dir::run_repo_dir;
 use crate::workspace::resolve_workflow_path;
 
 /// What a skipped execution has to tell the walk that replays it.
@@ -758,9 +759,10 @@ pub async fn plan_resume(
     }
     let attachments = recorded_attachments(&detail, &run_dir)?;
     let worktree = record_from_manifest(&detail);
-    let tree = worktree
-        .as_ref()
-        .map_or_else(|| workdir.to_string(), WorktreeRecord::native_tree);
+    let tree = worktree.as_ref().map_or_else(
+        || run_repo_dir(workdir, &detail),
+        WorktreeRecord::native_tree,
+    );
     // A worktree that is gone is refused by the runner; there is no tree to compare.
     if std::path::Path::new(&tree).is_dir() || worktree.is_none() {
         warnings.extend(tree_warnings(&detail, &tree).await);

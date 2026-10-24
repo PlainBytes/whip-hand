@@ -106,6 +106,7 @@ export function RunsPage({ onSelectRun, onNewRun }: RunsPageProps) {
           <OpenInEditorButton
             workdir={workspacePath}
             worktree={run.worktree ?? undefined}
+            subdir={run.subdir}
             size="small"
             iconOnly
             onError={setOpenError}

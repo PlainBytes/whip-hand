@@ -59,6 +59,8 @@ pub struct JournalInit {
     pub workflow: String,
     /// Native, absolute.
     pub workdir: String,
+    /// The run's work directory below `workdir`, workspace-relative `/`-form; `None` at the root.
+    pub subdir: Option<String>,
     pub dry_run: bool,
     pub workflow_source: Option<String>,
     pub inputs: JsObject,
@@ -742,6 +744,9 @@ impl RunJournal {
         }
         manifest.set("sessionIds", init.session_ids.clone());
         manifest.set("steps", steps);
+        if let Some(subdir) = &init.subdir {
+            manifest.set(crate::work_dir::SUBDIR_KEY, subdir.as_str());
+        }
         if let Some(record) = init.worktree {
             manifest.set("worktree", record);
         }

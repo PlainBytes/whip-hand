@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup as cleanupDom, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { NewRunForm } from './NewRunForm.tsx';
 import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
@@ -99,7 +99,7 @@ async function expectStartedTab(jobId: string) {
 }
 
 async function selectWorkflow(transport: MockTransport, name: string) {
-  fireEvent.click(screen.getByRole('combobox'));
+  fireEvent.click(screen.getByRole('combobox', { name: 'Workflow' }));
   fireEvent.click(await screen.findByRole('option', { name }));
 }
 
@@ -1386,5 +1386,119 @@ describe('NewRunForm as a draft tab', () => {
       expect(drafts[b]!.attachments).toMatchObject([{ path: '/home/me/trace.har' }]);
       expect(drafts[a]!.attachments).toEqual([]);
     });
+  });
+});
+
+describe('NewRunForm work directory', () => {
+  const REPOS = { rootIsRepo: false, repos: ['api', 'web'] };
+  const WORKTREE_WORKFLOW = { ...SCRIPTED_WORKFLOW, workflow: { ...SCRIPTED_WORKFLOW.workflow, worktree: true } };
+  const WARNING = 'Another run is already in progress in this workspace.';
+
+  beforeEach(() => {
+    useAppStore.setState({ workspacePath: '/ws', workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null });
+  });
+
+  afterEach(() => {
+    useAppStore.setState({ workspacePath: null, workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null });
+  });
+
+  async function open(workDirs: unknown, { runs = [], workflow = SCRIPTED_WORKFLOW, draftId }: {
+    runs?: unknown[]; workflow?: unknown; draftId?: string;
+  } = {}) {
+    const rendered = renderNewRunForm(draftId);
+    await respond(rendered.transport, 'listWorkflows', [workflow]);
+    await respond(rendered.transport, 'listRuns', runs);
+    await respond(rendered.transport, 'listWorkDirs', workDirs);
+    await selectWorkflow(rendered.transport, 'ship-feature');
+    fireEvent.change(await screen.findByLabelText('Ticket ID', { exact: false }), { target: { value: 'T-1' } });
+    return rendered;
+  }
+
+  const picker = () => screen.queryByRole('combobox', { name: /Work directory/ });
+  const worktreeSwitch = () => screen.getByRole('switch', { name: /separate worktree/i });
+
+  async function choose(name: string) {
+    fireEvent.click(picker()!);
+    fireEvent.click(await screen.findByRole('option', { name }));
+  }
+
+  it('is not offered when the workspace is a repository, and sends no subdir', async () => {
+    const { transport } = await open({ rootIsRepo: true, repos: [] });
+    expect(picker()).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    expect((await startRunRequest(transport)).params).not.toHaveProperty('subdir');
+  });
+
+  it('is not offered when there is no repository below the workspace', async () => {
+    await open({ rootIsRepo: false, repos: [] });
+    expect(picker()).not.toBeInTheDocument();
+    expect(worktreeSwitch()).toBeEnabled();
+  });
+
+  it('starts at the root with the worktree switch off and disabled', async () => {
+    const { transport } = await open(REPOS, { workflow: WORKTREE_WORKFLOW });
+    expect(picker()).toHaveTextContent('Workspace root (no git)');
+    expect(worktreeSwitch()).not.toBeChecked();
+    expect(worktreeSwitch()).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    const req = await startRunRequest(transport);
+    expect(req.params).not.toHaveProperty('subdir');
+    expect(req.params).toMatchObject({ worktree: false });
+  });
+
+  it('sends the chosen repository, where the workflow\'s worktree applies again', async () => {
+    const { transport } = await open(REPOS, { workflow: WORKTREE_WORKFLOW });
+    await choose('api');
+    expect(worktreeSwitch()).toBeEnabled();
+    expect(worktreeSwitch()).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    expect((await startRunRequest(transport)).params).toMatchObject({ subdir: 'api', worktree: true });
+  });
+
+  it('starts from the workspace\'s last choice, and ignores one whose folder is gone', async () => {
+    useAppStore.setState({
+      appState: { ...EMPTY_APP_STATE, workspaces: { '/ws': { lastInputs: {}, lastSubdir: 'web' } } },
+    });
+    await open(REPOS);
+    expect(picker()).toHaveTextContent('web');
+    cleanupDom();
+    useAppStore.setState({
+      appState: { ...EMPTY_APP_STATE, workspaces: { '/ws': { lastInputs: {}, lastSubdir: 'gone' } } },
+      drafts: {}, tabs: [],
+    });
+    await open(REPOS);
+    expect(picker()).toHaveTextContent('Workspace root (no git)');
+  });
+
+  it('remembers the choice for the next draft once a run starts', async () => {
+    useAppStore.setState({ appState: { ...EMPTY_APP_STATE } });
+    const { transport } = await open(REPOS);
+    await choose('web');
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    const req = await startRunRequest(transport);
+    transport.emitLine({ id: req.id, result: { jobId: 'job-1' } });
+    await waitFor(() => expect(useAppStore.getState().appState?.workspaces['/ws']?.lastSubdir).toBe('web'));
+  });
+
+  it('warns about a running run only in the same work directory', async () => {
+    const running = { runId: 'r1', runDir: '/r1', status: 'running', subdir: 'api' };
+    await open(REPOS, { runs: [running] });
+    expect(screen.queryByText(WARNING)).not.toBeInTheDocument();
+    await choose('api');
+    expect(screen.getByText(WARNING)).toBeInTheDocument();
+    await choose('web');
+    expect(screen.queryByText(WARNING)).not.toBeInTheDocument();
+  });
+
+  it('is not offered to a run continuing in another run\'s worktree, which names its folder', async () => {
+    const source = {
+      runId: 'r1', runDir: '/r1', status: 'succeeded', name: 'first', subdir: 'api',
+      worktree: { path: '.whiphand/worktrees/r1', branch: 'whiphand/r1' },
+    };
+    const { transport } = await open(REPOS, { runs: [source], draftId: openDraft({ continueIn: 'r1' }) });
+    expect(picker()).not.toBeInTheDocument();
+    expect(screen.getByTestId('continue-in-field')).toHaveTextContent('on branch whiphand/r1 of api');
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    expect((await startRunRequest(transport)).params).not.toHaveProperty('subdir');
   });
 });

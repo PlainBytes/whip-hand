@@ -211,7 +211,11 @@ export type WorkspaceMemory = { identityKey?: string, lastWorkflow?: string,
 /**
  * Workflow name to its last inputs.
  */
-lastInputs: Record<string, Record<string, string>>, };
+lastInputs: Record<string, Record<string, string>>, 
+/**
+ * The work directory the last run started here used; absent for the workspace itself.
+ */
+lastSubdir?: string, };
 
 export type DraftAttachment = { path: string, 
 /**

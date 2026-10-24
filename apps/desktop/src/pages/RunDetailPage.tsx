@@ -1129,6 +1129,13 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
             </Text>
           )}
           {manifest?.worktree && <WorktreeInfoButton worktree={manifest.worktree} />}
+          {manifest?.subdir && (
+            <Tooltip content="Work directory" relationship="description">
+              <Text data-testid="run-detail-subdir" font="monospace" style={{ color: 'var(--colorNeutralForeground3)', flexShrink: 0 }}>
+                {manifest.subdir}
+              </Text>
+            </Tooltip>
+          )}
           <div style={{ display: 'flex', gap: 8, marginLeft: 'auto', flexShrink: 0 }}>
             {job?.ptyActive && effectiveJobId && (
               <Tooltip

@@ -36,13 +36,16 @@ import { collectLoops, findStep, flattenSteps, isLoopStep } from '../shared/step
 import { disabledRoots, droppedRefs, droppedRefSentence } from '../shared/enabled.ts';
 import { attachmentNames, consumesAttachments } from '../shared/attachments.ts';
 import type { Workflow } from '../shared/types.ts';
-import type { ListWorkflowsResult } from '../shared/protocol.gen.ts';
+import type { ListWorkDirsResult, ListWorkflowsResult } from '../shared/protocol.gen.ts';
 import type { RunSummary } from '../shared/core-types.ts';
 import { errorMessage } from '../lib/error-message.ts';
 
 type WorkflowEntry = ListWorkflowsResult[number];
 
 const NARROW = { maxWidth: 480 };
+
+/** The work directory dropdown's value for the workspace itself. */
+const ROOT_OPTION = '';
 
 /**
  * Names the disabled roots — a loop counts as one entry naming its size, not
@@ -249,12 +252,12 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
-  // A running, non-dry-run run that works in the workspace itself. An isolated
-  // run touches nothing here, so it is no reason to warn.
-  const [workspaceRunActive, setWorkspaceRunActive] = useState(false);
   // The workspace's runs as last listed: the source of a continue-in draft
-  // is looked up here for its branch, path and whether it is still running.
+  // is looked up here for its branch, path and whether it is still running,
+  // and a running one outside a worktree is a reason to warn.
   const [runs, setRuns] = useState<RunSummary[]>([]);
+  // Whether the workspace is a repository, and the ones below it when it is not.
+  const [workDirs, setWorkDirs] = useState<ListWorkDirsResult | null>(null);
   const [attachError, setAttachError] = useState<string | null>(null);
   const [dropHover, setDropHover] = useState(false);
   const { pickFiles, onFileDrop } = useCapabilities();
@@ -288,15 +291,28 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
     client
       .request('listRuns', { workdir })
       .then(result => {
-        if (cancelled) return;
-        setRuns(result);
-        const running = result.some(
-          run => run.status === 'running' && run.dryRun !== true && run.worktree === undefined,
-        );
-        setWorkspaceRunActive(running);
+        if (!cancelled) setRuns(result);
       })
       .catch(() => {
         // Best-effort warning only — a failed check just means no warning shown.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, workdir, visible]);
+
+  // Asked again on showing: a repository may have been cloned below the workspace since.
+  useEffect(() => {
+    if (!visible || !workdir) return;
+    let cancelled = false;
+    client
+      .request('listWorkDirs', { workdir })
+      .then(result => {
+        if (!cancelled) setWorkDirs(result);
+      })
+      .catch(() => {
+        // No list means no choice: the run works in the workspace, as it always did.
+        if (!cancelled) setWorkDirs(null);
       });
     return () => {
       cancelled = true;
@@ -310,12 +326,24 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
   );
   const selectedKey = selectedEntry ? entryKey(selectedEntry) : null;
   const selectedWorkflow = selectedEntry?.workflow ?? null;
-  const worktreeDefault = selectedWorkflow?.worktree !== undefined && selectedWorkflow.worktree !== false;
-  const worktree = draft?.worktreeChoice ?? worktreeDefault;
   const continueIn = draft?.continueIn;
   const sourceRun = continueIn === undefined ? undefined : runs.find(run => run.runId === continueIn);
-  // Continuing shares a run's worktree, so the workspace is not what is at risk.
-  const anotherRunActive = workspaceRunActive && !worktree && continueIn === undefined;
+  // Offered only where the root is not a repository but holds some. A continuing
+  // run works where its source did, so it has nothing to choose.
+  const repos = workDirs && !workDirs.rootIsRepo ? workDirs.repos : [];
+  const workDirShown = repos.length > 0 && continueIn === undefined;
+  // A remembered choice whose folder is gone falls back to the workspace itself.
+  const subdir = workDirShown && draft?.subdir !== undefined && repos.includes(draft.subdir) ? draft.subdir : undefined;
+  // The root is not a repository, so it has no worktree to offer.
+  const worktreeUnavailable = workDirShown && subdir === undefined;
+  const worktreeDefault = selectedWorkflow?.worktree !== undefined && selectedWorkflow.worktree !== false;
+  const worktree = !worktreeUnavailable && (draft?.worktreeChoice ?? worktreeDefault);
+  // A running, non-dry-run run outside a worktree, in the same work directory. An
+  // isolated run, or one in another repository, touches nothing here. Continuing
+  // shares a run's worktree, so the workspace is not what is at risk.
+  const anotherRunActive = !worktree && continueIn === undefined && runs.some(
+    run => run.status === 'running' && run.dryRun !== true && run.worktree === undefined && run.subdir === subdir,
+  );
 
   function selectWorkflow(entry: WorkflowEntry): void {
     if (!draft) return;
@@ -503,6 +531,7 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
         dryRun,
         // Core refuses the two together, so a continuing run names only its source.
         ...(continueIn === undefined ? { worktree } : { continueIn }),
+        ...(subdir === undefined ? {} : { subdir }),
         ...(maxIterations === undefined ? {} : { maxIterations }),
         // Core normalizes and drops an empty one; send it only when typed so
         // an untouched field is indistinguishable from not passing --name.
@@ -515,7 +544,7 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
       // title and Activity badge attribute it from the first millisecond
       // rather than from the first whiphandEvent.
       noteJobWorkspace(result.jobId, draft.workdir, draft.identityKey);
-      rememberInputsLocal(draft.workdir, ref, values, draft.identityKey);
+      rememberInputsLocal(draft.workdir, ref, values, draft.identityKey, subdir);
       // The draft's own workspace, not the current one: it may have been left since.
       useAppStore.getState().convertDraftTab(draftId, {
         workdir: draft.workdir, identityKey: draft.identityKey, jobId: result.jobId,
@@ -562,6 +591,29 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
               start until it finishes.
             </MessageBarBody>
           </MessageBar>
+        )}
+
+        {workDirShown && (
+          <Field
+            label="Work directory"
+            style={NARROW}
+            hint="The repository steps run in. Runs and workflows stay in the workspace."
+          >
+            <Dropdown
+              data-testid="work-dir-dropdown"
+              value={subdir ?? 'Workspace root (no git)'}
+              selectedOptions={[subdir ?? ROOT_OPTION]}
+              onOptionSelect={(_e, data) => {
+                const chosen = data.optionValue === undefined || data.optionValue === ROOT_OPTION ? undefined : data.optionValue;
+                updateDraft(draftId, { subdir: chosen });
+              }}
+            >
+              <Option value={ROOT_OPTION} text="Workspace root (no git)">Workspace root (no git)</Option>
+              {repos.map(repo => (
+                <Option key={repo} value={repo} text={repo}>{repo}</Option>
+              ))}
+            </Dropdown>
+          </Field>
         )}
 
         <Field label="Workflow" style={NARROW}>
@@ -668,12 +720,15 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
             {continueIn === undefined ? (
               <Field
                 style={NARROW}
-                hint={<>Changes land on a new branch in <code>.whiphand/worktrees/</code>. Other runs keep the workspace.</>}
+                hint={worktreeUnavailable
+                  ? 'The workspace root is not a git repository. Choose a work directory to use a worktree.'
+                  : <>Changes land on a new branch in <code>.whiphand/worktrees/</code>. Other runs keep the workspace.</>}
               >
                 <Switch
                   data-testid="worktree-switch"
                   label="Run in a separate worktree"
                   checked={worktree}
+                  disabled={worktreeUnavailable}
                   onChange={(_e, data) => updateDraft(draftId, { worktreeChoice: data.checked })}
                 />
               </Field>
@@ -686,6 +741,7 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
                 <Text>
                   Runs in the worktree of run {sourceRun?.name ?? continueIn}
                   {sourceRun?.worktree ? <> on branch <code>{sourceRun.worktree.branch}</code></> : null}
+                  {sourceRun?.subdir ? <> of <code>{sourceRun.subdir}</code></> : null}
                 </Text>
                 <Link
                   data-testid="use-new-worktree-link"

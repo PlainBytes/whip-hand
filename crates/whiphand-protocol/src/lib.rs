@@ -874,6 +874,10 @@ pub struct WorkspaceMemory {
     /// Workflow name to its last inputs.
     #[ts(type = "Record<string, Record<string, string>>")]
     pub last_inputs: serde_json::Map<String, Value>,
+    /// The work directory the last run started here used; absent for the workspace itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_subdir: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]

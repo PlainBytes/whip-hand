@@ -479,6 +479,14 @@ describe('RunsPage', () => {
       expect(screen.getByText('.whiphand/worktrees/wt1')).toBeInTheDocument();
     });
 
+    it('names a run\'s work directory under its workflow', async () => {
+      const { transport } = renderRunsPage();
+      await respondListRuns(transport, [{ ...PLAIN_RUN, subdir: 'api' }, { ...WORKTREE_RUN }]);
+
+      expect(await screen.findByTestId('run-subdir-plain1')).toHaveTextContent('api');
+      expect(screen.queryByTestId('run-subdir-wt1')).not.toBeInTheDocument();
+    });
+
     it('keeps glyphs out of the Run cell so names line up', async () => {
       const { transport } = renderRunsPage();
       await respondListRuns(transport, [{ ...WORKTREE_RUN, locked: true }]);

@@ -411,6 +411,7 @@ pub fn app_state() -> S {
             "identityKey" => o(Str),
             "lastWorkflow" => o(Str),
             "lastInputs" => Rec(b(Rec(b(Str)))),
+            "lastSubdir" => o(Str),
         })),
         "runsRetention" => Default(b(runs_retention()), || {
             let mut m = Record::new();

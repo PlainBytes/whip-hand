@@ -1,3 +1,5 @@
+import type { PageId } from '../../nav.ts';
+
 /** Every keyboard shortcut, as a named action with its default binding. */
 
 export type ActionGroup = 'tabs' | 'workspaces' | 'pages' | 'run' | 'files';
@@ -39,10 +41,32 @@ export const ACTIONS = [
   { id: 'tabs.reopenClosed', label: 'Reopen closed tab', group: 'tabs', defaultChord: both('Mod+Alt+Shift+KeyT') },
   { id: 'tabs.keepPreview', label: 'Keep preview tab', group: 'tabs', defaultChord: null },
   { id: 'workspace.quickSwitch', label: 'Switch workspace', group: 'workspaces', defaultChord: both('Mod+KeyK') },
+  { id: 'workspace.previous', label: 'Previous workspace', group: 'workspaces', defaultChord: both('Mod+Alt+KeyP') },
+  { id: 'workspace.pinned1', label: 'Pinned workspace 1', group: 'workspaces', defaultChord: null },
+  { id: 'workspace.pinned2', label: 'Pinned workspace 2', group: 'workspaces', defaultChord: null },
+  { id: 'workspace.pinned3', label: 'Pinned workspace 3', group: 'workspaces', defaultChord: null },
+  { id: 'workspace.pinned4', label: 'Pinned workspace 4', group: 'workspaces', defaultChord: null },
+  { id: 'workspace.pinned5', label: 'Pinned workspace 5', group: 'workspaces', defaultChord: null },
+  { id: 'workspace.pinned6', label: 'Pinned workspace 6', group: 'workspaces', defaultChord: null },
+  { id: 'workspace.pinned7', label: 'Pinned workspace 7', group: 'workspaces', defaultChord: null },
+  { id: 'workspace.pinned8', label: 'Pinned workspace 8', group: 'workspaces', defaultChord: null },
+  { id: 'workspace.pinned9', label: 'Pinned workspace 9', group: 'workspaces', defaultChord: null },
+  { id: 'page.runs', label: 'Go to Runs', group: 'pages', defaultChord: null },
+  { id: 'page.workflows', label: 'Go to Workflows', group: 'pages', defaultChord: null },
+  { id: 'page.files', label: 'Go to Files', group: 'pages', defaultChord: null },
+  { id: 'page.workspaceSettings', label: 'Go to Workspace settings', group: 'pages', defaultChord: null },
+  { id: 'page.activity', label: 'Go to Activity', group: 'pages', defaultChord: null },
+  { id: 'page.doctor', label: 'Go to Doctor', group: 'pages', defaultChord: null },
+  { id: 'page.preferences', label: 'Go to Preferences', group: 'pages', defaultChord: both('Mod+Comma') },
   { id: 'files.find', label: 'Find in document', group: 'files', defaultChord: both('Mod+KeyF') },
 ] as const satisfies readonly ActionDef[];
 
 export type ActionId = (typeof ACTIONS)[number]['id'];
+
+/** The action that opens `page`: 'workspace-settings' -> 'page.workspaceSettings'. A test keeps ACTIONS in step with PAGES. */
+export function pageActionId(page: PageId): ActionId {
+  return `page.${page.replace(/-(\w)/g, (_, c: string) => c.toUpperCase())}` as ActionId;
+}
 
 export function actionById(id: string): ActionDef | undefined {
   return ACTIONS.find(action => action.id === id);

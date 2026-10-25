@@ -5,6 +5,9 @@ import { useAgentClient } from './agent/agent-context.tsx';
 import { useDarkTheme } from './lib/use-dark-theme.ts';
 import { useStartupRestore } from './lib/use-startup-restore.ts';
 import { useJobAttach } from './lib/use-job-attach.ts';
+import { isModalOpen } from './lib/tab-shortcuts.ts';
+import { pageActionId, type ActionId } from './lib/keymap/actions.ts';
+import { nthPinnedWorkspace, previousWorkspace } from './lib/workspace-identity.ts';
 import { openWorkspace, settlePendingWorkspaceSwitch } from './lib/workspace-switch.ts';
 import { useShortcut } from './lib/use-global-shortcut.ts';
 import { useWindowTitle } from './lib/use-window-title.ts';
@@ -18,8 +21,34 @@ import { Sidebar } from './components/Sidebar.tsx';
 import { PageContent } from './components/PageContent.tsx';
 import { UnsavedChangesDialog } from './components/UnsavedChangesDialog.tsx';
 import { WorkspaceQuickSwitch } from './components/WorkspaceQuickSwitch.tsx';
+import type { AgentClient } from './agent/client.ts';
 import type { RunTabTarget } from './lib/run-tabs.ts';
-import type { PageId } from './nav.ts';
+import { PAGES, isPageAvailable, type PageId } from './nav.ts';
+
+const PINNED_SLOTS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
+
+/** Switches through `openWorkspace`, so the unsaved-edits guard applies; a refused path is dropped like the other entry points. */
+function switchTo(client: AgentClient, path: string | undefined): void {
+  if (path === undefined || isModalOpen()) return;
+  void openWorkspace(client, path).catch(() => {});
+}
+
+/** Binds `workspace.pinned<n>`, live only while an Nth pinned workspace other than the open one exists; renders nothing. */
+function PinnedShortcut({ n, client }: { n: number; client: AgentClient }) {
+  const path = useAppStore(state => {
+    const open = state.workspacePath === null
+      ? null : { path: state.workspacePath, identityKey: state.workspaceIdentityKey ?? undefined };
+    return nthPinnedWorkspace(state.appState?.recentWorkspaces ?? [], n, open)?.path;
+  });
+  useShortcut(`workspace.pinned${n}` as ActionId, () => switchTo(client, path), path !== undefined);
+  return null;
+}
+
+/** Binds one page's action; `enabled` keeps an unavailable or gated page from swallowing its chord. */
+function PageShortcut({ page, enabled, onGo }: { page: PageId; enabled: boolean; onGo: (page: PageId) => void }) {
+  useShortcut(pageActionId(page), () => { if (!isModalOpen()) onGo(page); }, enabled);
+  return null;
+}
 
 export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
   const capabilities = useCapabilities();
@@ -45,6 +74,12 @@ export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
 
   useShortcut('workspace.quickSwitch', useCallback(() => setQuickSwitchOpen(true), []));
   useWindowTitle();
+
+  const recentWorkspaces = useAppStore(state => state.appState?.recentWorkspaces);
+  const openRef = workspacePath === null ? null : { path: workspacePath, identityKey: workspaceIdentityKey ?? undefined };
+  const previous = previousWorkspace(recentWorkspaces ?? [], openRef);
+  // Unbound-in-effect with nothing to switch to, so the chord is not swallowed.
+  useShortcut('workspace.previous', () => switchTo(client, previous?.path), previous !== undefined);
 
   function goToPage(next: PageId, runTarget?: RunTabTarget): void {
     // A preview tab, like any other single-click open.
@@ -113,6 +148,15 @@ export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
       style={{ height: '100%' }}
     >
       <NotificationBridge notifier={notifier} />
+      {PINNED_SLOTS.map(n => <PinnedShortcut key={n} n={n} client={client} />)}
+      {PAGES.map(def => (
+        <PageShortcut
+          key={def.id}
+          page={def.id}
+          enabled={isPageAvailable(def, capabilities) && (!def.requiresWorkspace || workspacePath !== null)}
+          onGo={requestPage}
+        />
+      ))}
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         <UpdateBanner />
         <AgentDownBanner />

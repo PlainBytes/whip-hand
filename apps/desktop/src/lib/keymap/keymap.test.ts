@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ACTIONS } from './actions.ts';
+import { PAGES } from '../../nav.ts';
+import { ACTIONS, pageActionId } from './actions.ts';
 import { actionLabel, matchesTerminalPassthrough, resolveKeymap } from './keymap.ts';
 
 const TODAY_OTHER: Record<string, string> = {
@@ -20,12 +21,20 @@ const TODAY_OTHER: Record<string, string> = {
   'tabs.goTo8': 'Mod+Alt+Digit9',
   'tabs.reopenClosed': 'Mod+Alt+Shift+KeyT',
   'workspace.quickSwitch': 'Mod+KeyK',
+  'workspace.previous': 'Mod+Alt+KeyP',
+  'page.preferences': 'Mod+Comma',
   'files.find': 'Mod+KeyF',
 };
 
+describe('page actions', () => {
+  it('has an action for every page', () => {
+    for (const def of PAGES) expect(ACTIONS.map(a => a.id), def.id).toContain(pageActionId(def.id));
+  });
+});
+
 describe('resolveKeymap', () => {
   it("yields today's chord for each bound action", () => {
-    expect(ACTIONS).toHaveLength(Object.keys(TODAY_OTHER).length + 2);
+    expect(ACTIONS).toHaveLength(Object.keys(TODAY_OTHER).length + 2 + 9 + 6);
     const other = resolveKeymap({}, false);
     expect(other.get('tabs.closeOthers')).toBeNull();
     expect(other.get('tabs.keepPreview')).toBeNull();

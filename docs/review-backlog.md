@@ -136,6 +136,12 @@ have not been re-checked against the Rust code.
   fix: dynamic-import the highlight core + language set the same way `Mermaid.tsx` and
   `load-pdfjs.ts` already do, loading only when a code block or the CodeEditor actually
   needs to highlight something · effort: S/M.
+- **low · `apps/desktop/src-tauri/src/notify.rs` · a notification click on GNOME Wayland may
+  not raise the window.** The `notify` command raises the window with `set_focus` but passes
+  no xdg-activation token, so focus-stealing prevention can show a "ready" prompt instead
+  and the run's tab opens behind other windows · proposed fix: take the activation token
+  the notification server hands back with the click and pass it to the window before
+  focusing · effort: M.
 
 ## Tests
 

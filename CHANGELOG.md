@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Click a notification to open its run
+
+- Clicking a desktop notification (Windows and Linux) brings Whiphand to the front and opens the
+  tab of the run that sent it, switching workspace first when the run belongs to another one.
+  On Windows this works while Whiphand is running; on GNOME Wayland the window may only show a
+  "ready" prompt instead of coming forward. The web build's notifications do not navigate.
+
 ### Work in one repository of a folder that holds several
 
 - A workspace whose root is not a git repository can now run each workflow in one of the

@@ -1419,6 +1419,19 @@ no second window — but the Activity page, sidebar job badges, and notification
 cross-workspace *awareness*, and pinning plus Ctrl+K make switching cheap enough that
 simultaneity is rarely what was actually wanted.
 
+**Desktop notifications.** The desktop shell sends them through its own `notify` command
+(`apps/desktop/src-tauri/src/notify.rs`, built on `notify-rust`), not through
+`tauri-plugin-notification`: on desktop the plugin discards the handle `notify-rust` returns,
+and that handle is the only way to see a click. Each notification carries its job id. A
+click raises the main window and emits `notification-clicked` for that job, and `App` routes
+it through the same `openRun` path as a click on the sidebar's "Ongoing runs", so the run's
+tab opens or is activated, and a run in another workspace switches workspace first. Limits:
+
+- On GNOME Wayland, focus-stealing prevention may show a "ready" prompt instead of raising
+  the window, because no xdg-activation token is passed (tracked in `docs/review-backlog.md`).
+- On Windows a click only navigates while the app is running.
+- The web build's browser notifications do not navigate on click.
+
 **The run's step strip.** The strip above the tabs on the run screen follows five rules, so
 that a run with many stages fits on screen and looks the same at any window size:
 

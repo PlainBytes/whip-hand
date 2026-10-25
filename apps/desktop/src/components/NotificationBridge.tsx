@@ -53,12 +53,12 @@ export function NotificationBridge({
       const job = useAppStore.getState().jobs[jobId];
       return job?.runName ?? runId ?? jobId;
     };
-    const send = (title: string, body: string) => {
-      if (!isWindowFocused()) notifier(title, body);
+    const send = (title: string, body: string, jobId: string) => {
+      if (!isWindowFocused()) notifier(title, body, jobId);
     };
     /** send(), with the job's workspace appended to the body. */
     const sendForJob = (jobId: string, title: string, body: string) => {
-      send(title, `${body}${workspaceSuffix(jobId)}`);
+      send(title, `${body}${workspaceSuffix(jobId)}`, jobId);
     };
     const unsubscribers = [
       client.onNotification('runStateChanged', p => {

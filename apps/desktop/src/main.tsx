@@ -6,7 +6,7 @@ import { InProcessTransport } from './agent/inprocess-transport.ts';
 import { AgentClientProvider } from './agent/agent-context.tsx';
 import { FileSystemProvider } from './files/fs-context.tsx';
 import { TauriFileSystem } from './files/tauri-fs.ts';
-import { createTauriNotifier } from './lib/notifier.ts';
+import { createTauriNotificationClicks, createTauriNotifier } from './lib/notifier.ts';
 import { OpenExternalProvider } from './lib/open-external.tsx';
 import { CapabilitiesProvider } from './capabilities.tsx';
 import { tauriCapabilities } from './lib/tauri-capabilities.ts';
@@ -40,7 +40,7 @@ createRoot(rootEl).render(
             });
           }}
         >
-          <App notifier={createTauriNotifier()} />
+          <App notifier={createTauriNotifier()} notificationClicks={createTauriNotificationClicks()} />
         </OpenExternalProvider>
       </FileSystemProvider>
     </AgentClientProvider>

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App } from './App.tsx';
 import { AgentClient } from './agent/client.ts';
 import { MockTransport } from './agent/transport.ts';
@@ -7,6 +7,7 @@ import { AgentClientProvider } from './agent/agent-context.tsx';
 import { useAppStore, type JobState } from './state/store.ts';
 import { FakeFileSystem } from './files/fake-fs.ts';
 import { FileSystemProvider } from './files/fs-context.tsx';
+import type { NotificationClicks } from './lib/notifier.ts';
 import { EMPTY_APP_STATE } from './test/app-state.ts';
 
 // The real banner renders nothing under vitest (it only runs in production
@@ -23,13 +24,13 @@ vi.mock('./pages/RunDetailPage.tsx', () => ({
 
 // A FileSystemProvider is always present: the Files tab throws without one,
 // and an unused FakeFileSystem costs the other tests nothing.
-function renderApp(fs: FakeFileSystem = new FakeFileSystem()) {
+function renderApp(fs: FakeFileSystem = new FakeFileSystem(), notificationClicks?: NotificationClicks) {
   const transport = new MockTransport();
   const client = new AgentClient(transport);
   render(
     <AgentClientProvider client={client}>
       <FileSystemProvider fs={fs}>
-        <App />
+        <App notificationClicks={notificationClicks} />
       </FileSystemProvider>
     </AgentClientProvider>,
   );
@@ -339,6 +340,56 @@ describe('App unsaved-edits guard on tab switch', () => {
       await waitFor(() => expect(useAppStore.getState().page).toBe('runs'));
       expect(useAppStore.getState()).toMatchObject({
         activeTabKey: 'r1', tabs: [{ key: 'r1', workdir: '/ws', preview: true }],
+      });
+    });
+
+    describe('notification clicks', () => {
+      async function renderWithClicks() {
+        let click: (jobId: string) => void = () => {};
+        const unsubscribe = vi.fn();
+        const clicks: NotificationClicks = onClick => {
+          click = onClick;
+          return unsubscribe;
+        };
+        const view = renderApp(new FakeFileSystem(), clicks);
+        useAppStore.setState({
+          appState: EMPTY_APP_STATE, restoreDone: true, page: 'workflows', workspacePath: '/ws',
+          jobs: { 'job-r1': liveJob('r1'), 'job-r2': liveJob('r2') },
+        });
+        // The store write lands outside act; once the sidebar lists the runs, App has re-rendered with it.
+        await screen.findByRole('button', { name: /Run r2/ });
+        return { ...view, click: (jobId: string) => act(() => click(jobId)), unsubscribe };
+      }
+
+      it('opens the Runs page on the clicked run, and unsubscribes on unmount', async () => {
+        const { click, unsubscribe } = await renderWithClicks();
+        click('job-r2');
+        await waitFor(() => expect(useAppStore.getState().page).toBe('runs'));
+        expect(useAppStore.getState()).toMatchObject({ activeTabKey: 'r2', tabs: [{ key: 'r2' }] });
+        expect(unsubscribe).not.toHaveBeenCalled();
+        cleanup();
+        expect(unsubscribe).toHaveBeenCalled();
+      });
+
+      it('activates an already open tab without adding a second one', async () => {
+        const { click } = await renderWithClicks();
+        useAppStore.setState({
+          tabs: [
+            { kind: 'run', key: 'r1', workdir: '/ws', runId: 'r1', preview: false },
+            { kind: 'run', key: 'r2', workdir: '/ws', runId: 'r2', preview: false },
+          ],
+          activeTabKey: 'r2',
+        });
+        click('job-r1');
+        await waitFor(() => expect(useAppStore.getState().activeTabKey).toBe('r1'));
+        expect(useAppStore.getState().tabs).toHaveLength(2);
+      });
+
+      it('ignores a click for an unknown job', async () => {
+        const { click } = await renderWithClicks();
+        click('job-nope');
+        await new Promise(resolve => setTimeout(resolve, 20));
+        expect(useAppStore.getState()).toMatchObject({ page: 'workflows', tabs: [], activeTabKey: null });
       });
     });
 

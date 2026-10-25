@@ -87,6 +87,19 @@ export function matchesChord(event: KeyLike, chord: Chord, mac = IS_MAC): boolea
   return chord.ctrl ? event.ctrlKey && !event.metaKey : !event.ctrlKey && !event.metaKey;
 }
 
+/**
+ * Whether two chord texts fire on the same keypress. Elsewhere than macOS, Mod
+ * and Ctrl match the same key, so "Mod+Tab" and "Ctrl+Tab" are one chord.
+ */
+export function sameChord(a: string | null, b: string | null, mac = IS_MAC): boolean {
+  if (a === null || b === null) return a === b;
+  const left = parseChord(a);
+  const right = parseChord(b);
+  if (left === null || right === null) return a === b;
+  const fold = (chord: Chord) => (mac ? chord : { ...chord, mod: chord.mod || chord.ctrl, ctrl: false });
+  return formatChord(fold(left)) === formatChord(fold(right));
+}
+
 const ARROWS: Record<string, string> = { ArrowRight: '→', ArrowLeft: '←' };
 
 /** "Ctrl+Alt+W" / "⌘⌥W", for tooltips. */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ACTIONS } from './actions.ts';
-import { chordFromEvent, chordLabel, formatChord, matchesChord, parseChord } from './chord.ts';
+import { chordFromEvent, chordLabel, formatChord, matchesChord, parseChord, sameChord } from './chord.ts';
 
 const event = (over: Partial<{ key: string; code: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }> = {}) =>
   ({ key: '', code: '', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...over });
@@ -93,5 +93,15 @@ describe('chordLabel', () => {
     expect(label('Mod+Alt+KeyW', true)).toBe('⌘⌥W');
     expect(label('Mod+Alt+ArrowRight', true)).toBe('⌘⌥→');
     expect(label('Mod+Alt+ArrowLeft', true)).toBe('⌘⌥←');
+  });
+});
+
+describe('sameChord', () => {
+  it('folds Ctrl into Mod off macOS only', () => {
+    expect(sameChord('Mod+Tab', 'Ctrl+Tab', false)).toBe(true);
+    expect(sameChord('Mod+Tab', 'Ctrl+Tab', true)).toBe(false);
+    expect(sameChord('Mod+Shift+Tab', 'Ctrl+Tab', false)).toBe(false);
+    expect(sameChord(null, null, false)).toBe(true);
+    expect(sameChord(null, 'Mod+KeyW', false)).toBe(false);
   });
 });

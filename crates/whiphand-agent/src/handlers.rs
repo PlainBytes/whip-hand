@@ -300,6 +300,7 @@ pub async fn call(agent: &Rc<Agent>, ctx: RequestCtx, method: &str, p: Value) ->
                     "runsRetention",
                     "showOngoingRuns",
                     "editor",
+                    "keybindings",
                     "tui",
                 ] {
                     if let Some(v) = p.get(key) {

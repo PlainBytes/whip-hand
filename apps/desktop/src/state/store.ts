@@ -32,7 +32,7 @@ import { mergeUsage, progressActionText, summarizeEvent } from '../shared/log-ro
 import { preselect, type PendingAttachment, type RunAgain } from '../lib/new-run-draft.ts';
 import { releaseThumbnail } from '../lib/draft-thumbnails.ts';
 import {
-  activateTab, adoptRunIds, closeTab, convertDraftTab, openDraftTab, openTab, pinTab, retargetTab, type AnyTab, type RunTabTarget,
+  activateTab, adoptRunIds, closeTab, convertDraftTab, openDraftTab, openTab, pinTab, retargetTab, runTabTarget, withClosed, type AnyTab, type RunTabTarget,
 } from '../lib/run-tabs.ts';
 
 /**
@@ -1003,6 +1003,12 @@ export interface AppState {
   openRunTab: (target: RunTabTarget, opts: { pin: boolean }) => void;
   pinTab: (key: string) => void;
   closeTab: (key: string) => void;
+  /** The last run tabs closed, newest last, for tabs.reopenClosed. In memory only; drafts are never kept. */
+  closedTabs: RunTabTarget[];
+  /** Removes and returns the most recently closed run tab's target. */
+  popClosedTab: () => RunTabTarget | undefined;
+  /** Puts a target back as the newest closed tab, when its reopening was refused. */
+  pushClosedTab: (target: RunTabTarget) => void;
   activateTab: (key: string | null) => void;
   /** Re-points a tab at another job or run — a job learning its runId, or a resume. */
   retargetTab: (key: string, target: RunTabTarget) => void;
@@ -1535,7 +1541,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     return openTab(adopted, target, opts);
   }),
   pinTab: key => set(state => pinTab({ tabs: state.tabs, activeTabKey: state.activeTabKey }, key)),
-  closeTab: key => set(state => closeTab({ tabs: state.tabs, activeTabKey: state.activeTabKey }, key)),
+  closeTab: key => set(state => {
+    const closing = state.tabs.find(tab => tab.key === key);
+    const next = closeTab({ tabs: state.tabs, activeTabKey: state.activeTabKey }, key);
+    return closing?.kind === 'run'
+      ? { ...next, closedTabs: withClosed(state.closedTabs, runTabTarget(closing)) }
+      : next;
+  }),
+  closedTabs: [],
+  popClosedTab: () => {
+    const target = get().closedTabs.at(-1);
+    if (target !== undefined) set(state => ({ closedTabs: state.closedTabs.slice(0, -1) }));
+    return target;
+  },
+  pushClosedTab: target => set(state => ({ closedTabs: withClosed(state.closedTabs, target) })),
   activateTab: key => set(state => activateTab({ tabs: state.tabs, activeTabKey: state.activeTabKey }, key)),
   retargetTab: (key, target) => set(state => retargetTab({ tabs: state.tabs, activeTabKey: state.activeTabKey }, key, target)),
 

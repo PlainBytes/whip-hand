@@ -1,40 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { isTypingTarget, matchesShortcut, useGlobalShortcut } from './use-global-shortcut.ts';
-
-const key = (over: Partial<{ key: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }> = {}) =>
-  ({ key: 'k', ctrlKey: false, metaKey: false, shiftKey: false, ...over });
-
-describe('matchesShortcut', () => {
-  it('accepts either Ctrl or Cmd for a mod shortcut', () => {
-    expect(matchesShortcut(key({ ctrlKey: true }), { key: 'k', mod: true })).toBe(true);
-    expect(matchesShortcut(key({ metaKey: true }), { key: 'k', mod: true })).toBe(true);
-  });
-
-  it('rejects the bare key, the wrong key, and an unwanted shift', () => {
-    expect(matchesShortcut(key(), { key: 'k', mod: true })).toBe(false);
-    expect(matchesShortcut(key({ key: 'j', ctrlKey: true }), { key: 'k', mod: true })).toBe(false);
-    expect(matchesShortcut(key({ ctrlKey: true, shiftKey: true }), { key: 'k', mod: true })).toBe(false);
-  });
-
-  it('is case-insensitive on the key', () => {
-    expect(matchesShortcut(key({ key: 'K', ctrlKey: true }), { key: 'k', mod: true })).toBe(true);
-  });
-});
-
-describe('matchesShortcut with alt and code', () => {
-  it('requires alt exactly when the shortcut asks for it', () => {
-    expect(matchesShortcut(key({ key: 'w', ctrlKey: true, altKey: true } as never), { key: 'w', mod: true, alt: true })).toBe(true);
-    expect(matchesShortcut(key({ key: 'w', ctrlKey: true }), { key: 'w', mod: true, alt: true })).toBe(false);
-    expect(matchesShortcut(key({ key: 'w', ctrlKey: true, altKey: true } as never), { key: 'w', mod: true })).toBe(false);
-  });
-
-  it('matches by physical key when a code is given, whatever character Alt produced', () => {
-    const event = { key: '∑', code: 'KeyW', ctrlKey: true, metaKey: false, shiftKey: false, altKey: true };
-    expect(matchesShortcut(event, { key: 'w', code: 'KeyW', mod: true, alt: true })).toBe(true);
-    expect(matchesShortcut({ ...event, code: 'KeyQ' }, { key: 'w', code: 'KeyW', mod: true, alt: true })).toBe(false);
-  });
-});
+import { isTypingTarget, useShortcut } from './use-global-shortcut.ts';
 
 describe('isTypingTarget', () => {
   it('recognises form fields and contenteditable, and nothing else', () => {
@@ -54,8 +20,9 @@ describe('isTypingTarget', () => {
   });
 });
 
+// Ctrl/Cmd+K (workspace.quickSwitch) is a plain chord; Ctrl+Tab (tabs.nextInWorkspace) is allowInTerminal.
 function Harness({ onFire, enabled, allowInTerminal }: { onFire: () => void; enabled?: boolean; allowInTerminal?: boolean }) {
-  useGlobalShortcut({ key: 'k', mod: true }, onFire, enabled, allowInTerminal === undefined ? undefined : { allowInTerminal });
+  useShortcut(allowInTerminal ? 'tabs.nextInWorkspace' : 'workspace.quickSwitch', onFire, enabled);
   return (
     <div>
       <input aria-label="field" />
@@ -65,40 +32,40 @@ function Harness({ onFire, enabled, allowInTerminal }: { onFire: () => void; ena
   );
 }
 
-describe('useGlobalShortcut', () => {
+describe('useShortcut', () => {
   it('fires on a matching window keydown', () => {
     const onFire = vi.fn();
     render(<Harness onFire={onFire} />);
-    fireEvent.keyDown(document.body, { key: 'k', ctrlKey: true });
+    fireEvent.keyDown(document.body, { code: 'KeyK', ctrlKey: true });
     expect(onFire).toHaveBeenCalledTimes(1);
   });
 
   it('stays out of the way while the user is typing', () => {
     const onFire = vi.fn();
     render(<Harness onFire={onFire} />);
-    fireEvent.keyDown(screen.getByLabelText('field'), { key: 'k', ctrlKey: true });
+    fireEvent.keyDown(screen.getByLabelText('field'), { code: 'KeyK', ctrlKey: true });
     expect(onFire).not.toHaveBeenCalled();
   });
 
   it('stays out of the way inside a terminal by default', () => {
     const onFire = vi.fn();
     render(<Harness onFire={onFire} />);
-    fireEvent.keyDown(screen.getByLabelText('helper'), { key: 'k', ctrlKey: true });
+    fireEvent.keyDown(screen.getByLabelText('helper'), { code: 'KeyK', ctrlKey: true });
     expect(onFire).not.toHaveBeenCalled();
   });
 
   it('fires from the xterm helper textarea when allowInTerminal is set', () => {
     const onFire = vi.fn();
     render(<Harness onFire={onFire} allowInTerminal />);
-    fireEvent.keyDown(screen.getByLabelText('helper'), { key: 'k', ctrlKey: true });
+    fireEvent.keyDown(screen.getByLabelText('helper'), { code: 'Tab', ctrlKey: true });
     expect(onFire).toHaveBeenCalledTimes(1);
   });
 
   it('still blocks plain inputs and textareas when allowInTerminal is set', () => {
     const onFire = vi.fn();
     render(<Harness onFire={onFire} allowInTerminal />);
-    fireEvent.keyDown(screen.getByLabelText('field'), { key: 'k', ctrlKey: true });
-    fireEvent.keyDown(screen.getByLabelText('plain'), { key: 'k', ctrlKey: true });
+    fireEvent.keyDown(screen.getByLabelText('field'), { code: 'Tab', ctrlKey: true });
+    fireEvent.keyDown(screen.getByLabelText('plain'), { code: 'Tab', ctrlKey: true });
     expect(onFire).not.toHaveBeenCalled();
   });
 
@@ -107,7 +74,7 @@ describe('useGlobalShortcut', () => {
     // shortcut has to leave the event alone for whoever else wants it.
     const onFire = vi.fn();
     render(<Harness onFire={onFire} enabled={false} />);
-    const event = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true, cancelable: true });
+    const event = new KeyboardEvent('keydown', { code: 'KeyK', ctrlKey: true, bubbles: true, cancelable: true });
     document.body.dispatchEvent(event);
     expect(onFire).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(false);
@@ -118,7 +85,7 @@ describe('useGlobalShortcut', () => {
     // simply broken.
     const onFire = vi.fn();
     render(<Harness onFire={onFire} enabled />);
-    const event = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true, cancelable: true });
+    const event = new KeyboardEvent('keydown', { code: 'KeyK', ctrlKey: true, bubbles: true, cancelable: true });
     document.body.dispatchEvent(event);
     expect(onFire).toHaveBeenCalledTimes(1);
     expect(event.defaultPrevented).toBe(true);
@@ -128,7 +95,7 @@ describe('useGlobalShortcut', () => {
     const onFire = vi.fn();
     const { unmount } = render(<Harness onFire={onFire} />);
     unmount();
-    fireEvent.keyDown(document.body, { key: 'k', ctrlKey: true });
+    fireEvent.keyDown(document.body, { code: 'KeyK', ctrlKey: true });
     expect(onFire).not.toHaveBeenCalled();
   });
 });

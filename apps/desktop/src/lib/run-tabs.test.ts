@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  EMPTY_TABS, isPreview, activateTab, adoptRunIds, closeTab, convertDraftTab, openDraftTab, openTab, pinTab, retargetTab, type RunTabTarget, type TabsState,
+  EMPTY_TABS, isPreview, activateTab, adoptRunIds, closeTab, convertDraftTab, openDraftTab, openTab, pinTab, retargetTab, runTabTarget, withClosed, CLOSED_TABS_LIMIT, type RunTabTarget, type TabsState,
 } from './run-tabs.ts';
 
 const W = '/work/a';
@@ -253,5 +253,20 @@ describe('draft tabs', () => {
     const state = openDraftTab(EMPTY_TABS, 'd1');
     expect(retargetTab(state, 'd1', run('r1'))).toBe(state);
     expect(adoptRunIds(state, { d1: { runId: 'r1' } })).toBe(state);
+  });
+});
+
+describe('closed tab memory', () => {
+  it('describes a tab by where and which run it shows, without its preview flag or key', () => {
+    const tab = open(EMPTY_TABS, { workdir: '/ws', runId: 'r1', jobId: 'j1' }).tabs[0] as never;
+    expect(runTabTarget(tab)).toEqual({ workdir: '/ws', runId: 'r1', jobId: 'j1' });
+  });
+
+  it('keeps the newest entries up to the limit', () => {
+    let closed: RunTabTarget[] = [];
+    for (let i = 0; i < CLOSED_TABS_LIMIT + 5; i++) closed = withClosed(closed, { workdir: '/ws', runId: `r${i}` });
+    expect(closed).toHaveLength(CLOSED_TABS_LIMIT);
+    expect(closed[0]!.runId).toBe('r5');
+    expect(closed.at(-1)!.runId).toBe(`r${CLOSED_TABS_LIMIT + 4}`);
   });
 });

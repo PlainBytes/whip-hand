@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  basename, filterWorkspaces, sortWorkspaces, workspaceColorVar,
+  basename, filterWorkspaces, nthPinnedWorkspace, previousWorkspace, sortWorkspaces, workspaceColorVar,
 } from './workspace-identity.ts';
 
 const ws = (path: string, pinned?: boolean) => ({
@@ -63,5 +63,27 @@ describe('filterWorkspaces', () => {
 
   it('drops workspaces that match neither label nor path', () => {
     expect(filterWorkspaces([ws('/a/one'), ws('/b/two')], 'zzz')).toEqual([]);
+  });
+});
+
+describe('previousWorkspace', () => {
+  it('skips the open workspace', () => {
+    expect(previousWorkspace([ws('/a'), ws('/b'), ws('/c')], { path: '/a' })?.path).toBe('/b');
+    expect(previousWorkspace([ws('/a'), ws('/b')], null)?.path).toBe('/a');
+  });
+  it('is undefined with no other entry', () => {
+    expect(previousWorkspace([ws('/a')], { path: '/a' })).toBeUndefined();
+    expect(previousWorkspace([], null)).toBeUndefined();
+  });
+});
+
+describe('nthPinnedWorkspace', () => {
+  const recents = [ws('/a'), ws('/x', true), ws('/b'), ws('/y', true)];
+  it('counts pinned entries in switcher order', () => {
+    expect(nthPinnedWorkspace(recents, 2, null)?.path).toBe('/y');
+  });
+  it('is undefined when missing or already open', () => {
+    expect(nthPinnedWorkspace(recents, 3, null)).toBeUndefined();
+    expect(nthPinnedWorkspace(recents, 1, { path: '/x' })).toBeUndefined();
   });
 });

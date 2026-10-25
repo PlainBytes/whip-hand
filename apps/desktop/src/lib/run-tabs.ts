@@ -109,6 +109,23 @@ export function pinTab(state: TabsState, key: string): TabsState {
   return { ...state, tabs: state.tabs.map(tab => (tab.kind === 'run' && tab.key === key ? { ...tab, preview: false } : tab)) };
 }
 
+/** How many closed tabs `withClosed` remembers. */
+export const CLOSED_TABS_LIMIT = 20;
+
+/** The part of a tab that says which run it shows; what reopening needs. */
+export function runTabTarget(tab: RunTab): RunTabTarget {
+  const target: RunTabTarget = { workdir: tab.workdir };
+  if (tab.identityKey !== undefined) target.identityKey = tab.identityKey;
+  if (tab.runId !== undefined) target.runId = tab.runId;
+  if (tab.jobId !== undefined) target.jobId = tab.jobId;
+  return target;
+}
+
+/** `closed` with `target` as the newest entry, the oldest dropped past the limit. */
+export function withClosed(closed: RunTabTarget[], target: RunTabTarget): RunTabTarget[] {
+  return [...closed, target].slice(-CLOSED_TABS_LIMIT);
+}
+
 export function closeTab(state: TabsState, key: string): TabsState {
   const at = state.tabs.findIndex(tab => tab.key === key);
   if (at === -1) return state;

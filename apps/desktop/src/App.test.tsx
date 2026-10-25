@@ -353,4 +353,71 @@ describe('App unsaved-edits guard on tab switch', () => {
       expect(useAppStore.getState().tabs).toHaveLength(1);
     });
   });
+
+  describe('workspace and page shortcuts', () => {
+    const rec = (path: string, pinned?: boolean) => ({ path, lastOpenedAt: '2026-01-01T00:00:00Z', ...(pinned ? { pinned } : {}) });
+    const press = (init: KeyboardEventInit) => fireEvent.keyDown(document.body, init);
+    const touched = (transport: MockTransport) => transport.sent
+      .map(line => JSON.parse(line) as { method: string; params?: { path?: string } })
+      .filter(m => m.method === 'touchRecentWorkspace').map(m => m.params?.path);
+
+    it('Mod+Alt+P opens the previous workspace', async () => {
+      const { transport } = renderApp();
+      act(() => useAppStore.setState({
+        workspacePath: '/a',
+        appState: { ...EMPTY_APP_STATE, recentWorkspaces: [rec('/a'), rec('/b'), rec('/c')] },
+      }));
+      press({ code: 'KeyP', ctrlKey: true, altKey: true });
+      await waitFor(() => expect(touched(transport)).toEqual(['/b']));
+    });
+
+    it('does not swallow Mod+Alt+P when there is no other workspace', () => {
+      renderApp();
+      act(() => useAppStore.setState({
+        workspacePath: '/a', appState: { ...EMPTY_APP_STATE, recentWorkspaces: [rec('/a')] },
+      }));
+      expect(press({ code: 'KeyP', ctrlKey: true, altKey: true, cancelable: true })).toBe(true);
+    });
+
+    it('raises the unsaved-changes dialog from a workspace shortcut', async () => {
+      await openFilesWithUnsavedEdits();
+      act(() => useAppStore.setState({
+        appState: { ...EMPTY_APP_STATE, recentWorkspaces: [rec('/ws'), rec('/b')] },
+      }));
+      press({ code: 'KeyP', ctrlKey: true, altKey: true });
+      await waitFor(() => expect(useAppStore.getState().pendingWorkspaceSwitch).toBe('/b'));
+    });
+
+    it('Mod+, opens Preferences with no workspace; page.runs does nothing without one', async () => {
+      renderApp();
+      act(() => useAppStore.setState({ workspacePath: null, page: 'activity' }));
+      press({ code: 'Comma', ctrlKey: true });
+      await waitFor(() => expect(useAppStore.getState().page).toBe('preferences'));
+    });
+
+    it('keeps the Files guard for a page shortcut', async () => {
+      await openFilesWithUnsavedEdits();
+      press({ code: 'Comma', ctrlKey: true });
+      expect(await screen.findByRole('dialog')).toBeInTheDocument();
+      expect(useAppStore.getState().page).toBe('files');
+    });
+
+    it('page.runs does nothing with no workspace; pinned-2 opens the second pinned workspace', async () => {
+      const { transport } = renderApp();
+      const keybindings = { 'page.runs': 'Mod+Alt+KeyR', 'workspace.pinned2': 'Mod+Alt+KeyY' };
+      act(() => useAppStore.setState({
+        workspacePath: null, page: 'activity', appState: { ...EMPTY_APP_STATE, keybindings },
+      }));
+      press({ code: 'KeyR', ctrlKey: true, altKey: true });
+      expect(useAppStore.getState().page).toBe('activity');
+      act(() => useAppStore.setState({
+        appState: {
+          ...EMPTY_APP_STATE, keybindings,
+          recentWorkspaces: [rec('/o'), rec('/x', true), rec('/m'), rec('/y', true)],
+        },
+      }));
+      press({ code: 'KeyY', ctrlKey: true, altKey: true });
+      await waitFor(() => expect(touched(transport)).toEqual(['/y']));
+    });
+  });
 });

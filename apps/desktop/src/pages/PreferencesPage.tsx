@@ -4,6 +4,7 @@ import {
 } from '@fluentui/react-components';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { Page } from '../components/Page.tsx';
+import { KeyboardShortcutsSection } from '../components/KeyboardShortcutsSection.tsx';
 import { RemoteAccessCard } from '../components/RemoteAccessCard.tsx';
 import { useAppStore } from '../state/store.ts';
 import { spinInteger } from '../lib/spin-value.ts';
@@ -116,7 +117,7 @@ export function PreferencesPage() {
 
   return (
     <Page header={<Text weight="semibold" size={500}>Preferences</Text>}>
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 480 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 640 }}>
       <Checkbox
         label="Show ongoing runs in the sidebar"
         checked={showOngoingRuns}
@@ -208,6 +209,8 @@ export function PreferencesPage() {
       {retentionError && <MessageBar intent="error"><MessageBarBody>{retentionError}</MessageBarBody></MessageBar>}
 
       <RemoteAccessCard />
+
+      <KeyboardShortcutsSection />
     </div>
     </Page>
   );

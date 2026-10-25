@@ -424,6 +424,7 @@ pub fn app_state() -> S {
             m.insert("kind".to_string(), Raw::Str("vscode".to_string()));
             Raw::Map(m)
         }),
+        "keybindings" => Default(b(Rec(b(Nullable(b(Str))))), || Raw::Map(Record::new())),
         "runDrafts" => Default(b(Arr(b(run_draft()))), || Raw::Seq(Vec::new())),
         "runTabs" => Default(b(run_tabs_state()), || {
             let mut m = Record::new();
@@ -579,6 +580,7 @@ pub fn params(method: &str) -> Option<S> {
             "runsRetention" => o(runs_retention()),
             "showOngoingRuns" => o(Bool),
             "editor" => o(editor_preference()),
+            "keybindings" => o(Rec(b(Nullable(b(Str))))),
             "tui" => o(tui_preferences()),
         },
         "saveRunDraft" => object! { "draft" => run_draft() },
@@ -638,6 +640,42 @@ mod tests {
         ] {
             assert_eq!(check("setUiState", params.clone()), Ok(params));
         }
+    }
+
+    #[test]
+    fn set_ui_state_accepts_keybindings_of_strings_and_nulls() {
+        for params in [
+            serde_json::json!({ "keybindings": {} }),
+            serde_json::json!({ "keybindings": { "tabs.close": "Mod+Shift+KeyW", "tabs.newRun": null } }),
+        ] {
+            assert_eq!(check("setUiState", params.clone()), Ok(params));
+        }
+    }
+
+    #[test]
+    fn set_ui_state_rejects_keybindings_that_are_not_strings_or_null() {
+        for params in [
+            serde_json::json!({ "keybindings": { "x": 5 } }),
+            serde_json::json!({ "keybindings": ["Mod+KeyW"] }),
+            serde_json::json!({ "keybindings": null }),
+        ] {
+            assert!(check("setUiState", params).is_err());
+        }
+    }
+
+    #[test]
+    fn app_state_defaults_keybindings_and_rejects_bad_values() {
+        let mut state = crate::app_state::empty_app_state();
+        state.as_object_mut().unwrap().remove("keybindings");
+        let check_state = |v: &serde_json::Value| {
+            validate(&super::app_state(), Some(&Raw::from_json(v))).map(|r| r.to_json())
+        };
+        assert_eq!(
+            check_state(&state).unwrap()["keybindings"],
+            serde_json::json!({})
+        );
+        state["keybindings"] = serde_json::json!({ "x": 5 });
+        assert!(check_state(&state).is_err());
     }
 
     #[test]

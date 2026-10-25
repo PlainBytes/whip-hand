@@ -26,7 +26,7 @@ type CounterBadgeColor = CounterBadgeProps['color'];
  * survives a restart once enabled, so without a persistent marker the machine
  * could be reachable from the network with nothing on screen saying so.
  */
-function RemoteAccessIndicator() {
+function RemoteAccessIndicator({ collapsed }: { collapsed: boolean }) {
   const remote = useAppStore(state => state.remoteAccess);
   if (!remote?.listening) return null;
   const devices = remote.clientCount === 1 ? '1 device connected' : `${remote.clientCount} devices connected`;
@@ -36,8 +36,11 @@ function RemoteAccessIndicator() {
       relationship="description"
     >
       <div
+        role={collapsed ? 'img' : undefined}
+        aria-label={collapsed ? 'Remote access on' : undefined}
         style={{
           ...SIDEBAR_ROW_STYLE,
+          ...(collapsed ? SIDEBAR_RAIL_ROW_STYLE : null),
           display: 'flex', alignItems: 'center',
           fontSize: 14, color: 'var(--colorNeutralForeground3)',
         }}
@@ -51,7 +54,7 @@ function RemoteAccessIndicator() {
             }}
           />
         </RowGlyph>
-        Remote access on
+        {!collapsed && 'Remote access on'}
       </div>
     </Tooltip>
   );
@@ -169,7 +172,8 @@ export function Sidebar({ page, onSelectPage, onOpenRun, collapsed = false }: Si
   const urgent = useAppStore(state => waitingJobs(state.jobs).length > 0);
   const ongoing = useAppStoreStable(state => ongoingJobs(state.jobs), sameOngoingRows);
   const remoteListening = useAppStore(state => state.remoteAccess?.listening ?? false);
-  const hasOngoingRuns = showOngoingRuns && ongoing.length > 0;
+  // The rail has no room for the list; the Activity badge covers live runs.
+  const hasOngoingRuns = !collapsed && showOngoingRuns && ongoing.length > 0;
 
   function group(name: NavGroup) {
     return (
@@ -216,7 +220,7 @@ export function Sidebar({ page, onSelectPage, onOpenRun, collapsed = false }: Si
         boxSizing: 'border-box',
       }}
     >
-      <WorkspaceSwitcher />
+      <WorkspaceSwitcher compact={collapsed} />
       <div style={{ height: SIDEBAR_GROUP_GAP }} />
       <div
         data-testid="sidebar-scroll-region"
@@ -244,7 +248,7 @@ export function Sidebar({ page, onSelectPage, onOpenRun, collapsed = false }: Si
         )}
         {remoteListening && (
           <>
-            <RemoteAccessIndicator />
+            <RemoteAccessIndicator collapsed={collapsed} />
             <div style={{ height: SIDEBAR_GROUP_GAP }} />
           </>
         )}

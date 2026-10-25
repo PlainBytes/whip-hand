@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { Button, FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { Sidebar, SIDEBAR_WIDTH_COLLAPSED } from './Sidebar.tsx';
 import { RunStatusIcon } from './OngoingRuns.tsx';
@@ -222,6 +222,45 @@ describe('Sidebar', () => {
       expect(screen.getByRole('button', { name: 'Doctor' })).toHaveAttribute('aria-current', 'page');
       expect(screen.getByRole('button', { name: 'Files' })).toBeDisabled();
       expect(screen.getByRole('button', { name: 'Doctor' })).toBeEnabled();
+    });
+
+    it('hides the Ongoing runs list but still shows it expanded', () => {
+      const run = { ...liveJob('j1'), runName: 'OAuth support' };
+      useAppStore.setState({
+        workspacePath: '/ws', jobs: { j1: run }, appState: { ...EMPTY_APP_STATE, showOngoingRuns: true },
+      });
+      renderSidebar('runs', undefined, true);
+      expect(screen.queryByLabelText('Ongoing runs')).not.toBeInTheDocument();
+      cleanup();
+      renderSidebar();
+      expect(screen.getByLabelText('Ongoing runs')).toBeInTheDocument();
+    });
+
+    it('keeps the remote access marker as a named dot, and only while listening', () => {
+      useAppStore.setState({
+        workspacePath: '/ws',
+        remoteAccess: {
+          enabled: true, port: 61338, listening: true, error: null,
+          clientCount: 1, addresses: [], webRootPresent: true,
+        },
+      });
+      renderSidebar('runs', undefined, true);
+      const marker = screen.getByRole('img', { name: 'Remote access on' });
+      expect(marker.textContent).toBe('');
+      cleanup();
+      useAppStore.setState({ remoteAccess: null });
+      renderSidebar('runs', undefined, true);
+      expect(screen.queryByRole('img', { name: 'Remote access on' })).not.toBeInTheDocument();
+    });
+
+    it('gives the compact switcher the workspace name, without its path', async () => {
+      useAppStore.setState({
+        workspacePath: '/ws/a',
+        appState: { ...EMPTY_APP_STATE, recentWorkspaces: [{ path: '/ws/a', lastOpenedAt: '1' }] },
+      });
+      renderSidebar('runs', undefined, true);
+      expect(screen.getByRole('button', { name: 'a' })).toBeInTheDocument();
+      expect(screen.queryByText('/ws/a')).not.toBeInTheDocument();
     });
 
     it('narrows the nav to the rail width', () => {

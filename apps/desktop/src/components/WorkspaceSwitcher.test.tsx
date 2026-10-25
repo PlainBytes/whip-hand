@@ -13,13 +13,13 @@ const DESKTOP_CAPS: AppCapabilities = {
 };
 const BROWSER_CAPS: AppCapabilities = { host: 'browser', localFiles: false };
 
-function renderSwitcher(capabilities?: AppCapabilities) {
+function renderSwitcher(capabilities?: AppCapabilities, compact = false) {
   const transport = new MockTransport();
   const client = new AgentClient(transport);
   const tree = (
     <FluentProvider theme={webLightTheme}>
       <AgentClientProvider client={client}>
-        <WorkspaceSwitcher />
+        <WorkspaceSwitcher compact={compact} />
       </AgentClientProvider>
     </FluentProvider>
   );
@@ -143,5 +143,53 @@ describe('WorkspaceSwitcher', () => {
 
     const req = await sentRequest(transport, 'touchRecentWorkspace');
     expect(req.params).toEqual({ path: '/srv/elsewhere' });
+  });
+
+  describe('compact', () => {
+    const appState = {
+      schemaVersion: 1 as const, window: null, lastPage: null, theme: 'system' as const, workspaces: {},
+      runsRetention: { maxPerWorkspace: 0 }, showOngoingRuns: true, sidebarCollapsed: false, editor: { kind: 'vscode' as const },
+      runDrafts: [], runTabs: { tabs: [], active: null },
+      recentWorkspaces: [
+        { path: '/ws/a', lastOpenedAt: '2' },
+        { path: '/ws/b', lastOpenedAt: '1' },
+      ],
+    };
+
+    it('names the current workspace and shows no path text inline', () => {
+      useAppStore.setState({ workspacePath: '/ws/a', appState });
+      renderSwitcher(undefined, true);
+      expect(screen.getByRole('button', { name: 'a' })).toBeInTheDocument();
+      expect(screen.queryByText('/ws/a')).not.toBeInTheDocument();
+    });
+
+    it('offers to open a workspace when none is open', () => {
+      useAppStore.setState({ workspacePath: null, appState });
+      renderSwitcher(undefined, true);
+      expect(screen.getByRole('button', { name: 'Open a workspace' })).toBeInTheDocument();
+    });
+
+    it('lists the same recents and actions, and switches through the same path', async () => {
+      useAppStore.setState({ workspacePath: '/ws/a', appState });
+      const { transport } = renderSwitcher(DESKTOP_CAPS, true);
+      fireEvent.click(screen.getByRole('button', { name: 'a' }));
+      const items = await screen.findAllByRole('menuitem');
+      expect(items.map(i => i.textContent)).toEqual([
+        expect.stringContaining('a'), expect.stringContaining('b'), 'Pin this workspace', 'Browse…',
+      ]);
+      fireEvent.click(items[1]);
+      const req = await sentRequest(transport, 'touchRecentWorkspace');
+      expect(req.params).toEqual({ path: '/ws/b' });
+    });
+
+    it('still surfaces a failed open', async () => {
+      useAppStore.setState({ workspacePath: null, appState });
+      const { transport } = renderSwitcher(undefined, true);
+      fireEvent.click(screen.getByRole('button', { name: 'Open a workspace' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: /b/ }));
+      const open = await sentRequest(transport, 'touchRecentWorkspace');
+      transport.emitLine({ id: open.id, error: { code: -32000, message: 'not an existing directory: /ws/b' } });
+      expect(await screen.findByRole('alert')).toHaveTextContent(/not an existing directory/);
+    });
   });
 });

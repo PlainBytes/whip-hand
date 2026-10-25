@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
-  Button, Menu, MenuDivider, MenuItem, MenuList, MenuPopover, MenuTrigger, Text,
+  Button, Menu, MenuDivider, MenuItem, MenuList, MenuPopover, MenuTrigger, Popover, PopoverSurface, Text, Tooltip,
 } from '@fluentui/react-components';
 import {
   ChevronUpDownRegular, FolderOpenRegular, PinOffRegular, PinRegular,
@@ -13,7 +13,7 @@ import { OpenPathField } from './OpenPathField.tsx';
 import { openWorkspace } from '../lib/workspace-switch.ts';
 import { basename, sortWorkspaces } from '../lib/workspace-identity.ts';
 import { WorkspaceDot } from './WorkspaceDot.tsx';
-import { RowGlyph, RowTrailing, SIDEBAR_ROW_STYLE } from './sidebar-row.tsx';
+import { RowGlyph, RowTrailing, SIDEBAR_RAIL_ROW_STYLE, SIDEBAR_ROW_STYLE } from './sidebar-row.tsx';
 import type { RecentWorkspace } from '../shared/protocol.gen.ts';
 import { errorMessage } from '../lib/error-message.ts';
 
@@ -28,7 +28,10 @@ const EMPTY_RECENTS: RecentWorkspace[] = [];
  * pinned workspace survives the agent's prune while its drive is unmounted,
  * so "I clicked it and nothing happened" is a reachable state.
  */
-export function WorkspaceSwitcher() {
+export function WorkspaceSwitcher({ compact = false }: {
+  /** Icon-only trigger for the collapsed rail; the menu and actions are unchanged. */
+  compact?: boolean;
+}) {
   const client = useAgentClient();
   const { pickDirectory } = useCapabilities();
   const workspacePath = useAppStore(state => state.workspacePath);
@@ -37,6 +40,7 @@ export function WorkspaceSwitcher() {
   const patchAppState = useAppStore(state => state.patchAppState);
   const [error, setError] = useState<string | null>(null);
   const [promptingPath, setPromptingPath] = useState(false);
+  const anchorRef = useRef<HTMLDivElement>(null);
 
   const sorted = sortWorkspaces(recents);
   const current = workspacePath === null
@@ -68,10 +72,20 @@ export function WorkspaceSwitcher() {
     }
   }
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <Menu>
-        <MenuTrigger disableButtonEnhancement>
+  const currentLabel = workspacePath ? basename(workspacePath) : 'Open a workspace';
+
+  const trigger = compact ? (
+    <Tooltip content={error ? `${currentLabel} — ${error}` : currentLabel} relationship="label" positioning="after">
+      <Button
+        appearance="subtle"
+        aria-label={currentLabel}
+        style={{ ...SIDEBAR_ROW_STYLE, ...SIDEBAR_RAIL_ROW_STYLE, width: '100%' }}
+        icon={workspacePath
+          ? <WorkspaceDot path={workspacePath} identityKey={identityKey ?? current?.identityKey} />
+          : <FolderOpenRegular />}
+      />
+    </Tooltip>
+  ) : (
           <Button
             appearance="subtle"
             style={SIDEBAR_ROW_STYLE}
@@ -98,6 +112,22 @@ export function WorkspaceSwitcher() {
               </RowTrailing>
             </span>
           </Button>
+  );
+
+  const pathField = (
+    <OpenPathField
+      onOpen={async path => {
+        setPromptingPath(false);
+        await switchTo(path);
+      }}
+    />
+  );
+
+  return (
+    <div ref={anchorRef} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <Menu>
+        <MenuTrigger disableButtonEnhancement>
+          {trigger}
         </MenuTrigger>
         <MenuPopover>
           <MenuList>
@@ -130,21 +160,25 @@ export function WorkspaceSwitcher() {
           </MenuList>
         </MenuPopover>
       </Menu>
-      {promptingPath && (
-        <div style={{ padding: '4px 12px' }}>
-          <OpenPathField
-            onOpen={async path => {
-              setPromptingPath(false);
-              await switchTo(path);
-            }}
-          />
-        </div>
-      )}
-      {error && (
+      {promptingPath && (compact ? (
+        // The rail is too narrow for the field, so it opens beside it.
+        <Popover open positioning={{ target: anchorRef.current, position: 'after' }}
+          onOpenChange={(_, data) => { if (!data.open) setPromptingPath(false); }}>
+          <PopoverSurface>{pathField}</PopoverSurface>
+        </Popover>
+      ) : (
+        <div style={{ padding: '4px 12px' }}>{pathField}</div>
+      ))}
+      {error && (compact ? (
+        // Also in the tooltip, but that needs hover; this keeps it announced.
+        <Text role="alert" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
+          {error}
+        </Text>
+      ) : (
         <Text size={100} style={{ color: 'var(--colorPaletteRedForeground1)', padding: '0 12px' }}>
           {error}
         </Text>
-      )}
+      ))}
     </div>
   );
 }

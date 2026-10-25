@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { Sidebar } from './Sidebar.tsx';
+import { Button, FluentProvider, webLightTheme } from '@fluentui/react-components';
+import { Sidebar, SIDEBAR_WIDTH_COLLAPSED } from './Sidebar.tsx';
 import { RunStatusIcon } from './OngoingRuns.tsx';
 import { hasInjectedStyle } from '../test/badge-style.ts';
 import { AgentClient } from '../agent/client.ts';
@@ -15,13 +15,13 @@ import { workspaceColorVar } from '../lib/workspace-identity.ts';
 
 const BROWSER_CAPS: AppCapabilities = { host: 'browser', localFiles: false };
 
-function renderSidebar(page: PageId = 'runs', capabilities?: AppCapabilities) {
+function renderSidebar(page: PageId = 'runs', capabilities?: AppCapabilities, collapsed = false) {
   const onSelectPage = vi.fn();
   const onOpenRun = vi.fn();
   const tree = (
     <FluentProvider theme={webLightTheme}>
       <AgentClientProvider client={new AgentClient(new MockTransport())}>
-        <Sidebar page={page} onSelectPage={onSelectPage} onOpenRun={onOpenRun} />
+        <Sidebar page={page} onSelectPage={onSelectPage} onOpenRun={onOpenRun} collapsed={collapsed} />
       </AgentClientProvider>
     </FluentProvider>
   );
@@ -159,6 +159,75 @@ describe('Sidebar', () => {
     for (const label of ['Runs', 'Workflows', 'Settings', 'Activity', 'Doctor', 'Preferences']) {
       expect(screen.getByRole('button', { name: new RegExp(`^${label}$`) })).toBeInTheDocument();
     }
+  });
+
+  describe('collapsed rail', () => {
+    const liveJob = (jobId: string, awaiting = false) => ({
+      jobId, workdir: '/ws', finished: false, stepOrder: [], steps: {}, currentExecution: {},
+      events: [], logTail: [], logRows: [], activityTail: [], hasNarrated: false, ptyActive: false, ptyDataBuffer: [], ptyDataBaseIndex: 0,
+      ptyDataTrimmed: false, ptyExited: false,
+      ...(awaiting ? { awaiting: { stepId: 's', reason: 'permission' as const } } : {}),
+    });
+
+    it('shows no label text but keeps every button findable by its label', () => {
+      useAppStore.setState({ workspacePath: '/ws' });
+      renderSidebar('runs', undefined, true);
+      const nav = screen.getByRole('navigation', { name: 'Main' });
+      // A bare icon-only Button has no label-side icon margin; the rail must match it.
+      const bare = render(<FluentProvider theme={webLightTheme}><Button icon={<span />} aria-label="x" /></FluentProvider>);
+      const iconOnlyClasses = bare.container.querySelector('.fui-Button__icon')!.className.split(' ');
+      bare.unmount();
+      for (const def of [...pagesInGroup('workspace'), ...pagesInGroup('app')]) {
+        const button = within(nav).getByRole('button', { name: def.label });
+        expect(button.textContent).toBe('');
+        expect(button.querySelector('.fui-Button__icon')!.className.split(' ')).toEqual(iconOnlyClasses);
+        expect(within(nav).queryByText(def.label)).toBeNull();
+      }
+    });
+
+    it('selects a page on click', () => {
+      useAppStore.setState({ workspacePath: '/ws' });
+      const { onSelectPage } = renderSidebar('runs', undefined, true);
+      fireEvent.click(screen.getByRole('button', { name: 'Workflows' }));
+      expect(onSelectPage).toHaveBeenCalledWith('workflows');
+    });
+
+    it('puts the running count in the name and a badge on Activity', () => {
+      useAppStore.setState({ workspacePath: '/ws', jobs: { j1: liveJob('j1'), j2: liveJob('j2') } });
+      renderSidebar('runs', undefined, true);
+      const button = screen.getByRole('button', { name: 'Activity (2 running)' });
+      const badge = button.parentElement!.querySelector('.fui-CounterBadge') as HTMLElement;
+      expect(badge).not.toBeNull();
+      expect(badge.closest('[aria-hidden="true"]')).not.toBeNull();
+      expect(hasInjectedStyle(badge, 'background-color', 'var(--colorPaletteYellowBackground3)')).toBe(false);
+    });
+
+    it('paints the badge in the waiting colour when a job needs an answer', () => {
+      useAppStore.setState({ workspacePath: '/ws', jobs: { j1: liveJob('j1', true) } });
+      renderSidebar('runs', undefined, true);
+      const badge = screen.getByRole('button', { name: 'Activity (1 running)' })
+        .parentElement!.querySelector('.fui-CounterBadge') as HTMLElement;
+      expect(hasInjectedStyle(badge, 'background-color', 'var(--colorPaletteYellowBackground3)')).toBe(true);
+    });
+
+    it('renders no badge when nothing is running', () => {
+      useAppStore.setState({ workspacePath: '/ws', jobs: {} });
+      renderSidebar('runs', undefined, true);
+      const button = screen.getByRole('button', { name: 'Activity' });
+      expect(button.parentElement!.querySelector('.fui-CounterBadge')).toBeNull();
+    });
+
+    it('marks the selected page current and disables gated pages', () => {
+      renderSidebar('doctor', undefined, true);
+      expect(screen.getByRole('button', { name: 'Doctor' })).toHaveAttribute('aria-current', 'page');
+      expect(screen.getByRole('button', { name: 'Files' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Doctor' })).toBeEnabled();
+    });
+
+    it('narrows the nav to the rail width', () => {
+      renderSidebar('runs', undefined, true);
+      expect(screen.getByRole('navigation', { name: 'Main' })).toHaveStyle({ width: `${SIDEBAR_WIDTH_COLLAPSED}px` });
+    });
   });
 
   describe('Sidebar layout', () => {

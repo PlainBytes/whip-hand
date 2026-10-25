@@ -160,6 +160,17 @@ describe('stageRollup: elapsed', () => {
     expect(stageRollup(groups, clockAfter(999)).elapsed).toBe('50s');
   });
 
+  it('subtracts the waits of leaf rows, closed and open', () => {
+    const groups = attemptsOf(
+      row({ id: 'execute', status: 'done', startedAt: stamp(0), endedAt: stamp(100), waitedMs: 30_000 }),
+      row({ id: 'accept', status: 'running', startedAt: stamp(100), waitingSince: stamp(120) }),
+    );
+    // 150s span, 30s closed wait, 30s open wait.
+    expect(stageRollup(groups, clockAfter(150)).elapsed).toBe('1m 30s');
+    // The open wait absorbs the clock: the number stands still while it ticks.
+    expect(stageRollup(groups, clockAfter(200)).elapsed).toBe('1m 30s');
+  });
+
   it('is null when nothing has started', () => {
     const groups = attemptsOf(row({ id: 'execute' }), row({ id: 'accept' }));
     expect(stageRollup(groups, clockAfter(60)).elapsed).toBeNull();

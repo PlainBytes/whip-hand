@@ -10,6 +10,7 @@ use std::fs;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
+use crate::active_time::close_wait;
 use crate::config::WorkspaceConfig;
 use crate::js::utf16_cmp;
 use crate::jsval::{self, JsObject, JsValue, ObjExt};
@@ -125,15 +126,21 @@ fn repair_abandoned(manifest: &JsObject, reason: &str) -> JsObject {
     let interrupted = steps
         .iter()
         .find(|s| s.get("status").as_str() == Some("running"));
+    let end_iso = ended.as_str().unwrap_or_default();
     let steps: Vec<JsValue> = steps
         .iter()
         .map(|s| match s.as_obj() {
-            Some(row) if row.str_prop("status") == Some("running") => JsValue::Obj(
-                row.spread(&obj! { "status" => "interrupted", "endedAt" => ended.clone() }),
-            ),
+            Some(row) if row.str_prop("status") == Some("running") => {
+                let mut row =
+                    row.spread(&obj! { "status" => "interrupted", "endedAt" => ended.clone() });
+                close_wait(&mut row, end_iso);
+                JsValue::Obj(row)
+            }
             _ => s.clone(),
         })
         .collect();
+    let mut manifest = manifest.clone();
+    close_wait(&mut manifest, end_iso);
     let error = if manifest.prop("error").is_nullish() {
         JsValue::Obj(obj! {
             "stepId" => interrupted.map_or(JsValue::Undefined, |s| s.get("id").clone()),

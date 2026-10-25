@@ -20,3 +20,16 @@ export function editorLabel(editor: EditorPreference): string {
   if (editor.kind === 'custom') return 'editor';
   return EDITOR_OPTIONS.find(o => o.value === editor.kind)?.label ?? 'editor';
 }
+
+/**
+ * Opens a run in the editor: its worktree, else its work directory below
+ * `workdir` (`subdir`), else `workdir` itself. Rejects with the launch error.
+ * The one place that decides the target, shared by the button and the shortcut.
+ */
+export function openRunInEditor(
+  openInEditor: (workdir: string, relPath: string, editor: EditorPreference) => Promise<void>,
+  editor: EditorPreference,
+  run: { workdir: string; worktree?: { path: string } | null | undefined; subdir?: string | null | undefined },
+): Promise<void> {
+  return openInEditor(run.workdir, run.worktree?.path ?? run.subdir ?? '', editor);
+}

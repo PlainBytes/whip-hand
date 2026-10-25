@@ -18,6 +18,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use crate::active_time::{add_waited, close_wait, open_wait};
 use crate::execution_key::same_loop_refs;
 use crate::jsval::{self, JsObject, JsValue, ObjExt};
 use crate::log_rows::{
@@ -35,6 +36,11 @@ pub const MANIFEST_VERSION: u32 = 5;
 pub const NESTED_LOOP_TRACKING_VERSION: u32 = 4;
 /// How often a live run refreshes `heartbeatAt` on disk.
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+/// A heartbeat tick later than this many intervals after the previous one means the process
+/// was frozen (host sleep or suspend), and the excess counts as waiting. 3× because a busy
+/// host or a slow disk write delays a tick by a fraction of an interval or two, while a
+/// real suspend lasts far longer; 3× keeps that jitter from being booked as waiting.
+pub const SUSPEND_GAP_FACTOR: u32 = 3;
 
 const TERMINAL_EVENTS: [&str; 3] = ["run:done", "run:error", "run:cancelled"];
 
@@ -114,6 +120,9 @@ struct Inner {
     failure: Option<String>,
     clock: Clock,
     on_lease_lost: Option<LeaseLostHook>,
+    heartbeat_interval: Duration,
+    /// When the previous heartbeat tick ran (the run's start before the first), by `clock`.
+    last_beat_ms: f64,
 }
 
 struct Stop {
@@ -174,6 +183,8 @@ fn reset_unfinished(step: &JsValue) -> JsValue {
         "verdict",
         "progress",
         "iterations",
+        "waitedMs",
+        "waitingSince",
     ] {
         keep.remove(key);
     }
@@ -367,6 +378,7 @@ impl Inner {
         };
         if let Some(b) = blamed {
             let row = self.row_mut(b);
+            close_wait(row, now);
             if row.str_prop("status") != Some("failed") {
                 row.set("status", "failed");
                 if row.prop("endedAt").is_nullish() {
@@ -380,8 +392,39 @@ impl Inner {
                 continue;
             }
             let row = self.row_mut(i);
+            close_wait(row, now);
             row.set("status", "interrupted");
             row.set("endedAt", now);
+        }
+    }
+
+    /// Opens a wait on the run and on every row in flight (the current step
+    /// plus its enclosing loop/stages rows). A wait already open stays as it is.
+    fn open_waits(&mut self, now: &str) {
+        open_wait(&mut self.manifest, now);
+        for i in 0..self.steps().len() {
+            if self.row(i).str_prop("status") == Some("running") {
+                open_wait(self.row_mut(i), now);
+            }
+        }
+    }
+
+    /// Closes the open wait on the run and on every row in flight.
+    fn close_waits(&mut self, now: &str) {
+        close_wait(&mut self.manifest, now);
+        for i in 0..self.steps().len() {
+            if self.row(i).str_prop("status") == Some("running") {
+                close_wait(self.row_mut(i), now);
+            }
+        }
+    }
+
+    /// A step has ended: nothing is waiting any more, so the wait closes on
+    /// the row that ended and on everything still in flight around it.
+    fn end_step_wait(&mut self, step_id: &str, now: &str) {
+        self.close_waits(now);
+        if let Some(i) = self.find_step(step_id) {
+            close_wait(self.row_mut(i), now);
         }
     }
 
@@ -506,6 +549,7 @@ impl Inner {
             }
             "step:progress" => self.fold_progress(&id_of("stepId"), event.prop("progress")),
             "step:verdict" => {
+                self.end_step_wait(&id_of("stepId"), &now);
                 self.upsert_step(
                     &id_of("stepId"),
                     &obj! { "verdict" => p("verdict"), "status" => "done" },
@@ -517,6 +561,7 @@ impl Inner {
                 } else {
                     "failed"
                 };
+                self.end_step_wait(&id_of("stepId"), &now);
                 self.upsert_step(
                     &id_of("stepId"),
                     &obj! { "status" => status, "exitCode" => p("exitCode"), "endedAt" => now.as_str() },
@@ -525,8 +570,19 @@ impl Inner {
             "step:manual" => {
                 let pending = obj! { "stepId" => p("stepId"), "title" => event.prop("request").get("title").clone() };
                 self.manifest.set("manualPending", pending);
+                self.open_waits(&now);
             }
-            "step:manual-resolved" => self.manifest.set("manualPending", undef),
+            "step:manual-resolved" => {
+                self.manifest.set("manualPending", undef);
+                self.close_waits(&now);
+            }
+            "session:await" => {
+                if truthy(event.prop("awaiting")) {
+                    self.open_waits(&now);
+                } else {
+                    self.close_waits(&now);
+                }
+            }
             "loop:start" => {
                 let patch = obj! {
                     "kind" => "loop", "status" => "running", "startedAt" => now.as_str(), "iterations" => 0u32,
@@ -552,6 +608,7 @@ impl Inner {
                 let id = id_of("loopId");
                 self.current.remove(&id);
                 let passed = truthy(event.prop("passed"));
+                self.end_step_wait(&id, &now);
                 self.upsert_step(
                     &id,
                     &obj! {
@@ -617,6 +674,7 @@ impl Inner {
             "stages:exhausted" => self.upsert_step(&id_of("id"), &obj! { "exhausted" => true }),
             "stages:done" => {
                 let id = id_of("id");
+                self.end_step_wait(&id, &now);
                 self.current.remove(&id);
                 self.upsert_step(
                     &id,
@@ -657,10 +715,12 @@ impl Inner {
                 }
                 self.manifest.set("ok", p("ok"));
                 self.manifest.set("endedAt", now.as_str());
+                self.close_waits(&now);
                 self.manifest.set("manualPending", undef.clone());
                 self.finalize_running_steps(&now, &undef);
             }
             "run:error" => {
+                self.close_waits(&now);
                 self.manifest.set("status", "failed");
                 self.manifest.set("manualPending", undef);
                 self.manifest.set(
@@ -672,6 +732,7 @@ impl Inner {
             "run:cancelled" => {
                 self.manifest.set("status", "cancelled");
                 self.manifest.set("endedAt", now.as_str());
+                self.close_waits(&now);
                 self.manifest.set("manualPending", undef.clone());
                 self.finalize_running_steps(&now, &undef);
             }
@@ -681,6 +742,30 @@ impl Inner {
         }
         self.schedule(event, &now, seq);
         (seq, now)
+    }
+
+    /// A tick far later than the interval means the process was frozen: the
+    /// excess is waiting, added to the run and to every row in flight. A wait
+    /// already open covers the gap itself, so that object gets nothing.
+    fn count_suspend(&mut self) {
+        let now = (self.clock)();
+        let gap = now - self.last_beat_ms;
+        self.last_beat_ms = now;
+        let interval = self.heartbeat_interval.as_secs_f64() * 1000.0;
+        if gap <= interval * f64::from(SUSPEND_GAP_FACTOR) {
+            return;
+        }
+        let suspended = gap - interval;
+        if self.manifest.prop("waitingSince").is_nullish() {
+            add_waited(&mut self.manifest, suspended);
+        }
+        for i in 0..self.steps().len() {
+            if self.row(i).str_prop("status") == Some("running")
+                && self.row(i).prop("waitingSince").is_nullish()
+            {
+                add_waited(self.row_mut(i), suspended);
+            }
+        }
     }
 
     /// Before renewing, look for a fence on this lease and re-read run.json:
@@ -709,6 +794,7 @@ impl Inner {
                 "lease lost (host suspended?): run.json says '{status}'"
             ));
         }
+        self.count_suspend();
         self.manifest.set("heartbeatAt", self.now_iso());
         // A failed renewal must not poison the writes real events depend on.
         let _ = write_manifest_atomic(&self.run_dir, &self.manifest);
@@ -778,12 +864,28 @@ impl RunJournal {
             .iter()
             .map(reset_unfinished)
             .collect();
-        let manifest = existing.spread(&obj! {
+        let mut manifest = existing.spread(&obj! {
             "pid" => std::process::id(), "pidScope" => current_pid_scope(), "leaseId" => crate::random::uuid_v4(),
             "interruptedReason" => undef.clone(), "status" => "running", "updatedAt" => now.as_str(),
             "heartbeatAt" => now.as_str(), "endedAt" => undef.clone(), "ok" => undef.clone(),
             "error" => undef.clone(), "manualPending" => undef, "resumedAt" => resumed, "steps" => steps,
         });
+        // The time the run was stopped counts as waiting: close any wait the
+        // stop left open where the run last was alive, then add the gap.
+        let previous_end = ["endedAt", "heartbeatAt", "updatedAt"]
+            .iter()
+            .find_map(|k| {
+                existing
+                    .str_prop(k)
+                    .filter(|s| time::date_parse(s).is_some())
+            })
+            .map(str::to_string);
+        if let Some(end) = previous_end {
+            close_wait(&mut manifest, &end);
+            if let (Some(end), Some(resume)) = (time::date_parse(&end), time::date_parse(&now)) {
+                add_waited(&mut manifest, resume - end);
+            }
+        }
         let workdir =
             workdir.map_or_else(|| existing.prop("workdir").to_js_string(), str::to_string);
         Self::start(run_dir.to_path_buf(), workdir, manifest, opts)
@@ -801,8 +903,10 @@ impl RunJournal {
             run_log_bytes: 0,
             output_dropped: 0,
             failure: None,
+            last_beat_ms: (opts.clock)(),
             clock: opts.clock.clone(),
             on_lease_lost: opts.on_lease_lost.clone(),
+            heartbeat_interval: opts.heartbeat_interval,
         };
         inner.persist();
         // A reopened run's cap has to count what earlier attempts already wrote.
@@ -909,5 +1013,122 @@ impl RunJournal {
 impl Drop for RunJournal {
     fn drop(&mut self) {
         self.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    const T0: u64 = 1_700_000_000_000;
+    const INTERVAL_MS: u64 = 30_000;
+
+    struct Rig {
+        journal: RunJournal,
+        clock: Arc<AtomicU64>,
+        dir: tempfile::TempDir,
+    }
+
+    fn rig() -> Rig {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = Arc::new(AtomicU64::new(T0));
+        let c = clock.clone();
+        let journal = RunJournal::create(
+            JournalInit {
+                run_dir: dir.path().to_path_buf(),
+                run_id: "r".into(),
+                workflow: "w".into(),
+                workdir: dir.path().to_string_lossy().into_owned(),
+                steps: vec![SeedStep {
+                    id: "s".into(),
+                    kind: "agent".into(),
+                    ..SeedStep::default()
+                }],
+                ..JournalInit::default()
+            },
+            JournalOptions {
+                // The real thread never ticks inside a test; ticks are driven by hand.
+                heartbeat_interval: Duration::from_millis(INTERVAL_MS),
+                clock: Arc::new(move || c.load(Ordering::SeqCst) as f64),
+                ..JournalOptions::default()
+            },
+        );
+        let rig = Rig {
+            journal,
+            clock,
+            dir,
+        };
+        rig.event(obj! { "type" => "step:start", "stepId" => "s", "kind" => "agent" });
+        rig
+    }
+
+    impl Rig {
+        fn event(&self, event: JsObject) {
+            self.journal.record(&event);
+        }
+        fn tick_after(&self, ms: u64) -> Option<String> {
+            self.clock.fetch_add(ms, Ordering::SeqCst);
+            self.journal.lock().renew_lease()
+        }
+        fn waited(&self) -> (Option<f64>, Option<f64>) {
+            let m = self.journal.manifest();
+            let step = m.prop("steps").as_arr().unwrap()[0]
+                .as_obj()
+                .unwrap()
+                .clone();
+            (m.num_prop("waitedMs"), step.num_prop("waitedMs"))
+        }
+    }
+
+    #[test]
+    fn a_tick_far_past_the_interval_counts_the_excess() {
+        let r = rig();
+        assert!(r.tick_after(10 * INTERVAL_MS).is_none());
+        let want = Some((9 * INTERVAL_MS) as f64);
+        assert_eq!(r.waited(), (want, want));
+    }
+
+    #[test]
+    fn a_tick_a_little_late_counts_nothing() {
+        let r = rig();
+        r.tick_after(2 * INTERVAL_MS);
+        r.tick_after(3 * INTERVAL_MS);
+        assert_eq!(r.waited(), (None, None));
+    }
+
+    #[test]
+    fn the_gap_is_measured_from_the_previous_tick() {
+        let r = rig();
+        r.tick_after(INTERVAL_MS);
+        r.tick_after(5 * INTERVAL_MS);
+        let want = Some((4 * INTERVAL_MS) as f64);
+        assert_eq!(r.waited(), (want, want));
+    }
+
+    #[test]
+    fn an_open_wait_already_covers_the_gap() {
+        let r = rig();
+        r.event(obj! { "type" => "session:await", "stepId" => "s", "awaiting" => true, "reason" => "turn" });
+        r.tick_after(10 * INTERVAL_MS);
+        assert_eq!(r.waited(), (None, None));
+        r.event(obj! { "type" => "session:await", "stepId" => "s", "awaiting" => false, "reason" => "turn" });
+        assert_eq!(
+            r.waited(),
+            (
+                Some((10 * INTERVAL_MS) as f64),
+                Some((10 * INTERVAL_MS) as f64)
+            )
+        );
+    }
+
+    #[test]
+    fn a_lost_lease_counts_nothing() {
+        let r = rig();
+        let mut on_disk = r.journal.manifest();
+        on_disk.set("status", "interrupted");
+        write_manifest_atomic(r.dir.path(), &on_disk).unwrap();
+        assert!(r.tick_after(10 * INTERVAL_MS).is_some());
+        assert_eq!(r.waited(), (None, None));
     }
 }

@@ -333,3 +333,14 @@ describe('PreferencesPage', () => {
     expect(methods).not.toContain('pruneRuns');
   });
 });
+
+describe('PreferencesPage keyboard shortcuts', () => {
+  afterEach(() => useAppStore.setState({ appState: null }));
+
+  it('lists the shortcut actions with no workspace open', () => {
+    useAppStore.setState({ appState: { ...EMPTY_APP_STATE }, workspacePath: null });
+    renderPreferences();
+    expect(screen.getByRole('region', { name: 'Keyboard shortcuts' })).toBeTruthy();
+    expect(screen.getByText('Close tab')).toBeTruthy();
+  });
+});

@@ -8,6 +8,13 @@
   tab of the run that sent it, switching workspace first when the run belongs to another one.
   On Windows this works while Whiphand is running; on GNOME Wayland the window may only show a
   "ready" prompt instead of coming forward. The web build's notifications do not navigate.
+  
+### Durations count active time only
+
+- Every duration in the desktop app — step pills, stage rollups, the run header and the runs grid —
+  now counts active time only, as the TUI and the CLI do. It leaves out waits for the human,
+  manual and approval gates, the gap between a stop and a resume, and host suspend. A run that is
+  waiting right now stands still instead of ticking, and manual and approval steps show no duration.
 
 ### Work in one repository of a folder that holds several
 

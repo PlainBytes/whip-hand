@@ -53,8 +53,8 @@ fn current_step(run: &Value) -> String {
         .to_string()
 }
 
-/// Start to end, or to the last sign of life, or (for a live job) to now;
-/// as the desktop's run-columns.tsx does.
+/// Active time: start to end, or to the last sign of life, or (for a live
+/// job) to now, less the time spent waiting.
 fn elapsed(run: &Value, live: bool, now_ms: f64) -> String {
     let Some(start) = str_of(run, "startedAt").and_then(date_parse) else {
         return "—".into();
@@ -67,7 +67,11 @@ fn elapsed(run: &Value, live: bool, now_ms: f64) -> String {
         Some(t) if !live => t,
         _ => now_ms,
     };
-    format_elapsed(end - start)
+    let waited = run.get("waitedMs").and_then(Value::as_f64).unwrap_or(0.0);
+    let open = str_of(run, "waitingSince")
+        .and_then(date_parse)
+        .map_or(0.0, |since| (end - since).max(0.0));
+    format_elapsed((end - start - waited - open).max(0.0))
 }
 
 pub fn row(run: &Value, job: Option<&Job>, now_ms: f64) -> Row {
@@ -165,6 +169,20 @@ mod tests {
         assert_eq!(r.step, "build");
         // No heartbeat yet: counted to now.
         assert_eq!(r.elapsed, "1m 5s");
+    }
+
+    #[test]
+    fn elapsed_is_active_time() {
+        let now = date_parse(T0).unwrap() + 100_000.0;
+        let waited = json!({ "runId": "r1", "status": "done", "startedAt": T0,
+            "endedAt": "2026-10-10T10:01:40.000Z", "waitedMs": 30_000 });
+        assert_eq!(row(&waited, None, now).elapsed, "1m 10s");
+        // Waiting now: a live run's time stands still as the clock advances.
+        let waiting = json!({ "runId": "r1", "status": "running", "startedAt": T0,
+            "waitedMs": 10_000, "waitingSince": "2026-10-10T10:00:40.000Z" });
+        let job = Job::new(JobStatus::Running);
+        assert_eq!(row(&waiting, Some(&job), now).elapsed, "30s");
+        assert_eq!(row(&waiting, Some(&job), now + 60_000.0).elapsed, "30s");
     }
 
     #[test]

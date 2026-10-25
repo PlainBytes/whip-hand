@@ -2,12 +2,16 @@
 //! spawns bound to the run's container, events to the renderer or as NDJSON,
 //! and manual steps asked on the terminal.
 
+use std::cell::RefCell;
+
 use tokio::process::Child;
 use tokio_util::sync::CancellationToken;
 use whiphand_core::engine::frontend::{self, Frontend, LocalFuture};
 use whiphand_core::engine::manual::ManualResponse;
 use whiphand_core::engine::spec;
-use whiphand_core::jsval::{self, JsObject};
+use whiphand_core::engine::step_files::{AwaitReason, read_await_state};
+use whiphand_core::jsval::{self, JsObject, JsValue, ObjExt};
+use whiphand_core::obj;
 use whiphand_core::process::container::Container;
 use whiphand_core::process::launch::{
     ChildStream, LineSink, Out, PipeOptions, SpawnOptions, StdinFrom, errno_name_of, pipe_child,
@@ -17,6 +21,9 @@ use whiphand_core::process::launch::{
 use crate::io::{err_bytes, out_bytes, out_line};
 use crate::prompt::Prompter;
 use crate::render::Renderer;
+
+/// How often a running interactive step's await-state file is read.
+const AWAIT_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// What an aborted spawn exits with: the shell's 128 + SIGINT.
 pub const ABORTED_EXIT_CODE: i32 = 130;
@@ -35,6 +42,8 @@ pub struct Tty {
     pub prompter: Prompter,
     /// Where a piped child's raw output is echoed: the terminal, unless a test says otherwise.
     pub echo: Echo,
+    /// The step a `step:start` last announced: the session a hook reports on.
+    pub last_step_id: RefCell<Option<String>>,
 }
 
 #[derive(Clone, Copy)]
@@ -108,6 +117,12 @@ impl Tty {
 
 impl Frontend for Tty {
     fn on_event(&self, event: &JsObject, _seq: u64, _ts: &str) {
+        if event.get("type").and_then(JsValue::as_str) == Some("step:start") {
+            *self.last_step_id.borrow_mut() = event
+                .get("stepId")
+                .and_then(JsValue::as_str)
+                .map(str::to_string);
+        }
         match &self.events {
             EventSink::Json => out_line(&jsval::stringify_compact(&event.clone().into())),
             EventSink::Human(r) => r.render(event),
@@ -161,18 +176,59 @@ impl Frontend for Tty {
         })
     }
 
-    /// The child owns the real terminal; there is no session state to report.
+    /// The child owns the real terminal. The only session state we can see is
+    /// the await-state file a hook writes, so poll that (never the tty) and
+    /// report its transitions.
     fn run_interactive<'a>(
         &'a self,
         spec_obj: &'a JsObject,
         cancel: CancellationToken,
-        _emit: frontend::EventSink<'a>,
+        mut emit: frontend::EventSink<'a>,
     ) -> LocalFuture<'a, Result<i32, String>> {
         // The child inherits the terminal, so it stays in the foreground
         // process group: its own group would cut it off from the tty.
         Box::pin(async move {
             let child = self.launch(spec_obj, StdinFrom::Inherit, Out::Inherit, false)?;
-            self.wait(child, cancel).await
+            let await_path = spec_obj
+                .get("awaitState")
+                .and_then(JsValue::as_obj)
+                .and_then(|a| a.get("statePath"))
+                .and_then(JsValue::as_str)
+                .map(str::to_string);
+            let Some(path) = await_path else {
+                return self.wait(child, cancel).await;
+            };
+            // The on_findings 'interactive' triage opens a session with no
+            // step:start before it.
+            let step_id = self
+                .last_step_id
+                .borrow()
+                .clone()
+                .unwrap_or_else(|| "triage".into());
+            let mut poll = tokio::time::interval(AWAIT_POLL);
+            poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let mut reported: Option<AwaitReason> = None;
+            let wait = self.wait(child, cancel);
+            tokio::pin!(wait);
+            loop {
+                tokio::select! {
+                    code = &mut wait => return code,
+                    _ = poll.tick() => {
+                        // Only a change says anything; garbage says nothing.
+                        if let Some(next) = read_await_state(&path) && next != reported {
+                            reported = next;
+                            let mut event = obj! {
+                                "type" => "session:await", "stepId" => step_id.as_str(),
+                                "awaiting" => next.is_some(),
+                            };
+                            if let Some(r) = next {
+                                event.set("reason", r.as_str());
+                            }
+                            emit(event);
+                        }
+                    }
+                }
+            }
         })
     }
 
@@ -230,6 +286,7 @@ mod tests {
                 out: echo_out,
                 err: echo_err,
             },
+            last_step_id: RefCell::default(),
         }
     }
 
@@ -330,5 +387,64 @@ mod tests {
         assert_eq!(*lines.borrow(), ["a", "b"]);
         let out: String = echoed().into_iter().map(|(_, t)| t).collect();
         assert_eq!(out, "a\r\nb", "the terminal gets the raw bytes");
+    }
+
+    #[tokio::test]
+    async fn an_await_file_is_reported_on_transitions_only() {
+        let t = tty();
+        t.on_event(
+            match &from_json(&json!({ "type": "step:start", "stepId": "impl" })) {
+                JsValue::Obj(o) => o,
+                _ => unreachable!(),
+            },
+            1,
+            "",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("await.json");
+        let done = dir.path().join("done");
+        let s = spec(
+            "while [ ! -e \"$1\" ]; do sleep 0.05; done",
+            json!({ "awaitState": { "statePath": state } }),
+        );
+        let s = {
+            let mut v = jsval::to_json(&JsValue::Obj(s));
+            v["argv"] = json!(["sh", "-c", v["argv"][2], "sh", done]);
+            match from_json(&v) {
+                JsValue::Obj(o) => o,
+                _ => unreachable!(),
+            }
+        };
+        let seen: Rc<RefCell<Vec<serde_json::Value>>> = Rc::default();
+        let sink = seen.clone();
+        let nap = || tokio::time::sleep(AWAIT_POLL * 3);
+        let (code, ()) = tokio::join!(
+            t.run_interactive(
+                &s,
+                CancellationToken::new(),
+                Box::new(move |e| sink.borrow_mut().push(jsval::to_json(&JsValue::Obj(e))))
+            ),
+            async {
+                nap().await;
+                std::fs::write(&state, r#"{"r":"turn"}"#).unwrap();
+                nap().await;
+                std::fs::write(&state, r#"{"r":"permission"}"#).unwrap();
+                nap().await;
+                std::fs::write(&state, "").unwrap(); // says nothing
+                nap().await;
+                std::fs::remove_file(&state).unwrap();
+                nap().await;
+                std::fs::write(&done, "").unwrap();
+            }
+        );
+        assert_eq!(code.unwrap(), 0);
+        assert_eq!(
+            *seen.borrow(),
+            [
+                json!({ "type": "session:await", "stepId": "impl", "awaiting": true, "reason": "turn" }),
+                json!({ "type": "session:await", "stepId": "impl", "awaiting": true, "reason": "permission" }),
+                json!({ "type": "session:await", "stepId": "impl", "awaiting": false }),
+            ]
+        );
     }
 }

@@ -18,6 +18,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use crate::active_time::{add_waited, close_wait, open_wait};
 use crate::execution_key::same_loop_refs;
 use crate::jsval::{self, JsObject, JsValue, ObjExt};
 use crate::log_rows::{
@@ -174,6 +175,8 @@ fn reset_unfinished(step: &JsValue) -> JsValue {
         "verdict",
         "progress",
         "iterations",
+        "waitedMs",
+        "waitingSince",
     ] {
         keep.remove(key);
     }
@@ -367,6 +370,7 @@ impl Inner {
         };
         if let Some(b) = blamed {
             let row = self.row_mut(b);
+            close_wait(row, now);
             if row.str_prop("status") != Some("failed") {
                 row.set("status", "failed");
                 if row.prop("endedAt").is_nullish() {
@@ -380,8 +384,39 @@ impl Inner {
                 continue;
             }
             let row = self.row_mut(i);
+            close_wait(row, now);
             row.set("status", "interrupted");
             row.set("endedAt", now);
+        }
+    }
+
+    /// Opens a wait on the run and on every row in flight (the current step
+    /// plus its enclosing loop/stages rows). A wait already open stays as it is.
+    fn open_waits(&mut self, now: &str) {
+        open_wait(&mut self.manifest, now);
+        for i in 0..self.steps().len() {
+            if self.row(i).str_prop("status") == Some("running") {
+                open_wait(self.row_mut(i), now);
+            }
+        }
+    }
+
+    /// Closes the open wait on the run and on every row in flight.
+    fn close_waits(&mut self, now: &str) {
+        close_wait(&mut self.manifest, now);
+        for i in 0..self.steps().len() {
+            if self.row(i).str_prop("status") == Some("running") {
+                close_wait(self.row_mut(i), now);
+            }
+        }
+    }
+
+    /// A step has ended: nothing is waiting any more, so the wait closes on
+    /// the row that ended and on everything still in flight around it.
+    fn end_step_wait(&mut self, step_id: &str, now: &str) {
+        self.close_waits(now);
+        if let Some(i) = self.find_step(step_id) {
+            close_wait(self.row_mut(i), now);
         }
     }
 
@@ -506,6 +541,7 @@ impl Inner {
             }
             "step:progress" => self.fold_progress(&id_of("stepId"), event.prop("progress")),
             "step:verdict" => {
+                self.end_step_wait(&id_of("stepId"), &now);
                 self.upsert_step(
                     &id_of("stepId"),
                     &obj! { "verdict" => p("verdict"), "status" => "done" },
@@ -517,6 +553,7 @@ impl Inner {
                 } else {
                     "failed"
                 };
+                self.end_step_wait(&id_of("stepId"), &now);
                 self.upsert_step(
                     &id_of("stepId"),
                     &obj! { "status" => status, "exitCode" => p("exitCode"), "endedAt" => now.as_str() },
@@ -525,8 +562,19 @@ impl Inner {
             "step:manual" => {
                 let pending = obj! { "stepId" => p("stepId"), "title" => event.prop("request").get("title").clone() };
                 self.manifest.set("manualPending", pending);
+                self.open_waits(&now);
             }
-            "step:manual-resolved" => self.manifest.set("manualPending", undef),
+            "step:manual-resolved" => {
+                self.manifest.set("manualPending", undef);
+                self.close_waits(&now);
+            }
+            "session:await" => {
+                if truthy(event.prop("awaiting")) {
+                    self.open_waits(&now);
+                } else {
+                    self.close_waits(&now);
+                }
+            }
             "loop:start" => {
                 let patch = obj! {
                     "kind" => "loop", "status" => "running", "startedAt" => now.as_str(), "iterations" => 0u32,
@@ -552,6 +600,7 @@ impl Inner {
                 let id = id_of("loopId");
                 self.current.remove(&id);
                 let passed = truthy(event.prop("passed"));
+                self.end_step_wait(&id, &now);
                 self.upsert_step(
                     &id,
                     &obj! {
@@ -617,6 +666,7 @@ impl Inner {
             "stages:exhausted" => self.upsert_step(&id_of("id"), &obj! { "exhausted" => true }),
             "stages:done" => {
                 let id = id_of("id");
+                self.end_step_wait(&id, &now);
                 self.current.remove(&id);
                 self.upsert_step(
                     &id,
@@ -657,10 +707,12 @@ impl Inner {
                 }
                 self.manifest.set("ok", p("ok"));
                 self.manifest.set("endedAt", now.as_str());
+                self.close_waits(&now);
                 self.manifest.set("manualPending", undef.clone());
                 self.finalize_running_steps(&now, &undef);
             }
             "run:error" => {
+                self.close_waits(&now);
                 self.manifest.set("status", "failed");
                 self.manifest.set("manualPending", undef);
                 self.manifest.set(
@@ -672,6 +724,7 @@ impl Inner {
             "run:cancelled" => {
                 self.manifest.set("status", "cancelled");
                 self.manifest.set("endedAt", now.as_str());
+                self.close_waits(&now);
                 self.manifest.set("manualPending", undef.clone());
                 self.finalize_running_steps(&now, &undef);
             }
@@ -778,12 +831,28 @@ impl RunJournal {
             .iter()
             .map(reset_unfinished)
             .collect();
-        let manifest = existing.spread(&obj! {
+        let mut manifest = existing.spread(&obj! {
             "pid" => std::process::id(), "pidScope" => current_pid_scope(), "leaseId" => crate::random::uuid_v4(),
             "interruptedReason" => undef.clone(), "status" => "running", "updatedAt" => now.as_str(),
             "heartbeatAt" => now.as_str(), "endedAt" => undef.clone(), "ok" => undef.clone(),
             "error" => undef.clone(), "manualPending" => undef, "resumedAt" => resumed, "steps" => steps,
         });
+        // The time the run was stopped counts as waiting: close any wait the
+        // stop left open where the run last was alive, then add the gap.
+        let previous_end = ["endedAt", "heartbeatAt", "updatedAt"]
+            .iter()
+            .find_map(|k| {
+                existing
+                    .str_prop(k)
+                    .filter(|s| time::date_parse(s).is_some())
+            })
+            .map(str::to_string);
+        if let Some(end) = previous_end {
+            close_wait(&mut manifest, &end);
+            if let (Some(end), Some(resume)) = (time::date_parse(&end), time::date_parse(&now)) {
+                add_waited(&mut manifest, resume - end);
+            }
+        }
         let workdir =
             workdir.map_or_else(|| existing.prop("workdir").to_js_string(), str::to_string);
         Self::start(run_dir.to_path_buf(), workdir, manifest, opts)

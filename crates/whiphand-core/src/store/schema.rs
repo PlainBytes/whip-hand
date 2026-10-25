@@ -107,6 +107,8 @@ fn step_schema() -> S {
         opt("verdict", S::Enum(&["pass", "fail"])),
         opt("startedAt", str0()),
         opt("endedAt", str0()),
+        opt("waitedMs", S::Num),
+        opt("waitingSince", str0()),
         opt("attempted", S::Bool),
         opt("sessionStarted", S::Bool),
         opt(
@@ -158,6 +160,8 @@ fn manifest_schema() -> S {
         opt("heartbeatAt", str0()),
         opt("leaseId", str0()),
         opt("endedAt", str0()),
+        opt("waitedMs", S::Num),
+        opt("waitingSince", str0()),
         opt("resumedAt", S::Arr(Box::new(str0()))),
         opt("stoppedTree", str0()),
         opt(

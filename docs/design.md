@@ -1149,6 +1149,40 @@ only from behind a tab; Escape deliberately does nothing.
 path, `read-tree` then `add -A`), which is what lets one pass cover tracked edits, renames,
 binaries and untracked files alike without touching the real index.
 
+## Active time versus wall clock
+
+A run's or step's wall-clock span (`startedAt` → `endedAt`, or now) includes every moment it
+sat waiting on a person. The journal therefore records waits as they happen, so readers can
+report **active time** instead. Two optional fields, on step rows (including `loop` and
+`stages` rows) and on the run manifest:
+
+- `waitedMs` — total milliseconds of closed waits.
+- `waitingSince` — ISO timestamp of the wait open now; absent when not waiting.
+
+Both are written **only once a wait happens** (and `waitedMs` only once it is above 0), so a
+run that never waited has today's manifest shape and older manifests stay valid unchanged.
+
+A wait opens and closes on the run and on every row with `status: running` (the current step
+plus its enclosing loop/stages rows; steps run one at a time):
+
+- `session:await` with `awaiting: true` opens a wait, whatever the `reason` (`turn`,
+  `permission`, `away`, `attention`). While one is open, another `awaiting: true` (even with a
+  different reason) leaves it open and does not move `waitingSince`; `awaiting: false` closes it.
+- `step:manual` opens a wait and `step:manual-resolved` closes it.
+- `step:done`, `step:verdict`, `loop:done`, `stages:done`, `run:done`, `run:error`,
+  `run:cancelled`, and the path that marks leftover rows failed or interrupted close any open
+  wait at the same instant they stamp as `endedAt`.
+
+Closing adds `now − waitingSince` to `waitedMs` and removes `waitingSince`. Time a run spent
+stopped counts as waiting too: on resume, the gap between the previous end (`endedAt`, else
+`heartbeatAt`, else `updatedAt`) and the resume is added to the run's `waitedMs` (rows the
+resume resets to pending drop their wait fields with their timestamps). Repairing an abandoned
+run closes any open wait at the end time it assigns.
+
+`active_ms(row, end)` in `whiphand-core` (`active_time.rs`) turns a row into its active time:
+`(end − startedAt) − waitedMs − (end − waitingSince, if open)`, floored at 0, and `None`
+without a usable `startedAt`. A row without the fields gives the plain wall-clock span.
+
 ## Run names
 
 A run is minted as `YYYYMMDD-HHmmss-xxxx` and that id never changes: `listRuns` sorts by

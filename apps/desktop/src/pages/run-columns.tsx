@@ -103,7 +103,26 @@ export function runColumns<T extends RunSummary>(
     createTableColumn<T>({
       columnId: 'workflow',
       renderHeaderCell: () => 'Workflow',
-      renderCell: run => (typeof run.workflow === 'string' ? run.workflow : '—'),
+      // A run in a repository below the workspace names it under the workflow.
+      renderCell: run => {
+        const workflow = typeof run.workflow === 'string' ? run.workflow : '—';
+        if (run.subdir === undefined) return workflow;
+        return (
+          <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{workflow}</span>
+            <span
+              data-testid={`run-subdir-${run.runId}`}
+              style={{
+                fontFamily: tokens.fontFamilyMonospace,
+                fontSize: tokens.fontSizeBase100,
+                color: tokens.colorNeutralForeground3,
+              }}
+            >
+              {run.subdir}
+            </span>
+          </span>
+        );
+      },
     }),
     createTableColumn<T>({
       // Still 'runId': both grids address this column by that id.

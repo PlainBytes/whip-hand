@@ -61,6 +61,7 @@ async fn dispatch(matches: ArgMatches) -> CmdResult {
                 worktree: flag(m, "worktree"),
                 no_worktree: flag(m, "no-worktree"),
                 in_worktree: string(m, "in-worktree"),
+                subdir: string(m, "subdir"),
             })
             .await
         }

@@ -488,6 +488,20 @@ describe('app-state slice', () => {
     expect(memory?.lastWorkflow).toBe('feature');
     expect(memory?.lastInputs.feature).toEqual({ ticket: 'T-1' });
   });
+
+  it('rememberInputsLocal keeps the work directory, and forgets it for the workspace root', () => {
+    useAppStore.getState().setAppState(EMPTY_APP_STATE);
+    useAppStore.getState().rememberInputsLocal('/ws', 'feature', {}, undefined, 'api');
+    expect(useAppStore.getState().appState?.workspaces['/ws']?.lastSubdir).toBe('api');
+    useAppStore.getState().rememberInputsLocal('/ws', 'feature', {});
+    expect(useAppStore.getState().appState?.workspaces['/ws']).not.toHaveProperty('lastSubdir');
+  });
+
+  it('a new draft starts in the workspace\'s last work directory', () => {
+    useAppStore.getState().setAppState({ ...EMPTY_APP_STATE, workspaces: { '/ws': { lastInputs: {}, lastSubdir: 'web' } } });
+    const id = useAppStore.getState().createDraft({ workdir: '/ws' });
+    expect(useAppStore.getState().drafts[id]?.subdir).toBe('web');
+  });
 });
 
 describe('waitingRunIds', () => {

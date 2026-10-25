@@ -836,6 +836,11 @@ export interface RunDraft {
    * not per workflow: changing workflow keeps it. Excludes `worktreeChoice`.
    */
   continueIn?: string | undefined;
+  /**
+   * The work directory: a repository below a workspace whose root is not one.
+   * Absent is the workspace itself. Starts from the workspace's last choice.
+   */
+  subdir?: string | undefined;
   maxIterationsRaw: string;
   attachments: PendingAttachment[];
   /**
@@ -986,7 +991,7 @@ export interface AppState {
   page: string;
   setPage: (page: string) => void;
   rememberInputsLocal: (
-    workspace: string, workflow: string, inputs: Record<string, string>, identityKey?: string,
+    workspace: string, workflow: string, inputs: Record<string, string>, identityKey?: string, subdir?: string,
   ) => void;
 
   /**
@@ -1443,11 +1448,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   setRestoreDone: () => set({ restoreDone: true }),
   page: 'runs',
   setPage: page => set({ page }),
-  rememberInputsLocal: (workspace, workflow, inputs, identityKey) => set(state => {
+  rememberInputsLocal: (workspace, workflow, inputs, identityKey, subdir) => set(state => {
     if (!state.appState) return state;
     // Under whichever spelling the agent first recorded this workspace by.
     const key = findWorkspaceKey(state.appState.workspaces, { path: workspace, identityKey }) ?? workspace;
-    const memory = state.appState.workspaces[key] ?? { lastInputs: {} };
+    // No `lastSubdir` is the workspace itself, as the agent records it.
+    const { lastSubdir: _previous, ...memory } = state.appState.workspaces[key] ?? { lastInputs: {} };
     return {
       appState: {
         ...state.appState,
@@ -1458,6 +1464,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             ...(identityKey === undefined ? {} : { identityKey }),
             lastWorkflow: workflow,
             lastInputs: { ...memory.lastInputs, [workflow]: { ...inputs } },
+            ...(subdir === undefined ? {} : { lastSubdir: subdir }),
           },
         },
       },
@@ -1481,6 +1488,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       dryRun: false,
       worktreeChoice: null,
       ...(init.continueIn === undefined ? {} : { continueIn: init.continueIn }),
+      ...(memory?.lastSubdir === undefined ? {} : { subdir: memory.lastSubdir }),
       maxIterationsRaw: '',
       attachments: [],
       baselineValues: chosen?.values ?? {},

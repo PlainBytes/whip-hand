@@ -7,9 +7,10 @@
  * cover the envelope, workflow files, config, dry runs, real runs with
  * command steps, manual gates, cancellation, resume, an interactive
  * terminal, run housekeeping, artifacts, app state, models and doctor, the
- * working diff, and remote access.
+ * working diff, work directories, and remote access.
  */
 import { execFileSync } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { Ctx, Message, Scenario } from './agent-transcript.ts';
 
@@ -64,7 +65,7 @@ const BAD_PARAMS: Array<[string, unknown]> = [
   ['endSession', {}], ['resolveManual', { jobId: 'j', stepId: 's', choice: 'maybe', comments: [{ path: 1 }] }],
   ['listRuns', { workdir: null }], ['getRun', { workdir: 'w', runId: '' }],
   ['readRunLog', { workdir: '', runId: 3, limit: 6000, offset: -1 }], ['readRunLog', { workdir: 'w', runId: 'r', limit: 1.5 }],
-  ['getWorkingDiff', {}],
+  ['getWorkingDiff', {}], ['listWorkDirs', {}],
   ['readArtifact', { workdir: 'w', runId: 'r', name: 'n', encoding: 'hex' }],
   ['writeArtifact', { workdir: 'w', runId: 'r', name: 'n', expectedMtimeMs: -1 }],
   ['statArtifact', { workdir: 'w', runId: 'r' }],
@@ -442,6 +443,33 @@ export const SCENARIOS: Scenario[] = [
         label: 'make a repo with changes',
       },
       { call: 'getWorkingDiff', params: (c: Ctx) => ({ workdir: c.ws }), label: 'changes' },
+    ],
+  },
+  {
+    name: 'work dirs',
+    steps: [
+      { call: 'listWorkDirs', params: (c: Ctx) => ({ workdir: c.ws }), label: 'nothing below' },
+      {
+        act: (c: Ctx) => {
+          for (const dir of ['api', 'group/web', 'node_modules/pkg']) {
+            mkdirSync(path.join(c.ws, dir), { recursive: true });
+            execFileSync('git', ['init', '-q'], { cwd: path.join(c.ws, dir), stdio: 'ignore' });
+          }
+        },
+        label: 'repositories below a folder that is not one',
+      },
+      { call: 'listWorkDirs', params: (c: Ctx) => ({ workdir: c.ws }), label: 'repos' },
+      { call: 'listWorkDirs', params: (c: Ctx) => ({ workdir: path.join(c.ws, 'api') }), label: 'inside a repo' },
+      {
+        call: 'startRun',
+        params: (c: Ctx) => ({ workdir: c.ws, workflow: 'feature', dryRun: true, subdir: '../x' }),
+        label: 'subdir outside',
+      },
+      {
+        call: 'startRun',
+        params: (c: Ctx) => ({ workdir: c.ws, workflow: 'feature', dryRun: true, subdir: 'missing' }),
+        label: 'subdir missing',
+      },
     ],
   },
   {

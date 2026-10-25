@@ -61,6 +61,7 @@ whiphand rename-run 20260907-141233-a3f1 "Something better"                  # r
 whiphand run examples/feature.yaml --input feature=x --worktree              # run on a new branch in its own git worktree
 whiphand run develop --input feature=x --no-worktree                         # run in the working folder even if the workflow asks for a worktree
 whiphand run develop --input feature=y --in-worktree 20260907-141233-a3f1   # run again in that run's worktree, on its branch (refused while another run is using it)
+whiphand run develop -C ~/src --input feature=x --subdir api                 # in a folder of repositories: work in ~/src/api, runs stay in ~/src/.whiphand
 whiphand worktree remove 20260907-141233-a3f1                                # remove a run's worktree (--force discards uncommitted changes); the branch stays
 whiphand                                                                     # the terminal UI, on the current folder
 whiphand tui -C ~/src/shop                                                   # the terminal UI on another workspace
@@ -95,6 +96,17 @@ run; `--in-worktree <run-id>` instead continues in the worktree an earlier run m
 hand. A worktree starts from the base's fetched upstream (`worktree.sync`, on by default; set it to
 `false` to start from the local base). `whiphand init` writes templates to new workspaces only, so an
 existing workspace keeps its old copies until you replace them. See `docs/design.md`, *Worktrees*.
+
+**Several repositories in one workspace.** For work across repositories, open the folder that holds
+them (`~/src` with `~/src/api` and `~/src/web` in it) as the workspace. When that folder is not a git
+repository itself, each run can pick a **work directory**: `--subdir api`, or *work directory* in the
+desktop's New Run dialog and the terminal UI's new-run form, which list the repositories found one
+or two levels down. Steps run there, and the
+git guard, the diff and worktrees use that repository, as if it had been opened on its own; runs,
+workflows, config and worktree folders stay in the workspace's `.whiphand/`, and the Files view
+keeps showing the whole folder. Leaving the choice at the workspace root works as it always did,
+with no git guard and no worktree. A resumed run, or one continued with `--in-worktree`, keeps the
+work directory it started in.
 
 `research` builds nothing. You settle the question with the agent in a live chat, then a headless
 agent investigates and writes a report whose every claim carries a `file:line` or a URL, a second

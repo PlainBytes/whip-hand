@@ -975,6 +975,80 @@ fn worktree_in_a_directory_that_is_not_a_repo_is_refused_without_a_run() {
     assert!(!e.runs_dir().exists());
 }
 
+/// A workspace that is not a repository, holding the repository `api`.
+fn multi_repo_workspace(e: &Env) {
+    e.write(".whiphand/config.yaml", "runs:\n  auto_name: false\n");
+    e.write("api/tracked.txt", "x\n");
+    let api = e.ws().join("api");
+    git(&api, &["init", "-q"]);
+    git(&api, &["config", "user.name", "T"]);
+    git(&api, &["config", "user.email", "t@example.com"]);
+    git(&api, &["add", "."]);
+    git(&api, &["commit", "-q", "-m", "init"]);
+}
+
+#[test]
+fn in_runs_a_worktree_from_the_repository_below_the_workspace() {
+    let e = Env::new();
+    multi_repo_workspace(&e);
+    worktree_workflow(&e, "worktree: true\n", "echo hi > new.txt");
+    let out = e.run(&["run", "wt", "--subdir", "api"]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    let run = e.only_run();
+    let id = run_id(&run);
+    assert_eq!(manifest_of(&run)["subdir"], "api");
+    assert!(
+        e.ws()
+            .join(".whiphand/worktrees")
+            .join(&id)
+            .join("new.txt")
+            .is_file()
+    );
+    assert!(git(&e.ws().join("api"), &["branch", "--list"]).contains(&format!("whiphand/{id}")));
+    assert!(!out.stderr().contains("pass --subdir"), "{}", out.stderr());
+}
+
+#[test]
+fn a_run_at_a_root_that_is_not_a_repository_names_the_ones_below_it() {
+    let e = Env::new();
+    multi_repo_workspace(&e);
+    worktree_workflow(&e, "", "true");
+    let out = e.run(&["run", "wt"]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    assert!(
+        out.stderr().contains("pass --subdir <dir> (api)"),
+        "{}",
+        out.stderr()
+    );
+}
+
+#[test]
+fn in_outside_the_workspace_is_a_usage_error_without_a_run() {
+    let e = Env::new();
+    multi_repo_workspace(&e);
+    worktree_workflow(&e, "", "true");
+    let out = e.run(&["run", "wt", "--subdir", "../elsewhere"]);
+    assert_eq!(out.code(), 2, "{}", out.stderr());
+    assert!(
+        out.stderr().contains("work directory '../elsewhere'"),
+        "{}",
+        out.stderr()
+    );
+    assert!(!e.runs_dir().exists());
+}
+
+#[test]
+fn in_with_resume_is_refused() {
+    let e = Env::new();
+    let out = e.run(&["run", "--resume", "r1", "--subdir", "api"]);
+    assert_ne!(out.code(), 0);
+    assert!(
+        out.stderr().contains("cannot be used with"),
+        "{}",
+        out.stderr()
+    );
+}
+
 #[test]
 fn worktree_with_an_unknown_base_is_refused_without_a_run() {
     let e = Env::new();

@@ -42,6 +42,7 @@ pub const REMOTE_METHODS: &[&str] = &[
     "getRun",
     "readRunLog",
     "getWorkingDiff",
+    "listWorkDirs",
     "readArtifact",
     "writeArtifact",
     "statArtifact",

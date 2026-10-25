@@ -10,8 +10,10 @@ const DESKTOP_ONLY = 'Opening in an editor is only available in the desktop app'
 
 export interface OpenInEditorButtonProps {
   workdir: string;
-  /** Without one the button opens `workdir` itself. */
+  /** Without one the button opens `subdir`, or `workdir` itself. */
   worktree?: { path: string; branch: string };
+  /** The run's work directory below `workdir`, when it chose one. */
+  subdir?: string | undefined;
   size: 'small' | 'medium';
   iconOnly?: boolean;
   /**
@@ -22,11 +24,12 @@ export interface OpenInEditorButtonProps {
 }
 
 /**
- * Opens a run's worktree, or the repository when it has none, in the editor
+ * Opens a run's worktree, or the repository when it has none (its work
+ * directory, or the workspace), in the editor
  * chosen in Preferences. On a host without the `openInEditor` capability (the
  * browser) it stays visible but disabled, with a tooltip saying why.
  */
-export function OpenInEditorButton({ workdir, worktree, size, iconOnly, onError }: OpenInEditorButtonProps) {
+export function OpenInEditorButton({ workdir, worktree, subdir, size, iconOnly, onError }: OpenInEditorButtonProps) {
   const { openInEditor } = useCapabilities();
   const editor = useAppStore(state => state.appState?.editor ?? DEFAULT_EDITOR);
   const [pending, setPending] = useState(false);
@@ -47,7 +50,7 @@ export function OpenInEditorButton({ workdir, worktree, size, iconOnly, onError 
     setLocalError(null);
     onError?.(null);
     try {
-      await openInEditor(workdir, worktree?.path ?? '', editor);
+      await openInEditor(workdir, worktree?.path ?? subdir ?? '', editor);
     } catch (err) {
       const message = errorMessage(err);
       if (onError) onError(message);

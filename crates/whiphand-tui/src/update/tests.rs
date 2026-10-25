@@ -5,6 +5,7 @@ use whiphand_protocol::{self as p, JobStatus, RpcError};
 use super::*;
 use crate::cmd::{External, LogPage};
 use crate::model::detail::{Pane, Tab};
+use crate::model::new_run::FieldKind;
 
 fn key(c: char) -> Msg {
     Msg::Key(KeyEvent::from(KeyCode::Char(c)))
@@ -874,7 +875,10 @@ fn workflows() -> Value {
 
 fn new_run_on(model: &mut Model) {
     let cmds = update(model, key('n'));
-    assert_eq!(methods(&cmds), ["listWorkflows", "getAppState"]);
+    assert_eq!(
+        methods(&cmds),
+        ["listWorkflows", "listWorkDirs", "getAppState"]
+    );
     assert_eq!(*model.screen(), Route::NewRun);
     let generation = model.new_run.as_ref().unwrap().generation;
     update(
@@ -964,6 +968,55 @@ fn a_refused_start_stays_on_the_form() {
         Some("workflow 'cycle' has a problem")
     );
     assert!(model.notice.is_none());
+}
+
+#[test]
+fn a_workspace_of_repositories_offers_a_work_directory_first() {
+    let mut model = Model::new("/w".into(), 0.0);
+    model.runs = vec![json!({ "runId": "r0", "status": "running", "subdir": "web" })];
+    new_run_on(&mut model);
+    // The form is up before the list of repositories arrives; it gains the field.
+    update(&mut model, code(KeyCode::Enter));
+    update(
+        &mut model,
+        Msg::Reply(
+            Then::WorkDirs(1),
+            Ok(json!({ "rootIsRepo": false, "repos": ["api", "web"] })),
+        ),
+    );
+    let n = model.new_run.as_ref().unwrap();
+    let form = n.form.as_ref().unwrap();
+    assert_eq!(form.fields[0].kind, FieldKind::WorkDir);
+    assert_eq!(form.subdir, None);
+    assert!(form.worktree_unavailable());
+    assert!(!n.busy(), "the running run is in another repository");
+    // Enter on the field cycles through the repositories.
+    model.new_run.as_mut().unwrap().form.as_mut().unwrap().focus = 0;
+    update(&mut model, code(KeyCode::Enter));
+    update(&mut model, code(KeyCode::Enter));
+    let n = model.new_run.as_ref().unwrap();
+    assert_eq!(n.form.as_ref().unwrap().subdir.as_deref(), Some("web"));
+    assert!(n.busy());
+    let cmds = update(&mut model, key('s'));
+    let call = rpc(&cmds);
+    assert_eq!(call.method, "startRun");
+    assert_eq!(call.params["subdir"], "web");
+}
+
+#[test]
+fn a_failed_work_directory_scan_leaves_the_form_as_it_was() {
+    let mut model = Model::new("/w".into(), 0.0);
+    new_run_on(&mut model);
+    let refused = RpcError {
+        code: -32601,
+        message: "method not found".into(),
+        data: None,
+    };
+    update(&mut model, Msg::Reply(Then::WorkDirs(1), Err(refused)));
+    assert!(model.notice.is_none());
+    update(&mut model, code(KeyCode::Enter));
+    let form = model.new_run.as_ref().unwrap().form.as_ref().unwrap();
+    assert!(form.fields.iter().all(|f| f.kind != FieldKind::WorkDir));
 }
 
 #[test]
@@ -1195,7 +1248,10 @@ fn finished_with_worktree() -> Value {
 fn w_on_a_finished_run_opens_the_new_run_screen_in_its_worktree() {
     let mut model = detail_on(finished_with_worktree());
     let cmds = update(&mut model, key('w'));
-    assert_eq!(methods(&cmds), ["listWorkflows", "getAppState"]);
+    assert_eq!(
+        methods(&cmds),
+        ["listWorkflows", "listWorkDirs", "getAppState"]
+    );
     assert_eq!(*model.screen(), Route::NewRun);
     let generation = model.new_run.as_ref().unwrap().generation;
     update(
@@ -1483,7 +1539,10 @@ fn setup_is_offered_and_run_opens_the_form_on_the_workflow() {
     assert_eq!(methods(&cmds), ["listWorkflows"]);
 
     let cmds = update(&mut model, key('r'));
-    assert_eq!(methods(&cmds), ["listWorkflows", "getAppState"]);
+    assert_eq!(
+        methods(&cmds),
+        ["listWorkflows", "listWorkDirs", "getAppState"]
+    );
     assert_eq!(*model.screen(), Route::NewRun);
     let generation = model.new_run.as_ref().unwrap().generation;
     let list = json!([

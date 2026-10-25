@@ -36,6 +36,11 @@ pub const MANIFEST_VERSION: u32 = 5;
 pub const NESTED_LOOP_TRACKING_VERSION: u32 = 4;
 /// How often a live run refreshes `heartbeatAt` on disk.
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+/// A heartbeat tick later than this many intervals after the previous one means the process
+/// was frozen (host sleep or suspend), and the excess counts as waiting. 3× because a busy
+/// host or a slow disk write delays a tick by a fraction of an interval or two, while a
+/// real suspend lasts far longer; 3× keeps that jitter from being booked as waiting.
+pub const SUSPEND_GAP_FACTOR: u32 = 3;
 
 const TERMINAL_EVENTS: [&str; 3] = ["run:done", "run:error", "run:cancelled"];
 
@@ -115,6 +120,9 @@ struct Inner {
     failure: Option<String>,
     clock: Clock,
     on_lease_lost: Option<LeaseLostHook>,
+    heartbeat_interval: Duration,
+    /// When the previous heartbeat tick ran (the run's start before the first), by `clock`.
+    last_beat_ms: f64,
 }
 
 struct Stop {
@@ -736,6 +744,30 @@ impl Inner {
         (seq, now)
     }
 
+    /// A tick far later than the interval means the process was frozen: the
+    /// excess is waiting, added to the run and to every row in flight. A wait
+    /// already open covers the gap itself, so that object gets nothing.
+    fn count_suspend(&mut self) {
+        let now = (self.clock)();
+        let gap = now - self.last_beat_ms;
+        self.last_beat_ms = now;
+        let interval = self.heartbeat_interval.as_secs_f64() * 1000.0;
+        if gap <= interval * f64::from(SUSPEND_GAP_FACTOR) {
+            return;
+        }
+        let suspended = gap - interval;
+        if self.manifest.prop("waitingSince").is_nullish() {
+            add_waited(&mut self.manifest, suspended);
+        }
+        for i in 0..self.steps().len() {
+            if self.row(i).str_prop("status") == Some("running")
+                && self.row(i).prop("waitingSince").is_nullish()
+            {
+                add_waited(self.row_mut(i), suspended);
+            }
+        }
+    }
+
     /// Before renewing, look for a fence on this lease and re-read run.json:
     /// either one saying the run is over means the lease is lost. Returns the
     /// lease-lost message when it was lost just now.
@@ -762,6 +794,7 @@ impl Inner {
                 "lease lost (host suspended?): run.json says '{status}'"
             ));
         }
+        self.count_suspend();
         self.manifest.set("heartbeatAt", self.now_iso());
         // A failed renewal must not poison the writes real events depend on.
         let _ = write_manifest_atomic(&self.run_dir, &self.manifest);
@@ -870,8 +903,10 @@ impl RunJournal {
             run_log_bytes: 0,
             output_dropped: 0,
             failure: None,
+            last_beat_ms: (opts.clock)(),
             clock: opts.clock.clone(),
             on_lease_lost: opts.on_lease_lost.clone(),
+            heartbeat_interval: opts.heartbeat_interval,
         };
         inner.persist();
         // A reopened run's cap has to count what earlier attempts already wrote.
@@ -978,5 +1013,122 @@ impl RunJournal {
 impl Drop for RunJournal {
     fn drop(&mut self) {
         self.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    const T0: u64 = 1_700_000_000_000;
+    const INTERVAL_MS: u64 = 30_000;
+
+    struct Rig {
+        journal: RunJournal,
+        clock: Arc<AtomicU64>,
+        dir: tempfile::TempDir,
+    }
+
+    fn rig() -> Rig {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = Arc::new(AtomicU64::new(T0));
+        let c = clock.clone();
+        let journal = RunJournal::create(
+            JournalInit {
+                run_dir: dir.path().to_path_buf(),
+                run_id: "r".into(),
+                workflow: "w".into(),
+                workdir: dir.path().to_string_lossy().into_owned(),
+                steps: vec![SeedStep {
+                    id: "s".into(),
+                    kind: "agent".into(),
+                    ..SeedStep::default()
+                }],
+                ..JournalInit::default()
+            },
+            JournalOptions {
+                // The real thread never ticks inside a test; ticks are driven by hand.
+                heartbeat_interval: Duration::from_millis(INTERVAL_MS),
+                clock: Arc::new(move || c.load(Ordering::SeqCst) as f64),
+                ..JournalOptions::default()
+            },
+        );
+        let rig = Rig {
+            journal,
+            clock,
+            dir,
+        };
+        rig.event(obj! { "type" => "step:start", "stepId" => "s", "kind" => "agent" });
+        rig
+    }
+
+    impl Rig {
+        fn event(&self, event: JsObject) {
+            self.journal.record(&event);
+        }
+        fn tick_after(&self, ms: u64) -> Option<String> {
+            self.clock.fetch_add(ms, Ordering::SeqCst);
+            self.journal.lock().renew_lease()
+        }
+        fn waited(&self) -> (Option<f64>, Option<f64>) {
+            let m = self.journal.manifest();
+            let step = m.prop("steps").as_arr().unwrap()[0]
+                .as_obj()
+                .unwrap()
+                .clone();
+            (m.num_prop("waitedMs"), step.num_prop("waitedMs"))
+        }
+    }
+
+    #[test]
+    fn a_tick_far_past_the_interval_counts_the_excess() {
+        let r = rig();
+        assert!(r.tick_after(10 * INTERVAL_MS).is_none());
+        let want = Some((9 * INTERVAL_MS) as f64);
+        assert_eq!(r.waited(), (want, want));
+    }
+
+    #[test]
+    fn a_tick_a_little_late_counts_nothing() {
+        let r = rig();
+        r.tick_after(2 * INTERVAL_MS);
+        r.tick_after(3 * INTERVAL_MS);
+        assert_eq!(r.waited(), (None, None));
+    }
+
+    #[test]
+    fn the_gap_is_measured_from_the_previous_tick() {
+        let r = rig();
+        r.tick_after(INTERVAL_MS);
+        r.tick_after(5 * INTERVAL_MS);
+        let want = Some((4 * INTERVAL_MS) as f64);
+        assert_eq!(r.waited(), (want, want));
+    }
+
+    #[test]
+    fn an_open_wait_already_covers_the_gap() {
+        let r = rig();
+        r.event(obj! { "type" => "session:await", "stepId" => "s", "awaiting" => true, "reason" => "turn" });
+        r.tick_after(10 * INTERVAL_MS);
+        assert_eq!(r.waited(), (None, None));
+        r.event(obj! { "type" => "session:await", "stepId" => "s", "awaiting" => false, "reason" => "turn" });
+        assert_eq!(
+            r.waited(),
+            (
+                Some((10 * INTERVAL_MS) as f64),
+                Some((10 * INTERVAL_MS) as f64)
+            )
+        );
+    }
+
+    #[test]
+    fn a_lost_lease_counts_nothing() {
+        let r = rig();
+        let mut on_disk = r.journal.manifest();
+        on_disk.set("status", "interrupted");
+        write_manifest_atomic(r.dir.path(), &on_disk).unwrap();
+        assert!(r.tick_after(10 * INTERVAL_MS).is_some());
+        assert_eq!(r.waited(), (None, None));
     }
 }

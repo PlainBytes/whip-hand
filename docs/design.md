@@ -1179,6 +1179,12 @@ stopped counts as waiting too: on resume, the gap between the previous end (`end
 resume resets to pending drop their wait fields with their timestamps). Repairing an abandoned
 run closes any open wait at the end time it assigns.
 
+Time the host spent asleep counts as waiting too. The heartbeat remembers when it last
+ticked; a tick more than three intervals after the previous one means the process was frozen,
+and `gap − heartbeat_interval` is added to `waitedMs` on the run and on every `running` row.
+An object with a wait already open gets nothing (that wait covers the gap), and neither does
+a tick that finds the lease lost.
+
 `active_ms(row, end)` in `whiphand-core` (`active_time.rs`) turns a row into its active time:
 `(end − startedAt) − waitedMs − (end − waitingSince, if open)`, floored at 0, and `None`
 without a usable `startedAt`. A row without the fields gives the plain wall-clock span.

@@ -386,6 +386,121 @@ describe('RunTabStrip', () => {
       expect(useAppStore.getState().activeTabKey).toBeNull();
     });
 
+    describe('go-to-tab, close-others, reopen and keep-preview', () => {
+      const DIGIT = (n: number) => ALT(`Digit${n}`, String(n));
+      const active = () => useAppStore.getState().activeTabKey;
+      const fire = (init: KeyboardEventInit) => {
+        const event = new KeyboardEvent('keydown', { ...init, bubbles: true, cancelable: true });
+        document.body.dispatchEvent(event);
+        return event;
+      };
+
+      it('Mod+Alt+3 activates the second tab after the Runs list; Mod+Alt+9 does nothing and is not swallowed', () => {
+        seed([tab('r1'), tab('r2'), tab('r3')], null);
+        renderStrip();
+        expect(fire(DIGIT(3)).defaultPrevented).toBe(true);
+        expect(active()).toBe('r2');
+        expect(fire(DIGIT(9)).defaultPrevented).toBe(false);
+        expect(active()).toBe('r2');
+      });
+
+      it('go-to on another workspace\'s tab switches workspace, and honours the unsaved-edits guard', async () => {
+        seed([tab('r1'), tab('r2', { workdir: '/ws/b' })], 'r1');
+        useAppStore.setState({ filesDirty: true });
+        renderStrip();
+        press(DIGIT(3));
+        await waitFor(() => expect(useAppStore.getState().pendingWorkspaceSwitch).toBe('/ws/b'));
+        act(() => settlePendingWorkspaceSwitch(false));
+        await waitFor(() => expect(useAppStore.getState().pendingWorkspaceSwitch).toBeNull());
+        expect(active()).toBe('r1');
+        expect(useAppStore.getState().workspacePath).toBe('/ws/a');
+      });
+
+      it('go-to switches workspace when allowed', async () => {
+        useAppStore.setState({ filesDirty: false });
+        seed([tab('r1'), tab('r2', { workdir: '/ws/b' })], 'r1');
+        const { transport } = renderStrip();
+        press(DIGIT(3));
+        const req = await touchRequest(transport);
+        transport.emitLine({ id: req.id, result: { recentWorkspaces: [{ path: '/ws/b', lastOpenedAt: 'now' }] } });
+        await waitFor(() => expect(active()).toBe('r2'));
+        expect(useAppStore.getState().workspacePath).toBe('/ws/b');
+      });
+
+      it('close-others keeps the active tab and other workspaces\' tabs; it is unbound by default', () => {
+        seed([tab('r1'), tab('r2'), tab('r3'), tab('r4', { workdir: '/ws/b' })], 'r2');
+        useAppStore.setState({ appState: { ...EMPTY_APP_STATE, keybindings: { 'tabs.closeOthers': 'Mod+Alt+KeyO' } } });
+        renderStrip();
+        press(ALT('KeyO', 'ø'));
+        expect(useAppStore.getState().tabs.map(t => t.key)).toEqual(['r2', 'r4']);
+        expect(active()).toBe('r2');
+        useAppStore.setState({ appState: null });
+      });
+
+      it('close-others does not touch draft tabs', () => {
+        const id = useAppStore.getState().createDraft({ workdir: '/ws/a' });
+        useAppStore.getState().openDraftTab(id);
+        useAppStore.setState({ tabs: [tab('r1'), ...useAppStore.getState().tabs], activeTabKey: 'r1' });
+        useAppStore.setState({ appState: { ...EMPTY_APP_STATE, keybindings: { 'tabs.closeOthers': 'Mod+Alt+KeyO' } } });
+        renderStrip();
+        const event = fire(ALT('KeyO', 'ø'));
+        expect(event.defaultPrevented).toBe(false);
+        expect(useAppStore.getState().tabs.map(t => t.key)).toEqual(['r1', id]);
+        useAppStore.setState({ appState: null });
+      });
+
+      it('reopens the last closed tab pinned and active, and does nothing once the stack is empty', () => {
+        seed([tab('r1'), tab('r2')], 'r1');
+        useAppStore.setState({ closedTabs: [], runs: [{ runId: 'r2', runDir: '/x', status: 'finished' }] as never });
+        renderStrip();
+        fireEvent.click(screen.getByRole('button', { name: 'Close r2' }));
+        expect(useAppStore.getState().tabs.map(t => t.key)).toEqual(['r1']);
+        const REOPEN = { key: 'T', code: 'KeyT', ctrlKey: true, altKey: true, shiftKey: true };
+        let first: KeyboardEvent | undefined;
+        act(() => { first = fire(REOPEN); });
+        expect(first!.defaultPrevented).toBe(true);
+        const state = useAppStore.getState();
+        expect(state.tabs.map(t => t.key)).toEqual(['r1', 'r2']);
+        expect(state.activeTabKey).toBe('r2');
+        expect(isPreview(state.tabs[1]!)).toBe(false);
+        expect(fire(REOPEN).defaultPrevented).toBe(false);
+        expect(useAppStore.getState().tabs).toHaveLength(2);
+      });
+
+      it('skips a closed run that no longer exists', () => {
+        seed([tab('r1'), tab('r2'), tab('r3')], 'r1');
+        useAppStore.setState({ closedTabs: [], runs: [{ runId: 'r2', runDir: '/x', status: 'finished' }] as never });
+        act(() => { useAppStore.getState().closeTab('r2'); useAppStore.getState().closeTab('r3'); });
+        renderStrip();
+        press({ key: 'T', code: 'KeyT', ctrlKey: true, altKey: true, shiftKey: true });
+        expect(useAppStore.getState().tabs.map(t => t.key)).toEqual(['r1', 'r2']);
+        expect(useAppStore.getState().closedTabs).toEqual([]);
+      });
+
+      it('does not make a closed draft reopenable', () => {
+        const id = useAppStore.getState().createDraft({ workdir: '/ws/a' });
+        useAppStore.getState().openDraftTab(id);
+        useAppStore.setState({ closedTabs: [] });
+        renderStrip();
+        fireEvent.click(screen.getByRole('button', { name: 'Close New run' }));
+        expect(useAppStore.getState().closedTabs).toEqual([]);
+      });
+
+      it('keep-preview pins the active preview tab, and does nothing on a pinned tab or the Runs list', () => {
+        seed([tab('r1', { preview: true }), tab('r2')], 'r1');
+        useAppStore.setState({ appState: { ...EMPTY_APP_STATE, keybindings: { 'tabs.keepPreview': 'Mod+Alt+KeyP' } } });
+        renderStrip();
+        act(() => useAppStore.getState().activateTab('r2'));
+        expect(fire(ALT('KeyP', 'π')).defaultPrevented).toBe(false);
+        act(() => useAppStore.getState().activateTab(null));
+        expect(fire(ALT('KeyP', 'π')).defaultPrevented).toBe(false);
+        act(() => useAppStore.getState().activateTab('r1'));
+        expect(fire(ALT('KeyP', 'π')).defaultPrevented).toBe(true);
+        expect(isPreview(useAppStore.getState().tabs[0]!)).toBe(false);
+        useAppStore.setState({ appState: null });
+      });
+    });
+
     it('leaves the shortcuts alone while a dialog is open or a terminal-like field has focus', async () => {
       const id = useAppStore.getState().createDraft({ workdir: '/ws/a' });
       useAppStore.getState().openDraftTab(id);
@@ -426,7 +541,7 @@ describe('RunTabStrip', () => {
       useAppStore.setState({ jobs: { j1: job('j1', { runId: 'r1', pendingManual: { kind: 'x' } as never }) } });
       renderStrip();
       fireEvent.mouseEnter(screen.getByRole('tab', { name: /r1/ }));
-      expect(await screen.findByText(/^r1 — .* · a$/)).toBeInTheDocument();
+      expect(await screen.findByText(/^r1 — .* · a \(Ctrl\+Alt\+2\)$/)).toBeInTheDocument();
     });
   });
 

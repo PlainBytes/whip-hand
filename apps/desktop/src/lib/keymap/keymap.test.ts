@@ -10,14 +10,25 @@ const TODAY_OTHER: Record<string, string> = {
   'tabs.close': 'Mod+Alt+KeyW',
   'tabs.newRun': 'Mod+Alt+KeyN',
   'tabs.runsList': 'Mod+Alt+Digit1',
+  'tabs.goTo1': 'Mod+Alt+Digit2',
+  'tabs.goTo2': 'Mod+Alt+Digit3',
+  'tabs.goTo3': 'Mod+Alt+Digit4',
+  'tabs.goTo4': 'Mod+Alt+Digit5',
+  'tabs.goTo5': 'Mod+Alt+Digit6',
+  'tabs.goTo6': 'Mod+Alt+Digit7',
+  'tabs.goTo7': 'Mod+Alt+Digit8',
+  'tabs.goTo8': 'Mod+Alt+Digit9',
+  'tabs.reopenClosed': 'Mod+Alt+Shift+KeyT',
   'workspace.quickSwitch': 'Mod+KeyK',
   'files.find': 'Mod+KeyF',
 };
 
 describe('resolveKeymap', () => {
-  it("yields today's chord for each of the 9 actions", () => {
-    expect(ACTIONS).toHaveLength(9);
+  it("yields today's chord for each bound action", () => {
+    expect(ACTIONS).toHaveLength(Object.keys(TODAY_OTHER).length + 2);
     const other = resolveKeymap({}, false);
+    expect(other.get('tabs.closeOthers')).toBeNull();
+    expect(other.get('tabs.keepPreview')).toBeNull();
     for (const [id, chord] of Object.entries(TODAY_OTHER)) expect(other.get(id as never), id).toBe(chord);
     const mac = resolveKeymap({}, true);
     expect(mac.get('tabs.next')).toBe('Mod+Alt+ArrowRight');

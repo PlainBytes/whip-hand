@@ -8,6 +8,7 @@ const event = (over: Partial<{ key: string; code: string; ctrlKey: boolean; meta
 describe('parseChord / formatChord', () => {
   it('round-trips every default chord in the catalogue', () => {
     for (const action of ACTIONS) {
+      if (action.defaultChord === null) continue;
       for (const text of [action.defaultChord.mac, action.defaultChord.other]) {
         const parsed = parseChord(text);
         expect(parsed, text).not.toBeNull();

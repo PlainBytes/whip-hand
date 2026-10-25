@@ -5,12 +5,14 @@ import {
 import { Dismiss12Regular, Edit12Regular, MoreHorizontal20Regular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { isWaitingJob, useAppStore, type AppState, type JobState } from '../state/store.ts';
+import { sameWorkspace } from '../shared/path-form.ts';
 import { openWorkspace } from '../lib/workspace-switch.ts';
-import type { AnyTab, DraftTab, RunTab } from '../lib/run-tabs.ts';
+import { isPreview, type AnyTab, type DraftTab, type RunTab } from '../lib/run-tabs.ts';
 import { basename } from '../lib/workspace-identity.ts';
 import { useShortcut } from '../lib/use-global-shortcut.ts';
 import { isModalOpen } from '../lib/tab-shortcuts.ts';
-import { actionLabel } from '../lib/keymap/keymap.ts';
+import type { ActionId } from '../lib/keymap/actions.ts';
+import { actionLabel, chordFor } from '../lib/keymap/keymap.ts';
 import { useKeymap } from '../lib/keymap/use-keymap.ts';
 import { RunStatusIcon, stateLabel, type RunStatus } from './OngoingRuns.tsx';
 import { WorkspaceDot } from './WorkspaceDot.tsx';
@@ -49,8 +51,16 @@ const middleClick = (onClose: () => void) => ({
 });
 
 /** The tab's hover text: full title, then state (runs only), then the workspace. */
-const tabTooltip = (title: string, state: string | undefined, workdir: string): string =>
-  `${state === undefined ? title : `${title} — ${state}`}${workdir ? ` · ${basename(workdir)}` : ''}`;
+const tabTooltip = (title: string, state: string | undefined, workdir: string, chord?: string): string =>
+  `${state === undefined ? title : `${title} — ${state}`}${workdir ? ` · ${basename(workdir)}` : ''}${chord ? ` (${chord})` : ''}`;
+
+/** The go-to chord of the tab at 1-based `position`, when it has one and it is bound. */
+function useGoToChord(position: number): string | undefined {
+  const keymap = useKeymap();
+  if (position < 1 || position > GO_TO_TABS.length) return undefined;
+  const id = `tabs.goTo${position}` as const;
+  return chordFor(keymap, id as ActionId) === null ? undefined : actionLabel(keymap, id as ActionId);
+}
 
 /** What the tab says about its run's state: live state, else how it ended. */
 function stateOf(job: JobState | undefined): string | undefined {
@@ -79,7 +89,8 @@ function CloseButton({ label, onClose }: { label: string; onClose: () => void })
   );
 }
 
-function RunTabItem({ tab, onClose, onPin }: { tab: RunTab; onClose: () => void; onPin: () => void }) {
+function RunTabItem({ tab, position, onClose, onPin }: { tab: RunTab; position: number; onClose: () => void; onPin: () => void }) {
+  const chord = useGoToChord(position);
   const name = useAppStore(state => {
     const job = jobForTab(state.jobs, tab);
     const runId = tab.runId ?? job?.runId;
@@ -90,7 +101,7 @@ function RunTabItem({ tab, onClose, onPin }: { tab: RunTab; onClose: () => void;
   const label = name ?? '(starting…)';
 
   return (
-    <Tooltip content={tabTooltip(label, state, tab.workdir)} relationship="description" positioning="below">
+    <Tooltip content={tabTooltip(label, state, tab.workdir, chord)} relationship="description" positioning="below">
     <Tab
       value={tab.key}
       onDoubleClick={onPin}
@@ -126,7 +137,8 @@ function draftTitle(state: Pick<AppState, 'drafts'>, draftId: string): string {
   return workflow || 'New run';
 }
 
-function DraftTabItem({ tab, onClose }: { tab: DraftTab; onClose: () => void }) {
+function DraftTabItem({ tab, position, onClose }: { tab: DraftTab; position: number; onClose: () => void }) {
+  const chord = useGoToChord(position);
   const title = useAppStore(state => draftTitle(state, tab.key));
   const workspace = useAppStore(state => {
     const draft = state.drafts[tab.key];
@@ -135,7 +147,7 @@ function DraftTabItem({ tab, onClose }: { tab: DraftTab; onClose: () => void }) 
   const [workdir = '', identityKey = ''] = workspace.split('\u0000');
 
   return (
-    <Tooltip content={tabTooltip(title, 'draft', workdir)} relationship="description" positioning="below">
+    <Tooltip content={tabTooltip(title, 'draft', workdir, chord)} relationship="description" positioning="below">
     <Tab
       value={tab.key}
       {...middleClick(onClose)}
@@ -174,6 +186,14 @@ function OverflowItem({ tab, onPick }: { tab: AnyTab; onPick: () => void }) {
   );
 }
 
+const GO_TO_TABS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
+
+/** Binds `tabs.goTo<n>`; renders nothing. */
+function GoToShortcut({ n, enabled, onGo }: { n: (typeof GO_TO_TABS)[number]; enabled: boolean; onGo: (n: number) => void }) {
+  useShortcut(`tabs.goTo${n}`, () => onGo(n), enabled);
+  return null;
+}
+
 /**
  * The Runs page's tabs: the fixed Runs list, then every open run and draft across
  * all workspaces. Activating a tab from another workspace goes through
@@ -189,6 +209,7 @@ export function RunTabStrip() {
   const closeTab = useAppStore(state => state.closeTab);
   const pinTab = useAppStore(state => state.pinTab);
   const retargetTab = useAppStore(state => state.retargetTab);
+  const closedCount = useAppStore(state => state.closedTabs.length);
   // Just-started tabs are keyed by jobId; re-key them once the job has a run,
   // so opening that run from the list finds the tab instead of adding one.
   const learned = useAppStore(state => tabs
@@ -248,6 +269,13 @@ export function RunTabStrip() {
     if (next !== undefined) void select(next);
   }
 
+  // Tab N exists only while there are N tabs; the rest leave their chord alone.
+  const goTo = (n: number) => {
+    if (isModalOpen()) return;
+    const target = useAppStore.getState().tabs[n - 1];
+    if (target !== undefined) void select(target.key);
+  };
+
   // The Ctrl+Tab actions are allowInTerminal: they stay live while a terminal has focus (TerminalPanel stops xterm eating them).
   useShortcut('tabs.next', () => step(1));
   useShortcut('tabs.nextInWorkspace', stepInWorkspace);
@@ -268,6 +296,50 @@ export function RunTabStrip() {
   useShortcut('tabs.runsList', () => {
     if (!isModalOpen()) void select(RUNS_TAB_VALUE);
   });
+
+  // Draft tabs still ask before being discarded, so with several drafts open
+  // the questions come one after another; the dialog holds one at a time, so
+  // only the non-draft tabs are closed here and drafts stay open.
+  // The chord is swallowed only when the action can act, so each is enabled by what it would do.
+  const hasOthers = tabs.some(other => other.key !== activeTabKey && other.kind === 'run' && isTabHere(other));
+  useShortcut('tabs.closeOthers', () => {
+    if (isModalOpen()) return;
+    const { tabs: open, activeTabKey: active } = useAppStore.getState();
+    for (const other of open) {
+      if (other.key !== active && other.kind === 'run' && isTabHere(other)) close(other);
+    }
+  }, hasOthers);
+  useShortcut('tabs.reopenClosed', () => {
+    if (!isModalOpen()) void reopenClosed();
+  }, closedCount > 0);
+  useShortcut('tabs.keepPreview', () => {
+    if (!isModalOpen() && activeTabKey !== null) pinTab(activeTabKey);
+  }, tabs.some(candidate => candidate.key === activeTabKey && isPreview(candidate)));
+
+  /** Reopens the newest closed tab whose run still exists, switching workspace first as `select` does. */
+  async function reopenClosed(): Promise<void> {
+    for (;;) {
+      const target = useAppStore.getState().popClosedTab();
+      if (target === undefined) return;
+      const { runs, workspacePath, workspaceIdentityKey } = useAppStore.getState();
+      const here = workspacePath !== null
+        && sameWorkspace({ path: target.workdir, identityKey: target.identityKey }, { path: workspacePath, identityKey: workspaceIdentityKey ?? undefined });
+      // Only this workspace's runs are listed, so only a run here can be known gone.
+      if (here && target.runId !== undefined && !runs.some(run => run.runId === target.runId)) continue;
+      if (!here) {
+        const opened = await openWorkspace(client, target.workdir).catch(() => false);
+        if (!opened) {
+          useAppStore.getState().pushClosedTab(target);
+          return;
+        }
+      }
+      useAppStore.getState().openRunTab(target, { pin: true });
+      return;
+    }
+  }
+
+  // One component per digit keeps the hook count fixed while each can be enabled on its own.
+  const goToShortcuts = GO_TO_TABS.map(n => <GoToShortcut key={n} n={n} enabled={tabs.length >= n} onGo={goTo} />);
 
   async function select(value: string): Promise<void> {
     if (value === RUNS_TAB_VALUE) {
@@ -302,12 +374,13 @@ export function RunTabStrip() {
             <Tooltip content={`Runs list (${actionLabel(keymap, 'tabs.runsList')})`} relationship="description" positioning="below">
               <Tab value={RUNS_TAB_VALUE}>Runs</Tab>
             </Tooltip>
-            {tabs.map(tab => (tab.kind === 'draft' ? (
-              <DraftTabItem key={tab.key} tab={tab} onClose={() => close(tab)} />
+            {tabs.map((tab, index) => (tab.kind === 'draft' ? (
+              <DraftTabItem key={tab.key} tab={tab} position={index + 1} onClose={() => close(tab)} />
             ) : (
               <RunTabItem
                 key={tab.key}
                 tab={tab}
+                position={index + 1}
                 onClose={() => close(tab)}
                 onPin={() => pinTab(tab.key)}
               />
@@ -335,6 +408,7 @@ export function RunTabStrip() {
           </Menu>
         )}
       </div>
+      {goToShortcuts}
       {discard.dialog}
     </>
   );

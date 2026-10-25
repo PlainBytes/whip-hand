@@ -31,8 +31,8 @@ describe('NotificationBridge', () => {
     const { transport, notifier } = renderBridge(false);
     transport.emitLine({ method: 'runStateChanged', params: { jobId: 'j1', runId: 'r1', status: 'succeeded' } });
     transport.emitLine({ method: 'runStateChanged', params: { jobId: 'j2', status: 'failed' } });
-    expect(notifier).toHaveBeenCalledWith('Run succeeded', 'r1');
-    expect(notifier).toHaveBeenCalledWith('Run failed', 'j2');
+    expect(notifier).toHaveBeenCalledWith('Run succeeded', 'r1', 'j1');
+    expect(notifier).toHaveBeenCalledWith('Run failed', 'j2', 'j2');
   });
 
   it('says nothing merely because a session opened', () => {
@@ -48,9 +48,9 @@ describe('NotificationBridge', () => {
     transport.emitLine(awaitLine('j1', 'permission'));
     transport.emitLine(awaitLine('j2', 'away'));
     transport.emitLine(awaitLine('j3', 'attention'));
-    expect(notifier).toHaveBeenCalledWith('Permission needed', 'Step plan');
-    expect(notifier).toHaveBeenCalledWith('Waiting for you', 'Step plan');
-    expect(notifier).toHaveBeenCalledWith('Session needs attention', 'Step plan');
+    expect(notifier).toHaveBeenCalledWith('Permission needed', 'Step plan', 'j1');
+    expect(notifier).toHaveBeenCalledWith('Waiting for you', 'Step plan', 'j2');
+    expect(notifier).toHaveBeenCalledWith('Session needs attention', 'Step plan', 'j3');
   });
 
   it('stays quiet for a plain turn end, which is just the conversation resting', () => {
@@ -107,7 +107,7 @@ describe('NotificationBridge: manual steps', () => {
   it('interrupts for a parked approval — the run cannot continue without one', () => {
     const { transport, notifier } = renderBridge(false);
     transport.emitLine(manualLine('j-a', 'approval', 'Ship it?'));
-    expect(notifier).toHaveBeenCalledWith('Decision needed', 'Ship it?');
+    expect(notifier).toHaveBeenCalledWith('Decision needed', 'Ship it?', 'j-a');
   });
 
   it('says which stage a gate inside a stage belongs to, keeping the title stable for OS grouping', () => {
@@ -123,13 +123,13 @@ describe('NotificationBridge: manual steps', () => {
         },
       },
     });
-    expect(notifier).toHaveBeenCalledWith('Decision needed', 'Stage 3 of 7: Add API routes');
+    expect(notifier).toHaveBeenCalledWith('Decision needed', 'Stage 3 of 7: Add API routes', 'j-s');
   });
 
   it('distinguishes a plain manual step from an approval', () => {
     const { transport, notifier } = renderBridge(false);
     transport.emitLine(manualLine('j-b', 'manual', 'Release note'));
-    expect(notifier).toHaveBeenCalledWith('Your turn', 'Release note');
+    expect(notifier).toHaveBeenCalledWith('Your turn', 'Release note', 'j-b');
   });
 
   it('stays quiet while the window is focused — you can already see the card', () => {

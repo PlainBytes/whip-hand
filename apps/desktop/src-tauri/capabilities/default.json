@@ -12,7 +12,6 @@
     "core:window:allow-inner-size",
     "core:window:allow-outer-position",
     "core:window:allow-set-title",
-    "notification:default",
     "updater:default",
     "process:allow-restart",
     "fs:allow-read-dir",

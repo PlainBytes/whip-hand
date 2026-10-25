@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { FluentProvider, webDarkTheme, webLightTheme } from '@fluentui/react-components';
 import { jobInWorkspace, useAppStore, type JobState } from './state/store.ts';
 import { useAgentClient } from './agent/agent-context.tsx';
@@ -11,7 +11,7 @@ import { nthPinnedWorkspace, previousWorkspace } from './lib/workspace-identity.
 import { openWorkspace, settlePendingWorkspaceSwitch } from './lib/workspace-switch.ts';
 import { useShortcut } from './lib/use-global-shortcut.ts';
 import { useWindowTitle } from './lib/use-window-title.ts';
-import { noopNotifier, type Notifier } from './lib/notifier.ts';
+import { noopNotificationClicks, noopNotifier, type NotificationClicks, type Notifier } from './lib/notifier.ts';
 import { SPINNER_STYLE_HOOKS } from './lib/spinner-clip.ts';
 import { useCapabilities } from './capabilities.tsx';
 import { NotificationBridge } from './components/NotificationBridge.tsx';
@@ -50,7 +50,10 @@ function PageShortcut({ page, enabled, onGo }: { page: PageId; enabled: boolean;
   return null;
 }
 
-export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
+export function App({
+  notifier = noopNotifier,
+  notificationClicks = noopNotificationClicks,
+}: { notifier?: Notifier; notificationClicks?: NotificationClicks } = {}) {
   const capabilities = useCapabilities();
   const dark = useDarkTheme();
   const page = useAppStore(state => state.page) as PageId;
@@ -140,6 +143,19 @@ export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
     }
     goToPage('runs', target);
   }
+
+  // openRun reads page, filesDirty and workspacePath, so the subscription
+  // below calls through a ref to always get the current render's closure.
+  const openRunRef = useRef(openRun);
+  openRunRef.current = openRun;
+  useEffect(
+    () =>
+      notificationClicks(jobId => {
+        const job = useAppStore.getState().jobs[jobId];
+        if (job !== undefined) void openRunRef.current(job);
+      }),
+    [notificationClicks],
+  );
 
   return (
     <FluentProvider

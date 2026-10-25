@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Click a notification to open its run
+
+- Clicking a desktop notification (Windows and Linux) brings Whiphand to the front and opens the
+  tab of the run that sent it, switching workspace first when the run belongs to another one.
+  On Windows this works while Whiphand is running; on GNOME Wayland the window may only show a
+  "ready" prompt instead of coming forward. The web build's notifications do not navigate.
+  
 ### Durations count active time only
 
 - Every duration in the desktop app — step pills, stage rollups, the run header and the runs grid —

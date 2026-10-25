@@ -7,11 +7,6 @@ function unavailable(name: string): never {
   throw new Error(`${name}() is a desktop-only Tauri API and is not available in the browser`);
 }
 
-// @tauri-apps/plugin-notification
-export const isPermissionGranted = (): never => unavailable('isPermissionGranted');
-export const requestPermission = (): never => unavailable('requestPermission');
-export const sendNotification = (): never => unavailable('sendNotification');
-
 // @tauri-apps/api/window
 export const getCurrentWindow = (): never => unavailable('getCurrentWindow');
 export const PhysicalPosition = function PhysicalPosition(): never {

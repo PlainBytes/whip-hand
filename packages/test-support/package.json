@@ -1,6 +1,6 @@
 {
   "name": "@whiphand/test-support",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "description": "Shared test helpers for the parity suite and the desktop app's tests. A private workspace, so no test helper ships.",

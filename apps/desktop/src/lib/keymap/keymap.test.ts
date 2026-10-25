@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { ACTIONS } from './actions.ts';
-import { resolveKeymap } from './keymap.ts';
+import { actionLabel, matchesTerminalPassthrough, resolveKeymap } from './keymap.ts';
 
 const TODAY_OTHER: Record<string, string> = {
   'tabs.next': 'Mod+PageDown',
@@ -41,15 +41,27 @@ describe('resolveKeymap', () => {
 });
 
 describe('matchesTerminalPassthrough', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  const base = { key: '', code: '', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false };
 
-  it('is true for the Ctrl+Tab pair and false for Ctrl/Cmd+K', async () => {
-    vi.resetModules();
-    vi.stubGlobal('navigator', { platform: 'Linux x86_64' });
-    const { matchesTerminalPassthrough } = await import('./keymap.ts');
-    const base = { key: '', code: '', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false };
-    expect(matchesTerminalPassthrough({ ...base, code: 'Tab' })).toBe(true);
-    expect(matchesTerminalPassthrough({ ...base, code: 'Tab', shiftKey: true })).toBe(true);
-    expect(matchesTerminalPassthrough({ ...base, code: 'KeyK' })).toBe(false);
+  it('is true for the Ctrl+Tab pair and false for Ctrl/Cmd+K', () => {
+    const keymap = resolveKeymap({}, false);
+    expect(matchesTerminalPassthrough(keymap, { ...base, code: 'Tab' })).toBe(true);
+    expect(matchesTerminalPassthrough(keymap, { ...base, code: 'Tab', shiftKey: true })).toBe(true);
+    expect(matchesTerminalPassthrough(keymap, { ...base, code: 'KeyK' })).toBe(false);
+  });
+
+  it('follows overrides: the new chord passes through, the old one and unbound ones do not', () => {
+    const keymap = resolveKeymap({ 'tabs.nextInWorkspace': 'Ctrl+KeyJ', 'tabs.nextAll': null }, false);
+    expect(matchesTerminalPassthrough(keymap, { ...base, code: 'KeyJ' })).toBe(true);
+    expect(matchesTerminalPassthrough(keymap, { ...base, code: 'Tab' })).toBe(false);
+    expect(matchesTerminalPassthrough(keymap, { ...base, code: 'Tab', shiftKey: true })).toBe(false);
+  });
+});
+
+describe('actionLabel', () => {
+  it('labels the effective chord and says unbound for null', () => {
+    const keymap = resolveKeymap({ 'tabs.newRun': 'Ctrl+Shift+KeyJ', 'tabs.close': null }, false);
+    expect(actionLabel(keymap, 'tabs.newRun')).toBe('Ctrl+Shift+J');
+    expect(actionLabel(keymap, 'tabs.close')).toBe('unbound');
   });
 });

@@ -4,6 +4,7 @@ import { useAppStore } from '../state/store.ts';
 import { decodeBase64ToBytes, encodeToBase64 } from '../lib/base64.ts';
 import { createTerminal, TERMINAL_BACKGROUND, type TerminalHandle } from './xterm-runtime.ts';
 import { matchesTerminalPassthrough } from '../lib/keymap/keymap.ts';
+import { useKeymap } from '../lib/keymap/use-keymap.ts';
 import { perfEnabled, perfMark } from '../lib/perf-probe.ts';
 
 export interface TerminalPanelProps {
@@ -74,6 +75,11 @@ export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProp
   const pumpingRef = useRef(false);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
+  // Read through a ref: the key handler is installed once per terminal, and a rebind must apply to it live.
+  const keymap = useKeymap();
+  const keymapRef = useRef(keymap);
+  keymapRef.current = keymap;
+
   const ptyDataBuffer = useAppStore(state => state.jobs[jobId]?.ptyDataBuffer ?? EMPTY_BUFFER);
   const ptyDataBaseIndex = useAppStore(state => state.jobs[jobId]?.ptyDataBaseIndex ?? 0);
   const ptyExited = useAppStore(state => state.jobs[jobId]?.ptyExited ?? false);
@@ -108,7 +114,7 @@ export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProp
       // Chords marked allowInTerminal (Ctrl+Tab / Ctrl+Shift+Tab switch run tabs). Returning false on every
       // event type keeps xterm from writing \t to the pty and from cancelling
       // the event, so it reaches the window-level shortcut.
-      if (matchesTerminalPassthrough(event)) return false;
+      if (matchesTerminalPassthrough(keymapRef.current, event)) return false;
       if (!isShiftEnter(event)) return true;
       if (event.type === 'keydown' && !handle.term.options.disableStdin) {
         void client.request('ptyInput', { jobId, data: encodeToBase64(NEWLINE_SEQUENCE) });

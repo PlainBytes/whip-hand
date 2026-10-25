@@ -7,6 +7,7 @@ import { AgentClientProvider } from '../agent/agent-context.tsx';
 import { useAppStore, type JobState } from '../state/store.ts';
 import { settlePendingWorkspaceSwitch } from '../lib/workspace-switch.ts';
 import { isPreview, type RunTab } from '../lib/run-tabs.ts';
+import { EMPTY_APP_STATE } from '../test/app-state.ts';
 
 const tab = (runId: string, extra: Partial<RunTab> = {}): RunTab => (
   { kind: 'run', key: runId, workdir: '/ws/a', runId, preview: false, ...extra }
@@ -342,6 +343,36 @@ describe('RunTabStrip', () => {
       act(() => useAppStore.getState().activateTab(null));
       press(ALT('KeyW', '∑'));
       expect(useAppStore.getState().tabs).toHaveLength(1);
+    });
+
+    describe('with keybinding overrides in app-state', () => {
+      const override = { 'tabs.close': 'Mod+Shift+KeyW', 'tabs.newRun': null };
+      afterEach(() => useAppStore.setState({ appState: null }));
+
+      it('closes on the new chord, not the old one, and leaves an unbound chord unswallowed', () => {
+        seed([tab('r1'), tab('r2')], 'r1');
+        useAppStore.setState({ appState: { ...EMPTY_APP_STATE, keybindings: override } });
+        renderStrip();
+        press(ALT('KeyW', '∑'));
+        expect(useAppStore.getState().tabs).toHaveLength(2);
+        press({ key: 'W', code: 'KeyW', ctrlKey: true, shiftKey: true });
+        expect(useAppStore.getState().tabs.map(t => t.key)).toEqual(['r2']);
+        const unbound = new KeyboardEvent('keydown', { ...ALT('KeyN', 'Dead'), bubbles: true, cancelable: true });
+        document.body.dispatchEvent(unbound);
+        expect(unbound.defaultPrevented).toBe(false);
+        expect(useAppStore.getState().tabs.map(t => t.kind)).toEqual(['run']);
+      });
+
+      it('rebinds live when the store changes, without a remount', () => {
+        seed([tab('r1'), tab('r2')], 'r1');
+        useAppStore.setState({ appState: { ...EMPTY_APP_STATE } });
+        renderStrip();
+        act(() => useAppStore.getState().patchAppState({ keybindings: override }));
+        press(ALT('KeyW', '∑'));
+        expect(useAppStore.getState().tabs).toHaveLength(2);
+        press({ key: 'W', code: 'KeyW', ctrlKey: true, shiftKey: true });
+        expect(useAppStore.getState().tabs).toHaveLength(1);
+      });
     });
 
     it('opens a draft with Ctrl+Alt+N and shows the Runs list with Ctrl+Alt+1', () => {

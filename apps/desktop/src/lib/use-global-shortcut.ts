@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { actionById, type ActionId } from './keymap/actions.ts';
 import { matchesChord, parseChord } from './keymap/chord.ts';
 import { chordFor } from './keymap/keymap.ts';
+import { useKeymap } from './keymap/use-keymap.ts';
 
 /**
  * True where a keystroke belongs to whatever the user is typing into.
@@ -31,7 +32,7 @@ function isTerminalTarget(target: EventTarget | null): boolean {
  *   An action with no binding never subscribes either.
  */
 export function useShortcut(actionId: ActionId, handler: () => void, enabled = true): void {
-  const chordText = chordFor(actionId);
+  const chordText = chordFor(useKeymap(), actionId);
   const allowInTerminal = actionById(actionId)?.allowInTerminal ?? false;
   useEffect(() => {
     const chord = chordText === null ? null : parseChord(chordText);

@@ -255,6 +255,11 @@ active: string | null, };
 
 export type AppState = { schemaVersion: 1, recentWorkspaces: Array<RecentWorkspace>, window: WindowState | null, lastPage: string | null, theme: ThemePreference, workspaces: Record<string, WorkspaceMemory>, runsRetention: RunsRetention, showOngoingRuns: boolean, editor: EditorPreference, 
 /**
+ * Per-action chord overrides. A missing key means the action's default,
+ * `null` means deliberately unbound.
+ */
+keybindings: { [key in string]?: string | null }, 
+/**
  * Unstarted New-run forms, kept so they survive a restart.
  */
 runDrafts: Array<RunDraft>, runTabs: RunTabsState, 
@@ -283,7 +288,11 @@ detachKey?: DetachKey, };
 
 export type DetachKey = "ctrl-bracket" | "ctrl-backslash" | "ctrl-caret" | "ctrl-underscore";
 
-export type SetUiStateParams = { window?: WindowState | null, lastPage?: string | null, theme?: ThemePreference, runsRetention?: RunsRetention, showOngoingRuns?: boolean, editor?: EditorPreference, tui?: TuiPreferences, };
+export type SetUiStateParams = { window?: WindowState | null, lastPage?: string | null, theme?: ThemePreference, runsRetention?: RunsRetention, showOngoingRuns?: boolean, editor?: EditorPreference, 
+/**
+ * Replaces the whole override map.
+ */
+keybindings?: { [key in string]?: string | null }, tui?: TuiPreferences, };
 
 export type SaveRunDraftParams = { draft: RunDraft, };
 

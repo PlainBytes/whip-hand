@@ -8,6 +8,7 @@ import { AgentClientProvider } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
 import { CapabilitiesProvider, type AppCapabilities } from '../capabilities.tsx';
 import { hasInjectedStyle } from '../test/badge-style.ts';
+import { EMPTY_APP_STATE } from '../test/app-state.ts';
 
 function renderRunsPage(onSelectRun = vi.fn(), onNewRun = vi.fn(), capabilities?: AppCapabilities) {
   const transport = new MockTransport();
@@ -328,6 +329,21 @@ describe('RunsPage', () => {
       const id = trigger.getAttribute('aria-describedby');
       expect(id && document.getElementById(id)).toHaveTextContent('Locked');
     });
+  });
+
+  it('labels New run with the overridden chord', async () => {
+    useAppStore.setState({ appState: { ...EMPTY_APP_STATE, keybindings: { 'tabs.newRun': 'Ctrl+Shift+KeyJ' } } });
+    try {
+      renderRunsPage();
+      const button = screen.getByRole('button', { name: 'New run' });
+      fireEvent.mouseEnter(button);
+      await waitFor(() => {
+        const id = button.getAttribute('aria-describedby');
+        expect(id && document.getElementById(id)).toHaveTextContent('New run (Ctrl+Shift+J)');
+      });
+    } finally {
+      useAppStore.setState({ appState: null });
+    }
   });
 
   it('lock toggle sends setRunLocked without following the row link, and re-polls on success', async () => {

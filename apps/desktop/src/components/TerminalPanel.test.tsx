@@ -7,6 +7,7 @@ import { AgentClientProvider } from '../agent/agent-context.tsx';
 import { useAppStore, type JobState } from '../state/store.ts';
 import { encodeToBase64 } from '../lib/base64.ts';
 import { createTerminal, type TerminalHandle } from './xterm-runtime.ts';
+import { EMPTY_APP_STATE } from '../test/app-state.ts';
 
 /** A full JobState with sane defaults, for tests that need to seed the store's job shape directly (e.g. an already-trimmed ptyDataBuffer) rather than build it up through reducer calls. */
 function baseJob(jobId: string, overrides: Partial<JobState> = {}): JobState {
@@ -251,6 +252,28 @@ describe('TerminalPanel', () => {
     ])('leaves %s to xterm', (_name, init) => {
       renderPanel('job-tab');
       expect(handle.emitKey('keydown', { key: 'Tab', code: 'Tab', ...init })).toBe(true);
+    });
+  });
+
+  describe('with keybinding overrides in app-state', () => {
+    afterEach(() => useAppStore.setState({ appState: null }));
+
+    it('passes the new chord of an allowInTerminal action through, and the old one no longer', () => {
+      useAppStore.setState({ appState: { ...EMPTY_APP_STATE, keybindings: { 'tabs.nextInWorkspace': 'Ctrl+KeyJ' } } });
+      renderPanel('job-rebound');
+      for (const type of ['keydown', 'keypress', 'keyup'] as const) {
+        expect(handle.emitKey(type, { key: 'j', code: 'KeyJ', ctrlKey: true })).toBe(false);
+      }
+      expect(handle.emitKey('keydown', { key: 'Tab', code: 'Tab', ctrlKey: true })).toBe(true);
+    });
+
+    it('follows a rebind made after the terminal mounted', () => {
+      useAppStore.setState({ appState: { ...EMPTY_APP_STATE } });
+      renderPanel('job-live');
+      expect(handle.emitKey('keydown', { key: 'j', code: 'KeyJ', ctrlKey: true })).toBe(true);
+      act(() => useAppStore.getState().patchAppState({ keybindings: { 'tabs.nextInWorkspace': 'Ctrl+KeyJ' } }));
+      expect(handle.emitKey('keydown', { key: 'j', code: 'KeyJ', ctrlKey: true })).toBe(false);
+      expect(handle.emitKey('keydown', { key: 'Tab', code: 'Tab', ctrlKey: true })).toBe(true);
     });
   });
 

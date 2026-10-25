@@ -11,6 +11,7 @@ import { basename } from '../lib/workspace-identity.ts';
 import { useShortcut } from '../lib/use-global-shortcut.ts';
 import { isModalOpen } from '../lib/tab-shortcuts.ts';
 import { actionLabel } from '../lib/keymap/keymap.ts';
+import { useKeymap } from '../lib/keymap/use-keymap.ts';
 import { RunStatusIcon, stateLabel, type RunStatus } from './OngoingRuns.tsx';
 import { WorkspaceDot } from './WorkspaceDot.tsx';
 import { isTabHere, tabWorkspace, useDiscardDraft } from './use-discard-draft.tsx';
@@ -59,8 +60,9 @@ function stateOf(job: JobState | undefined): string | undefined {
 }
 
 function CloseButton({ label, onClose }: { label: string; onClose: () => void }) {
+  const keymap = useKeymap();
   return (
-    <Tooltip content={`Close (${actionLabel('tabs.close')} on the active tab)`} relationship="description">
+    <Tooltip content={`Close (${actionLabel(keymap, 'tabs.close')} on the active tab)`} relationship="description">
       {/* A span, not a Button: the Tab is already a <button>, and nesting one is invalid. */}
       <span
         role="button"
@@ -180,6 +182,7 @@ function OverflowItem({ tab, onPick }: { tab: AnyTab; onPick: () => void }) {
  */
 export function RunTabStrip() {
   const client = useAgentClient();
+  const keymap = useKeymap();
   const tabs = useAppStore(state => state.tabs);
   const activeTabKey = useAppStore(state => state.activeTabKey);
   const activateTab = useAppStore(state => state.activateTab);
@@ -296,7 +299,7 @@ export function RunTabStrip() {
             aria-label="Runs"
             style={{ width: 'max-content' }}
           >
-            <Tooltip content={`Runs list (${actionLabel('tabs.runsList')})`} relationship="description" positioning="below">
+            <Tooltip content={`Runs list (${actionLabel(keymap, 'tabs.runsList')})`} relationship="description" positioning="below">
               <Tab value={RUNS_TAB_VALUE}>Runs</Tab>
             </Tooltip>
             {tabs.map(tab => (tab.kind === 'draft' ? (
@@ -315,7 +318,7 @@ export function RunTabStrip() {
           <Menu>
             <MenuTrigger disableButtonEnhancement>
               <Tooltip
-                content={`All tabs (${actionLabel('tabs.previous')} / ${actionLabel('tabs.next')} to cycle; ${actionLabel('tabs.nextInWorkspace')} this workspace, ${actionLabel('tabs.nextAll')} all)`}
+                content={`All tabs (${actionLabel(keymap, 'tabs.previous')} / ${actionLabel(keymap, 'tabs.next')} to cycle; ${actionLabel(keymap, 'tabs.nextInWorkspace')} this workspace, ${actionLabel(keymap, 'tabs.nextAll')} all)`}
                 relationship="label"
               >
                 <Button appearance="subtle" size="small" icon={<MoreHorizontal20Regular />} />

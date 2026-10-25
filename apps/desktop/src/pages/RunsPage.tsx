@@ -29,6 +29,7 @@ import { OpenInEditorButton } from '../components/OpenInEditorButton.tsx';
 import { useClickOrDoubleClick } from '../lib/use-click-or-double-click.ts';
 import { Page } from '../components/Page.tsx';
 import { actionLabel } from '../lib/keymap/keymap.ts';
+import { useKeymap } from '../lib/keymap/use-keymap.ts';
 
 export interface RunsPageProps {
   /** A single click opens a preview tab; a double click (`pin`) a pinned one. */
@@ -40,6 +41,7 @@ export interface RunsPageProps {
 /** Fluent DataGrid over listRuns, polled every 5s, with dry-run/interrupted filters. */
 export function RunsPage({ onSelectRun, onNewRun }: RunsPageProps) {
   const client = useAgentClient();
+  const keymap = useKeymap();
   const workspacePath = useAppStore(state => state.workspacePath);
   const runs = useAppStore(state => state.runs);
   const setRuns = useAppStore(state => state.setRuns);
@@ -172,7 +174,7 @@ export function RunsPage({ onSelectRun, onNewRun }: RunsPageProps) {
           checked={showInterrupted}
           onChange={(_e, data) => setShowInterrupted(data.checked)}
         />
-        <Tooltip content={`New run (${actionLabel('tabs.newRun')})`} relationship="description">
+        <Tooltip content={`New run (${actionLabel(keymap, 'tabs.newRun')})`} relationship="description">
           <Button appearance="primary" icon={<Add20Regular />} onClick={onNewRun}>
             New run
           </Button>

@@ -30,6 +30,12 @@ export interface CaptureOptions {
  * `pidScope` name the owning process and its PID space, and differ by construction.
  */
 const HOST_FIELDS = ['stoppedTree', 'degradations', 'pid', 'pidScope'] as const;
+/**
+ * Wall-clock wait accounting, dropped from the manifest and every step row: a
+ * measured span like the ISO timestamps, but a number, and written only once a
+ * wait exceeds 0ms — so even the key's presence depends on the leg's speed.
+ */
+const CLOCK_FIELDS = new Set(['waitedMs', 'waitingSince']);
 const EXCLUDED_FILES = new Set(['run.log', 'events.ndjson']);
 
 const ISO = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g;
@@ -50,6 +56,14 @@ function normalizeText(text: string, opts: CaptureOptions): string {
     out = out.replace(new RegExp(escapeRegExp(spelling), 'g'), '<WORKSPACE>');
   }
   return out.replaceAll(opts.runId, '<RUN_ID>').replace(RUN_ID_SHAPE, '<RUN_ID>').replace(ISO, '<TIMESTAMP>').replace(UUID, '<UUID>');
+}
+
+function dropClockFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(dropClockFields);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).filter(([k]) => !CLOCK_FIELDS.has(k)).map(([k, v]) => [k, dropClockFields(v)]));
+  }
+  return value;
 }
 
 function walk(dir: string, prefix = ''): string[] {
@@ -79,7 +93,7 @@ export function captureBundle(runDir: string, opts: CaptureOptions): BundleFile[
     if (rel === 'run.json') {
       const manifest = JSON.parse(text) as Record<string, unknown>;
       for (const field of HOST_FIELDS) delete manifest[field];
-      text = JSON.stringify(manifest, null, 2);
+      text = JSON.stringify(dropClockFields(manifest), null, 2);
     }
     files.push({ path: rel, bytes: Buffer.from(normalizeText(text, opts), 'utf8') });
   }

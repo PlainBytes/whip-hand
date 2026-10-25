@@ -52,10 +52,35 @@ pub struct RenderOptions {
     pub show_prompts: bool,
 }
 
+/// Waiting time observed for one step: closed spans, and the open span's start.
+#[derive(Default)]
+struct Wait {
+    closed_ms: f64,
+    open_since: Option<f64>,
+}
+
+impl Wait {
+    fn begin(&mut self, now: f64) {
+        self.open_since.get_or_insert(now);
+    }
+
+    fn end(&mut self, now: f64) {
+        if let Some(since) = self.open_since.take() {
+            self.closed_ms += (now - since).max(0.0);
+        }
+    }
+
+    fn total(&self, now: f64) -> f64 {
+        self.closed_ms + self.open_since.map_or(0.0, |since| (now - since).max(0.0))
+    }
+}
+
 #[derive(Default)]
 struct State {
     /// Headless steps only: the usage counters so far plus `startedMs`.
     tallies: HashMap<String, JsObject>,
+    /// Per step, the time spent waiting on the human, from the events seen.
+    waits: HashMap<String, Wait>,
     stage_positions: HashMap<String, (String, String)>,
     degraded: Vec<JsObject>,
     run_ended: bool,
@@ -159,9 +184,9 @@ impl Renderer {
         (self.sinks.err)(line);
     }
 
-    /// Elapsed time is always known; every other counter is printed only
-    /// when the runner reported it.
-    fn summary(&self, tally: &JsObject) -> String {
+    /// Elapsed time is active time (the waits seen are taken off) and always
+    /// known; every other counter is printed only when the runner reported it.
+    fn summary(&self, tally: &JsObject, waited_ms: f64) -> String {
         let mut parts = usage_parts(tally, |usd| {
             format!("${}", to_fixed(usd.as_f64().unwrap_or(f64::NAN), 2))
         });
@@ -171,7 +196,10 @@ impl Renderer {
         } else {
             1
         };
-        parts.insert(at, format_elapsed((self.sinks.now)() - started));
+        parts.insert(
+            at,
+            format_elapsed(((self.sinks.now)() - started - waited_ms).max(0.0)),
+        );
         format!("  {}", parts.join(" · "))
     }
 
@@ -259,6 +287,7 @@ impl Renderer {
                 self.out(&format!("{indent}↷ step {} (reused)", s(e.prop("stepId"))));
             }
             "step:start" => {
+                self.state.borrow_mut().waits.remove(&s(e.prop("stepId")));
                 if e.str_prop("mode") == Some("headless") {
                     let started = (self.sinks.now)();
                     self.state.borrow_mut().tallies.insert(
@@ -322,12 +351,45 @@ impl Renderer {
                 }
             }
             "step:done" => {
-                let tally = self.state.borrow_mut().tallies.remove(&s(e.prop("stepId")));
+                let id = s(e.prop("stepId"));
+                let (tally, waited) = {
+                    let mut state = self.state.borrow_mut();
+                    let waited = state
+                        .waits
+                        .remove(&id)
+                        .map_or(0.0, |w| w.total((self.sinks.now)()));
+                    (state.tallies.remove(&id), waited)
+                };
                 if let Some(tally) = tally {
-                    self.out(&self.summary(&tally));
+                    self.out(&self.summary(&tally, waited));
                 }
             }
-            "step:manual-resolved" => self.out(&format!("  ↳ {}", s(e.prop("choice")))),
+            "session:await" => {
+                let now = (self.sinks.now)();
+                let mut state = self.state.borrow_mut();
+                let wait = state.waits.entry(s(e.prop("stepId"))).or_default();
+                if e.prop("awaiting").as_bool() == Some(true) {
+                    wait.begin(now);
+                } else {
+                    wait.end(now);
+                }
+            }
+            "step:manual" => {
+                let now = (self.sinks.now)();
+                let mut state = self.state.borrow_mut();
+                state
+                    .waits
+                    .entry(s(e.prop("stepId")))
+                    .or_default()
+                    .begin(now);
+            }
+            "step:manual-resolved" => {
+                let now = (self.sinks.now)();
+                if let Some(w) = self.state.borrow_mut().waits.get_mut(&s(e.prop("stepId"))) {
+                    w.end(now);
+                }
+                self.out(&format!("  ↳ {}", s(e.prop("choice"))));
+            }
             "loop:start" => self.out(&format!(
                 "↻ loop {} (up to {} iterations)",
                 loop_label(e),
@@ -517,6 +579,43 @@ mod tests {
         c.clock.set(192_000.0);
         c.render(json!({ "type": "step:done", "stepId": "impl", "exitCode": 0 }));
         assert_eq!(c.last(), "  7 turns · 3m 12s · $0.41");
+    }
+
+    #[test]
+    fn a_summary_prints_active_time_without_the_waits_seen() {
+        let c = capture();
+        c.render(start_headless());
+        c.clock.set(10_000.0);
+        c.render(json!({ "type": "session:await", "stepId": "impl", "awaiting": true, "reason": "turn" }));
+        c.clock.set(100_000.0);
+        c.render(json!({ "type": "session:await", "stepId": "impl", "awaiting": false }));
+        c.clock.set(120_000.0);
+        c.render(json!({ "type": "step:done", "stepId": "impl", "exitCode": 0 }));
+        assert_eq!(c.last(), "  30s");
+    }
+
+    #[test]
+    fn a_manual_wait_is_taken_off_too() {
+        let c = capture();
+        c.render(start_headless());
+        c.clock.set(20_000.0);
+        c.render(json!({ "type": "step:manual", "stepId": "impl", "request": {} }));
+        c.clock.set(80_000.0);
+        c.render(json!({ "type": "step:manual-resolved", "stepId": "impl", "choice": "ok" }));
+        c.clock.set(90_000.0);
+        c.render(json!({ "type": "step:done", "stepId": "impl", "exitCode": 0 }));
+        assert_eq!(c.last(), "  30s");
+    }
+
+    #[test]
+    fn a_manual_step_prints_no_elapsed_part() {
+        let c = capture();
+        c.render(with(start_headless(), "mode", "manual"));
+        c.render(json!({ "type": "step:manual", "stepId": "impl", "request": {} }));
+        c.clock.set(60_000.0);
+        c.render(json!({ "type": "step:manual-resolved", "stepId": "impl", "choice": "ok" }));
+        c.render(json!({ "type": "step:done", "stepId": "impl", "exitCode": 0 }));
+        assert_eq!(c.out().last().unwrap(), "  ↳ ok");
     }
 
     #[test]

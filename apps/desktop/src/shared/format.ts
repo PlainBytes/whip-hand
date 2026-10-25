@@ -16,8 +16,9 @@ export function formatBytes(bytes: number): string {
 }
 
 /**
- * Milliseconds from `startedAt` to `endMs`, or null when there is no usable
- * start. Null is the "show nothing" signal: a pending step has no duration,
+ * Wall-clock milliseconds from `startedAt` to `endMs` — no surface shows this
+ * any more (see `activeMs`); it remains for callers that need a raw span. Null
+ * when there is no usable start. Null is the "show nothing" signal: a pending step has no duration,
  * and inventing 0s for it would read as "ran instantly".
  *
  * `endMs` is always passed in rather than read here, so a ticking timer is one
@@ -28,6 +29,41 @@ export function elapsedMs(startedAt: string | undefined, endMs: number): number 
   const start = Date.parse(startedAt);
   if (Number.isNaN(start) || Number.isNaN(endMs)) return null;
   return endMs - start;
+}
+
+/** The fields of a step or run row that active time reads; all optional, as old manifests have none of the wait ones. */
+export interface ActiveTimeRow {
+  startedAt?: unknown;
+  /** Total of the waits already closed, in ms. */
+  waitedMs?: unknown;
+  /** When the wait still open began. */
+  waitingSince?: unknown;
+}
+
+function dateMs(value: unknown): number | null {
+  if (typeof value !== 'string') return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+/**
+ * Milliseconds a row was actually working, up to `endMs`: the span from
+ * `startedAt`, less the waits it recorded (`waitedMs`) and the one still open
+ * (`waitingSince`, counted up to `endMs`), floored at 0. A row with neither
+ * field is its plain span. Null when there is no usable start.
+ *
+ * A TS copy of whiphand-core's `active_ms`, held to it by the golden in
+ * core-goldens.test.ts. `endMs` is passed in for the same reason as in
+ * `elapsedMs`: the page owns the one ticking clock.
+ */
+export function activeMs(row: ActiveTimeRow, endMs: number): number | null {
+  const started = dateMs(row.startedAt);
+  if (started === null || Number.isNaN(endMs)) return null;
+  const waited = typeof row.waitedMs === 'number' ? row.waitedMs : 0;
+  let active = endMs - started - waited;
+  const since = dateMs(row.waitingSince);
+  if (since !== null) active -= endMs - since;
+  return Math.max(0, active);
 }
 
 /**

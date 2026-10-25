@@ -22,6 +22,12 @@ use crate::store::runs::{get_run, list_runs, rename_run};
 
 static TS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z").unwrap());
+/// The wait fields a manifest gains once something waited (a gate answered
+/// in-process takes a real millisecond or two). The goldens predate them and a
+/// real clock makes them unstable, so they are dropped, comma and all.
+static WAIT_FIELD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?:,\n\s*"(?:waitedMs|waitingSince)": [^,\n]+(?:\n)|\n\s*"(?:waitedMs|waitingSince)": [^,\n]+,)"#).unwrap()
+});
 static UUID: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}").unwrap()
 });
@@ -80,6 +86,12 @@ pub fn normalize_text(text: &str, ws: &str) -> String {
     // A separator is one backslash per escape level; a run at the token's end
     // only escapes the closing quote, so it stays.
     let out = WS_TOKEN.replace_all(&out, |c: &regex::Captures| fold_separators(&c[0]));
+    let out = WAIT_FIELD.replace_all(
+        &out,
+        |c: &regex::Captures| {
+            if c[0].starts_with(',') { "\n" } else { "" }
+        },
+    );
     let out = TS.replace_all(&out, "<TS>");
     let out = PID.replace_all(&out, "\"pid\": <PID>");
     let out = SCOPE.replace_all(&out, "\"pidScope\": \"<SCOPE>\"");

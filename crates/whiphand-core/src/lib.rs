@@ -5,6 +5,7 @@
 //! replaced (`packages/core`, removed in Phase 3); `parity/fixtures/core`
 //! holds the corpus both were checked against, frozen now.
 
+pub mod active_time;
 pub mod adapters;
 pub mod canonicalize;
 pub mod config;

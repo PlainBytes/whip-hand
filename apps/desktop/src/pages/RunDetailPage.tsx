@@ -61,7 +61,7 @@ import { ResizablePane } from '../components/ResizablePane.tsx';
 import { FilePreview } from '../components/FilePreview.tsx';
 import { RECESSED_SURFACE } from '../components/recessed-surface.ts';
 import { resolveInArtifacts } from '../markdown/resolve.ts';
-import { elapsedMs, formatElapsed, stageLabel } from '../shared/format.ts';
+import { activeMs, formatElapsed, stageLabel } from '../shared/format.ts';
 import { degradationLine } from '../shared/degradations.ts';
 import { mergeDegradations } from '../lib/run-degradations.ts';
 import { parsePositiveInt } from '../lib/parse-number.ts';
@@ -466,19 +466,20 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
   const focusStep = focusStepIndex === -1 ? undefined : steps[focusStepIndex];
 
   /**
-   * How long the run has been going. A run still live counts against the page
-   * clock; one that ended is frozen at its own span. A run that never wrote
+   * How long the run has been working, waits excluded (the human, gates, the
+   * gap between a stop and a resume, host suspend). A run still live counts
+   * against the page clock, and stands still while a wait is open; one that
+   * ended is frozen at its own active span. A run that never wrote
    * endedAt — abandoned before core could repair it — is bounded by the last
    * sign of life we have, or its duration would grow on every poll forever.
    */
   const runElapsed = useMemo(() => {
-    const startedAt = typeof manifest?.startedAt === 'string' ? manifest.startedAt : undefined;
     const lastSeen = [manifest?.endedAt, manifest?.heartbeatAt, manifest?.updatedAt]
       .find((v): v is string => typeof v === 'string');
     const end = isRunning || lastSeen === undefined ? now : Date.parse(lastSeen);
-    const ms = elapsedMs(startedAt, end);
+    const ms = manifest ? activeMs(manifest, end) : null;
     return ms === null ? null : formatElapsed(ms);
-  }, [manifest?.startedAt, manifest?.endedAt, manifest?.heartbeatAt, manifest?.updatedAt, isRunning, now]);
+  }, [manifest?.startedAt, manifest?.waitedMs, manifest?.waitingSince, manifest?.endedAt, manifest?.heartbeatAt, manifest?.updatedAt, isRunning, now]);
 
   // The run's own error, whichever side reported it. The manifest's copy was
   // never surfaced before, which is where the interrupted reason lands.

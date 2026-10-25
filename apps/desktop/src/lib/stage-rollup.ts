@@ -11,7 +11,7 @@
  * handed.
  */
 import type { StepState } from '../state/store.ts';
-import { elapsedMs, formatElapsed } from '../shared/format.ts';
+import { activeMs, formatElapsed } from '../shared/format.ts';
 import { usageParts, type UsageCounters } from '../shared/log-rows.ts';
 import { flattenNodes, type StageGroup, type StepNode } from './run-tree.ts';
 
@@ -46,7 +46,7 @@ function addOptional(a: number | undefined, b: number | undefined): number | und
 
 /**
  * `attempts` are one stage's groups, in order. `clock` is the page's ticking
- * `Date.now()`, passed in for the same reason `elapsedMs` takes its end: so a
+ * `Date.now()`, passed in for the same reason `activeMs` takes its end: so a
  * live stage is one interval owned by the page, and so tests can pin it.
  */
 export function stageRollup(attempts: readonly StageGroup[], clock: number): StageRollup {
@@ -61,9 +61,12 @@ export function stageRollup(attempts: readonly StageGroup[], clock: number): Sta
 }
 
 /**
- * Earliest start to latest end, or to `clock` while anything is running.
- * With no recorded end at all it reads against `clock` too — what
- * `stepDuration` does for a single step — rather than inventing a frozen span.
+ * Active time, as core's `stage_elapsed`: earliest start to latest end, or to
+ * `clock` while anything is running, minus the waits of the leaf rows
+ * (containers are skipped: their waits are their children's). A wait still
+ * open counts up to that end. With no recorded end at all it reads against
+ * `clock` too — what `stepDuration` does for a single step — rather than
+ * inventing a frozen span.
  */
 function stageElapsed(live: readonly StepNode[], running: boolean, clock: number): string | null {
   let startedAt: string | undefined;
@@ -78,7 +81,17 @@ function stageElapsed(live: readonly StepNode[], running: boolean, clock: number
     const end = row.endedAt === undefined ? NaN : Date.parse(row.endedAt);
     if (end > latest) latest = end;
   }
-  const ms = elapsedMs(startedAt, running || latest === -Infinity ? clock : latest);
+  const end = running || latest === -Infinity ? clock : latest;
+  let waited = 0;
+  for (const node of live) {
+    if (node.kind !== 'step') continue;
+    for (const row of node.executions) {
+      waited += typeof row.waitedMs === 'number' ? row.waitedMs : 0;
+      const since = row.waitingSince === undefined ? NaN : Date.parse(row.waitingSince);
+      if (!Number.isNaN(since)) waited += Math.max(0, end - since);
+    }
+  }
+  const ms = activeMs({ startedAt, waitedMs: waited }, end);
   return ms === null ? null : formatElapsed(ms);
 }
 

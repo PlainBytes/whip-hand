@@ -45,7 +45,7 @@ import { WorktreeInfoButton } from '../components/WorktreeInfoButton.tsx';
 import { Page } from '../components/Page.tsx';
 import { DismissibleWarning } from '../components/DismissibleWarning.tsx';
 import { AWAIT_LABEL } from '../lib/await-copy.ts';
-import { TerminalPanel } from '../components/TerminalPanel.tsx';
+import { TerminalPanel, type TerminalPanelHandle } from '../components/TerminalPanel.tsx';
 import { RunStepper } from '../components/RunStepper.tsx';
 import { PendingDecisionBar } from '../components/PendingDecisionBar.tsx';
 import { DeleteRunDialog } from '../components/DeleteRunDialog.tsx';
@@ -61,13 +61,17 @@ import { ResizablePane } from '../components/ResizablePane.tsx';
 import { FilePreview } from '../components/FilePreview.tsx';
 import { RECESSED_SURFACE } from '../components/recessed-surface.ts';
 import { resolveInArtifacts } from '../markdown/resolve.ts';
-import { elapsedMs, formatElapsed, stageLabel } from '../shared/format.ts';
+import { activeMs, formatElapsed, stageLabel } from '../shared/format.ts';
 import { degradationLine } from '../shared/degradations.ts';
 import { mergeDegradations } from '../lib/run-degradations.ts';
 import { parsePositiveInt } from '../lib/parse-number.ts';
 import { useOpenExternal } from '../lib/open-external.tsx';
 import type { FileComment, ManualChoice, Scope } from '../shared/types.ts';
 import { errorMessage } from '../lib/error-message.ts';
+import { useCapabilities } from '../capabilities.tsx';
+import { DEFAULT_EDITOR, openRunInEditor } from '../lib/editor.ts';
+import { useShortcut } from '../lib/use-global-shortcut.ts';
+import { isModalOpen } from '../lib/tab-shortcuts.ts';
 import { spacerHeights, useVirtualRows, VIRTUAL_SCROLLER_PROPS } from '../lib/use-virtual-rows.ts';
 
 export interface RunDetailPageProps {
@@ -462,19 +466,20 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
   const focusStep = focusStepIndex === -1 ? undefined : steps[focusStepIndex];
 
   /**
-   * How long the run has been going. A run still live counts against the page
-   * clock; one that ended is frozen at its own span. A run that never wrote
+   * How long the run has been working, waits excluded (the human, gates, the
+   * gap between a stop and a resume, host suspend). A run still live counts
+   * against the page clock, and stands still while a wait is open; one that
+   * ended is frozen at its own active span. A run that never wrote
    * endedAt — abandoned before core could repair it — is bounded by the last
    * sign of life we have, or its duration would grow on every poll forever.
    */
   const runElapsed = useMemo(() => {
-    const startedAt = typeof manifest?.startedAt === 'string' ? manifest.startedAt : undefined;
     const lastSeen = [manifest?.endedAt, manifest?.heartbeatAt, manifest?.updatedAt]
       .find((v): v is string => typeof v === 'string');
     const end = isRunning || lastSeen === undefined ? now : Date.parse(lastSeen);
-    const ms = elapsedMs(startedAt, end);
+    const ms = manifest ? activeMs(manifest, end) : null;
     return ms === null ? null : formatElapsed(ms);
-  }, [manifest?.startedAt, manifest?.endedAt, manifest?.heartbeatAt, manifest?.updatedAt, isRunning, now]);
+  }, [manifest?.startedAt, manifest?.waitedMs, manifest?.waitingSince, manifest?.endedAt, manifest?.heartbeatAt, manifest?.updatedAt, isRunning, now]);
 
   // The run's own error, whichever side reported it. The manifest's copy was
   // never surfaced before, which is where the interrupted reason lands.
@@ -556,6 +561,34 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
   // and the view must not bounce back to Logs in the gap that leaves.
   const hasLiveOutput = hadSession || job?.hasNarrated === true;
   const activeTab: RunTab = chosenTab ?? (hasLiveOutput ? 'terminal' : 'logs');
+
+  // run.focusTerminal / run.openInEditor: live only where they can act, so the chord is not swallowed otherwise.
+  const terminalRef = useRef<TerminalPanelHandle | null>(null);
+  const focusAfterShow = useRef(false);
+  const terminalShortcutLive = showTerminal && !!effectiveJobId;
+  useShortcut('run.focusTerminal', () => {
+    if (isModalOpen()) return;
+    if (activeTab === 'terminal') {
+      terminalRef.current?.focus();
+      return;
+    }
+    // The terminal panel is display:none on the other tabs; focus once it shows.
+    focusAfterShow.current = true;
+    setChosenTab('terminal');
+  }, terminalShortcutLive);
+  useEffect(() => {
+    if (!focusAfterShow.current || activeTab !== 'terminal') return;
+    focusAfterShow.current = false;
+    terminalRef.current?.focus();
+  }, [activeTab]);
+  const { openInEditor } = useCapabilities();
+  useShortcut('run.openInEditor', () => {
+    if (isModalOpen() || openInEditor === undefined || !workspacePath) return;
+    setOpenError(null);
+    const editor = useAppStore.getState().appState?.editor ?? DEFAULT_EDITOR;
+    openRunInEditor(openInEditor, editor, { workdir: workspacePath, worktree: manifest?.worktree, subdir: manifest?.subdir })
+      .catch(err => setOpenError(errorMessage(err)));
+  }, openInEditor !== undefined && !!workspacePath);
 
   // ---------------------------------------------------------------------
   // Logs tab: one merged, seq-ordered feed of the run's audit trail and its
@@ -1594,6 +1627,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
         >
           {showTerminal && effectiveJobId ? (
             <TerminalPanel
+              ref={terminalRef}
               // Keyed on the pty step (not just jobId): a later interactive step
               // in the same job starts a fresh PTY session (store resets
               // ptyDataBuffer/ptyExited on the new ptyStarted) — a remount here

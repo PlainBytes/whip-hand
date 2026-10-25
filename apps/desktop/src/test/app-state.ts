@@ -12,6 +12,7 @@ export const EMPTY_APP_STATE: AppState = {
   showOngoingRuns: true,
   sidebarCollapsed: false,
   editor: { kind: 'vscode' },
+  keybindings: {},
   runDrafts: [],
   runTabs: { tabs: [], active: null },
 };

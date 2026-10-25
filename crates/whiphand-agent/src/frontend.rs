@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 use whiphand_core::engine::frontend::{EventSink, Frontend, LocalFuture};
 use whiphand_core::engine::manual::ManualResponse;
 use whiphand_core::engine::spec;
-use whiphand_core::engine::step_files::{AwaitReason, parse_await_state};
+use whiphand_core::engine::step_files::{AwaitReason, read_await_state};
 use whiphand_core::jsval::{self, JsObject, JsValue, ObjExt};
 use whiphand_core::obj;
 use whiphand_core::process::container::Container;
@@ -478,13 +478,8 @@ impl AgentFrontend {
                         }
                     }
                     if let Some(path) = &await_path {
-                        let next = match std::fs::read(path) {
-                            Ok(bytes) => parse_await_state(&String::from_utf8_lossy(&bytes)).map(Some),
-                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(None),
-                            Err(_) => None,
-                        };
                         // Only a change says anything; garbage says nothing.
-                        if let Some(next) = next && next != hook {
+                        if let Some(next) = read_await_state(path) && next != hook {
                             hook = next;
                             publish(hook, false, &mut emit);
                         }

@@ -1,0 +1,10 @@
+[
+{"op":"activeMs","row":{"startedAt":"2023-11-14T22:13:20.000Z"},"endMs":1700000005000},
+{"op":"activeMs","row":{"startedAt":"2023-11-14T22:13:20.000Z","waitedMs":3000},"endMs":1700000010000},
+{"op":"activeMs","row":{"startedAt":"2023-11-14T22:13:20.000Z","waitedMs":2000,"waitingSince":"2023-11-14T22:13:26.000Z"},"endMs":1700000010000},
+{"op":"activeMs","row":{"startedAt":"2023-11-14T22:13:20.000Z","waitingSince":"2023-11-14T22:13:23.000Z"},"endMs":1700000010000},
+{"op":"activeMs","row":{"startedAt":"2023-11-14T22:13:20.000Z","waitedMs":50000},"endMs":1700000010000},
+{"op":"activeMs","row":{"startedAt":"2023-11-14T22:13:20.000Z"},"endMs":1699999990000},
+{"op":"activeMs","row":{"waitedMs":1000},"endMs":1700000010000},
+{"op":"activeMs","row":{"startedAt":"garbage"},"endMs":1700000010000}
+]

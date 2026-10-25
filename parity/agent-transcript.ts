@@ -243,6 +243,8 @@ function normalize(t: Transcript, root: string): Transcript {
   const port = process.env.PARITY_REMOTE_PORT;
   const replacer = function (this: Record<string, unknown>, key: string, value: unknown): unknown {
     if (key === 'mtimeMs' || key === 'expectedMtimeMs' || key === 'heartbeatAt') return '<MS>';
+    // Time a run spent waiting: real clock, and the recordings predate the fields.
+    if (key === 'waitedMs' || key === 'waitingSince') return undefined;
     // An event's journal ordinal: see runEnvApart.
     if (key === 'seq' && 'event' in this) return undefined;
     if (key === 'startByte') return '<BYTE>';

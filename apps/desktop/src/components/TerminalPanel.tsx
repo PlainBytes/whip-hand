@@ -1,10 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
 import { decodeBase64ToBytes, encodeToBase64 } from '../lib/base64.ts';
 import { createTerminal, TERMINAL_BACKGROUND, type TerminalHandle } from './xterm-runtime.ts';
-import { matchesShortcut } from '../lib/use-global-shortcut.ts';
-import { ALL_NEXT_TAB, WORKSPACE_NEXT_TAB } from '../lib/tab-shortcuts.ts';
+import { matchesTerminalPassthrough } from '../lib/keymap/keymap.ts';
+import { useKeymap } from '../lib/keymap/use-keymap.ts';
 import { perfEnabled, perfMark } from '../lib/perf-probe.ts';
 
 export interface TerminalPanelProps {
@@ -53,7 +53,15 @@ export function isShiftEnter(event: KeyboardEvent): boolean {
  * The store buffers ptyData/ptyExit unconditionally, whether or not this panel is
  * mounted, so mounting always replays everything the job has produced so far.
  */
-export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProps) {
+export interface TerminalPanelHandle {
+  /** Puts the keyboard cursor in the terminal (xterm's helper textarea). */
+  focus(): void;
+}
+
+export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>(function TerminalPanel(
+  { jobId, cols, rows, onResize },
+  ref,
+) {
   const client = useAgentClient();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const handleRef = useRef<TerminalHandle | null>(null);
@@ -74,6 +82,13 @@ export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProp
   /** True while a backlog slice is in xterm's queue and the next one waits on its callback. */
   const pumpingRef = useRef(false);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  useImperativeHandle(ref, () => ({ focus: () => handleRef.current?.term.focus() }), []);
+
+  // Read through a ref: the key handler is installed once per terminal, and a rebind must apply to it live.
+  const keymap = useKeymap();
+  const keymapRef = useRef(keymap);
+  keymapRef.current = keymap;
 
   const ptyDataBuffer = useAppStore(state => state.jobs[jobId]?.ptyDataBuffer ?? EMPTY_BUFFER);
   const ptyDataBaseIndex = useAppStore(state => state.jobs[jobId]?.ptyDataBaseIndex ?? 0);
@@ -106,10 +121,10 @@ export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProp
     // exited (disableStdin) we send nothing: this handler would otherwise get
     // around xterm's own input blocking.
     handle.term.attachCustomKeyEventHandler(event => {
-      // Ctrl+Tab / Ctrl+Shift+Tab switch run tabs. Returning false on every
+      // Chords marked allowInTerminal (Ctrl+Tab / Ctrl+Shift+Tab switch run tabs). Returning false on every
       // event type keeps xterm from writing \t to the pty and from cancelling
       // the event, so it reaches the window-level shortcut.
-      if (matchesShortcut(event, WORKSPACE_NEXT_TAB) || matchesShortcut(event, ALL_NEXT_TAB)) return false;
+      if (matchesTerminalPassthrough(keymapRef.current, event)) return false;
       if (!isShiftEnter(event)) return true;
       if (event.type === 'keydown' && !handle.term.options.disableStdin) {
         void client.request('ptyInput', { jobId, data: encodeToBase64(NEWLINE_SEQUENCE) });
@@ -238,4 +253,4 @@ export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProp
       }}
     />
   );
-}
+});

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateRelativePath, validateSegment } from './segment.ts';
 import { workflowNameProblem } from './workflow-name.ts';
+import { activeMs } from './format.ts';
 import { formatLogLine, parseLogLine, summarizeEvent } from './log-rows.ts';
 import type { WhiphandEvent } from './types.ts';
 
@@ -35,6 +36,16 @@ describe('segment and workflow-name match the core golden', () => {
     });
     // JSON drops `undefined`, as the golden's writer did.
     expect(JSON.parse(JSON.stringify(results))).toEqual(golden);
+  });
+});
+
+describe('activeMs matches the core golden', () => {
+  const ops = fixtures('suites/active-time.json') as Array<{ row: Record<string, unknown>; endMs: number }>;
+  const golden = fixtures('golden/active-time.json');
+
+  it('answers every case as core does', () => {
+    expect(ops).toHaveLength(golden.length);
+    expect(ops.map(op => ({ ms: activeMs(op.row, op.endMs) }))).toEqual(golden);
   });
 });
 

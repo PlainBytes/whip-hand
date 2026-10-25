@@ -15,6 +15,7 @@ use crate::config::{
     parse_partial_config,
 };
 use crate::js::Record;
+use crate::jsval::{JsObject, ObjExt};
 use crate::raw::{Raw, parse_yaml};
 use crate::schema::{
     WorkflowError, unattended_problems, validate_workflow_draft, validate_workflow_warnings,
@@ -243,6 +244,19 @@ pub fn run_op(op: &Value, repo: &Path) -> Value {
                     })
                     .collect(),
             )
+        }
+        "activeMs" => {
+            let mut row = JsObject::default();
+            for key in ["startedAt", "waitingSince"] {
+                if let Some(text) = op["row"][key].as_str() {
+                    row.set(key, text);
+                }
+            }
+            if let Some(ms) = op["row"]["waitedMs"].as_f64() {
+                row.set("waitedMs", ms);
+            }
+            let end = op["endMs"].as_f64().expect("endMs");
+            json!({ "ms": crate::active_time::active_ms(&row, end) })
         }
         other => crate::parity_store::run_store_op(op, repo)
             .or_else(|| crate::parity_process::run_process_op(op, repo))

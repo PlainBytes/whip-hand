@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Durations count active time only
+
+- Every duration in the desktop app — step pills, stage rollups, the run header and the runs grid —
+  now counts active time only, as the TUI and the CLI do. It leaves out waits for the human,
+  manual and approval gates, the gap between a stop and a resume, and host suspend. A run that is
+  waiting right now stands still instead of ticking, and manual and approval steps show no duration.
+
 ### Work in one repository of a folder that holds several
 
 - A workspace whose root is not a git repository can now run each workflow in one of the

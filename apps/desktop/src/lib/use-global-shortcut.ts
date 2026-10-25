@@ -1,43 +1,9 @@
-/**
- * Window-level keyboard shortcuts. The app had none before this — every
- * other binding hangs off the control it acts on — so this stays as small as
- * the one shortcut that needs it, rather than becoming a keymap registry.
- */
+/** Window-level keyboard shortcuts, bound by action id through the keymap (lib/keymap). */
 import { useEffect } from 'react';
-
-export interface Shortcut {
-  /** Compared case-insensitively against KeyboardEvent.key. */
-  key: string;
-  /** Ctrl on Linux/Windows, Cmd on macOS — one branch covers both. */
-  mod?: boolean;
-  shift?: boolean;
-  alt?: boolean;
-  /**
-   * Match KeyboardEvent.code (the physical key) instead of `key`. Needed for
-   * Alt chords: Option on macOS and AltGr elsewhere turn `key` into another
-   * character, so `key` no longer says which letter was pressed.
-   */
-  code?: string;
-}
-
-interface KeyLike {
-  key: string;
-  code?: string;
-  ctrlKey: boolean;
-  metaKey: boolean;
-  shiftKey: boolean;
-  altKey?: boolean;
-}
-
-export function matchesShortcut(event: KeyLike, shortcut: Shortcut): boolean {
-  if (shortcut.code !== undefined) {
-    if (event.code !== shortcut.code) return false;
-  } else if (event.key.toLowerCase() !== shortcut.key.toLowerCase()) return false;
-  if (Boolean(shortcut.alt) !== Boolean(event.altKey)) return false;
-  if (Boolean(shortcut.mod) !== (event.ctrlKey || event.metaKey)) return false;
-  if (Boolean(shortcut.shift) !== event.shiftKey) return false;
-  return true;
-}
+import { actionById, type ActionId } from './keymap/actions.ts';
+import { matchesChord, parseChord } from './keymap/chord.ts';
+import { chordFor } from './keymap/keymap.ts';
+import { useKeymap } from './keymap/use-keymap.ts';
 
 /**
  * True where a keystroke belongs to whatever the user is typing into.
@@ -58,34 +24,27 @@ function isTerminalTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && target.closest('.xterm') !== null;
 }
 
-export interface GlobalShortcutOptions {
-  /**
-   * Fire even when the keystroke comes from a terminal's helper textarea.
-   * Only for chords a shell gives no meaning (Ctrl+Tab); every other input,
-   * textarea, select and contenteditable still blocks the shortcut.
-   */
-  allowInTerminal?: boolean;
-}
-
 /**
  * @param enabled Whether the shortcut is live. A disabled shortcut is not
  *   merely inert: it never subscribes, so the keystroke is not swallowed
  *   either. That matters because this hook calls preventDefault on every
  *   match — a shortcut that cannot act on a keypress must not consume it.
+ *   An action with no binding never subscribes either.
  */
-export function useGlobalShortcut(shortcut: Shortcut, handler: () => void, enabled = true, options: GlobalShortcutOptions = {}): void {
-  const { allowInTerminal = false } = options;
-  const { key, mod, shift, alt, code } = shortcut;
+export function useShortcut(actionId: ActionId, handler: () => void, enabled = true): void {
+  const chordText = chordFor(useKeymap(), actionId);
+  const allowInTerminal = actionById(actionId)?.allowInTerminal ?? false;
   useEffect(() => {
-    if (!enabled) return;
+    const chord = chordText === null ? null : parseChord(chordText);
+    if (!enabled || chord === null) return;
     function onKeyDown(event: KeyboardEvent): void {
       if (event.defaultPrevented || event.isComposing) return;
       if (isTypingTarget(event.target) && !(allowInTerminal && isTerminalTarget(event.target))) return;
-      if (!matchesShortcut(event, { key, mod, shift, alt, code })) return;
+      if (!matchesChord(event, chord as NonNullable<typeof chord>)) return;
       event.preventDefault();
       handler();
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [key, mod, shift, alt, code, handler, enabled, allowInTerminal]);
+  }, [chordText, handler, enabled, allowInTerminal]);
 }

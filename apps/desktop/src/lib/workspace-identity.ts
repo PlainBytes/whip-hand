@@ -4,6 +4,7 @@
  * can be unit-tested directly.
  */
 import type { RecentWorkspace } from '../shared/protocol.gen.ts';
+import { sameWorkspace, type WorkspaceRef } from '../shared/path-form.ts';
 
 /** The last path segment, tolerating trailing separators and either style. */
 export function basename(path: string): string {
@@ -85,4 +86,22 @@ export function filterWorkspaces(
     r => !basename(r.path).toLowerCase().includes(q) && r.path.toLowerCase().includes(q),
   );
   return [...labelMatch, ...pathOnly];
+}
+
+const isOpen = (entry: RecentWorkspace, open: WorkspaceRef | null) =>
+  open !== null && sameWorkspace({ path: entry.path, identityKey: entry.identityKey }, open);
+
+/** The most recently used workspace other than the open one, if any. */
+export function previousWorkspace(
+  recents: readonly RecentWorkspace[], open: WorkspaceRef | null,
+): RecentWorkspace | undefined {
+  return recents.find(r => !isOpen(r, open));
+}
+
+/** The Nth (1-based) pinned workspace in switcher order; undefined when absent or already open. */
+export function nthPinnedWorkspace(
+  recents: readonly RecentWorkspace[], n: number, open: WorkspaceRef | null,
+): RecentWorkspace | undefined {
+  const entry = sortWorkspaces(recents.filter(r => r.pinned))[n - 1];
+  return entry === undefined || isOpen(entry, open) ? undefined : entry;
 }

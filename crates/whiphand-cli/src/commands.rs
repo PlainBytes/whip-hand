@@ -665,6 +665,7 @@ pub async fn run(a: RunArgs) -> CmdResult {
         events,
         prompter,
         echo: Echo::default(),
+        last_step_id: Default::default(),
     };
 
     let cancel = CancellationToken::new();

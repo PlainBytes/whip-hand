@@ -24,6 +24,10 @@ export interface RunSummary {
   worktree?: { path: string; branch: string; continuedFrom?: string };
   /** The workspace-relative folder the run worked in; absent when it worked in the workspace itself. */
   subdir?: string;
+  /** Total ms the run spent waiting (closed waits); absent until it has waited. */
+  waitedMs?: number;
+  /** When the wait still open began; absent when the run is not waiting. */
+  waitingSince?: string;
   [key: string]: unknown;
 }
 

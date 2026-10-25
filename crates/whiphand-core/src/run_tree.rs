@@ -79,6 +79,10 @@ pub struct StepRow {
     pub verdict: Option<String>,
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
+    /// Closed waits, in ms; absent until the row has waited.
+    pub waited_ms: Option<f64>,
+    /// When the wait open now began.
+    pub waiting_since: Option<String>,
     pub progress: Option<Progress>,
 }
 
@@ -178,6 +182,8 @@ impl StepRow {
             verdict: str_of(v, "verdict"),
             started_at: str_of(v, "startedAt"),
             ended_at: str_of(v, "endedAt"),
+            waited_ms: num_of(v, "waitedMs"),
+            waiting_since: str_of(v, "waitingSince"),
             progress,
             id,
         })
@@ -612,7 +618,9 @@ fn node_rows(node: &StepNode) -> Vec<&StepRow> {
     }
 }
 
-/// Earliest start to latest end, or to `clock` while running or with no end.
+/// Earliest start to latest end, or to `clock` while running or with no end,
+/// minus the waits of the leaf rows (containers are skipped: their waits are
+/// their children's). A wait still open counts up to that end.
 fn stage_elapsed(live: &[&StepNode], running: bool, clock: f64) -> Option<String> {
     let mut earliest = f64::INFINITY;
     let mut latest = f64::NEG_INFINITY;
@@ -632,7 +640,17 @@ fn stage_elapsed(live: &[&StepNode], running: bool, clock: f64) -> Option<String
     } else {
         latest
     };
-    Some(format_elapsed(end - earliest))
+    let mut waited = 0.0;
+    for node in live {
+        let StepNode::Step(leaf) = node else { continue };
+        for row in &leaf.executions {
+            waited += row.waited_ms.unwrap_or(0.0);
+            if let Some(since) = row.waiting_since.as_deref().and_then(date_parse) {
+                waited += (end - since).max(0.0);
+            }
+        }
+    }
+    Some(format_elapsed((end - earliest - waited).max(0.0)))
 }
 
 /// Sums each leaf's newest execution only (each report is that spawn's own
@@ -1344,6 +1362,50 @@ mod tests {
         ];
         assert_eq!(rollup(idle, clock_after(60.0)).elapsed, None);
         assert_eq!(stage_rollup(&[], clock_after(60.0)).elapsed, None);
+    }
+
+    #[test]
+    fn rollup_elapsed_is_active_time() {
+        let waited = vec![row(
+            json!({ "id": "execute", "status": "done", "startedAt": stamp(0), "endedAt": stamp(120), "waitedMs": 90_000 }),
+            1,
+        )];
+        assert_eq!(
+            rollup(waited, clock_after(600.0)).elapsed.as_deref(),
+            Some("30s")
+        );
+        // Waits of every execution count once; a container's own are skipped.
+        let folded = vec![
+            row(
+                json!({ "id": "cycle", "kind": "loop", "status": "done", "startedAt": stamp(0), "endedAt": stamp(100), "waitedMs": 40_000 }),
+                1,
+            ),
+            in_cycle(
+                json!({ "id": "execute", "status": "done", "startedAt": stamp(0), "endedAt": stamp(50), "waitedMs": 10_000 }),
+                1,
+            ),
+            in_cycle(
+                json!({ "id": "execute", "status": "done", "startedAt": stamp(50), "endedAt": stamp(100), "waitedMs": 30_000 }),
+                2,
+            ),
+        ];
+        assert_eq!(
+            rollup(folded, clock_after(999.0)).elapsed.as_deref(),
+            Some("1m 0s")
+        );
+        // Waiting now: the elapsed time stands still as the clock advances.
+        let waiting = vec![row(
+            json!({ "id": "execute", "status": "running", "startedAt": stamp(0), "waitedMs": 5_000, "waitingSince": stamp(20) }),
+            1,
+        )];
+        for clock in [30.0, 300.0] {
+            assert_eq!(
+                rollup(waiting.clone(), clock_after(clock))
+                    .elapsed
+                    .as_deref(),
+                Some("15s")
+            );
+        }
     }
 
     #[test]

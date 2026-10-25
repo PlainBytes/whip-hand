@@ -379,7 +379,7 @@ describe('find in document', () => {
 
   it('leaves ctrl+f alone while the reader is typing in the editor', async () => {
     // A window-level shortcut swallows the keystroke wherever it fires
-    // (useGlobalShortcut calls preventDefault before the handler), so
+    // (useShortcut calls preventDefault before the handler), so
     // "the bar did not open" is not enough on its own — the editor's own
     // Ctrl-F has to reach the editor unconsumed.
     renderDoc('PKCE');

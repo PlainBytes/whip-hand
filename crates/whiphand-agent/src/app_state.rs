@@ -29,6 +29,7 @@ pub fn empty_app_state() -> Value {
         "showOngoingRuns": true,
         "sidebarCollapsed": false,
         "editor": { "kind": "vscode" },
+        "keybindings": {},
         "runDrafts": [],
         "runTabs": { "tabs": [], "active": null },
     })
@@ -455,6 +456,31 @@ mod tests {
         let store = AppStateStore::new(path, Box::new(|_| {}));
         assert_eq!(store.get()["editor"], json!({ "kind": "vscode" }));
         assert_eq!(empty_app_state()["editor"], json!({ "kind": "vscode" }));
+    }
+
+    #[test]
+    fn a_state_file_without_keybindings_reads_back_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app-state.json");
+        let mut old = empty_app_state();
+        old.as_object_mut().unwrap().remove("keybindings");
+        std::fs::write(&path, serde_json::to_string(&old).unwrap()).unwrap();
+        let store = AppStateStore::new(path, Box::new(|_| {}));
+        assert_eq!(store.get()["keybindings"], json!({}));
+        assert_eq!(empty_app_state()["keybindings"], json!({}));
+    }
+
+    #[test]
+    fn saved_keybindings_keep_an_explicit_null() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app-state.json");
+        let keybindings = json!({ "tabs.close": "Mod+Shift+KeyW", "tabs.newRun": null });
+        let store = AppStateStore::new(path.clone(), Box::new(|_| {}));
+        store
+            .mutate(|state| state["keybindings"] = keybindings.clone())
+            .unwrap();
+        let fresh = AppStateStore::new(path, Box::new(|_| {}));
+        assert_eq!(fresh.get()["keybindings"], keybindings);
     }
 
     #[test]

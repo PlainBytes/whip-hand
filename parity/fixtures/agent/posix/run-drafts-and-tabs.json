@@ -18,6 +18,7 @@
           "editor": {
             "kind": "vscode"
           },
+          "keybindings": {},
           "runDrafts": [],
           "runTabs": {
             "tabs": [],
@@ -110,6 +111,7 @@
           "editor": {
             "kind": "vscode"
           },
+          "keybindings": {},
           "runDrafts": [
             {
               "id": "d1",
@@ -204,6 +206,7 @@
           "editor": {
             "kind": "vscode"
           },
+          "keybindings": {},
           "runDrafts": [
             {
               "id": "d2",
@@ -255,6 +258,7 @@
         "editor": {
           "kind": "vscode"
         },
+        "keybindings": {},
         "runDrafts": [
           {
             "id": "d1",
@@ -290,6 +294,7 @@
         "editor": {
           "kind": "vscode"
         },
+        "keybindings": {},
         "runDrafts": [
           {
             "id": "d1",
@@ -338,6 +343,7 @@
         "editor": {
           "kind": "vscode"
         },
+        "keybindings": {},
         "runDrafts": [
           {
             "id": "d1",
@@ -391,6 +397,7 @@
         "editor": {
           "kind": "vscode"
         },
+        "keybindings": {},
         "runDrafts": [
           {
             "id": "d1",
@@ -455,6 +462,7 @@
         "editor": {
           "kind": "vscode"
         },
+        "keybindings": {},
         "runDrafts": [
           {
             "id": "d2",
@@ -501,6 +509,7 @@
         "editor": {
           "kind": "vscode"
         },
+        "keybindings": {},
         "runDrafts": [
           {
             "id": "d2",

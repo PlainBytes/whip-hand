@@ -15,6 +15,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use ts_rs::TS;
 
 pub mod codegen;
@@ -897,6 +898,10 @@ pub struct AppState {
     #[serde(default)]
     pub sidebar_collapsed: bool,
     pub editor: EditorPreference,
+    /// Per-action chord overrides. A missing key means the action's default,
+    /// `null` means deliberately unbound.
+    #[serde(default)]
+    pub keybindings: BTreeMap<String, Option<String>>,
     /// Unstarted New-run forms, kept so they survive a restart.
     #[serde(default)]
     pub run_drafts: Vec<RunDraft>,
@@ -1124,6 +1129,10 @@ pub struct SetUiStateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub editor: Option<EditorPreference>,
+    /// Replaces the whole override map.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub keybindings: Option<BTreeMap<String, Option<String>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub tui: Option<TuiPreferences>,
@@ -1611,6 +1620,29 @@ mod tests {
         let (s, back) = round::<AppState>(v);
         assert!(s.run_drafts.is_empty() && s.run_tabs.tabs.is_empty());
         assert_eq!(back["runTabs"], json!({ "tabs": [], "active": null }));
+    }
+
+    #[test]
+    fn set_ui_state_carries_optional_keybindings_and_null_means_unbound() {
+        let v = json!({ "keybindings": { "tabs.close": "Mod+Shift+KeyW", "tabs.newRun": null } });
+        let (p, back) = round::<SetUiStateParams>(v.clone());
+        let map = p.keybindings.unwrap();
+        assert_eq!(map["tabs.close"], Some("Mod+Shift+KeyW".to_string()));
+        assert_eq!(map["tabs.newRun"], None);
+        assert_eq!(back, v);
+        assert_eq!(round::<SetUiStateParams>(json!({})).0.keybindings, None);
+    }
+
+    #[test]
+    fn app_state_keybindings_round_trip_with_an_explicit_null() {
+        let v = json!({ "schemaVersion": 1, "recentWorkspaces": [], "window": null, "lastPage": null,
+            "theme": "system", "workspaces": {}, "runsRetention": { "maxPerWorkspace": 0 },
+            "showOngoingRuns": true, "editor": { "kind": "vscode" },
+            "keybindings": { "tabs.newRun": null, "tabs.close": "Mod+KeyW" } });
+        let (s, back) = round::<AppState>(v.clone());
+        assert_eq!(s.keybindings["tabs.newRun"], None);
+        assert!(s.keybindings.contains_key("tabs.newRun"));
+        assert_eq!(back["keybindings"], v["keybindings"]);
     }
 
     #[test]

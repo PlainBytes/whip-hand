@@ -55,7 +55,7 @@ describe('WorkspaceSwitcher', () => {
       workspacePath: '/ws/recent',
       appState: {
         schemaVersion: 1, window: null, lastPage: null, theme: 'system', workspaces: {},
-      runsRetention: { maxPerWorkspace: 0 }, showOngoingRuns: true, editor: { kind: 'vscode' },
+      runsRetention: { maxPerWorkspace: 0 }, showOngoingRuns: true, sidebarCollapsed: false, editor: { kind: 'vscode' },
       runDrafts: [], runTabs: { tabs: [], active: null },
         recentWorkspaces: [
           { path: '/ws/recent', lastOpenedAt: '3' },
@@ -76,7 +76,7 @@ describe('WorkspaceSwitcher', () => {
       workspacePath: '/ws/a',
       appState: {
         schemaVersion: 1, window: null, lastPage: null, theme: 'system', workspaces: {},
-      runsRetention: { maxPerWorkspace: 0 }, showOngoingRuns: true, editor: { kind: 'vscode' },
+      runsRetention: { maxPerWorkspace: 0 }, showOngoingRuns: true, sidebarCollapsed: false, editor: { kind: 'vscode' },
       runDrafts: [], runTabs: { tabs: [], active: null },
         recentWorkspaces: [{ path: '/ws/a', lastOpenedAt: '1' }],
       },
@@ -100,7 +100,7 @@ describe('WorkspaceSwitcher', () => {
       workspacePath: null,
       appState: {
         schemaVersion: 1, window: null, lastPage: null, theme: 'system', workspaces: {},
-      runsRetention: { maxPerWorkspace: 0 }, showOngoingRuns: true, editor: { kind: 'vscode' },
+      runsRetention: { maxPerWorkspace: 0 }, showOngoingRuns: true, sidebarCollapsed: false, editor: { kind: 'vscode' },
       runDrafts: [], runTabs: { tabs: [], active: null },
         recentWorkspaces: [{ path: '/ws/unmounted', lastOpenedAt: '1', pinned: true }],
       },

@@ -210,6 +210,29 @@ fn tui_preferences_are_absent_until_set_then_survive_a_restart() {
 }
 
 #[test]
+fn sidebar_collapsed_defaults_to_false_persists_and_survives_unrelated_updates() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("app-state.json"),
+        json!({
+            "schemaVersion": 1, "recentWorkspaces": [], "window": null, "lastPage": null,
+            "theme": "dark", "workspaces": {},
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut h = Harness::start(dir, ClientKind::Desktop);
+    assert_eq!(h.state()["sidebarCollapsed"], false);
+    h.ok("setUiState", json!({ "sidebarCollapsed": true }));
+    assert_eq!(h.state()["sidebarCollapsed"], true);
+    h.ok("setUiState", json!({ "theme": "light" }));
+    assert_eq!(h.state()["sidebarCollapsed"], true);
+    let dir = h.shutdown();
+    let mut again = Harness::start(dir, ClientKind::Desktop);
+    assert_eq!(again.state()["sidebarCollapsed"], true);
+}
+
+#[test]
 fn a_draft_keeps_continue_in_across_a_reload_and_omits_it_otherwise() {
     let mut h = Harness::new(ClientKind::Desktop);
     let mut with = draft("a", "one", json!([]));

@@ -299,6 +299,7 @@ pub async fn call(agent: &Rc<Agent>, ctx: RequestCtx, method: &str, p: Value) ->
                     "theme",
                     "runsRetention",
                     "showOngoingRuns",
+                    "sidebarCollapsed",
                     "editor",
                     "keybindings",
                     "tui",

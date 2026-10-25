@@ -26,6 +26,7 @@ const TODAY_OTHER: Record<string, string> = {
   'run.focusTerminal': 'Mod+Alt+KeyT',
   'run.openInEditor': 'Mod+Alt+KeyE',
   'files.find': 'Mod+KeyF',
+  'view.toggleSidebar': 'Mod+KeyB',
 };
 
 describe('page actions', () => {

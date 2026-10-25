@@ -14,6 +14,7 @@
             "maxPerWorkspace": 0
           },
           "showOngoingRuns": true,
+          "sidebarCollapsed": false,
           "editor": {
             "kind": "vscode"
           },
@@ -106,6 +107,7 @@
             "maxPerWorkspace": 0
           },
           "showOngoingRuns": true,
+          "sidebarCollapsed": false,
           "editor": {
             "kind": "vscode"
           },
@@ -200,6 +202,7 @@
             "maxPerWorkspace": 0
           },
           "showOngoingRuns": true,
+          "sidebarCollapsed": false,
           "editor": {
             "kind": "vscode"
           },
@@ -251,6 +254,7 @@
           "maxPerWorkspace": 0
         },
         "showOngoingRuns": true,
+        "sidebarCollapsed": false,
         "editor": {
           "kind": "vscode"
         },
@@ -286,6 +290,7 @@
           "maxPerWorkspace": 0
         },
         "showOngoingRuns": true,
+        "sidebarCollapsed": false,
         "editor": {
           "kind": "vscode"
         },
@@ -334,6 +339,7 @@
           "maxPerWorkspace": 0
         },
         "showOngoingRuns": true,
+        "sidebarCollapsed": false,
         "editor": {
           "kind": "vscode"
         },
@@ -387,6 +393,7 @@
           "maxPerWorkspace": 0
         },
         "showOngoingRuns": true,
+        "sidebarCollapsed": false,
         "editor": {
           "kind": "vscode"
         },
@@ -451,6 +458,7 @@
           "maxPerWorkspace": 0
         },
         "showOngoingRuns": true,
+        "sidebarCollapsed": false,
         "editor": {
           "kind": "vscode"
         },
@@ -497,6 +505,7 @@
           "maxPerWorkspace": 0
         },
         "showOngoingRuns": true,
+        "sidebarCollapsed": false,
         "editor": {
           "kind": "vscode"
         },

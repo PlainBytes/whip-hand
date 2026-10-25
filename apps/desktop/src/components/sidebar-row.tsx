@@ -24,6 +24,25 @@ export const SIDEBAR_ROW_STYLE: CSSProperties = {
   borderRadius: 4,
 };
 
+/**
+ * An icon-only row for the collapsed rail: the 20px icon slot centred by
+ * 5px of padding on each side, which with the 1px border makes a 32px square.
+ * Spread after SIDEBAR_ROW_STYLE; the expanded row geometry is untouched.
+ */
+export const SIDEBAR_RAIL_ROW_STYLE: CSSProperties = {
+  justifyContent: 'center',
+  padding: 5,
+  minWidth: 32,
+};
+
+/** Nav width when expanded. */
+export const SIDEBAR_WIDTH_EXPANDED = 220;
+/**
+ * Nav width when collapsed: 8px padding + 32px row (see SIDEBAR_RAIL_ROW_STYLE)
+ * + 8px padding + the nav's 1px right border, so the icon sits dead centre.
+ */
+export const SIDEBAR_WIDTH_COLLAPSED = 49;
+
 /** Gap between rows within one block (a nav group, the ongoing-runs list). */
 export const SIDEBAR_ROW_GAP = 2;
 /** Gap between blocks (workspace switcher, nav groups, runs, remote indicator). */

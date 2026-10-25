@@ -1,12 +1,17 @@
 import { Button, CounterBadge, Tooltip, type CounterBadgeProps } from '@fluentui/react-components';
 import { pagesInGroup, type NavGroup, type PageDef, type PageId } from '../nav.ts';
+import { PanelLeftContractRegular, PanelLeftExpandRegular } from '@fluentui/react-icons';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher.tsx';
 import { OngoingRuns, sameOngoingRows } from './OngoingRuns.tsx';
-import { RowGlyph, RowTrailing, SIDEBAR_GROUP_GAP, SIDEBAR_ROW_GAP, SIDEBAR_ROW_STYLE } from './sidebar-row.tsx';
+import {
+  RowGlyph, RowTrailing, SIDEBAR_GROUP_GAP, SIDEBAR_RAIL_ROW_STYLE, SIDEBAR_ROW_GAP, SIDEBAR_ROW_STYLE,
+  SIDEBAR_WIDTH_COLLAPSED, SIDEBAR_WIDTH_EXPANDED,
+} from './sidebar-row.tsx';
 import { WAITING_BADGE_COLOR, STATUS_BADGE_SIZE } from '../lib/status-style.ts';
 import { useAppStore, ongoingJobs, waitingJobs, type JobState } from '../state/store.ts';
 import { useAppStoreStable } from '../state/use-stable-selector.ts';
 import { useCapabilities } from '../capabilities.tsx';
+import { IS_MAC } from '../lib/tab-shortcuts.ts';
 
 /** Fluent's CounterBadge restricts `color` in its types only — see NavItem. */
 type CounterBadgeColor = CounterBadgeProps['color'];
@@ -23,7 +28,7 @@ type CounterBadgeColor = CounterBadgeProps['color'];
  * survives a restart once enabled, so without a persistent marker the machine
  * could be reachable from the network with nothing on screen saying so.
  */
-function RemoteAccessIndicator() {
+function RemoteAccessIndicator({ collapsed }: { collapsed: boolean }) {
   const remote = useAppStore(state => state.remoteAccess);
   if (!remote?.listening) return null;
   const devices = remote.clientCount === 1 ? '1 device connected' : `${remote.clientCount} devices connected`;
@@ -33,8 +38,11 @@ function RemoteAccessIndicator() {
       relationship="description"
     >
       <div
+        role={collapsed ? 'img' : undefined}
+        aria-label={collapsed ? 'Remote access on' : undefined}
         style={{
           ...SIDEBAR_ROW_STYLE,
+          ...(collapsed ? SIDEBAR_RAIL_ROW_STYLE : null),
           display: 'flex', alignItems: 'center',
           fontSize: 14, color: 'var(--colorNeutralForeground3)',
         }}
@@ -48,11 +56,13 @@ function RemoteAccessIndicator() {
             }}
           />
         </RowGlyph>
-        Remote access on
+        {!collapsed && 'Remote access on'}
       </div>
     </Tooltip>
   );
 }
+
+export { SIDEBAR_WIDTH_COLLAPSED, SIDEBAR_WIDTH_EXPANDED };
 
 export interface SidebarProps {
   page: PageId;
@@ -60,18 +70,93 @@ export interface SidebarProps {
   onSelectPage: (next: PageId) => void;
   /** App owns this too: opening a run from another workspace goes through the same guard. */
   onOpenRun: (job: JobState) => void;
+  /** Render the narrow icon rail instead of the full sidebar. */
+  collapsed?: boolean;
+  /** When given, a toggle row ends the nav; App owns persisting the choice. */
+  onToggleCollapsed?: () => void;
 }
 
-function NavItem({ def, selected, disabled, badge, badgeUrgent, onSelect }: {
+function CollapseToggle({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+  const label = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+  return (
+    <Tooltip content={`${label} (${IS_MAC ? 'Cmd' : 'Ctrl'}+B)`} relationship="description" positioning="after">
+      <Button
+        appearance="subtle"
+        icon={collapsed ? <PanelLeftExpandRegular /> : <PanelLeftContractRegular />}
+        aria-label={label}
+        aria-expanded={!collapsed}
+        onClick={onToggle}
+        style={{
+          ...SIDEBAR_ROW_STYLE,
+          ...(collapsed ? SIDEBAR_RAIL_ROW_STYLE : null),
+          width: '100%',
+        }}
+      >
+        {collapsed ? undefined : label}
+      </Button>
+    </Tooltip>
+  );
+}
+
+function NavItem({ def, selected, disabled, collapsed, badge, badgeUrgent, onSelect }: {
   def: PageDef;
   selected: boolean;
   disabled: boolean;
+  /** Icon only, with the label in a tooltip and the count as a corner dot. */
+  collapsed: boolean;
   /** Live count shown beside the label; 0 renders nothing. */
   badge: number;
   /** True when at least one of those is blocked on this human. */
   badgeUrgent: boolean;
   onSelect: () => void;
 }) {
+  // The badge is aria-hidden, so the count has to reach the name here.
+  const name = badge > 0 ? `${def.label} (${badge} running)` : def.label;
+  const badgeColor = (badgeUrgent ? WAITING_BADGE_COLOR : 'informative') as CounterBadgeColor;
+  // Collapsed passes no children at all: any child, even `false`, makes Fluent
+  // treat the button as labelled and add the icon's label-side margin, which
+  // pulls the icon off centre.
+  const children = collapsed ? undefined : (
+    <>
+      {def.label}
+      {badge > 0 && (
+        <RowTrailing>
+          <CounterBadge
+            aria-hidden
+            count={badge}
+            appearance="filled"
+            size={STATUS_BADGE_SIZE}
+            // Fluent's CounterBadge type omits 'warning' from `color`, but
+            // the styles are the shared Badge ones — the yellow fill and its
+            // dark number render exactly like any other filled warning badge.
+            color={badgeColor}
+          />
+        </RowTrailing>
+      )}
+    </>
+  );
+  const button = (
+    <Button
+      appearance="subtle"
+      icon={<def.icon />}
+      disabled={disabled}
+      aria-current={selected ? 'page' : undefined}
+      aria-label={badge > 0 || collapsed ? name : undefined}
+      onClick={onSelect}
+      // The same rail geometry every other sidebar row spreads in: with the
+      // 24px badge in the trailing slot, Fluent's own 5px vertical padding
+      // would grow this row to 36px while its neighbours stayed 32px.
+      style={{
+        ...SIDEBAR_ROW_STYLE,
+        ...(collapsed ? SIDEBAR_RAIL_ROW_STYLE : null),
+        width: '100%',
+        background: selected ? 'var(--colorNeutralBackground2)' : undefined,
+      }}
+    >
+      {children}
+    </Button>
+  );
+
   return (
     <div style={{ position: 'relative' }}>
       {selected && (
@@ -88,44 +173,21 @@ function NavItem({ def, selected, disabled, badge, badgeUrgent, onSelect }: {
           }}
         />
       )}
-      <Button
-        appearance="subtle"
-        icon={<def.icon />}
-        disabled={disabled}
-        aria-current={selected ? 'page' : undefined}
-        // The badge is aria-hidden, so the count has to reach the name here.
-        aria-label={badge > 0 ? `${def.label} (${badge} running)` : undefined}
-        onClick={onSelect}
-        // The same rail geometry every other sidebar row spreads in: with the
-        // 24px badge in the trailing slot, Fluent's own 5px vertical padding
-        // would grow this row to 36px while its neighbours stayed 32px.
-        style={{
-          ...SIDEBAR_ROW_STYLE,
-          width: '100%',
-          background: selected ? 'var(--colorNeutralBackground2)' : undefined,
-        }}
-      >
-        {def.label}
-        {badge > 0 && (
-          <RowTrailing>
-            <CounterBadge
-              aria-hidden
-              count={badge}
-              appearance="filled"
-              size={STATUS_BADGE_SIZE}
-              // Fluent's CounterBadge type omits 'warning' from `color`, but
-              // the styles are the shared Badge ones — the yellow fill and its
-              // dark number render exactly like any other filled warning badge.
-              color={(badgeUrgent ? WAITING_BADGE_COLOR : 'informative') as CounterBadgeColor}
-            />
-          </RowTrailing>
-        )}
-      </Button>
+      {collapsed ? (
+        <Tooltip content={name} relationship="label" positioning="after">
+          {button}
+        </Tooltip>
+      ) : button}
+      {collapsed && badge > 0 && (
+        <span aria-hidden style={{ position: 'absolute', top: 3, right: 3, display: 'flex', pointerEvents: 'none' }}>
+          <CounterBadge aria-hidden dot count={badge} appearance="filled" size="small" color={badgeColor} />
+        </span>
+      )}
     </div>
   );
 }
 
-export function Sidebar({ page, onSelectPage, onOpenRun }: SidebarProps) {
+export function Sidebar({ page, onSelectPage, onOpenRun, collapsed = false, onToggleCollapsed }: SidebarProps) {
   const capabilities = useCapabilities();
   const workspacePath = useAppStore(state => state.workspacePath);
   const showOngoingRuns = useAppStore(state => state.appState?.showOngoingRuns ?? true);
@@ -136,7 +198,8 @@ export function Sidebar({ page, onSelectPage, onOpenRun }: SidebarProps) {
   const urgent = useAppStore(state => waitingJobs(state.jobs).length > 0);
   const ongoing = useAppStoreStable(state => ongoingJobs(state.jobs), sameOngoingRows);
   const remoteListening = useAppStore(state => state.remoteAccess?.listening ?? false);
-  const hasOngoingRuns = showOngoingRuns && ongoing.length > 0;
+  // The rail has no room for the list; the Activity badge covers live runs.
+  const hasOngoingRuns = !collapsed && showOngoingRuns && ongoing.length > 0;
 
   function group(name: NavGroup) {
     return (
@@ -152,6 +215,7 @@ export function Sidebar({ page, onSelectPage, onOpenRun }: SidebarProps) {
               // shell is refusing to show would just be wrong.
               selected={page === def.id && !gated}
               disabled={gated}
+              collapsed={collapsed}
               badge={def.id === 'activity' ? running : 0}
               badgeUrgent={urgent}
               onSelect={() => onSelectPage(def.id)}
@@ -177,12 +241,12 @@ export function Sidebar({ page, onSelectPage, onOpenRun }: SidebarProps) {
         overflow: 'hidden',
         borderRight: '1px solid var(--colorNeutralStroke2)',
         padding: 8,
-        width: 220,
+        width: collapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH_EXPANDED,
         flexShrink: 0,
         boxSizing: 'border-box',
       }}
     >
-      <WorkspaceSwitcher />
+      <WorkspaceSwitcher compact={collapsed} />
       <div style={{ height: SIDEBAR_GROUP_GAP }} />
       <div
         data-testid="sidebar-scroll-region"
@@ -210,12 +274,17 @@ export function Sidebar({ page, onSelectPage, onOpenRun }: SidebarProps) {
         )}
         {remoteListening && (
           <>
-            <RemoteAccessIndicator />
+            <RemoteAccessIndicator collapsed={collapsed} />
             <div style={{ height: SIDEBAR_GROUP_GAP }} />
           </>
         )}
       </div>
       {group('app')}
+      {onToggleCollapsed && (
+        <div style={{ marginTop: SIDEBAR_ROW_GAP }}>
+          <CollapseToggle collapsed={collapsed} onToggle={onToggleCollapsed} />
+        </div>
+      )}
     </nav>
   );
 }

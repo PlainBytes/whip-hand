@@ -27,6 +27,7 @@ pub fn empty_app_state() -> Value {
         "workspaces": {},
         "runsRetention": { "maxPerWorkspace": 0 },
         "showOngoingRuns": true,
+        "sidebarCollapsed": false,
         "editor": { "kind": "vscode" },
         "keybindings": {},
         "runDrafts": [],

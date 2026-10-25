@@ -13,6 +13,7 @@ const GROUP_LABELS: Record<ActionGroup, string> = {
   pages: 'Pages',
   run: 'Run',
   files: 'Files',
+  view: 'View',
 };
 
 /** Modifier keys pressed on their own: not a chord yet, keep waiting. */

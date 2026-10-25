@@ -894,6 +894,9 @@ pub struct AppState {
     pub workspaces: serde_json::Map<String, Value>,
     pub runs_retention: RunsRetention,
     pub show_ongoing_runs: bool,
+    /// Whether the desktop sidebar is collapsed to its icon rail.
+    #[serde(default)]
+    pub sidebar_collapsed: bool,
     pub editor: EditorPreference,
     /// Per-action chord overrides. A missing key means the action's default,
     /// `null` means deliberately unbound.
@@ -1120,6 +1123,9 @@ pub struct SetUiStateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub show_ongoing_runs: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sidebar_collapsed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub editor: Option<EditorPreference>,

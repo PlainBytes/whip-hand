@@ -71,11 +71,20 @@ export function App({
   const workspaceIdentityKey = useAppStore(state => state.workspaceIdentityKey);
   const pendingWorkspaceSwitch = useAppStore(state => state.pendingWorkspaceSwitch);
   const client = useAgentClient();
+  const sidebarCollapsed = useAppStore(state => state.appState?.sidebarCollapsed ?? false);
+  const patchAppState = useAppStore(state => state.patchAppState);
   useStartupRestore(client, capabilities);
   // Replays runs that started before this client connected — see use-job-attach.ts.
   useJobAttach(client);
 
   useShortcut('workspace.quickSwitch', useCallback(() => setQuickSwitchOpen(true), []));
+  const toggleSidebar = useCallback(() => {
+    // Read live, not from the render closure, so back-to-back toggles don't repeat a stale value.
+    const next = !(useAppStore.getState().appState?.sidebarCollapsed ?? false);
+    patchAppState({ sidebarCollapsed: next });
+    void client.request('setUiState', { sidebarCollapsed: next }).catch(() => {});
+  }, [client, patchAppState]);
+  useShortcut('view.toggleSidebar', toggleSidebar);
   useWindowTitle();
 
   const recentWorkspaces = useAppStore(state => state.appState?.recentWorkspaces);
@@ -177,7 +186,13 @@ export function App({
         <UpdateBanner />
         <AgentDownBanner />
         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-          <Sidebar page={page} onSelectPage={requestPage} onOpenRun={job => void openRun(job)} />
+          <Sidebar
+            page={page}
+            onSelectPage={requestPage}
+            onOpenRun={job => void openRun(job)}
+            collapsed={sidebarCollapsed}
+            onToggleCollapsed={toggleSidebar}
+          />
           <main
             style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
           >

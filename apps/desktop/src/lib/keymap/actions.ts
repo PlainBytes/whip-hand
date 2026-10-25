@@ -2,7 +2,7 @@ import type { PageId } from '../../nav.ts';
 
 /** Every keyboard shortcut, as a named action with its default binding. */
 
-export type ActionGroup = 'tabs' | 'workspaces' | 'pages' | 'run' | 'files';
+export type ActionGroup = 'tabs' | 'workspaces' | 'pages' | 'run' | 'files' | 'view';
 
 export interface ActionDef {
   id: string;
@@ -61,6 +61,7 @@ export const ACTIONS = [
   { id: 'run.focusTerminal', label: 'Focus terminal', group: 'run', defaultChord: both('Mod+Alt+KeyT') },
   { id: 'run.openInEditor', label: 'Open run in editor', group: 'run', defaultChord: both('Mod+Alt+KeyE') },
   { id: 'files.find', label: 'Find in document', group: 'files', defaultChord: both('Mod+KeyF') },
+  { id: 'view.toggleSidebar', label: 'Toggle sidebar', group: 'view', defaultChord: both('Mod+KeyB') },
 ] as const satisfies readonly ActionDef[];
 
 export type ActionId = (typeof ACTIONS)[number]['id'];

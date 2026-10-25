@@ -419,6 +419,7 @@ pub fn app_state() -> S {
             Raw::Map(m)
         }),
         "showOngoingRuns" => Default(b(Bool), || Raw::Bool(true)),
+        "sidebarCollapsed" => Default(b(Bool), || Raw::Bool(false)),
         "editor" => Default(b(editor_preference()), || {
             let mut m = Record::new();
             m.insert("kind".to_string(), Raw::Str("vscode".to_string()));
@@ -579,6 +580,7 @@ pub fn params(method: &str) -> Option<S> {
             "theme" => o(THEME),
             "runsRetention" => o(runs_retention()),
             "showOngoingRuns" => o(Bool),
+            "sidebarCollapsed" => o(Bool),
             "editor" => o(editor_preference()),
             "keybindings" => o(Rec(b(Nullable(b(Str))))),
             "tui" => o(tui_preferences()),

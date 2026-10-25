@@ -253,7 +253,11 @@ export type RunTabsState = { tabs: Array<RunTabRef>,
  */
 active: string | null, };
 
-export type AppState = { schemaVersion: 1, recentWorkspaces: Array<RecentWorkspace>, window: WindowState | null, lastPage: string | null, theme: ThemePreference, workspaces: Record<string, WorkspaceMemory>, runsRetention: RunsRetention, showOngoingRuns: boolean, editor: EditorPreference, 
+export type AppState = { schemaVersion: 1, recentWorkspaces: Array<RecentWorkspace>, window: WindowState | null, lastPage: string | null, theme: ThemePreference, workspaces: Record<string, WorkspaceMemory>, runsRetention: RunsRetention, showOngoingRuns: boolean, 
+/**
+ * Whether the desktop sidebar is collapsed to its icon rail.
+ */
+sidebarCollapsed: boolean, editor: EditorPreference, 
 /**
  * Per-action chord overrides. A missing key means the action's default,
  * `null` means deliberately unbound.
@@ -288,7 +292,7 @@ detachKey?: DetachKey, };
 
 export type DetachKey = "ctrl-bracket" | "ctrl-backslash" | "ctrl-caret" | "ctrl-underscore";
 
-export type SetUiStateParams = { window?: WindowState | null, lastPage?: string | null, theme?: ThemePreference, runsRetention?: RunsRetention, showOngoingRuns?: boolean, editor?: EditorPreference, 
+export type SetUiStateParams = { window?: WindowState | null, lastPage?: string | null, theme?: ThemePreference, runsRetention?: RunsRetention, showOngoingRuns?: boolean, sidebarCollapsed?: boolean, editor?: EditorPreference, 
 /**
  * Replaces the whole override map.
  */

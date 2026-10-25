@@ -8,16 +8,12 @@ import { isWaitingJob, useAppStore, type AppState, type JobState } from '../stat
 import { openWorkspace } from '../lib/workspace-switch.ts';
 import type { AnyTab, DraftTab, RunTab } from '../lib/run-tabs.ts';
 import { basename } from '../lib/workspace-identity.ts';
-import { useGlobalShortcut } from '../lib/use-global-shortcut.ts';
-import {
-  ALL_NEXT_TAB, CLOSE_TAB, NEW_RUN_TAB, NEXT_TAB, PREVIOUS_TAB, RUNS_LIST_TAB, WORKSPACE_NEXT_TAB, isModalOpen, shortcutLabel,
-} from '../lib/tab-shortcuts.ts';
+import { useShortcut } from '../lib/use-global-shortcut.ts';
+import { isModalOpen } from '../lib/tab-shortcuts.ts';
+import { actionLabel } from '../lib/keymap/keymap.ts';
 import { RunStatusIcon, stateLabel, type RunStatus } from './OngoingRuns.tsx';
 import { WorkspaceDot } from './WorkspaceDot.tsx';
 import { isTabHere, tabWorkspace, useDiscardDraft } from './use-discard-draft.tsx';
-
-/** Ctrl+Tab chords stay live while a terminal has focus; TerminalPanel stops xterm from eating them. */
-const TERMINAL_PASSTHROUGH = { allowInTerminal: true };
 
 /** TabList values are strings, so the Runs tab (activeTabKey null) needs one that no run key can be. */
 const RUNS_TAB_VALUE = '\u0000runs';
@@ -64,7 +60,7 @@ function stateOf(job: JobState | undefined): string | undefined {
 
 function CloseButton({ label, onClose }: { label: string; onClose: () => void }) {
   return (
-    <Tooltip content={`Close (${shortcutLabel(CLOSE_TAB)} on the active tab)`} relationship="description">
+    <Tooltip content={`Close (${actionLabel('tabs.close')} on the active tab)`} relationship="description">
       {/* A span, not a Button: the Tab is already a <button>, and nesting one is invalid. */}
       <span
         role="button"
@@ -249,23 +245,24 @@ export function RunTabStrip() {
     if (next !== undefined) void select(next);
   }
 
-  useGlobalShortcut(NEXT_TAB, () => step(1));
-  useGlobalShortcut(WORKSPACE_NEXT_TAB, stepInWorkspace, true, TERMINAL_PASSTHROUGH);
-  useGlobalShortcut(ALL_NEXT_TAB, () => step(1), true, TERMINAL_PASSTHROUGH);
-  useGlobalShortcut(PREVIOUS_TAB, () => step(-1));
-  useGlobalShortcut(CLOSE_TAB, () => {
+  // The Ctrl+Tab actions are allowInTerminal: they stay live while a terminal has focus (TerminalPanel stops xterm eating them).
+  useShortcut('tabs.next', () => step(1));
+  useShortcut('tabs.nextInWorkspace', stepInWorkspace);
+  useShortcut('tabs.nextAll', () => step(1));
+  useShortcut('tabs.previous', () => step(-1));
+  useShortcut('tabs.close', () => {
     if (isModalOpen()) return;
     const { tabs: open, activeTabKey: active } = useAppStore.getState();
     const current = open.find(candidate => candidate.key === active);
     // The Runs tab (no active key) cannot be closed.
     if (current !== undefined) close(current);
   });
-  useGlobalShortcut(NEW_RUN_TAB, () => {
+  useShortcut('tabs.newRun', () => {
     if (isModalOpen()) return;
     const { workspacePath, workspaceIdentityKey, createDraft, openDraftTab } = useAppStore.getState();
     if (workspacePath) openDraftTab(createDraft({ workdir: workspacePath, identityKey: workspaceIdentityKey ?? undefined }));
   });
-  useGlobalShortcut(RUNS_LIST_TAB, () => {
+  useShortcut('tabs.runsList', () => {
     if (!isModalOpen()) void select(RUNS_TAB_VALUE);
   });
 
@@ -299,7 +296,7 @@ export function RunTabStrip() {
             aria-label="Runs"
             style={{ width: 'max-content' }}
           >
-            <Tooltip content={`Runs list (${shortcutLabel(RUNS_LIST_TAB)})`} relationship="description" positioning="below">
+            <Tooltip content={`Runs list (${actionLabel('tabs.runsList')})`} relationship="description" positioning="below">
               <Tab value={RUNS_TAB_VALUE}>Runs</Tab>
             </Tooltip>
             {tabs.map(tab => (tab.kind === 'draft' ? (
@@ -318,7 +315,7 @@ export function RunTabStrip() {
           <Menu>
             <MenuTrigger disableButtonEnhancement>
               <Tooltip
-                content={`All tabs (${shortcutLabel(PREVIOUS_TAB)} / ${shortcutLabel(NEXT_TAB)} to cycle; ${shortcutLabel(WORKSPACE_NEXT_TAB)} this workspace, ${shortcutLabel(ALL_NEXT_TAB)} all)`}
+                content={`All tabs (${actionLabel('tabs.previous')} / ${actionLabel('tabs.next')} to cycle; ${actionLabel('tabs.nextInWorkspace')} this workspace, ${actionLabel('tabs.nextAll')} all)`}
                 relationship="label"
               >
                 <Button appearance="subtle" size="small" icon={<MoreHorizontal20Regular />} />

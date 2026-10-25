@@ -22,7 +22,7 @@ import {
   detectKind, isTextKind, languageForPath, mimeTypeForPath, MAX_PREVIEW_BYTES, previewCapFor, type FileKind,
 } from '../files/file-kind.ts';
 import { highlightCode } from '../files/highlight.ts';
-import { useGlobalShortcut } from '../lib/use-global-shortcut.ts';
+import { useShortcut } from '../lib/use-global-shortcut.ts';
 import { PdfView } from '../pdf/PdfView.tsx';
 import { formatBytes } from '../shared/format.ts';
 import { errorMessage } from '../lib/error-message.ts';
@@ -61,15 +61,6 @@ const STICK_TO_BOTTOM_PX = 40;
 
 /** Nothing found (yet): the starting counts, and what closing find restores. */
 const NO_MATCHES: FindMatchCounts = { total: 0, unreachable: 0 };
-
-/**
- * Find in document. Window-level rather than pane-level: the realistic
- * sequence is to click a file in the tree and then press Ctrl/Cmd-F, and a
- * handler on the preview only ever fires once focus is already inside it.
- * The webview has no native find to fall back on, so a shortcut that needs
- * the reader to guess where to click first is a shortcut nobody finds.
- */
-const FIND_IN_DOCUMENT = { key: 'f', mod: true } as const;
 
 /** Test-only: the module-scope view preference otherwise outlives every test. */
 export function resetPreviewViewForTests(): void {
@@ -619,7 +610,12 @@ export function FilePreview({
   // shortcut that would do nothing here has to be absent rather than
   // silent, or Ctrl/Cmd-F over an image or a plain text file would be
   // swallowed by a pane that had no use for it.
-  useGlobalShortcut(FIND_IN_DOCUMENT, openFind, findable);
+  // Find in document is window-level rather than pane-level: the realistic
+  // sequence is to click a file in the tree and then press Ctrl/Cmd-F, and a
+  // handler on the preview only ever fires once focus is already inside it.
+  // The webview has no native find to fall back on, so a shortcut that needs
+  // the reader to guess where to click first is a shortcut nobody finds.
+  useShortcut('files.find', openFind, findable);
 
   // Hooks must run before the early returns below, so the editor's controls
   // are assembled here rather than beside the buttons they drive.

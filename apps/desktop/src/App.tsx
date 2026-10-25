@@ -6,7 +6,7 @@ import { useDarkTheme } from './lib/use-dark-theme.ts';
 import { useStartupRestore } from './lib/use-startup-restore.ts';
 import { useJobAttach } from './lib/use-job-attach.ts';
 import { openWorkspace, settlePendingWorkspaceSwitch } from './lib/workspace-switch.ts';
-import { useGlobalShortcut } from './lib/use-global-shortcut.ts';
+import { useShortcut } from './lib/use-global-shortcut.ts';
 import { useWindowTitle } from './lib/use-window-title.ts';
 import { noopNotifier, type Notifier } from './lib/notifier.ts';
 import { SPINNER_STYLE_HOOKS } from './lib/spinner-clip.ts';
@@ -20,9 +20,6 @@ import { UnsavedChangesDialog } from './components/UnsavedChangesDialog.tsx';
 import { WorkspaceQuickSwitch } from './components/WorkspaceQuickSwitch.tsx';
 import type { RunTabTarget } from './lib/run-tabs.ts';
 import type { PageId } from './nav.ts';
-
-/** The one window-level shortcut: everything else hangs off the control it acts on. */
-const QUICK_SWITCH = { key: 'k', mod: true } as const;
 
 export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
   const capabilities = useCapabilities();
@@ -46,7 +43,7 @@ export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
   // Replays runs that started before this client connected — see use-job-attach.ts.
   useJobAttach(client);
 
-  useGlobalShortcut(QUICK_SWITCH, useCallback(() => setQuickSwitchOpen(true), []));
+  useShortcut('workspace.quickSwitch', useCallback(() => setQuickSwitchOpen(true), []));
   useWindowTitle();
 
   function goToPage(next: PageId, runTarget?: RunTabTarget): void {

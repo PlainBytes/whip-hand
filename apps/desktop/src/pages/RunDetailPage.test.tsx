@@ -20,8 +20,12 @@ import { hasInjectedStyle } from '../test/badge-style.ts';
 // xterm's real canvas rendering anyway, so mock the whole panel at this
 // boundary instead.
 let terminalPanelMountCount = 0;
-vi.mock('../components/TerminalPanel.tsx', () => ({
-  TerminalPanel: (props: { jobId: string; cols?: number; rows?: number; onResize: (cols: number, rows: number) => void }) => {
+const terminalFocus = vi.fn();
+vi.mock('../components/TerminalPanel.tsx', async () => {
+  const { forwardRef, useImperativeHandle } = await import('react');
+  return {
+  TerminalPanel: forwardRef(function TerminalPanelMock(props: { jobId: string; cols?: number; rows?: number; onResize: (cols: number, rows: number) => void }, ref) {
+    useImperativeHandle(ref, () => ({ focus: terminalFocus }), []);
     // useState initializer runs once per mount — a fresh instance number per
     // React mount (not per render) lets tests detect remounts (e.g. RunDetailPage
     // keying TerminalPanel on ptyStepId so a new interactive session gets a
@@ -32,8 +36,9 @@ vi.mock('../components/TerminalPanel.tsx', () => ({
         <button onClick={() => props.onResize(120, 40)}>trigger resize</button>
       </div>
     );
-  },
-}));
+  }),
+  };
+});
 
 function renderRunDetail(
   jobId?: string, onBack = vi.fn(), onRunAgain = vi.fn(), runId?: string, onResumed = vi.fn(),
@@ -893,6 +898,67 @@ describe('RunDetailPage', () => {
       return parsed;
     });
     expect(req.params).toEqual({ jobId: 'job-6', cols: 120, rows: 40 });
+  });
+
+  it('Mod+Alt+T focuses the live terminal, and leaves the key alone without one', async () => {
+    terminalFocus.mockClear();
+    const { transport } = renderRunDetail('job-ft');
+    emitWhiphandEvent(transport, 'job-ft', 'run-ft', { type: 'step:start', stepId: 'triage', kind: 'agent', runner: 'claude', mode: 'interactive' }, 't1');
+    await respondGetRun(transport, { runId: 'run-ft', runDir: '/ws/.whiphand/runs/run-ft', status: 'running', artifacts: [] });
+
+    const before = new KeyboardEvent('keydown', { code: 'KeyT', ctrlKey: true, altKey: true, bubbles: true, cancelable: true });
+    document.body.dispatchEvent(before);
+    expect(terminalFocus).not.toHaveBeenCalled();
+    expect(before.defaultPrevented).toBe(false);
+
+    transport.emitLine({ method: 'ptyStarted', params: { jobId: 'job-ft', stepId: 'triage', cols: 80, rows: 24 } });
+    await screen.findByTestId('terminal-panel-mock');
+    const event = new KeyboardEvent('keydown', { code: 'KeyT', ctrlKey: true, altKey: true, bubbles: true, cancelable: true });
+    document.body.dispatchEvent(event);
+    expect(terminalFocus).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  describe('run.openInEditor', () => {
+    const chord = () => document.body.dispatchEvent(
+      new KeyboardEvent('keydown', { code: 'KeyE', ctrlKey: true, altKey: true, bubbles: true, cancelable: true }),
+    );
+    const run = { runId: 'run-1', runDir: '/ws/.whiphand/runs/run-1', status: 'succeeded' as const, artifacts: [] };
+
+    it('opens the worktree, as the button does', async () => {
+      const openInEditor = vi.fn().mockResolvedValue(undefined);
+      const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1', vi.fn(), { host: 'desktop', localFiles: true, openInEditor });
+      await respondGetRun(transport, { ...run, worktree: { path: '.whiphand/worktrees/run-1', branch: 'whiphand/run-1' } });
+      await screen.findByTestId('run-detail-worktree');
+      chord();
+      await waitFor(() => expect(openInEditor).toHaveBeenCalledWith('/ws', '.whiphand/worktrees/run-1', expect.anything()));
+    });
+
+    it('opens the work directory without a worktree', async () => {
+      const openInEditor = vi.fn().mockResolvedValue(undefined);
+      const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1', vi.fn(), { host: 'desktop', localFiles: true, openInEditor });
+      await respondGetRun(transport, { ...run, subdir: 'api' });
+      await screen.findByTestId('run-detail-subdir');
+      chord();
+      await waitFor(() => expect(openInEditor).toHaveBeenCalledWith('/ws', 'api', expect.anything()));
+    });
+
+    it('shows a launch failure in the run view', async () => {
+      const openInEditor = vi.fn().mockRejectedValue(new Error('editor not found on PATH'));
+      const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1', vi.fn(), { host: 'desktop', localFiles: true, openInEditor });
+      await respondGetRun(transport, run);
+      await screen.findByText(/run-1/);
+      chord();
+      expect(await screen.findByTestId('run-open-error')).toHaveTextContent('editor not found on PATH');
+    });
+
+    it('is not live without the capability', async () => {
+      const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-1', vi.fn(), { host: 'browser', localFiles: false });
+      await respondGetRun(transport, run);
+      const event = new KeyboardEvent('keydown', { code: 'KeyE', ctrlKey: true, altKey: true, bubbles: true, cancelable: true });
+      document.body.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    });
   });
 
   it('offers End session only while an interactive session is live, and ends just that session', async () => {

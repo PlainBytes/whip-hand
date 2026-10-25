@@ -3,7 +3,7 @@ import { Button, Spinner, Text, Tooltip } from '@fluentui/react-components';
 import { Open16Regular, Open20Regular } from '@fluentui/react-icons';
 import { useCapabilities } from '../capabilities.tsx';
 import { useAppStore } from '../state/store.ts';
-import { DEFAULT_EDITOR, editorLabel } from '../lib/editor.ts';
+import { DEFAULT_EDITOR, editorLabel, openRunInEditor } from '../lib/editor.ts';
 import { errorMessage } from '../lib/error-message.ts';
 
 const DESKTOP_ONLY = 'Opening in an editor is only available in the desktop app';
@@ -50,7 +50,7 @@ export function OpenInEditorButton({ workdir, worktree, subdir, size, iconOnly, 
     setLocalError(null);
     onError?.(null);
     try {
-      await openInEditor(workdir, worktree?.path ?? subdir ?? '', editor);
+      await openRunInEditor(openInEditor, editor, { workdir, worktree, subdir });
     } catch (err) {
       const message = errorMessage(err);
       if (onError) onError(message);

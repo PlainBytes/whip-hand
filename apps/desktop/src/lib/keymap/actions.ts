@@ -58,6 +58,8 @@ export const ACTIONS = [
   { id: 'page.activity', label: 'Go to Activity', group: 'pages', defaultChord: null },
   { id: 'page.doctor', label: 'Go to Doctor', group: 'pages', defaultChord: null },
   { id: 'page.preferences', label: 'Go to Preferences', group: 'pages', defaultChord: both('Mod+Comma') },
+  { id: 'run.focusTerminal', label: 'Focus terminal', group: 'run', defaultChord: both('Mod+Alt+KeyT') },
+  { id: 'run.openInEditor', label: 'Open run in editor', group: 'run', defaultChord: both('Mod+Alt+KeyE') },
   { id: 'files.find', label: 'Find in document', group: 'files', defaultChord: both('Mod+KeyF') },
 ] as const satisfies readonly ActionDef[];
 

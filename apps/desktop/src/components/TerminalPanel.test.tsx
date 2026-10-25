@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
-import { TerminalPanel } from './TerminalPanel.tsx';
+import { createRef } from 'react';
+import { TerminalPanel, type TerminalPanelHandle } from './TerminalPanel.tsx';
 import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
 import { AgentClientProvider } from '../agent/agent-context.tsx';
@@ -53,6 +54,7 @@ function makeFakeHandle() {
       keyCb = cb;
     }),
     write: vi.fn(),
+    focus: vi.fn(),
     dispose: vi.fn(),
   };
   const fitAddon = {
@@ -158,6 +160,17 @@ describe('TerminalPanel', () => {
     expect(handle.term.open).toHaveBeenCalledTimes(1);
     unmount();
     expect(handle.term.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('focuses the terminal through its ref handle', () => {
+    const ref = createRef<TerminalPanelHandle>();
+    render(
+      <AgentClientProvider client={new AgentClient(new MockTransport())}>
+        <TerminalPanel ref={ref} jobId="job-1" onResize={vi.fn()} />
+      </AgentClientProvider>,
+    );
+    ref.current?.focus();
+    expect(handle.term.focus).toHaveBeenCalledTimes(1);
   });
 
   it('sends ptyInput with correctly base64-encoded (unicode-safe) data on term.onData', async () => {

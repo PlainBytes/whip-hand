@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
 import { decodeBase64ToBytes, encodeToBase64 } from '../lib/base64.ts';
@@ -53,7 +53,15 @@ export function isShiftEnter(event: KeyboardEvent): boolean {
  * The store buffers ptyData/ptyExit unconditionally, whether or not this panel is
  * mounted, so mounting always replays everything the job has produced so far.
  */
-export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProps) {
+export interface TerminalPanelHandle {
+  /** Puts the keyboard cursor in the terminal (xterm's helper textarea). */
+  focus(): void;
+}
+
+export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>(function TerminalPanel(
+  { jobId, cols, rows, onResize },
+  ref,
+) {
   const client = useAgentClient();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const handleRef = useRef<TerminalHandle | null>(null);
@@ -74,6 +82,8 @@ export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProp
   /** True while a backlog slice is in xterm's queue and the next one waits on its callback. */
   const pumpingRef = useRef(false);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  useImperativeHandle(ref, () => ({ focus: () => handleRef.current?.term.focus() }), []);
 
   // Read through a ref: the key handler is installed once per terminal, and a rebind must apply to it live.
   const keymap = useKeymap();
@@ -243,4 +253,4 @@ export function TerminalPanel({ jobId, cols, rows, onResize }: TerminalPanelProp
       }}
     />
   );
-}
+});

@@ -23,6 +23,8 @@ const TODAY_OTHER: Record<string, string> = {
   'workspace.quickSwitch': 'Mod+KeyK',
   'workspace.previous': 'Mod+Alt+KeyP',
   'page.preferences': 'Mod+Comma',
+  'run.focusTerminal': 'Mod+Alt+KeyT',
+  'run.openInEditor': 'Mod+Alt+KeyE',
   'files.find': 'Mod+KeyF',
 };
 

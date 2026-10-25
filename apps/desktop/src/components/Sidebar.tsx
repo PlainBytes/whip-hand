@@ -1,5 +1,6 @@
 import { Button, CounterBadge, Tooltip, type CounterBadgeProps } from '@fluentui/react-components';
 import { pagesInGroup, type NavGroup, type PageDef, type PageId } from '../nav.ts';
+import { PanelLeftContractRegular, PanelLeftExpandRegular } from '@fluentui/react-icons';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher.tsx';
 import { OngoingRuns, sameOngoingRows } from './OngoingRuns.tsx';
 import {
@@ -10,6 +11,7 @@ import { WAITING_BADGE_COLOR, STATUS_BADGE_SIZE } from '../lib/status-style.ts';
 import { useAppStore, ongoingJobs, waitingJobs, type JobState } from '../state/store.ts';
 import { useAppStoreStable } from '../state/use-stable-selector.ts';
 import { useCapabilities } from '../capabilities.tsx';
+import { IS_MAC } from '../lib/tab-shortcuts.ts';
 
 /** Fluent's CounterBadge restricts `color` in its types only — see NavItem. */
 type CounterBadgeColor = CounterBadgeProps['color'];
@@ -70,6 +72,30 @@ export interface SidebarProps {
   onOpenRun: (job: JobState) => void;
   /** Render the narrow icon rail instead of the full sidebar. */
   collapsed?: boolean;
+  /** When given, a toggle row ends the nav; App owns persisting the choice. */
+  onToggleCollapsed?: () => void;
+}
+
+function CollapseToggle({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+  const label = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+  return (
+    <Tooltip content={`${label} (${IS_MAC ? 'Cmd' : 'Ctrl'}+B)`} relationship="description" positioning="after">
+      <Button
+        appearance="subtle"
+        icon={collapsed ? <PanelLeftExpandRegular /> : <PanelLeftContractRegular />}
+        aria-label={label}
+        aria-expanded={!collapsed}
+        onClick={onToggle}
+        style={{
+          ...SIDEBAR_ROW_STYLE,
+          ...(collapsed ? SIDEBAR_RAIL_ROW_STYLE : null),
+          width: '100%',
+        }}
+      >
+        {collapsed ? undefined : label}
+      </Button>
+    </Tooltip>
+  );
 }
 
 function NavItem({ def, selected, disabled, collapsed, badge, badgeUrgent, onSelect }: {
@@ -161,7 +187,7 @@ function NavItem({ def, selected, disabled, collapsed, badge, badgeUrgent, onSel
   );
 }
 
-export function Sidebar({ page, onSelectPage, onOpenRun, collapsed = false }: SidebarProps) {
+export function Sidebar({ page, onSelectPage, onOpenRun, collapsed = false, onToggleCollapsed }: SidebarProps) {
   const capabilities = useCapabilities();
   const workspacePath = useAppStore(state => state.workspacePath);
   const showOngoingRuns = useAppStore(state => state.appState?.showOngoingRuns ?? true);
@@ -254,6 +280,11 @@ export function Sidebar({ page, onSelectPage, onOpenRun, collapsed = false }: Si
         )}
       </div>
       {group('app')}
+      {onToggleCollapsed && (
+        <div style={{ marginTop: SIDEBAR_ROW_GAP }}>
+          <CollapseToggle collapsed={collapsed} onToggle={onToggleCollapsed} />
+        </div>
+      )}
     </nav>
   );
 }

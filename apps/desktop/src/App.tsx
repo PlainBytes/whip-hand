@@ -23,6 +23,7 @@ import type { PageId } from './nav.ts';
 
 /** The one window-level shortcut: everything else hangs off the control it acts on. */
 const QUICK_SWITCH = { key: 'k', mod: true } as const;
+const TOGGLE_SIDEBAR = { key: 'b', mod: true } as const;
 
 export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
   const capabilities = useCapabilities();
@@ -42,11 +43,20 @@ export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
   const workspaceIdentityKey = useAppStore(state => state.workspaceIdentityKey);
   const pendingWorkspaceSwitch = useAppStore(state => state.pendingWorkspaceSwitch);
   const client = useAgentClient();
+  const sidebarCollapsed = useAppStore(state => state.appState?.sidebarCollapsed ?? false);
+  const patchAppState = useAppStore(state => state.patchAppState);
   useStartupRestore(client, capabilities);
   // Replays runs that started before this client connected — see use-job-attach.ts.
   useJobAttach(client);
 
   useGlobalShortcut(QUICK_SWITCH, useCallback(() => setQuickSwitchOpen(true), []));
+  const toggleSidebar = useCallback(() => {
+    // Read live, not from the render closure, so back-to-back toggles don't repeat a stale value.
+    const next = !(useAppStore.getState().appState?.sidebarCollapsed ?? false);
+    patchAppState({ sidebarCollapsed: next });
+    void client.request('setUiState', { sidebarCollapsed: next }).catch(() => {});
+  }, [client, patchAppState]);
+  useGlobalShortcut(TOGGLE_SIDEBAR, toggleSidebar);
   useWindowTitle();
 
   function goToPage(next: PageId, runTarget?: RunTabTarget): void {
@@ -120,7 +130,13 @@ export function App({ notifier = noopNotifier }: { notifier?: Notifier } = {}) {
         <UpdateBanner />
         <AgentDownBanner />
         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-          <Sidebar page={page} onSelectPage={requestPage} onOpenRun={job => void openRun(job)} />
+          <Sidebar
+            page={page}
+            onSelectPage={requestPage}
+            onOpenRun={job => void openRun(job)}
+            collapsed={sidebarCollapsed}
+            onToggleCollapsed={toggleSidebar}
+          />
           <main
             style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
           >

@@ -15,13 +15,14 @@ import { workspaceColorVar } from '../lib/workspace-identity.ts';
 
 const BROWSER_CAPS: AppCapabilities = { host: 'browser', localFiles: false };
 
-function renderSidebar(page: PageId = 'runs', capabilities?: AppCapabilities, collapsed = false) {
+function renderSidebar(page: PageId = 'runs', capabilities?: AppCapabilities, collapsed = false, withToggle = false) {
   const onSelectPage = vi.fn();
+  const onToggleCollapsed = withToggle ? vi.fn() : undefined;
   const onOpenRun = vi.fn();
   const tree = (
     <FluentProvider theme={webLightTheme}>
       <AgentClientProvider client={new AgentClient(new MockTransport())}>
-        <Sidebar page={page} onSelectPage={onSelectPage} onOpenRun={onOpenRun} collapsed={collapsed} />
+        <Sidebar page={page} onSelectPage={onSelectPage} onOpenRun={onOpenRun} collapsed={collapsed} onToggleCollapsed={onToggleCollapsed} />
       </AgentClientProvider>
     </FluentProvider>
   );
@@ -30,12 +31,39 @@ function renderSidebar(page: PageId = 'runs', capabilities?: AppCapabilities, co
       ? <CapabilitiesProvider value={capabilities}>{tree}</CapabilitiesProvider>
       : tree,
   );
-  return { onSelectPage, onOpenRun };
+  return { onSelectPage, onOpenRun, onToggleCollapsed };
 }
 
 afterEach(() => useAppStore.setState({ workspacePath: null, appState: null, remoteAccess: null, jobs: {} }));
 
 describe('Sidebar', () => {
+  describe('collapse toggle', () => {
+    it('renders no toggle without a handler', () => {
+      renderSidebar();
+      expect(screen.queryByRole('button', { name: /sidebar/ })).toBeNull();
+    });
+
+    it('offers "Collapse sidebar" with visible text when expanded, as the last row', () => {
+      const { onToggleCollapsed } = renderSidebar('runs', undefined, false, true);
+      const button = screen.getByRole('button', { name: 'Collapse sidebar' });
+      expect(button).toHaveTextContent('Collapse sidebar');
+      expect(button).toHaveAttribute('aria-expanded', 'true');
+      const buttons = within(screen.getByRole('navigation', { name: 'Main' })).getAllByRole('button');
+      expect(buttons[buttons.length - 1]).toBe(button);
+      fireEvent.click(button);
+      expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
+    });
+
+    it('offers an icon-only "Expand sidebar" when collapsed', () => {
+      const { onToggleCollapsed } = renderSidebar('runs', undefined, true, true);
+      const button = screen.getByRole('button', { name: 'Expand sidebar' });
+      expect(button).not.toHaveTextContent('Expand sidebar');
+      expect(button).toHaveAttribute('aria-expanded', 'false');
+      fireEvent.click(button);
+      expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('renders both groups inside one navigation landmark', () => {
     useAppStore.setState({ workspacePath: '/ws' });
     renderSidebar();

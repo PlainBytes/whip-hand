@@ -243,6 +243,64 @@ describe('App', () => {
   });
 });
 
+describe('App sidebar collapse', () => {
+  afterEach(() => {
+    useAppStore.setState({ appState: null, restoreDone: false, page: 'runs', workspacePath: null });
+  });
+
+  function uiStateRequests(transport: MockTransport) {
+    return transport.sent
+      .map(line => JSON.parse(line) as { method: string; params?: Record<string, unknown> })
+      .filter(r => r.method === 'setUiState' && 'sidebarCollapsed' in (r.params ?? {}))
+      .map(r => r.params?.sidebarCollapsed);
+  }
+
+  async function renderLoaded(sidebarCollapsed?: boolean) {
+    const { transport } = renderApp();
+    await respond(transport, 'hello', { version: '0.0.0', protocolVersion: 1 });
+    await respond(transport, 'getAppState', { ...EMPTY_APP_STATE, sidebarCollapsed });
+    return transport;
+  }
+
+  it('toggles from the button and saves each choice', async () => {
+    const transport = await renderLoaded();
+    fireEvent.click(await screen.findByRole('button', { name: 'Collapse sidebar' }));
+    expect(await screen.findByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
+    expect(await screen.findByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument();
+    expect(uiStateRequests(transport)).toEqual([true, false]);
+  });
+
+  it('toggles on Ctrl+B and Meta+B', async () => {
+    const transport = await renderLoaded();
+    await screen.findByRole('button', { name: 'Collapse sidebar' });
+    fireEvent.keyDown(window, { key: 'b', ctrlKey: true });
+    await screen.findByRole('button', { name: 'Expand sidebar' });
+    fireEvent.keyDown(window, { key: 'b', metaKey: true });
+    await screen.findByRole('button', { name: 'Collapse sidebar' });
+    expect(uiStateRequests(transport)).toEqual([true, false]);
+  });
+
+  it('leaves the sidebar alone when Ctrl+B is pressed in an input', async () => {
+    const transport = await renderLoaded();
+    await screen.findByRole('button', { name: 'Collapse sidebar' });
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    try {
+      fireEvent.keyDown(input, { key: 'b', ctrlKey: true });
+    } finally {
+      input.remove();
+    }
+    expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument();
+    expect(uiStateRequests(transport)).toEqual([]);
+  });
+
+  it('starts as the rail when sidebarCollapsed is saved', async () => {
+    await renderLoaded(true);
+    expect(await screen.findByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument();
+  });
+});
+
 /**
  * Leaving the Files tab unmounts FilesPage, so its own in-page dirty guard
  * can never see this exit — the flag has to be readable from App. See the

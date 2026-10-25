@@ -108,6 +108,10 @@ export interface StepState {
   verdict?: 'pass' | 'fail';
   startedAt?: string;
   endedAt?: string;
+  /** Total ms this row spent waiting (closed waits). Absent until it has waited; see activeMs. */
+  waitedMs?: number;
+  /** When the wait still open began; absent when not waiting. */
+  waitingSince?: string;
   /**
    * Summary of what a headless step is doing, folded from step:progress.
    * Mirrors the manifest's own progress field, so a step card reads the same

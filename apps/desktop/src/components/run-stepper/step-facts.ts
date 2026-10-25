@@ -1,6 +1,6 @@
 import type { StepState } from '../../state/store.ts';
 import type { StepNode } from '../../lib/run-tree.ts';
-import { elapsedMs, formatElapsed } from '../../shared/format.ts';
+import { activeMs, formatElapsed } from '../../shared/format.ts';
 import { usageParts } from '../../shared/log-rows.ts';
 
 /**
@@ -41,13 +41,16 @@ export function metaLine(step: StepState): string {
 }
 
 /**
- * How long this execution has taken: frozen once it ends, still counting
- * against `clock` while it runs, and absent entirely before it starts — a
- * pending step showing '0s' would read as one that ran instantly.
+ * How long this execution has been working, waits excluded: frozen once it
+ * ends, still counting against `clock` while it runs (but standing still
+ * while a wait is open), and absent before it starts — a pending step showing
+ * '0s' would read as one that ran instantly. A manual or approval gate is all
+ * waiting for a human, so it shows no duration at all.
  */
 export function stepDuration(step: StepState, clock: number): string | null {
+  if (step.kind === 'manual' || step.kind === 'approval') return null;
   const end = step.endedAt === undefined ? clock : Date.parse(step.endedAt);
-  const ms = elapsedMs(step.startedAt, end);
+  const ms = activeMs(step, end);
   return ms === null ? null : formatElapsed(ms);
 }
 

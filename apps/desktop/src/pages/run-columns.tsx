@@ -11,7 +11,7 @@ import { BranchFork16Regular, LockClosed16Regular } from '@fluentui/react-icons'
 import type { CSSProperties } from 'react';
 import type { RunSummary } from '../agent/client.ts';
 import { StatusBadge } from '../components/StatusBadge.tsx';
-import { elapsedMs, formatElapsed } from '../shared/format.ts';
+import { activeMs, formatElapsed } from '../shared/format.ts';
 
 export type RecentRun = RunSummary & { workspace: string; identityKey?: string };
 
@@ -32,15 +32,15 @@ export function formatStarted(startedAt: unknown): string {
   return Number.isNaN(parsed) ? '—' : new Date(parsed).toLocaleString();
 }
 
+/** The run's active time — waits for the human, gates, stop-to-resume gaps and host suspend are not counted. */
 function formatDuration(run: RunSummary): string {
-  const startedAt = typeof run.startedAt === 'string' ? run.startedAt : undefined;
   // A run that never wrote endedAt (one still going, or one abandoned before
   // core could repair it) must not keep growing on every poll — fall back to
   // the last sign of life we have.
   const lastSeen = [run.endedAt, run.heartbeatAt, run.updatedAt]
     .find((v): v is string => typeof v === 'string');
   const end = lastSeen ? Date.parse(lastSeen) : Date.now();
-  const ms = elapsedMs(startedAt, end);
+  const ms = activeMs(run, end);
   return ms === null ? '—' : formatElapsed(ms);
 }
 

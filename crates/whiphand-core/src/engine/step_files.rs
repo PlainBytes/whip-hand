@@ -116,6 +116,17 @@ pub fn parse_await_state(raw: &str) -> Option<AwaitReason> {
     }
 }
 
+/// One poll of a step's await-state file: `Some(state)` when the file says
+/// something (`None` inside: it is gone, so nothing is awaited), and `None`
+/// when it cannot be read or says nothing, which must not change a reported state.
+pub fn read_await_state(path: &str) -> Option<Option<AwaitReason>> {
+    match std::fs::read(path) {
+        Ok(bytes) => parse_await_state(&String::from_utf8_lossy(&bytes)).map(Some),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(None),
+        Err(_) => None,
+    }
+}
+
 /// The session id a `sessionIdCapture` runner wrote, or None when missing or blank.
 pub fn read_session_capture(run_dir: &str, step_id: &str) -> Option<String> {
     let path = step_file_path(run_dir, step_id, SESSION_CAPTURE).ok()?;

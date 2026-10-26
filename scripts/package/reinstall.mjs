@@ -23,6 +23,7 @@
  * sure a regression there fails loudly instead of installing yesterday's build.
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { runSync } from '../lib/exec.mjs';
 import { buildDesktopBundles } from './desktop.mjs';
@@ -105,7 +106,21 @@ if (isInstalled(packageName)) {
 // dependencies (libwebkit2gtk-4.1-0, libgtk-3-0) that dpkg will not resolve.
 // The path must be absolute — apt only treats an argument as a local file when
 // it contains a slash, otherwise it looks the name up in the repos and fails.
-process.stdout.write('\n');
-run([...sudo, 'apt-get', 'install', '-y', path.resolve(deb)]);
+//
+// apt reads local files as its sandbox user `_apt`, which cannot traverse a
+// private home directory (0750/0700). It then falls back to reading as root
+// and prints an alarming "Download is performed unsandboxed as root" notice.
+// Installing from a world-readable copy in the temp dir keeps apt sandboxed.
+const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whiphand-reinstall-'));
+try {
+  fs.chmodSync(stagingDir, 0o755);
+  const staged = path.join(stagingDir, path.basename(deb));
+  fs.copyFileSync(deb, staged);
+  fs.chmodSync(staged, 0o644);
+  process.stdout.write('\n');
+  run([...sudo, 'apt-get', 'install', '-y', staged]);
+} finally {
+  fs.rmSync(stagingDir, { recursive: true, force: true });
+}
 
 process.stdout.write(`\n  installed  ${capture(['dpkg-query', '-W', '-f=${Package} ${Version}', packageName])}\n`);

@@ -30,6 +30,12 @@ function suggestName(existing: WorkflowEntry[], base: string, scope: Scope): str
   return `${base}-copy-${n}`;
 }
 
+const CLONE_TARGET: Record<Scope, string> = {
+  project: 'This workspace',
+  workspace: 'Workspace (my user folder)',
+  global: 'Global (every workspace)',
+};
+
 /**
  * Clones one workflow file under a new name, staying in the source's own
  * scope. Follows the `DeleteWorkflowDialog` pattern: mounted only while
@@ -54,7 +60,7 @@ export function CloneWorkflowDialog({
     try {
       await client.request('cloneWorkflow', {
         workdir, name, newName,
-        ...(source === 'global' ? { scope: source } : {}),
+        ...(source !== 'project' ? { scope: source } : {}),
       });
       onCloned();
     } catch (err) {
@@ -87,7 +93,7 @@ export function CloneWorkflowDialog({
                 <Input value={newName} onChange={(_e, data) => setNewName(data.value)} />
               </Field>
               <Text size={200} style={{ color: 'var(--colorNeutralForeground3)' }}>
-                {source === 'global' ? 'Clones into: Global (every workspace)' : 'Clones into: This workspace'}
+                {`Clones into: ${CLONE_TARGET[source]}`}
               </Text>
               {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
             </div>

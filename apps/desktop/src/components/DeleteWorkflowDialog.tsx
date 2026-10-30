@@ -13,8 +13,8 @@ export interface DeleteWorkflowDialogProps {
   name: string;
   source: Scope;
   workdir: string;
-  /** A project workflow that overrides a global one of the same name: deleting it uncovers the global one. */
-  revealsGlobal: boolean;
+  /** The lower scope whose same-named workflow deleting this one uncovers, or null. */
+  uncovers: Scope | null;
   /** The file is gone — deleted now, or already missing, which is the same outcome. */
   onDeleted: () => void;
   onDismiss: () => void;
@@ -26,7 +26,7 @@ export interface DeleteWorkflowDialogProps {
  * a closed-but-mounted Fluent Dialog is still a live Modalizer (see RunsPage).
  */
 export function DeleteWorkflowDialog({
-  name, source, workdir, revealsGlobal, onDeleted, onDismiss,
+  name, source, workdir, uncovers, onDeleted, onDismiss,
 }: DeleteWorkflowDialogProps) {
   const client = useAgentClient();
   const [busy, setBusy] = useState(false);
@@ -39,7 +39,7 @@ export function DeleteWorkflowDialog({
       // `deleted: false` means the file was already gone — still the goal.
       await client.request('deleteWorkflow', {
         workdir, name,
-        ...(source === 'global' ? { scope: source } : {}),
+        ...(source !== 'project' ? { scope: source } : {}),
       });
       onDeleted();
     } catch (err) {
@@ -71,8 +71,8 @@ export function DeleteWorkflowDialog({
               ) : (
                 <Text>This deletes its file. This cannot be undone. Past runs keep their own copy.</Text>
               )}
-              {source === 'project' && revealsGlobal && (
-                <Text>{`The global '${name}' workflow will be used in this workspace instead.`}</Text>
+              {uncovers && (
+                <Text>{`The ${uncovers} '${name}' workflow will be used in this workspace instead.`}</Text>
               )}
               {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
             </div>

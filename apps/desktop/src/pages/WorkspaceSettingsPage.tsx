@@ -28,7 +28,8 @@ const DEFAULT_OVERRIDE_MAX_RETAINED = 10;
 /**
  * What each leaf falls back to when nothing in this workspace's own
  * `.whiphand/config.yaml` sets it — whiphand-core's `default_config()`
- * (config.rs), duplicated here. This page only ever
+ * (config.rs), duplicated here — except `artifacts_dir`, left empty because
+ * the server resolves it from the workspace's storage. This page only ever
  * needs it to preview what "inherited" resolves to, never to actually merge
  * a config — the server is the one source of truth for that.
  */
@@ -36,7 +37,9 @@ const DEFAULT_CONFIG_LEAVES: WorkspaceConfig = {
   defaults: { runner: 'claude' },
   on_findings: 'report',
   loop: { max_iterations: 3 },
-  artifacts_dir: '.whiphand/runs',
+  // Empty: the default is the runs folder of the workspace's storage, which
+  // depends on where the workspace keeps its data; the server resolves it.
+  artifacts_dir: '',
   runs: { max_retained: null, auto_name: false, max_attachment_mb: 25 },
 };
 
@@ -193,7 +196,14 @@ export function WorkspaceSettingsPage() {
   }
 
   /** "(inherited from global)" hint, or a Reset link when there's an override to clear. */
-  function InheritanceNote({ isOverride, onReset }: { isOverride: boolean; onReset: () => void }) {
+  function InheritanceNote({ isOverride, onReset, resettable = true }: { isOverride: boolean; onReset: () => void; resettable?: boolean }) {
+    if (isOverride && !resettable) {
+      return (
+        <Text size={200} italic style={{ color: 'var(--colorNeutralForeground3)' }}>
+          Set for this workspace
+        </Text>
+      );
+    }
     if (!isOverride) {
       return (
         <Text size={200} italic style={{ color: 'var(--colorNeutralForeground3)' }}>
@@ -285,10 +295,13 @@ export function WorkspaceSettingsPage() {
       >
         <Input
           value={form.artifacts_dir}
+          placeholder="Runs folder of this workspace's storage"
           onChange={(_e, data) => update(prev => ({ ...prev, artifacts_dir: data.value }))}
         />
         <InheritanceNote
           isOverride={overrides.artifactsDir}
+          // Nothing inherited to fall back to: the server picks the default.
+          resettable={inherited.artifacts_dir !== ''}
           onReset={() => update(prev => ({ ...prev, artifacts_dir: inherited.artifacts_dir }))}
         />
       </Field>

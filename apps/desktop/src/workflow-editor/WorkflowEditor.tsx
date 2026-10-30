@@ -27,8 +27,8 @@ export interface WorkflowEditorProps {
   name: string;
   source: Scope;
   workdir: string;
-  /** A project workflow overriding a global one of the same name — the delete confirmation says so. */
-  revealsGlobal: boolean;
+  /** The scope a delete would uncover (a lower-scope workflow of the same name), or null. */
+  uncovers: Scope | null;
   onSaved: () => void;
   onCancel: () => void;
   /** The workflow's file is gone. Any unsaved draft goes with it — the delete confirmation covers that. */
@@ -66,7 +66,7 @@ const NO_PROBLEMS: DraftValidation = { problems: [], fieldProblems: [] };
 const REVALIDATE_MS = 250;
 
 export function WorkflowEditor({
-  workflow, name, source, workdir, revealsGlobal, onSaved, onCancel, onDeleted,
+  workflow, name, source, workdir, uncovers, onSaved, onCancel, onDeleted,
 }: WorkflowEditorProps) {
   const client = useAgentClient();
   const draftApi = useWorkflowDraft(workflow);
@@ -222,7 +222,7 @@ export function WorkflowEditor({
     try {
       await client.request('updateWorkflow', {
         workdir, name, workflow: normalized,
-        ...(source === 'global' ? { scope: source } : {}),
+        ...(source !== 'project' ? { scope: source } : {}),
       });
       setConfirmingGlobalSave(false);
       onSaved();
@@ -258,6 +258,7 @@ export function WorkflowEditor({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Text weight="semibold" size={500}>
             Edit workflow: {name}
+            {source === 'workspace' && <Badge appearance="tint" color="informative" style={{ marginLeft: 8 }}>Workspace</Badge>}
             {source === 'global' && <Badge appearance="tint" color="brand" style={{ marginLeft: 8 }}>Global</Badge>}
           </Text>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -288,7 +289,7 @@ export function WorkflowEditor({
           name={name}
           source={source}
           workdir={workdir}
-          revealsGlobal={revealsGlobal}
+          uncovers={uncovers}
           onDeleted={onDeleted}
           onDismiss={() => setConfirmingDelete(false)}
         />

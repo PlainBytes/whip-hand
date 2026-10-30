@@ -727,7 +727,7 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
                 style={NARROW}
                 hint={worktreeUnavailable
                   ? 'The workspace root is not a git repository. Choose a work directory to use a worktree.'
-                  : <>Changes land on a new branch in <code>.whiphand/worktrees/</code>. Other runs keep the workspace.</>}
+                  : <>Changes land on a new branch in a separate worktree. Other runs keep the workspace.</>}
               >
                 <Switch
                   data-testid="worktree-switch"

@@ -115,6 +115,7 @@ export function WorkflowLane({
         }}
       >
         <Text weight="semibold" size={500}>{entry.name}</Text>
+        {entry.source === 'workspace' && <Badge appearance="tint" color="informative">Workspace</Badge>}
         {entry.source === 'global' && <Badge appearance="tint" color="brand">Global</Badge>}
         {workflow && (
           <Text size={200} style={{ color: 'var(--colorNeutralForeground3)' }}>{stepAndLoopCounts(workflow)}</Text>

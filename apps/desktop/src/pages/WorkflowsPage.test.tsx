@@ -77,10 +77,76 @@ describe('WorkflowsPage', () => {
     const { transport } = renderWorkflowsPage();
     await respond(transport, 'listWorkflows', []);
     fireEvent.click(await screen.findByRole('button', { name: /set up this workspace/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Set up' }));
     await respond(transport, 'initWorkspace', { created: ['.whiphand/config.yaml', '.whiphand/workflows/feature.yaml'] });
     // page refreshes the list afterwards — answer the SECOND listWorkflows request
     await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
     expect(await screen.findByText('feature')).toBeInTheDocument();
+  });
+
+  it('hides the set-up CTA once setup on the defaults lists workspace-scope workflows', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', []);
+    fireEvent.click(await screen.findByRole('button', { name: /set up this workspace/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Set up' }));
+    await respond(transport, 'initWorkspace', { created: ['workflows/feature.yaml'] });
+    await respond(transport, 'listWorkflows', [{ ...FEATURE_WORKFLOW, source: 'workspace' }]);
+    expect(await screen.findByText('feature')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /set up this workspace/i })).not.toBeInTheDocument();
+  });
+
+  it('sends the chosen storage and workflows from the set-up dialog', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', []);
+    fireEvent.click(await screen.findByRole('button', { name: /set up this workspace/i }));
+    // Defaults to the user folder, recommended against long paths.
+    expect(await screen.findByRole('radio', { name: /my user folder/i })).toBeChecked();
+    fireEvent.click(screen.getByRole('radio', { name: /this repo/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /use global workflows/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Set up' }));
+    const req = await waitFor(() => {
+      const parsed = transport.sentRequest(transport.sent.length - 1);
+      if (parsed.method !== 'initWorkspace') throw new Error('initWorkspace not sent yet');
+      return parsed;
+    });
+    expect(req.params).toEqual({ workdir: '/ws', storage: 'local', workflows: 'global' });
+  });
+
+  it('sends nothing when the set-up dialog is cancelled', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', []);
+    fireEvent.click(await screen.findByRole('button', { name: /set up this workspace/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Set up' })).not.toBeInTheDocument());
+    expect(transport.sent.some(l => (JSON.parse(l) as { method: string }).method === 'initWorkspace')).toBe(false);
+  });
+
+  it('badges workspace-scope workflows', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [
+      FEATURE_WORKFLOW,
+      { ...FEATURE_WORKFLOW, name: 'mine', source: 'workspace' },
+    ]);
+    expect(await screen.findByText('Workspace')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['project', ['workspace', 'global'], 'workspace'],
+    ['project', ['global'], 'global'],
+    ['workspace', ['global'], 'global'],
+  ])('deleting a %s workflow says it uncovers the %s one', async (source, lower, expected) => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [
+      { ...FEATURE_WORKFLOW, source },
+      ...(lower as string[]).map(s => ({ ...FEATURE_WORKFLOW, source: s })),
+    ]);
+    fireEvent.click((await screen.findAllByRole('button', { name: /delete/i }))[0]);
+    expect(await screen.findByText(new RegExp(`The ${expected} 'feature' workflow will be used`))).toBeInTheDocument();
   });
 
   it('creates a workflow through the New workflow dialog', async () => {

@@ -58,7 +58,7 @@ function renderEditor(
         name={overrides.name ?? workflow.name}
         source={overrides.source ?? 'project'}
         workdir="/ws"
-        revealsGlobal={false}
+        uncovers={null}
         onSaved={onSaved}
         onCancel={onCancel}
         onDeleted={onDeleted}

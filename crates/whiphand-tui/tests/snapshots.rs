@@ -8,7 +8,7 @@ use whiphand_core::time::date_parse;
 use whiphand_protocol::{self as p, JobStatus};
 use whiphand_tui::client::notify::Notification;
 use whiphand_tui::cmd::{LogPage, Then};
-use whiphand_tui::model::Model;
+use whiphand_tui::model::{ArtifactOwner, Model};
 use whiphand_tui::msg::Msg;
 use whiphand_tui::update::update;
 use whiphand_tui::view::view;
@@ -332,6 +332,7 @@ fn run_detail_artifacts() {
     reply(
         &mut model,
         Then::ArtifactStat {
+            owner: ArtifactOwner::Detail,
             run_id: RUN.into(),
             name: name.clone(),
         },
@@ -340,6 +341,7 @@ fn run_detail_artifacts() {
     reply(
         &mut model,
         Then::Artifact {
+            owner: ArtifactOwner::Detail,
             run_id: RUN.into(),
             name,
         },

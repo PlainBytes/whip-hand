@@ -3,6 +3,7 @@
 use whiphand_protocol::Scope;
 
 use crate::client::Call;
+use crate::model::ArtifactOwner;
 
 #[derive(Debug, PartialEq)]
 pub enum Cmd {
@@ -75,10 +76,12 @@ pub enum Then {
         run_id: String,
     },
     ArtifactStat {
+        owner: ArtifactOwner,
         run_id: String,
         name: String,
     },
     Artifact {
+        owner: ArtifactOwner,
         run_id: String,
         name: String,
     },
@@ -116,6 +119,7 @@ pub enum Then {
     WorkspaceInit(String),
     /// `writeArtifact` for a run's artifact.
     ArtifactWritten {
+        owner: ArtifactOwner,
         run_id: String,
         name: String,
     },

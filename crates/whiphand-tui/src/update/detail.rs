@@ -7,14 +7,12 @@ use whiphand_core::path_form::is_absolute_any_platform;
 use whiphand_protocol as p;
 
 use super::PAGE;
-use crate::client::{
-    self, Call, GetJobScrollback, GetRun, GetWorkingDiff, ReadArtifact, ReadRunLog, StatArtifact,
-    WriteArtifact,
-};
+use super::artifact::{self, Edited};
+use crate::client::{self, Call, GetJobScrollback, GetRun, GetWorkingDiff, ReadRunLog};
 use crate::cmd::{Cmd, External, LogPage, Then};
-use crate::model::detail::{ArtifactBody, ArtifactView, DiffState, Pane, RunDetail, Tab, TreeLine};
+use crate::model::detail::{ArtifactView, DiffState, Pane, RunDetail, Tab, TreeLine};
 use crate::model::log::LogEntry;
-use crate::model::{EditTarget, Model, Route};
+use crate::model::{ArtifactOwner, EditTarget, Model, Route};
 use crate::view::keymap::Action;
 
 /// `run.log` lines per read, as the desktop pages it.
@@ -23,8 +21,6 @@ const LOG_PAGE: u32 = 500;
 const REFETCH_DELAY_MS: f64 = 250.0;
 /// A foreign run is re-read every second while on screen.
 const FOREIGN_POLL_TICKS: u32 = 10;
-/// Artifacts bigger than this are left to the pager.
-const MAX_ARTIFACT_BYTES: u64 = 1024 * 1024;
 
 fn get_run(d: &RunDetail) -> Cmd {
     Cmd::Rpc(Call::new::<GetRun>(
@@ -65,14 +61,6 @@ fn get_diff(d: &RunDetail) -> Cmd {
         },
         Then::Diff(d.run_id.clone()),
     ))
-}
-
-fn artifact_ref(d: &RunDetail, name: &str) -> p::ArtifactRefParams {
-    p::ArtifactRefParams {
-        workdir: d.workdir.clone(),
-        run_id: d.run_id.clone(),
-        name: name.to_string(),
-    }
 }
 
 /// Opens `run_id`'s detail on top of the current screen.
@@ -175,7 +163,6 @@ pub fn on_event(model: &mut Model, run_id: Option<&str>, kind: &str, entry: LogE
     model.dirty |= visible && added && shown;
 }
 
-/// A failed reply this screen owns; whether it was one.
 /// `$EDITOR` is back with an artifact: saved when it changed, as long as
 /// the file is still what was read.
 pub fn on_artifact_edited(
@@ -183,16 +170,10 @@ pub fn on_artifact_edited(
     target: EditTarget,
     result: Result<String, String>,
 ) -> Vec<Cmd> {
-    let EditTarget::Artifact {
-        workdir,
-        run_id,
-        name,
-        text,
-        mtime_ms,
-    } = target
-    else {
+    let EditTarget::Artifact { run_id, name, .. } = &target else {
         return vec![];
     };
+    let (run_id, name) = (run_id.clone(), name.clone());
     let edited = match result {
         Ok(edited) => edited,
         Err(why) => {
@@ -203,22 +184,18 @@ pub fn on_artifact_edited(
     let Some(d) = detail_for(model, &run_id) else {
         return vec![];
     };
-    if edited == text {
-        d.artifact_draft = None;
-        model.toast = Some((format!("{name} unchanged"), model.now_ms + super::TOAST_MS));
-        return vec![];
+    match artifact::on_edited(target, edited) {
+        Some(Edited::Unchanged) => {
+            d.artifact_draft = None;
+            model.toast = Some((format!("{name} unchanged"), model.now_ms + super::TOAST_MS));
+            vec![]
+        }
+        Some(Edited::Save { draft, cmd }) => {
+            d.artifact_draft = Some((name, draft));
+            vec![cmd]
+        }
+        None => vec![],
     }
-    d.artifact_draft = Some((name.clone(), edited.clone()));
-    vec![Cmd::Rpc(Call::new::<WriteArtifact>(
-        p::WriteArtifactParams {
-            workdir,
-            run_id: run_id.clone(),
-            name: name.clone(),
-            content: edited,
-            expected_mtime_ms: Some(mtime_ms),
-        },
-        Then::ArtifactWritten { run_id, name },
-    ))]
 }
 
 /// `e` on the Artifacts tab: the open artifact in `$EDITOR`, or the edit
@@ -234,31 +211,21 @@ fn edit_artifact(model: &mut Model) -> Vec<Cmd> {
         model.notice = Some("open the artifact first (Enter)".into());
         return vec![];
     };
-    let (ArtifactBody::Text(text), Some(mtime_ms)) = (&view.body, view.mtime_ms) else {
-        model.notice = Some(format!("{} is not text the TUI can edit", view.name));
-        return vec![];
-    };
     let draft = d
         .artifact_draft
         .as_ref()
         .filter(|(n, _)| *n == view.name)
         .map(|(_, t)| t.clone());
-    model.edit_target = Some(EditTarget::Artifact {
-        workdir: d.workdir.clone(),
-        run_id: d.run_id.clone(),
-        name: view.name.clone(),
-        text: text.clone(),
-        mtime_ms,
-    });
-    let suffix = if view.name.ends_with(".md") {
-        ".md"
-    } else {
-        ".txt"
-    };
-    vec![Cmd::Suspend(External::Editor {
-        text: draft.unwrap_or_else(|| text.clone()),
-        suffix,
-    })]
+    match artifact::edit(view, ArtifactOwner::Detail, &d.workdir, &d.run_id, draft) {
+        Ok((target, cmd)) => {
+            model.edit_target = Some(target);
+            vec![cmd]
+        }
+        Err(why) => {
+            model.notice = Some(why);
+            vec![]
+        }
+    }
 }
 
 /// The artifact as it is on disk now, read again.
@@ -266,18 +233,15 @@ fn reread_artifact(model: &mut Model, run_id: &str, name: &str) -> Vec<Cmd> {
     let Some(d) = detail_for(model, run_id) else {
         return vec![];
     };
-    if let Some(view) = d.artifact_view.as_mut().filter(|v| v.name == name) {
-        view.body = ArtifactBody::Loading;
-        view.mtime_ms = None;
-        view.scroll = 0;
-    }
-    vec![Cmd::Rpc(Call::new::<StatArtifact>(
-        artifact_ref(d, name),
-        Then::ArtifactStat {
-            run_id: run_id.to_string(),
-            name: name.to_string(),
-        },
-    ))]
+    let view = d.artifact_view.as_mut().filter(|v| v.name == name);
+    let (workdir, run_id) = (d.workdir.clone(), d.run_id.clone());
+    vec![artifact::reread(
+        view,
+        ArtifactOwner::Detail,
+        &workdir,
+        &run_id,
+        name,
+    )]
 }
 
 /// `writeArtifact` refused (the run wrote the file since it was read): the
@@ -289,14 +253,28 @@ pub fn on_write_refused(model: &mut Model, run_id: &str, name: &str, message: &s
     reread_artifact(model, run_id, name)
 }
 
+/// The detail's open artifact, when it is `name` of `run_id`.
+fn view_for<'a>(model: &'a mut Model, run_id: &str, name: &str) -> Option<&'a mut ArtifactView> {
+    detail_for(model, run_id)
+        .and_then(|d| d.artifact_view.as_mut())
+        .filter(|v| v.name == name)
+}
+
+/// A failed reply this screen owns; whether it was one.
 pub fn on_error(model: &mut Model, then: &Then, message: &str) -> bool {
     match then {
-        Then::ArtifactStat { run_id, name } | Then::Artifact { run_id, name } => {
-            if let Some(view) = detail_for(model, run_id)
-                .and_then(|d| d.artifact_view.as_mut())
-                .filter(|v| v.name == *name)
-            {
-                view.body = ArtifactBody::Failed(message.to_string());
+        Then::ArtifactStat {
+            owner: ArtifactOwner::Detail,
+            run_id,
+            name,
+        }
+        | Then::Artifact {
+            owner: ArtifactOwner::Detail,
+            run_id,
+            name,
+        } => {
+            if let Some(view) = view_for(model, run_id, name) {
+                artifact::on_error(view, message);
             }
             true
         }
@@ -383,51 +361,37 @@ pub fn on_reply(model: &mut Model, then: Then, value: Value) -> Vec<Cmd> {
                 }
             }
         }
-        Then::ArtifactStat { run_id, name } => {
-            let decoded = client::decode::<StatArtifact>(value);
+        Then::ArtifactStat {
+            owner: ArtifactOwner::Detail,
+            run_id,
+            name,
+        } => {
             let Some(d) = detail_for(model, &run_id) else {
                 return vec![];
             };
+            let (workdir, run_id) = (d.workdir.clone(), d.run_id.clone());
             let Some(view) = d.artifact_view.as_mut().filter(|v| v.name == name) else {
                 return vec![];
             };
-            match decoded {
-                Ok(stat) if stat.size > MAX_ARTIFACT_BYTES => {
-                    view.body = ArtifactBody::TooLarge(stat.size);
-                }
-                Ok(_) => {
-                    let params = artifact_ref(d, &name);
-                    return vec![Cmd::Rpc(Call::new::<ReadArtifact>(
-                        p::ReadArtifactParams {
-                            workdir: params.workdir,
-                            run_id: params.run_id,
-                            name: params.name,
-                            encoding: Some(p::ArtifactEncoding::Utf8),
-                        },
-                        Then::Artifact { run_id, name },
-                    ))];
-                }
-                Err(e) => view.body = ArtifactBody::Failed(e),
+            return artifact::on_stat(view, ArtifactOwner::Detail, &workdir, &run_id, value)
+                .into_iter()
+                .collect();
+        }
+        Then::Artifact {
+            owner: ArtifactOwner::Detail,
+            run_id,
+            name,
+        } => {
+            if let Some(view) = view_for(model, &run_id, &name) {
+                artifact::on_read(view, value);
             }
         }
-        Then::Artifact { run_id, name } => {
-            let decoded = client::decode::<ReadArtifact>(value);
-            if let Some(view) = detail_for(model, &run_id)
-                .and_then(|d| d.artifact_view.as_mut())
-                .filter(|v| v.name == name)
-            {
-                view.body = match decoded {
-                    Ok(a) if a.content.contains('\0') => ArtifactBody::Binary(a.size),
-                    Ok(a) => {
-                        view.mtime_ms = Some(a.mtime_ms);
-                        ArtifactBody::Text(a.content)
-                    }
-                    Err(e) => ArtifactBody::Failed(e),
-                };
-            }
-        }
-        Then::ArtifactWritten { run_id, name } => {
-            if let Err(e) = client::decode::<WriteArtifact>(value) {
+        Then::ArtifactWritten {
+            owner: ArtifactOwner::Detail,
+            run_id,
+            name,
+        } => {
+            if let Err(e) = artifact::on_written(value) {
                 model.notice = Some(e);
                 return vec![];
             }
@@ -563,20 +527,10 @@ fn enter(d: &mut RunDetail) -> Vec<Cmd> {
             let Some((name, path)) = d.artifacts.get(d.artifact_cursor).cloned() else {
                 return vec![];
             };
-            d.artifact_view = Some(ArtifactView {
-                name: name.clone(),
-                path,
-                body: ArtifactBody::Loading,
-                scroll: 0,
-                mtime_ms: None,
-            });
-            vec![Cmd::Rpc(Call::new::<StatArtifact>(
-                artifact_ref(d, &name),
-                Then::ArtifactStat {
-                    run_id: d.run_id.clone(),
-                    name,
-                },
-            ))]
+            let (view, cmd) =
+                artifact::open(ArtifactOwner::Detail, &d.workdir, &d.run_id, name, path);
+            d.artifact_view = Some(view);
+            vec![cmd]
         }
         _ => vec![],
     }

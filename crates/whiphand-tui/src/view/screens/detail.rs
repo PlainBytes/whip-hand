@@ -4,16 +4,15 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, List, ListState, Paragraph, Tabs, Wrap};
-use whiphand_core::format::format_bytes;
+use ratatui::widgets::{Block, List, ListState, Paragraph, Tabs};
 use whiphand_core::run_tree::stage_stop_sentence;
 
 use crate::model::Model;
-use crate::model::detail::{ArtifactBody, ArtifactView, DiffState, Pane, RunDetail, Tab};
+use crate::model::detail::{DiffState, Pane, RunDetail, Tab};
 use crate::model::runs::row;
 use crate::update::detail::is_foreign;
 use crate::view::theme;
-use crate::view::widgets::{diff, log, markdown, tree};
+use crate::view::widgets::{artifact, diff, log, tree};
 
 /// Below this width the tree goes above the tabs instead of beside them.
 const SIDE_BY_SIDE: u16 = 100;
@@ -202,7 +201,7 @@ fn render_log(d: &RunDetail, frame: &mut Frame, area: Rect) {
 
 fn render_artifacts(d: &RunDetail, frame: &mut Frame, area: Rect) {
     if let Some(view) = &d.artifact_view {
-        render_artifact(view, frame, area);
+        artifact::render(view, frame, area);
         return;
     }
     if d.artifacts.is_empty() {
@@ -220,46 +219,6 @@ fn render_artifacts(d: &RunDetail, frame: &mut Frame, area: Rect) {
     let list = List::new(items).highlight_style(theme::selected());
     let mut state = ListState::default().with_selected(Some(d.artifact_cursor));
     frame.render_stateful_widget(list, area, &mut state);
-}
-
-fn render_artifact(view: &ArtifactView, frame: &mut Frame, area: Rect) {
-    let [title, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
-    frame.render_widget(
-        Line::from(vec![
-            Span::styled(view.name.clone(), theme::bold()),
-            Span::styled(
-                match view.body {
-                    ArtifactBody::Text(_) => "  e edit · o pager · q back",
-                    _ => "  o pager · q back",
-                },
-                theme::dim(),
-            ),
-        ]),
-        title,
-    );
-    let text: Text = match &view.body {
-        ArtifactBody::Loading => Text::styled("Loading…", theme::dim()),
-        ArtifactBody::Text(t) if view.name.ends_with(".md") => markdown::render(t),
-        ArtifactBody::Text(t) => Text::raw(t.replace('\t', "    ")),
-        ArtifactBody::TooLarge(n) => Text::styled(
-            format!(
-                "{} — too large to show here; o opens it in $PAGER",
-                format_bytes(*n as f64)
-            ),
-            theme::dim(),
-        ),
-        ArtifactBody::Binary(n) => Text::styled(
-            format!("binary, {}; o opens it in $PAGER", format_bytes(*n as f64)),
-            theme::dim(),
-        ),
-        ArtifactBody::Failed(e) => Text::styled(e.clone(), theme::error()),
-    };
-    frame.render_widget(
-        Paragraph::new(text)
-            .wrap(Wrap { trim: false })
-            .scroll((view.scroll, 0)),
-        body,
-    );
 }
 
 fn render_diff(d: &RunDetail, frame: &mut Frame, area: Rect) {

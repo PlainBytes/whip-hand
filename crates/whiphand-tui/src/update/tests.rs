@@ -4,6 +4,7 @@ use whiphand_protocol::{self as p, JobStatus, RpcError};
 
 use super::*;
 use crate::cmd::{External, LogPage};
+use crate::model::ArtifactOwner;
 use crate::model::detail::{Pane, Tab};
 use crate::model::new_run::FieldKind;
 
@@ -536,6 +537,7 @@ fn an_artifact_is_statted_then_read_then_paged() {
     let cmds = update(&mut model, code(KeyCode::Enter));
     assert_eq!(methods(&cmds), ["statArtifact"]);
     let stat = Then::ArtifactStat {
+        owner: ArtifactOwner::Detail,
         run_id: "r1".into(),
         name: "plan.md".into(),
     };
@@ -545,6 +547,7 @@ fn an_artifact_is_statted_then_read_then_paged() {
     );
     assert_eq!(methods(&cmds), ["readArtifact"]);
     let read = Then::Artifact {
+        owner: ArtifactOwner::Detail,
         run_id: "r1".into(),
         name: "plan.md".into(),
     };
@@ -1791,6 +1794,7 @@ fn an_artifact_edit_is_written_only_if_unchanged_on_disk_and_kept_if_refused() {
     update(&mut model, key('3'));
     update(&mut model, code(KeyCode::Enter));
     let read = Then::Artifact {
+        owner: ArtifactOwner::Detail,
         run_id: "r1".into(),
         name: "plan.md".into(),
     };
@@ -1837,6 +1841,7 @@ fn an_artifact_edit_is_written_only_if_unchanged_on_disk_and_kept_if_refused() {
             .contains("e opens your edit again")
     );
     let read = Then::Artifact {
+        owner: ArtifactOwner::Detail,
         run_id: "r1".into(),
         name: "plan.md".into(),
     };

@@ -578,6 +578,7 @@ fn load_workflow(
         .map_err(unreadable)?;
     let source = match resolved.source {
         Scope::Project => "project",
+        Scope::Workspace => "workspace",
         Scope::Global => "global",
     };
     if let Some(recorded) = detail.str_prop("workflowSource")

@@ -48,7 +48,7 @@ impl WorkflowsUi {
 
     /// Deleting this project workflow uncovers a global one of its name.
     pub fn reveals_global(&self, name: &str, source: Scope) -> bool {
-        source == Scope::Project
+        source != Scope::Global
             && self.list.as_ref().is_some_and(|l| {
                 l.iter()
                     .any(|e| e.source == Scope::Global && e.name == name && e.error.is_none())
@@ -59,6 +59,7 @@ impl WorkflowsUi {
 pub fn scope_word(scope: Scope) -> &'static str {
     match scope {
         Scope::Project => "project",
+        Scope::Workspace => "workspace",
         Scope::Global => "global",
     }
 }

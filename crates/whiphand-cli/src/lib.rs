@@ -74,6 +74,7 @@ async fn dispatch(matches: ArgMatches) -> CmdResult {
         "new-workflow" => commands::new_workflow(
             &string(m, "name").unwrap_or_default(),
             flag(m, "global"),
+            flag(m, "workspace"),
             &dir(m),
         ),
         "worktree" => {

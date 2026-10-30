@@ -8,7 +8,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use crate::config::{config_to_js, default_config};
-use crate::config_home::global_workflows_dir;
+use crate::config_home::{global_workflows_dir, user_workspace_dir};
 use crate::engine::workflow_js::workflow_to_js;
 use crate::node_path;
 use crate::schema::{WorkflowError, parse_workflow, validate_workflow_semantics};
@@ -82,6 +82,10 @@ impl std::fmt::Display for ScaffoldError {
 fn workflows_dir(workdir: &str, scope: Scope, config_home: &Path) -> String {
     match scope {
         Scope::Global => global_workflows_dir(config_home)
+            .to_string_lossy()
+            .into_owned(),
+        Scope::Workspace => user_workspace_dir(config_home, Path::new(workdir))
+            .join("workflows")
             .to_string_lossy()
             .into_owned(),
         Scope::Project => node_path::join(&[workdir, ".whiphand", "workflows"]),
@@ -169,8 +173,8 @@ pub fn update_workflow(
 }
 
 /// `deleteWorkflow`: removes `name.yaml`, else `name.yml`, from `scope`'s
-/// directory only, so a project override uncovers the global workflow rather
-/// than taking it too. `Ok(false)` when neither file was there.
+/// directory only, so deleting from one scope uncovers the next lower one
+/// rather than taking it too. `Ok(false)` when neither file was there.
 pub fn delete_workflow(
     workdir: &str,
     name: &str,

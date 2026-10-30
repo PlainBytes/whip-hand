@@ -291,7 +291,7 @@ fn empty() -> Raw {
     Raw::Map(Record::new())
 }
 
-pub const SCOPE: S = Enum(&["project", "global"]);
+pub const SCOPE: S = Enum(&["project", "workspace", "global"]);
 const MANUAL_CHOICE: S = Enum(&["continue", "abort", "retry"]);
 const THEME: S = Enum(&["system", "light", "dark"]);
 

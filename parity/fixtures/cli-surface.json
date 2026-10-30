@@ -162,6 +162,12 @@
           "long": "--global"
         },
         {
+          "flags": "--workspace",
+          "required": false,
+          "hasDefault": true,
+          "long": "--workspace"
+        },
+        {
           "flags": "-C <dir>",
           "required": true,
           "hasDefault": true,

@@ -20,7 +20,7 @@ export type Response = { id: number | null, result: unknown, } | { id: number | 
 
 export type Notification = { method: string, params: unknown, };
 
-export type Scope = "project" | "global";
+export type Scope = "project" | "workspace" | "global";
 
 export type JobStatus = "running" | "succeeded" | "failed" | "cancelled";
 

@@ -172,10 +172,10 @@ fn workflow_files_op(op: &Value) -> Value {
             fs::write(file, w[1].as_str().unwrap()).unwrap();
             continue;
         }
-        let scope = if step["scope"] == "global" {
-            Scope::Global
-        } else {
-            Scope::Project
+        let scope = match step["scope"].as_str() {
+            Some("global") => Scope::Global,
+            Some("workspace") => Scope::Workspace,
+            _ => Scope::Project,
         };
         let name = step["name"].as_str().unwrap();
         let path = |r: Result<String, crate::scaffold::ScaffoldError>| match r {

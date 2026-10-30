@@ -102,9 +102,11 @@ pub fn init(dir: &str) -> CmdResult {
     Ok(0)
 }
 
-pub fn new_workflow(name: &str, global: bool, dir: &str) -> CmdResult {
+pub fn new_workflow(name: &str, global: bool, workspace: bool, dir: &str) -> CmdResult {
     let scope = if global {
         Scope::Global
+    } else if workspace {
+        Scope::Workspace
     } else {
         Scope::Project
     };

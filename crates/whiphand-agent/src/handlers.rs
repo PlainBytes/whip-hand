@@ -342,10 +342,10 @@ fn workdir(p: &Value) -> String {
 }
 
 fn scope(p: &Value) -> Scope {
-    if p["scope"] == "global" {
-        Scope::Global
-    } else {
-        Scope::Project
+    match p["scope"].as_str() {
+        Some("global") => Scope::Global,
+        Some("workspace") => Scope::Workspace,
+        _ => Scope::Project,
     }
 }
 

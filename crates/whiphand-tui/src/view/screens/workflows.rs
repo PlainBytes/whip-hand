@@ -53,6 +53,7 @@ fn render_list(model: &Model, frame: &mut Frame, area: Rect) {
         };
         let scope = match e.source {
             Scope::Project => Span::raw("project"),
+            Scope::Workspace => Span::styled("workspace", theme::dim()),
             Scope::Global => Span::styled("global", theme::dim()),
         };
         Row::new(vec![

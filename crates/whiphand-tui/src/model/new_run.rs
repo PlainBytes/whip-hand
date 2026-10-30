@@ -21,6 +21,7 @@ use super::input::Input;
 pub fn ref_for(entry: &WorkflowListEntry) -> String {
     match entry.source {
         Scope::Global => format!("global:{}", entry.name),
+        Scope::Workspace => format!("workspace:{}", entry.name),
         Scope::Project => entry.name.clone(),
     }
 }
@@ -32,6 +33,7 @@ pub fn find_entry<'a>(entries: &'a [WorkflowListEntry], r: &str) -> Option<&'a W
         |scope: Scope, name: &str| entries.iter().find(|e| e.source == scope && e.name == name);
     match r.split_once(':') {
         Some(("global", name)) => scoped(Scope::Global, name),
+        Some(("workspace", name)) => scoped(Scope::Workspace, name),
         Some(("project", name)) => scoped(Scope::Project, name),
         _ => entries.iter().find(|e| e.name == r),
     }

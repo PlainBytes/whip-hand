@@ -87,6 +87,7 @@ where
 #[serde(rename_all = "lowercase")]
 pub enum Scope {
     Project,
+    Workspace,
     Global,
 }
 

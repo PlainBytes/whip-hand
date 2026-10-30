@@ -20,7 +20,7 @@ pub const MARKER_NAME: &str = "workspace.yaml";
 pub const RUNS_DIR_NAME: &str = "runs";
 
 /// The folder name, under the data dir, of the run worktrees.
-pub const WORKTREES_DIR_NAME: &str = "worktrees";
+pub const WORKTREES_DIR_NAME: &str = "wt";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Storage {
@@ -177,7 +177,7 @@ mod tests {
             runs_dir(&l, &default_config()),
             ws.join(".whiphand").join("runs")
         );
-        assert_eq!(worktrees_dir(&l), ws.join(".whiphand").join("worktrees"));
+        assert_eq!(worktrees_dir(&l), ws.join(".whiphand").join("wt"));
     }
 
     #[test]
@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(l.storage, Storage::User);
         assert_eq!(l.data_dir, l.user_dir);
         assert_eq!(runs_dir(&l, &default_config()), l.user_dir.join("runs"));
-        assert_eq!(worktrees_dir(&l), l.user_dir.join("worktrees"));
+        assert_eq!(worktrees_dir(&l), l.user_dir.join("wt"));
         assert_eq!(l.config_path(), l.user_dir.join("config.yaml"));
     }
 

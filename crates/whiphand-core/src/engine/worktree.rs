@@ -52,14 +52,14 @@ pub fn resolve_request(workflow: &Workflow, run_override: Option<bool>) -> Optio
     }
 }
 
-/// Where a workspace keeps its runs' worktrees, below the workspace root.
+/// Where a workspace keeps its runs' worktrees, below the data dir.
 pub const WORKTREES_DIR: &str = crate::storage::WORKTREES_DIR_NAME;
 
 /// Recorded in run.json as `worktree`. `path` and `tree` are absolute, `/`-form (like `workdir`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct WorktreeRecord {
-    /// The worktree root: `<workspace>/.whiphand/worktrees/<run-id>-<slug>`, or `<run-id>` when the
-    /// run has no usable name. Always read from here, never rebuilt from the run id.
+    /// The worktree root: `<data dir>/wt/<suffix>-<short-slug>`, or `<suffix>` when the run has no
+    /// usable name (`<run-id>-<slug>` when that folder was taken; older runs: `worktrees/`). Always read from here, never rebuilt from the run id.
     pub path: String,
     /// Where steps run: `path` plus the workspace's prefix inside its repository.
     pub tree: String,
@@ -201,9 +201,28 @@ pub async fn preflight(workspace: &Path, base: &str) -> Result<Preflight, String
     Ok(Preflight { prefix })
 }
 
-/// The worktree folder: the run id first (chronological order, unique), then the run's slug
-/// when the run has a usable name (`run_slug_for` yields the run id otherwise).
+/// Longest slug part of a worktree folder name.
+const FOLDER_SLUG_MAX: usize = 16;
+
+/// The short worktree folder: the run id's random suffix, then the start of the run's slug when
+/// the run has a usable name (`run_slug_for` yields the run id otherwise). Short, to keep paths
+/// below the Windows limit; not unique, see [`long_folder_name`].
 fn folder_name(run_id: &str, slug: &str) -> String {
+    let suffix = run_id.rsplit('-').next().unwrap_or(run_id);
+    if slug.is_empty() || slug == run_id {
+        return suffix.to_string();
+    }
+    let short: String = slug.chars().take(FOLDER_SLUG_MAX).collect();
+    let short = short.trim_end_matches('-');
+    if short.is_empty() {
+        suffix.to_string()
+    } else {
+        format!("{suffix}-{short}")
+    }
+}
+
+/// The fallback folder when [`folder_name`] is taken: the full run id (unique), then the slug.
+fn long_folder_name(run_id: &str, slug: &str) -> String {
     if slug.is_empty() || slug == run_id {
         run_id.to_string()
     } else {
@@ -244,7 +263,10 @@ pub async fn create(
     let start = choose_start(repo, base, local_sha, sync).await;
     let parent = worktrees_parent(&data_dir.to_string_lossy())
         .map_err(|e| format!("worktree: cannot create {WORKTREES_DIR}: {e}"))?;
-    let path = node_path::join(&[&parent, &folder_name(run_id, slug)]);
+    let mut path = node_path::join(&[&parent, &folder_name(run_id, slug)]);
+    if Path::new(&path).exists() {
+        path = node_path::join(&[&parent, &long_folder_name(run_id, slug)]);
+    }
     match worktree_add(repo, Path::new(&path), branch, &start.sha).await {
         GitResult::Ok(()) => {}
         GitResult::NotARepo => return Err(not_a_repo(repo)),
@@ -396,7 +418,7 @@ pub fn record_to_event(r: &WorktreeRecord) -> JsObject {
     o
 }
 
-/// `<data dir>/worktrees`, created with a `.gitignore` that hides it from git.
+/// `<data dir>/wt`, created with a `.gitignore` that hides it from git.
 fn worktrees_parent(data_dir: &str) -> std::io::Result<String> {
     let parent = crate::storage::worktrees_dir_of(data_dir);
     std::fs::create_dir_all(&parent)?;
@@ -797,16 +819,90 @@ mod tests {
     }
 
     #[test]
-    fn folder_name_puts_the_id_first_and_drops_a_slug_that_is_the_id() {
+    fn folder_name_is_the_id_suffix_and_a_short_slug() {
+        let id = "20261030-090650-29b4";
         assert_eq!(
-            folder_name("20261009-1-ab", "fix-login"),
-            "20261009-1-ab-fix-login"
+            folder_name(id, "plan-storage-locations-for-workflows"),
+            "29b4-plan-storage-loc"
+        );
+        assert_eq!(folder_name(id, "fix-login"), "29b4-fix-login");
+        // The cut lands after a dash: it is trimmed.
+        assert_eq!(
+            folder_name(id, "plan-storage-lo-cations"),
+            "29b4-plan-storage-lo"
         );
         assert_eq!(
-            folder_name("20261009-1-ab", "20261009-1-ab"),
-            "20261009-1-ab"
+            folder_name(id, "abcdefghijklmno-pq"),
+            "29b4-abcdefghijklmno"
         );
-        assert_eq!(folder_name("20261009-1-ab", ""), "20261009-1-ab");
+        assert_eq!(folder_name(id, id), "29b4");
+        assert_eq!(folder_name(id, ""), "29b4");
+        assert_eq!(long_folder_name(id, "fix-login"), format!("{id}-fix-login"));
+        assert_eq!(long_folder_name(id, id), id);
+    }
+
+    #[tokio::test]
+    async fn create_uses_the_short_folder_then_the_long_one_when_it_is_taken() {
+        let r = repo();
+        let pf = preflight(r.path(), "HEAD").await.unwrap();
+        let id = "20261030-090650-29b4";
+        let slug = "plan-storage-locations-for-workflows";
+        let first = create(r.path(), r.path(), id, slug, "b1", "HEAD", true, &pf)
+            .await
+            .unwrap();
+        let wt = r.path().join(WORKTREES_DIR);
+        assert_eq!(WORKTREES_DIR, "wt");
+        assert_eq!(
+            first.record.path,
+            to_fwd_abs(&wt.join("29b4-plan-storage-loc").to_string_lossy())
+        );
+        assert_eq!(
+            std::fs::read_to_string(wt.join(".gitignore")).unwrap(),
+            "*\n"
+        );
+
+        let second = create(r.path(), r.path(), id, slug, "b2", "HEAD", true, &pf)
+            .await
+            .unwrap();
+        assert_eq!(
+            second.record.path,
+            to_fwd_abs(&wt.join(format!("{id}-{slug}")).to_string_lossy())
+        );
+        check(&second.record).await.unwrap();
+
+        let bare = create(r.path(), r.path(), id, id, "b3", "HEAD", true, &pf)
+            .await
+            .unwrap();
+        assert_eq!(
+            bare.record.path,
+            to_fwd_abs(&wt.join("29b4").to_string_lossy())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_worktree_recorded_under_the_old_worktrees_folder_still_checks_and_removes() {
+        let d = repo();
+        let old = d
+            .path()
+            .join(".whiphand/worktrees/20260101-000000-abcd-old");
+        sh(
+            d.path(),
+            &["worktree", "add", "-q", "-b", "old", old.to_str().unwrap()],
+        );
+        let path = old.to_string_lossy().replace('\\', "/");
+        let record = WorktreeRecord {
+            path: path.clone(),
+            tree: path,
+            branch: "old".into(),
+            base: "HEAD".into(),
+            base_sha: "abc".into(),
+            started_from: None,
+            continued_from: None,
+        };
+        check(&record).await.unwrap();
+        let ws = d.path().to_string_lossy();
+        assert_eq!(remove_sync(&ws, &record, false), RemoveWorktree::Removed);
+        assert!(!old.exists());
     }
 
     #[tokio::test]
@@ -826,7 +922,7 @@ mod tests {
         .await
         .unwrap();
         assert!(
-            created.record.path.ends_with("/worktrees/r1-fix-login"),
+            created.record.path.ends_with("/wt/r1-fix-login"),
             "{}",
             created.record.path
         );

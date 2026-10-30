@@ -35,7 +35,7 @@ steps:
     run: echo hi >> marker.txt
 ";
 
-/// The worktree is `<root>/.whiphand/worktrees/<name>`: this reaches the sub-repo's main checkout.
+/// The worktree is `<root>/.whiphand/wt/<name>`: this reaches the sub-repo's main checkout.
 const ESCAPE: &str = "name: w
 worktree:
   sync: false
@@ -187,7 +187,7 @@ fn a_worktree_run_branches_from_the_subdir_repo_and_lives_under_the_root() {
         let run = get_run(&ws, &config(), &result.run_id).unwrap();
         let record = record_from_manifest(&run.obj).unwrap();
         assert!(
-            Path::new(&record.native_tree()).starts_with(d.path().join(".whiphand/worktrees")),
+            Path::new(&record.native_tree()).starts_with(d.path().join(".whiphand/wt")),
             "{}",
             record.tree
         );

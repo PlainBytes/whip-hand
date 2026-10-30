@@ -73,12 +73,12 @@ fn a_run_in_a_user_storage_workspace_lands_in_the_user_folder() {
             result.run_dir
         );
         assert!(runs.join(&result.run_id).join("run.json").exists());
-        let worktrees = std::fs::read_dir(layout.user_dir.join("worktrees")).unwrap();
-        assert!(
-            worktrees
-                .flatten()
-                .any(|e| e.file_name().to_string_lossy().starts_with(&result.run_id))
-        );
+        let worktrees = std::fs::read_dir(layout.user_dir.join("wt")).unwrap();
+        assert!(worktrees.flatten().any(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with(result.run_id.rsplit('-').next().unwrap())
+        }));
         assert!(!ws.path().join(".whiphand").exists());
 
         let wd = ws.path().to_string_lossy().into_owned();

@@ -11,7 +11,7 @@ use whiphand_core::schema::parse_workflow;
 use whiphand_core::types::Scope;
 
 /// `mark` writes in the worktree; `escape` reaches past it into the main
-/// checkout (the worktree is `<main>/.whiphand/worktrees/<name>`).
+/// checkout (the worktree is `<main>/.whiphand/wt/<name>`).
 fn workflow(escape: bool) -> String {
     let mut text = "name: w
 worktree:

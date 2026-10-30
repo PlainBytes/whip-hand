@@ -1521,22 +1521,84 @@ fn new_clone_and_delete_ask_then_call_the_agent() {
 }
 
 #[test]
-fn setup_is_offered_and_run_opens_the_form_on_the_workflow() {
-    let mut model = workflows_on(json!([workflow_entry("feature", "global")]));
-    assert!(model.workflows.needs_setup());
-    let cmds = update(&mut model, key('i'));
+fn setup_sends_the_local_choices_and_either_prompt_cancels_without_a_request() {
+    let mut model = workflows_on(json!([]));
+    update(&mut model, key('i'));
+    update(&mut model, key('r'));
+    let cmds = update(&mut model, key('c'));
     assert_eq!(
         sent_params(&cmds, "initWorkspace"),
-        json!({ "workdir": "/w" })
+        json!({ "workdir": "/w", "storage": "local", "workflows": "local" })
     );
     let cmds = update(
         &mut model,
         Msg::Reply(
             Then::WorkspaceInit("/w".into()),
-            Ok(json!({ "created": ["a", "b"] })),
+            Ok(json!({ "created": ["a"], "storage": "local" })),
         ),
     );
     assert_eq!(methods(&cmds), ["listWorkflows"]);
+    assert!(model.toast.clone().unwrap().0.contains("in this repo"));
+
+    update(&mut model, key('i'));
+    assert!(update(&mut model, code(KeyCode::Esc)).is_empty());
+    assert!(model.dialog.is_none());
+    update(&mut model, key('i'));
+    update(&mut model, key('u'));
+    assert!(update(&mut model, code(KeyCode::Esc)).is_empty());
+    assert!(model.dialog.is_none());
+}
+
+#[test]
+fn a_workspace_workflow_is_made_in_the_workspace_scope() {
+    let mut model = workflows_on(json!([workflow_entry("feature", "workspace")]));
+    update(&mut model, key('w'));
+    typed_in_dialog(&mut model, "mine");
+    let cmds = update(&mut model, code(KeyCode::Enter));
+    assert_eq!(
+        sent_params(&cmds, "createWorkflow"),
+        json!({ "workdir": "/w", "name": "mine", "scope": "workspace" })
+    );
+}
+
+#[test]
+fn setup_is_offered_and_run_opens_the_form_on_the_workflow() {
+    let mut model = workflows_on(json!([workflow_entry("feature", "global")]));
+    assert!(model.workflows.needs_setup());
+    assert!(update(&mut model, key('i')).is_empty());
+    assert!(matches!(
+        model.dialog,
+        Some(Dialog::Confirm {
+            ask: Ask::InitStorage,
+            ..
+        })
+    ));
+    assert!(update(&mut model, key('u')).is_empty());
+    assert!(matches!(
+        model.dialog,
+        Some(Dialog::Confirm {
+            ask: Ask::InitWorkflows(_),
+            ..
+        })
+    ));
+    let cmds = update(&mut model, key('g'));
+    assert_eq!(
+        sent_params(&cmds, "initWorkspace"),
+        json!({ "workdir": "/w", "storage": "user", "workflows": "global" })
+    );
+    let cmds = update(
+        &mut model,
+        Msg::Reply(
+            Then::WorkspaceInit("/w".into()),
+            Ok(json!({ "created": ["a", "b"], "storage": "user" })),
+        ),
+    );
+    assert_eq!(methods(&cmds), ["listWorkflows"]);
+    let (toast, _) = model.toast.clone().unwrap();
+    assert!(
+        toast.contains("~/.whiphand") && toast.contains("2 files"),
+        "{toast}"
+    );
 
     let cmds = update(&mut model, key('r'));
     assert_eq!(

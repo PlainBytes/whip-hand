@@ -276,6 +276,30 @@ pub fn on_dialog_key(model: &mut Model, key: &KeyEvent) -> Vec<Cmd> {
             KeyCode::Char('y' | 'Y') => super::settings::prune(model, max),
             _ => vec![],
         },
+        Dialog::Confirm {
+            ask: Ask::InitStorage,
+            ..
+        } => match key.code {
+            KeyCode::Char('r' | 'R') => {
+                super::workflows::ask_workflows(model, p::InitStorage::Local)
+            }
+            KeyCode::Char('u' | 'U') => {
+                super::workflows::ask_workflows(model, p::InitStorage::User)
+            }
+            _ => vec![],
+        },
+        Dialog::Confirm {
+            ask: Ask::InitWorkflows(storage),
+            ..
+        } => match key.code {
+            KeyCode::Char('c' | 'C') => {
+                super::workflows::init(model, storage, p::InitWorkflowsMode::Local)
+            }
+            KeyCode::Char('g' | 'G') => {
+                super::workflows::init(model, storage, p::InitWorkflowsMode::Global)
+            }
+            _ => vec![],
+        },
         Dialog::Confirm { ask, .. } => match key.code {
             KeyCode::Char('y' | 'Y') => answer(ask),
             _ => vec![],
@@ -367,6 +391,8 @@ fn answer(ask: Ask) -> Vec<Cmd> {
         | Ask::NewWorkflow(_)
         | Ask::CloneWorkflow { .. }
         | Ask::DeleteWorkflow { .. }
+        | Ask::InitStorage
+        | Ask::InitWorkflows(_)
         | Ask::OpenPath
         | Ask::Setting { .. }
         | Ask::Prune { .. } => return vec![],

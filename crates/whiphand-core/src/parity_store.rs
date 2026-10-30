@@ -310,7 +310,7 @@ fn runs_op(op: &Value, repo: &Path) -> Value {
             }
             out
         }
-        "delete" => match delete_run(&wsp, &config, run_id).expect("delete") {
+        "delete" => match delete_run(&wsp, &config, run_id, false).expect("delete") {
             DeleteRun::Deleted => json!({ "deleted": true }),
             DeleteRun::Refused(reason) => json!({ "deleted": false, "reason": reason }),
         },

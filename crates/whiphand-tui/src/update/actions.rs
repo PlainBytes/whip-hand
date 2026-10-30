@@ -347,9 +347,10 @@ fn answer(ask: Ask) -> Vec<Cmd> {
             Then::Cancelled(run_id),
         )),
         Ask::Delete(run) => Cmd::Rpc(client::Call::new::<DeleteRun>(
-            p::RunRefParams {
+            p::DeleteRunParams {
                 workdir: run.workdir,
                 run_id: run.run_id.clone(),
+                force: None,
             },
             Then::Deleted(run.run_id),
         )),

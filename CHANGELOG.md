@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Where whiphand keeps things
+
+- The global root is now `~/.whiphand` on every platform (override: `WHIPHAND_CONFIG_HOME`). On
+  first run the global config and workflows are copied from the old per-platform config folder; the
+  old files are left in place and nothing is overwritten.
+- New storage mode: keep a workspace's runs, worktrees and config in the user folder
+  (`~/.whiphand/<basename>-<hash6>`) instead of `<folder>/.whiphand`. Existing workspaces are
+  unaffected and stay local.
+- New **workspace** workflow scope, private to one workspace and stored in its user folder. Lookup
+  order is project, workspace, global; `workspace:<name>` selects it, and `new-workflow --workspace`
+  writes to it.
+- `whiphand init` asks where to keep data and where to put the starter workflows, in the CLI
+  (`--storage <local|user>`, `--workflows <local|global>`), the terminal UI and the desktop app.
+- Worktree folders are shorter: `<data dir>/wt/<suffix>-<short-slug>`, falling back to the full run id
+  when that name is taken. Older runs keep their recorded path.
+- The `iterate` template's commit step now reads the commit message through `inputs` instead of a
+  hardcoded `.whiphand/runs/...` path, so it works with any data dir. Existing workspaces keep
+  their old copy until replaced.
+
 ### Click a notification to open its run
 
 - Clicking a desktop notification (Windows and Linux) brings Whiphand to the front and opens the

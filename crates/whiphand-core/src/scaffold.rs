@@ -12,6 +12,7 @@ use crate::config_home::{global_workflows_dir, user_workspace_dir};
 use crate::engine::workflow_js::workflow_to_js;
 use crate::node_path;
 use crate::schema::{WorkflowError, parse_workflow, validate_workflow_semantics};
+use crate::storage::{MARKER_NAME, Storage, resolve_layout, write_user_marker};
 use crate::types::{Scope, Workflow};
 use crate::workflow_name::assert_valid_workflow_name;
 use crate::workflow_write::merge_workflow;
@@ -227,28 +228,127 @@ pub fn clone_workflow(
     write_workflow_file(workdir, to, &content, scope, config_home)
 }
 
-/// `initWorkspace`: the default config and every shipped workflow, each
-/// written only when absent. Returns the workspace-relative paths created.
-pub fn init_workspace(workdir: &str, config_home: &Path) -> Result<Vec<String>, ScaffoldError> {
-    let mut created = Vec::new();
-    let config_rel = node_path::join(&[".whiphand", "config.yaml"]);
-    std::fs::create_dir_all(node_path::join(&[workdir, ".whiphand"]))
-        .map_err(|e| ScaffoldError::Other(e.to_string()))?;
-    let config_text = stringify_yaml(&config_to_js(&default_config()));
-    if write_exclusive(&node_path::join(&[workdir, &config_rel]), &config_text)
-        .map_err(|e| ScaffoldError::Other(e.to_string()))?
-    {
-        created.push(config_rel);
+/// Where `init` puts the shipped workflows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InitWorkflows {
+    /// Into this workspace's data dir (`<data dir>/workflows`).
+    Local,
+    /// Into the user-level workflows dir, each only when absent there.
+    Global,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InitOptions {
+    pub storage: Storage,
+    pub workflows: InitWorkflows,
+}
+
+impl Default for InitOptions {
+    fn default() -> Self {
+        InitOptions {
+            storage: Storage::Local,
+            workflows: InitWorkflows::Local,
+        }
     }
+}
+
+/// What `init_workspace` did: the files it created and the storage in effect.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InitOutcome {
+    pub created: Vec<String>,
+    pub storage: Storage,
+}
+
+/// The storage a workspace already has: user when its marker names it, local when
+/// `<workspace>/.whiphand` exists, `None` for a workspace `init` has not touched.
+pub fn existing_storage(workdir: &str, config_home: &Path) -> Option<Storage> {
+    let layout = resolve_layout(Path::new(workdir), config_home);
+    match layout.storage {
+        Storage::User => Some(Storage::User),
+        Storage::Local => layout.project_dir.is_dir().then_some(Storage::Local),
+    }
+}
+
+/// A created path as `init` reports it: relative to the workspace when inside it.
+fn report_path(workdir: &str, path: &str) -> String {
+    match Path::new(path).strip_prefix(workdir) {
+        Ok(rel) => rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/"),
+        Err(_) => path.to_string(),
+    }
+}
+
+fn io_err(e: io::Error) -> ScaffoldError {
+    ScaffoldError::Other(e.to_string())
+}
+
+/// `initWorkspace`: the default config and the shipped workflows, each written
+/// only when absent. `opts.storage` picks the data dir (`<ws>/.whiphand` or the
+/// user folder, which also gets the marker); `opts.workflows` picks whether the
+/// templates land in that data dir or in the global workflows dir. Returns the
+/// created paths, workspace-relative when inside it.
+pub fn init_workspace(
+    workdir: &str,
+    config_home: &Path,
+    opts: InitOptions,
+) -> Result<InitOutcome, ScaffoldError> {
+    let layout = resolve_layout(Path::new(workdir), config_home);
+    let existing = existing_storage(workdir, config_home);
+    if let Some(current) = existing
+        && current != opts.storage
+    {
+        let (where_, wanted) = match current {
+            Storage::Local => (format!("in {}", layout.project_dir.display()), "user"),
+            Storage::User => (format!("in {}", layout.user_dir.display()), "local"),
+        };
+        return Err(ScaffoldError::Other(format!(
+            "this workspace already keeps its whiphand data {where_}; \
+             moving it to {wanted} storage is not supported yet"
+        )));
+    }
+    let mut created = Vec::new();
+    let data_dir = match opts.storage {
+        Storage::Local => layout.project_dir.clone(),
+        Storage::User => {
+            if existing.is_none() {
+                let marker = layout.user_dir.join(MARKER_NAME);
+                if marker.exists() {
+                    return Err(ScaffoldError::Other(format!(
+                        "{} already belongs to another workspace",
+                        marker.display()
+                    )));
+                }
+                write_user_marker(&layout).map_err(io_err)?;
+                created.push(report_path(workdir, &marker.to_string_lossy()));
+            }
+            layout.user_dir.clone()
+        }
+    };
+    std::fs::create_dir_all(&data_dir).map_err(io_err)?;
+    let config_path = data_dir.join("config.yaml").to_string_lossy().into_owned();
+    let config_text = stringify_yaml(&config_to_js(&default_config()));
+    if write_exclusive(&config_path, &config_text).map_err(io_err)? {
+        created.push(report_path(workdir, &config_path));
+    }
+    let scope = match (opts.workflows, opts.storage) {
+        (InitWorkflows::Global, _) => Scope::Global,
+        (InitWorkflows::Local, Storage::Local) => Scope::Project,
+        (InitWorkflows::Local, Storage::User) => Scope::Workspace,
+    };
     for (name, text) in SHIPPED_TEMPLATES {
-        let rel = node_path::join(&[".whiphand", "workflows", &format!("{name}.yaml")]);
-        match write_workflow_file(workdir, name, text, Scope::Project, config_home) {
-            Ok(_) => created.push(rel),
+        match write_workflow_file(workdir, name, text, scope, config_home) {
+            Ok(path) => created.push(report_path(workdir, &path)),
             Err(ScaffoldError::Exists(_)) => {}
             Err(e) => return Err(e),
         }
     }
-    Ok(created)
+    Ok(InitOutcome {
+        created,
+        storage: opts.storage,
+    })
 }
 
 #[cfg(test)]
@@ -268,9 +368,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ws = dir.path().to_string_lossy().into_owned();
         let home = dir.path().join("home");
-        let first = init_workspace(&ws, &home).unwrap();
-        assert_eq!(first.len(), 1 + SHIPPED_TEMPLATES.len());
-        assert!(init_workspace(&ws, &home).unwrap().is_empty());
+        let first = init_workspace(&ws, &home, InitOptions::default()).unwrap();
+        assert_eq!(first.created.len(), 1 + SHIPPED_TEMPLATES.len());
+        assert_eq!(first.storage, Storage::Local);
+        assert!(first.created.contains(&".whiphand/config.yaml".to_string()));
+        let again = init_workspace(&ws, &home, InitOptions::default()).unwrap();
+        assert!(again.created.is_empty());
         let err = create_workflow(&ws, "iterate", Scope::Project, &home).unwrap_err();
         assert!(matches!(err, ScaffoldError::Exists(_)), "{err}");
     }
@@ -345,9 +448,145 @@ mod tests {
     fn init_writes_the_worktree_templates() {
         let dir = tempfile::tempdir().unwrap();
         let ws = dir.path().to_string_lossy().into_owned();
-        init_workspace(&ws, &dir.path().join("home")).unwrap();
+        init_workspace(&ws, &dir.path().join("home"), InitOptions::default()).unwrap();
         let written =
             std::fs::read_to_string(dir.path().join(".whiphand/workflows/develop.yaml")).unwrap();
         assert!(written.contains("\nworktree:\n"));
+    }
+
+    struct Rig {
+        _ws: tempfile::TempDir,
+        _home: tempfile::TempDir,
+        ws: String,
+        home: std::path::PathBuf,
+    }
+
+    fn rig() -> Rig {
+        let ws = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        Rig {
+            ws: ws.path().to_string_lossy().into_owned(),
+            home: home.path().to_path_buf(),
+            _ws: ws,
+            _home: home,
+        }
+    }
+
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir)
+            .map(|d| {
+                d.flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        v
+    }
+
+    const TEMPLATE_FILES: [&str; 3] = ["develop.yaml", "iterate.yaml", "research.yaml"];
+
+    #[test]
+    fn init_local_storage_global_workflows() {
+        let r = rig();
+        let opts = InitOptions {
+            storage: Storage::Local,
+            workflows: InitWorkflows::Global,
+        };
+        let out = init_workspace(&r.ws, &r.home, opts).unwrap();
+        assert_eq!(out.created.len(), 1 + 3);
+        assert_eq!(
+            names_in(&Path::new(&r.ws).join(".whiphand")),
+            ["config.yaml"]
+        );
+        assert_eq!(names_in(&r.home.join("workflows")), TEMPLATE_FILES);
+        assert!(
+            init_workspace(&r.ws, &r.home, opts)
+                .unwrap()
+                .created
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn init_user_storage_local_workflows() {
+        let r = rig();
+        let opts = InitOptions {
+            storage: Storage::User,
+            workflows: InitWorkflows::Local,
+        };
+        let out = init_workspace(&r.ws, &r.home, opts).unwrap();
+        assert_eq!(out.storage, Storage::User);
+        assert!(names_in(Path::new(&r.ws)).is_empty());
+        let layout = resolve_layout(Path::new(&r.ws), &r.home);
+        assert_eq!(layout.storage, Storage::User);
+        assert_eq!(
+            names_in(&layout.user_dir),
+            ["config.yaml", "workflows", "workspace.yaml"]
+        );
+        assert_eq!(names_in(&layout.user_dir.join("workflows")), TEMPLATE_FILES);
+        assert!(!r.home.join("workflows").exists());
+        let listed = crate::workspace::list_workflows(Path::new(&r.ws), &r.home);
+        assert_eq!(listed.len(), 3);
+        assert!(listed.iter().all(|e| e.source == Scope::Workspace));
+        // marker and workflows are outside the workspace: reported absolutely
+        assert!(out.created.iter().all(|p| Path::new(p).is_absolute()));
+        assert_eq!(out.created.len(), 5);
+        assert!(
+            init_workspace(&r.ws, &r.home, opts)
+                .unwrap()
+                .created
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn init_user_storage_global_workflows_keeps_existing_ones() {
+        let r = rig();
+        let global = r.home.join("workflows");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::write(global.join("iterate.yaml"), "mine").unwrap();
+        let opts = InitOptions {
+            storage: Storage::User,
+            workflows: InitWorkflows::Global,
+        };
+        let out = init_workspace(&r.ws, &r.home, opts).unwrap();
+        assert!(names_in(Path::new(&r.ws)).is_empty());
+        assert_eq!(
+            std::fs::read_to_string(global.join("iterate.yaml")).unwrap(),
+            "mine"
+        );
+        assert_eq!(names_in(&global), TEMPLATE_FILES);
+        // marker + config + the two templates that were missing
+        assert_eq!(out.created.len(), 4);
+        let layout = resolve_layout(Path::new(&r.ws), &r.home);
+        assert_eq!(
+            names_in(&layout.user_dir),
+            ["config.yaml", "workspace.yaml"]
+        );
+    }
+
+    #[test]
+    fn init_refuses_to_switch_storage() {
+        let r = rig();
+        init_workspace(&r.ws, &r.home, InitOptions::default()).unwrap();
+        let user = InitOptions {
+            storage: Storage::User,
+            ..InitOptions::default()
+        };
+        let err = init_workspace(&r.ws, &r.home, user)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not supported yet"), "{err}");
+        assert!(!resolve_layout(Path::new(&r.ws), &r.home).user_dir.exists());
+
+        let r = rig();
+        init_workspace(&r.ws, &r.home, user).unwrap();
+        let err = init_workspace(&r.ws, &r.home, InitOptions::default())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not supported yet"), "{err}");
+        assert!(names_in(Path::new(&r.ws)).is_empty());
+        assert_eq!(existing_storage(&r.ws, &r.home), Some(Storage::User));
     }
 }

@@ -198,7 +198,23 @@ pub fn build_cli() -> Command {
         .subcommand(
             sub(
                 "init",
-                "initialize .whiphand/ (config + starter workflows) in the working folder",
+                "initialize whiphand data (config + starter workflows) for the working folder",
+            )
+            .arg(
+                value(
+                    "storage",
+                    "local|user",
+                    "keep data in <folder>/.whiphand (local) or in the user folder (user); asked on a terminal when omitted",
+                )
+                .value_parser(["local", "user"]),
+            )
+            .arg(
+                value(
+                    "workflows",
+                    "local|global",
+                    "copy the starter workflows into this workspace (local) or add the missing ones to the global workflows dir (global); asked on a terminal when omitted",
+                )
+                .value_parser(["local", "global"]),
             )
             .arg(dir_option("working folder"))
             .arg(extra()),

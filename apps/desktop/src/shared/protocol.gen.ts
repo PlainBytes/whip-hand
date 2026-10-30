@@ -67,7 +67,21 @@ export type ValidateWorkflowParams = { draft: unknown, };
 
 export type ValidateWorkflowResult = { workflow?: Workflow, problems: Array<string>, fieldProblems: Array<WorkflowFieldProblem>, };
 
-export type InitWorkspaceResult = { created: Array<string>, };
+export type InitStorage = "local" | "user";
+
+export type InitWorkflowsMode = "local" | "global";
+
+export type InitWorkspaceParams = { workdir: string, 
+/**
+ * Absent: keep the storage the workspace already has, else local.
+ */
+storage?: InitStorage, 
+/**
+ * Absent: local.
+ */
+workflows?: InitWorkflowsMode, };
+
+export type InitWorkspaceResult = { created: Array<string>, storage: InitStorage, };
 
 export type OptionalWorkdirParams = { workdir?: string, };
 
@@ -370,7 +384,6 @@ export type CreateWorkflowResult = PathResult;
 export type UpdateWorkflowResult = PathResult;
 export type DeleteWorkflowParams = WorkflowRefParams;
 export type CloneWorkflowResult = PathResult;
-export type InitWorkspaceParams = WorkdirParams;
 export type DoctorParams = OptionalWorkdirParams;
 export type DoctorResult = DoctorRow[];
 export type ConfigGetParams = OptionalWorkdirParams;

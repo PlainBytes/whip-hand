@@ -70,7 +70,11 @@ async fn dispatch(matches: ArgMatches) -> CmdResult {
             &string(m, "name").unwrap_or_default(),
             &dir(m),
         ),
-        "init" => commands::init(&dir(m)),
+        "init" => commands::init(
+            string(m, "storage").as_deref(),
+            string(m, "workflows").as_deref(),
+            &dir(m),
+        ),
         "new-workflow" => commands::new_workflow(
             &string(m, "name").unwrap_or_default(),
             flag(m, "global"),

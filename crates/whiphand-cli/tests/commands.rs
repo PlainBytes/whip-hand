@@ -524,15 +524,89 @@ fn config_set_rejects_invalid_values_and_writes_nothing() {
 
 // ------------------------------------------------------------------ init, new-workflow, rename-run
 
+fn names(dir: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir)
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort();
+    v
+}
+
+#[test]
+fn init_without_a_terminal_defaults_to_local_storage_and_workflows() {
+    let e = Env::new();
+    let out = e.run(&["init"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    assert!(e.ws().join(".whiphand/config.yaml").is_file());
+    assert_eq!(
+        names(&e.ws().join(".whiphand/workflows")),
+        ["develop.yaml", "iterate.yaml", "research.yaml"]
+    );
+    assert!(!e.home.path().join("workflows").exists());
+    assert!(out.stdout().contains("data: "), "{}", out.stdout());
+}
+
+#[test]
+fn init_user_storage_with_global_workflows() {
+    let e = Env::new();
+    std::fs::create_dir_all(e.home.path().join("workflows")).unwrap();
+    std::fs::write(e.home.path().join("workflows/iterate.yaml"), "mine").unwrap();
+    let out = e.run(&["init", "--storage", "user", "--workflows", "global"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    assert!(names(e.ws()).is_empty());
+    assert_eq!(
+        std::fs::read_to_string(e.home.path().join("workflows/iterate.yaml")).unwrap(),
+        "mine"
+    );
+    assert_eq!(
+        names(&e.home.path().join("workflows")),
+        ["develop.yaml", "iterate.yaml", "research.yaml"]
+    );
+    // a re-run keeps the storage and creates nothing; the other mode is refused
+    let again = e.run(&["init", "--workflows", "global"]);
+    assert_eq!(again.code(), 0, "{}", again.stderr());
+    assert!(again.stdout().starts_with("workspace already initialized"));
+    let switch = e.run(&["init", "--storage", "local"]);
+    assert_eq!(switch.code(), 1);
+    assert!(
+        switch.stderr().contains("not supported yet"),
+        "{}",
+        switch.stderr()
+    );
+    assert!(names(e.ws()).is_empty());
+}
+
+#[test]
+fn init_user_storage_with_local_workflows_keeps_everything_in_the_user_folder() {
+    let e = Env::new();
+    let out = e.run(&["init", "--storage", "user", "--workflows", "local"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    assert!(names(e.ws()).is_empty());
+    assert!(!e.home.path().join("workflows").exists());
+}
+
+#[test]
+fn init_rejects_unknown_flag_values() {
+    let e = Env::new();
+    assert_ne!(e.run(&["init", "--storage", "cloud"]).code(), 0);
+    assert_ne!(e.run(&["init", "--workflows", "x"]).code(), 0);
+    assert!(names(e.ws()).is_empty());
+}
+
 #[test]
 fn init_then_new_workflow() {
     let e = Env::new();
     let out = e.run(&["init"]);
     assert_eq!(out.code(), 0);
     assert!(out.stdout().contains("created "), "{}", out.stdout());
-    assert_eq!(
-        e.run(&["init"]).stdout(),
-        "workspace already initialized — nothing to do\n"
+    assert!(
+        e.run(&["init"])
+            .stdout()
+            .starts_with("workspace already initialized — nothing to do\n")
     );
     let out = e.run(&["new-workflow", "triage"]);
     assert_eq!(out.code(), 0);

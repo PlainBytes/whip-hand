@@ -72,6 +72,10 @@ export const uiActions: Record<string, Record<string, string>> = {
     // WorkflowsPage empty state's "Set up this workspace" button.
     _command: 'workflows:setUpWorkspaceButton',
     '-C': 'sidebar:workspaceSwitcher',
+    // The desktop button sends no options yet, so it keeps local storage and
+    // local workflows; the choice dialog arrives with the desktop init UI.
+    '--storage': 'exempt:desktop-init-dialog-pending',
+    '--workflows': 'exempt:desktop-init-dialog-pending',
   },
   'new-workflow': {
     // WorkflowsPage's "New workflow" dialog.

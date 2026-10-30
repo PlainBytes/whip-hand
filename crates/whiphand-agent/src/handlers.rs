@@ -24,7 +24,8 @@ use whiphand_core::jsval::{self, JsValue};
 use whiphand_core::node_path;
 use whiphand_core::raw::Raw;
 use whiphand_core::scaffold::{
-    clone_workflow, create_workflow, delete_workflow, init_workspace, update_workflow,
+    InitOptions, InitWorkflows, clone_workflow, create_workflow, delete_workflow, existing_storage,
+    init_workspace, update_workflow,
 };
 use whiphand_core::schema::{parse_workflow, shape, validate_workflow_draft};
 use whiphand_core::storage::{Storage, resolve_layout};
@@ -169,8 +170,24 @@ pub async fn call(agent: &Rc<Agent>, ctx: RequestCtx, method: &str, p: Value) ->
         }
         "validateWorkflow" => Ok(validate_workflow(&p["draft"])),
         "initWorkspace" => {
-            let created = init_workspace(&workdir(&p), &home()).map_err(|e| e.to_string())?;
-            Ok(json!({ "created": created }))
+            let workdir = workdir(&p);
+            let storage = match p["storage"].as_str() {
+                Some("user") => Storage::User,
+                Some(_) => Storage::Local,
+                None => existing_storage(&workdir, &home()).unwrap_or(Storage::Local),
+            };
+            let workflows = match p["workflows"].as_str() {
+                Some("global") => InitWorkflows::Global,
+                _ => InitWorkflows::Local,
+            };
+            let out = init_workspace(&workdir, &home(), InitOptions { storage, workflows })
+                .map_err(|e| e.to_string())?;
+            let storage = if out.storage == Storage::User {
+                "user"
+            } else {
+                "local"
+            };
+            Ok(json!({ "created": out.created, "storage": storage }))
         }
         "doctor" => doctor(agent, &p).await,
         "listModels" => {

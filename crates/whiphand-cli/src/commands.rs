@@ -10,6 +10,7 @@ use whiphand_core::config::{
     CONFIG_KEYS, WorkspaceConfig, config_to_js, default_config, diff_config_layer,
     load_config_layer, load_workspace_config, merge_config, partial_config_to_js,
 };
+use whiphand_core::config_home::global_workflows_dir;
 use whiphand_core::config_home::{global_config_path, host_config_home};
 use whiphand_core::doctor::config::{global_doctor_config_path, load_doctor_config};
 use whiphand_core::doctor::tools::{detect_tools, doctor_report};
@@ -22,10 +23,13 @@ use whiphand_core::engine::worktree::{
 use whiphand_core::js::number_to_string;
 use whiphand_core::node_path;
 use whiphand_core::process::container::Container;
-use whiphand_core::scaffold::{create_workflow, init_workspace};
+use whiphand_core::scaffold::{
+    InitOptions, InitWorkflows, create_workflow, existing_storage, init_workspace,
+};
 use whiphand_core::schema::{
     WorkflowError, parse_workflow, unattended_problems, validate_workflow_warnings,
 };
+use whiphand_core::storage::Storage;
 use whiphand_core::storage::{data_dir, resolve_layout};
 use whiphand_core::store::runs::{get_run, rename_run, runs_dir};
 use whiphand_core::types::{OnFindings, Scope, Workflow};
@@ -87,18 +91,78 @@ pub async fn doctor(dir: &str) -> CmdResult {
 
 // ---------------------------------------------------------------- init / new-workflow
 
-pub fn init(dir: &str) -> CmdResult {
-    let created = init_workspace(&node_path::resolve(dir), &host_config_home())
-        .map_err(|e| Thrown::error(e.to_string()))?;
-    out_line(&if created.is_empty() {
-        "workspace already initialized — nothing to do".to_string()
+/// Asks `question` on stderr and reads one line from stdin; an empty or
+/// unrecognised answer is `default`, the first of `choices`.
+fn ask_choice(question: &str, choices: [&str; 2]) -> String {
+    use std::io::{BufRead, Write};
+    eprint!(
+        "{question} [{}/{}] ({}): ",
+        choices[0], choices[1], choices[0]
+    );
+    let _ = std::io::stderr().flush();
+    let mut line = String::new();
+    let _ = std::io::stdin().lock().read_line(&mut line);
+    let answer = line.trim().to_lowercase();
+    choices
+        .into_iter()
+        .find(|c| !answer.is_empty() && c.starts_with(&answer))
+        .unwrap_or(choices[0])
+        .to_string()
+}
+
+pub fn init(storage: Option<&str>, workflows: Option<&str>, dir: &str) -> CmdResult {
+    use std::io::IsTerminal;
+    let workdir = node_path::resolve(dir);
+    let home = host_config_home();
+    let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let existing = existing_storage(&workdir, &home);
+    let storage = match (storage, existing) {
+        (Some(s), _) => s.to_string(),
+        (None, Some(s)) => if s == Storage::User { "user" } else { "local" }.to_string(),
+        (None, None) if interactive => ask_choice(
+            "Keep whiphand data in the workspace (local) or in your user folder (user)?",
+            ["local", "user"],
+        ),
+        (None, None) => "local".to_string(),
+    };
+    let workflows = match workflows {
+        Some(w) => w.to_string(),
+        None if interactive => ask_choice(
+            "Copy the starter workflows into this workspace (local) or use the global ones (global)?",
+            ["local", "global"],
+        ),
+        None => "local".to_string(),
+    };
+    let opts = InitOptions {
+        storage: if storage == "user" {
+            Storage::User
+        } else {
+            Storage::Local
+        },
+        workflows: if workflows == "global" {
+            InitWorkflows::Global
+        } else {
+            InitWorkflows::Local
+        },
+    };
+    let out = init_workspace(&workdir, &home, opts).map_err(|e| Thrown::error(e.to_string()))?;
+    let layout = resolve_layout(Path::new(&workdir), &home);
+    let data = match opts.storage {
+        Storage::Local => layout.project_dir.display().to_string(),
+        Storage::User => layout.user_dir.display().to_string(),
+    };
+    let flows = match opts.workflows {
+        InitWorkflows::Local => format!("{data}/workflows"),
+        InitWorkflows::Global => global_workflows_dir(&home).display().to_string(),
+    };
+    let mut lines: Vec<String> = if out.created.is_empty() {
+        vec!["workspace already initialized — nothing to do".to_string()]
     } else {
-        created
-            .iter()
-            .map(|p| format!("created {p}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    });
+        out.created.iter().map(|p| format!("created {p}")).collect()
+    };
+    lines.push(format!("data: {data}"));
+    lines.push(format!("workflows: {flows}"));
+    out_line(&lines.join("\n"));
     Ok(0)
 }
 

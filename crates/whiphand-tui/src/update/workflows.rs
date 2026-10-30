@@ -116,8 +116,10 @@ pub fn act(model: &mut Model, action: Action) -> Option<Vec<Cmd>> {
         }
         Action::InitWorkspace => {
             return Some(vec![Cmd::Rpc(Call::new::<InitWorkspace>(
-                p::WorkdirParams {
+                p::InitWorkspaceParams {
                     workdir: workdir.clone(),
+                    storage: None,
+                    workflows: None,
                 },
                 Then::WorkspaceInit(workdir),
             ))]);

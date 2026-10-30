@@ -139,6 +139,18 @@
       "args": [],
       "options": [
         {
+          "flags": "--storage <local|user>",
+          "required": true,
+          "hasDefault": false,
+          "long": "--storage"
+        },
+        {
+          "flags": "--workflows <local|global>",
+          "required": true,
+          "hasDefault": false,
+          "long": "--workflows"
+        },
+        {
           "flags": "-C <dir>",
           "required": true,
           "hasDefault": true,

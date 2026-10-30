@@ -261,7 +261,8 @@
             ".whiphand/workflows/iterate.yaml",
             ".whiphand/workflows/develop.yaml",
             ".whiphand/workflows/research.yaml"
-          ]
+          ],
+          "storage": "local"
         }
       }
     },
@@ -269,7 +270,8 @@
       "step": "initWorkspace again",
       "response": {
         "result": {
-          "created": []
+          "created": [],
+          "storage": "local"
         }
       }
     },

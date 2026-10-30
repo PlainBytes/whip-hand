@@ -10,15 +10,16 @@ use crate::model::detail::{ArtifactBody, ArtifactView};
 use crate::view::theme;
 use crate::view::widgets::markdown;
 
-pub fn render(view: &ArtifactView, frame: &mut Frame, area: Rect) {
+/// `back` is the key that leaves the artifact, as the hint spells it.
+pub fn render(view: &ArtifactView, back: &str, frame: &mut Frame, area: Rect) {
     let [title, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
     frame.render_widget(
         Line::from(vec![
             Span::styled(view.name.clone(), theme::bold()),
             Span::styled(
                 match view.body {
-                    ArtifactBody::Text(_) => "  e edit · o pager · q back",
-                    _ => "  o pager · q back",
+                    ArtifactBody::Text(_) => format!("  e edit · o pager · {back} back"),
+                    _ => format!("  o pager · {back} back"),
                 },
                 theme::dim(),
             ),

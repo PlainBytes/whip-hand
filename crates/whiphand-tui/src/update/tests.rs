@@ -5,7 +5,8 @@ use whiphand_protocol::{self as p, JobStatus, RpcError};
 use super::*;
 use crate::cmd::{External, LogPage};
 use crate::model::ArtifactOwner;
-use crate::model::detail::{Pane, Tab};
+use crate::model::detail::{ArtifactBody, Pane, Tab};
+use crate::model::manual::Focus;
 use crate::model::new_run::FieldKind;
 
 fn key(c: char) -> Msg {
@@ -1105,6 +1106,204 @@ fn a_request_for_the_run_on_screen_opens_over_it() {
     assert_eq!(m.request.step_id, "sign-off");
 }
 
+fn manual_then(f: fn(ArtifactOwner, String, String) -> Then) -> Then {
+    f(
+        ArtifactOwner::Manual {
+            job_id: "j1".into(),
+        },
+        "r1".into(),
+        "plan.md".into(),
+    )
+}
+
+fn stat_then() -> Then {
+    manual_then(|owner, run_id, name| Then::ArtifactStat {
+        owner,
+        run_id,
+        name,
+    })
+}
+
+fn read_then() -> Then {
+    manual_then(|owner, run_id, name| Then::Artifact {
+        owner,
+        run_id,
+        name,
+    })
+}
+
+/// The sign-off with its plan opened and read.
+fn reading_the_plan(content: &str, mtime: f64) -> Model {
+    let mut model = signing_off();
+    update(&mut model, key('j'));
+    update(&mut model, code(KeyCode::Enter));
+    update(
+        &mut model,
+        Msg::Reply(stat_then(), Ok(json!({ "size": 10, "mtimeMs": mtime }))),
+    );
+    update(
+        &mut model,
+        Msg::Reply(
+            read_then(),
+            Ok(json!({ "content": content, "size": 6, "mtimeMs": mtime })),
+        ),
+    );
+    model
+}
+
+#[test]
+fn manual_enter_on_an_artifact_opens_it_in_the_screen() {
+    let mut model = signing_off();
+    update(&mut model, key('j'));
+    let cmds = update(&mut model, code(KeyCode::Enter));
+    assert_eq!(methods(&cmds), ["statArtifact"]);
+    assert_eq!(
+        rpc(&cmds).params,
+        json!({ "workdir": "/w", "runId": "r1", "name": "plan.md" })
+    );
+    assert_eq!(rpc(&cmds).then, stat_then());
+    let cmds = update(
+        &mut model,
+        Msg::Reply(stat_then(), Ok(json!({ "size": 10, "mtimeMs": 1.0 }))),
+    );
+    assert_eq!(methods(&cmds), ["readArtifact"]);
+    update(
+        &mut model,
+        Msg::Reply(
+            read_then(),
+            Ok(json!({ "content": "# Plan", "size": 6, "mtimeMs": 1.0 })),
+        ),
+    );
+    let view = model
+        .manual
+        .as_ref()
+        .unwrap()
+        .artifact_view
+        .as_ref()
+        .unwrap();
+    assert_eq!(view.body, ArtifactBody::Text("# Plan".into()));
+    assert_eq!(view.mtime_ms, Some(1.0));
+}
+
+#[test]
+fn manual_an_open_artifact_scrolls_and_esc_closes_it_before_the_screen() {
+    let mut model = reading_the_plan("# Plan", 1.0);
+    update(&mut model, key('j'));
+    update(&mut model, code(KeyCode::PageDown));
+    let m = model.manual.as_ref().unwrap();
+    assert_eq!(
+        m.focus,
+        Focus::Artifact(0),
+        "the keys scroll, not the focus"
+    );
+    assert_eq!(m.artifact_view.as_ref().unwrap().scroll, 1 + PAGE as u16);
+    assert_eq!(m.scroll, 0);
+    update(&mut model, code(KeyCode::Esc));
+    assert!(model.manual.as_ref().unwrap().artifact_view.is_none());
+    assert_eq!(*model.screen(), Route::Manual);
+    update(&mut model, code(KeyCode::Esc));
+    assert_eq!(*model.screen(), Route::RunDetail);
+}
+
+#[test]
+fn manual_the_choices_still_answer_with_an_artifact_open() {
+    let mut model = reading_the_plan("# Plan", 1.0);
+    let cmds = update(&mut model, key('a'));
+    assert_eq!(rpc(&cmds).method, "resolveManual");
+}
+
+#[test]
+fn manual_o_pages_the_open_artifact() {
+    let mut model = reading_the_plan("# Plan", 1.0);
+    assert_eq!(
+        update(&mut model, key('o')),
+        [Cmd::Suspend(External::Pager {
+            path: whiphand_core::path_form::to_native(".whiphand/runs/r1/plan.md", "/w")
+        })]
+    );
+}
+
+#[test]
+fn manual_an_artifact_edit_on_the_manual_screen_is_written_and_kept_if_refused() {
+    let mut model = reading_the_plan("# Plan\n", 42.0);
+    assert_eq!(
+        update(&mut model, key('e')),
+        [Cmd::Suspend(External::Editor {
+            text: "# Plan\n".into(),
+            suffix: ".md"
+        })]
+    );
+    assert!(update(&mut model, Msg::Edited(Ok("# Plan\n".into()))).is_empty());
+    assert_eq!(model.toast.as_ref().unwrap().0, "plan.md unchanged");
+    update(&mut model, key('e'));
+    let cmds = update(&mut model, Msg::Edited(Ok("# Plan v2\n".into())));
+    assert_eq!(
+        sent_params(&cmds, "writeArtifact"),
+        json!({ "workdir": "/w", "runId": "r1", "name": "plan.md", "content": "# Plan v2\n",
+                "expectedMtimeMs": 42.0 })
+    );
+    let refused = update(
+        &mut model,
+        Msg::Reply(
+            rpc_then(&cmds, "writeArtifact"),
+            Err(RpcError {
+                code: -32000,
+                message: "artifact 'plan.md' changed on disk since it was read".into(),
+                data: None,
+            }),
+        ),
+    );
+    assert_eq!(methods(&refused), ["statArtifact"]);
+    assert!(
+        model
+            .notice
+            .as_ref()
+            .unwrap()
+            .contains("e opens your edit again")
+    );
+    update(
+        &mut model,
+        Msg::Reply(
+            read_then(),
+            Ok(json!({ "content": "# Plan (run)\n", "size": 13, "mtimeMs": 43.0 })),
+        ),
+    );
+    assert_eq!(
+        update(&mut model, key('e')),
+        [Cmd::Suspend(External::Editor {
+            text: "# Plan v2\n".into(),
+            suffix: ".md"
+        })]
+    );
+}
+
+#[test]
+fn manual_an_artifact_edit_for_a_gone_screen_is_ignored() {
+    let mut model = reading_the_plan("# Plan\n", 42.0);
+    update(&mut model, key('e'));
+    model.manual = None;
+    model.route.retain(|r| *r != Route::Manual);
+    assert!(update(&mut model, Msg::Edited(Ok("# Plan v2\n".into()))).is_empty());
+    assert!(model.toast.is_none() && model.notice.is_none());
+}
+
+#[test]
+fn manual_an_artifact_outside_the_run_dir_still_pages() {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "running" }));
+    running(&mut model, "j1", "r1");
+    let mut request = sign_off();
+    let path = ".whiphand/runs/r2/plan.md";
+    request["context"]["artifacts"][0]["path"] = json!(path);
+    ask(&mut model, request);
+    update(&mut model, key('j'));
+    assert_eq!(
+        update(&mut model, code(KeyCode::Enter)),
+        [Cmd::Suspend(External::Pager {
+            path: whiphand_core::path_form::to_native(path, "/w")
+        })]
+    );
+}
+
 #[test]
 fn a_request_elsewhere_only_notifies_and_m_opens_it() {
     let mut model = Model::new("/w".into(), 0.0);
@@ -1127,14 +1326,12 @@ fn sending_back_takes_the_feedback_and_the_file_comments() {
     update(&mut model, key('i'));
     typed(&mut model, "Handle the empty cart.");
     update(&mut model, code(KeyCode::Esc));
-    // Down to the plan artifact, which Enter pages; then the file.
+    // Down to the plan artifact; Enter opens it, Esc closes it; then the file.
     update(&mut model, key('j'));
-    assert_eq!(
-        update(&mut model, code(KeyCode::Enter)),
-        [Cmd::Suspend(External::Pager {
-            path: whiphand_core::path_form::to_native(".whiphand/runs/r1/plan.md", "/w")
-        })]
-    );
+    let cmds = update(&mut model, code(KeyCode::Enter));
+    assert_eq!(methods(&cmds), ["statArtifact"]);
+    update(&mut model, code(KeyCode::Esc));
+    assert!(model.manual.as_ref().unwrap().artifact_view.is_none());
     update(&mut model, key('j'));
     update(&mut model, code(KeyCode::Enter));
     typed(&mut model, "Split this.");

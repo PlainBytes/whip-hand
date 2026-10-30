@@ -126,12 +126,19 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                 Ok(value) => on_reply(model, then, value),
                 Err(e) => {
                     if let Then::ArtifactWritten {
-                        owner: ArtifactOwner::Detail,
+                        owner,
                         run_id,
                         name,
                     } = &then
                     {
-                        return detail::on_write_refused(model, run_id, name, &e.message);
+                        return match owner {
+                            ArtifactOwner::Detail => {
+                                detail::on_write_refused(model, run_id, name, &e.message)
+                            }
+                            ArtifactOwner::Manual { job_id } => {
+                                manual::on_write_refused(model, job_id, name, &e.message)
+                            }
+                        };
                     }
                     if then == Then::RecentRuns {
                         model.runs_ui.recent_failed = true;
@@ -164,11 +171,12 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                         ..
                     },
                 ) => return detail::on_artifact_edited(model, target, result),
-                // The manual screen does not hand artifacts to `$EDITOR` yet.
-                Some(EditTarget::Artifact {
-                    owner: ArtifactOwner::Manual { .. },
-                    ..
-                }) => {}
+                Some(
+                    target @ EditTarget::Artifact {
+                        owner: ArtifactOwner::Manual { .. },
+                        ..
+                    },
+                ) => return manual::on_artifact_edited(model, target, result),
                 None => {}
             }
             match result {

@@ -539,6 +539,37 @@ fn a_sign_off_over_the_run() {
     snapshot("manual_commenting", &model);
 }
 
+#[test]
+fn manual_artifact_markdown() {
+    let mut model = live_detail();
+    sign_off(&mut model);
+    key(&mut model, KeyCode::Char('j'));
+    key(&mut model, KeyCode::Enter);
+    reply(
+        &mut model,
+        Then::ArtifactStat {
+            owner: ArtifactOwner::Manual {
+                job_id: "j1".into(),
+            },
+            run_id: RUN.into(),
+            name: "review.md".into(),
+        },
+        json!({ "size": 120, "mtimeMs": 1.0 }),
+    );
+    reply(
+        &mut model,
+        Then::Artifact {
+            owner: ArtifactOwner::Manual {
+                job_id: "j1".into(),
+            },
+            run_id: RUN.into(),
+            name: "review.md".into(),
+        },
+        json!({ "content": "# Review\n\nThe cart total now counts **quantities**.\n\n## Findings\n\n- tests pass\n- `total()` is *still* pure\n", "size": 120, "mtimeMs": 1.0 }),
+    );
+    snapshot("manual_artifact_markdown", &model);
+}
+
 // ------------------------------------------------------------- workflows
 
 fn workflows() -> Model {

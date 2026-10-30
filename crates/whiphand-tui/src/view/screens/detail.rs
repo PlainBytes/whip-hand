@@ -201,7 +201,7 @@ fn render_log(d: &RunDetail, frame: &mut Frame, area: Rect) {
 
 fn render_artifacts(d: &RunDetail, frame: &mut Frame, area: Rect) {
     if let Some(view) = &d.artifact_view {
-        artifact::render(view, frame, area);
+        artifact::render(view, "q", frame, area);
         return;
     }
     if d.artifacts.is_empty() {

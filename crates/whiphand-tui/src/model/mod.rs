@@ -153,7 +153,6 @@ pub enum ArtifactOwner {
     /// The run detail's Artifacts tab.
     Detail,
     /// A manual step's request on the manual screen.
-    #[allow(dead_code)] // the manual screen adopts the viewer in the next stage
     Manual { job_id: String },
 }
 

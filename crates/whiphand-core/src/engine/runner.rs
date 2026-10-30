@@ -63,6 +63,7 @@ use crate::process_id::node_platform;
 use crate::run_ctx::RunCtx;
 use crate::schema::{StepTreeLocation, is_forward_ref, locate_steps};
 use crate::steps::{disabled_ids, flatten_steps};
+use crate::storage::data_dir;
 use crate::store::journal::{JournalInit, JournalOptions, RunJournal, SeedStep};
 use crate::store::markers::{WORKFLOW_SNAPSHOT_NAME, read_run_name, run_slug_for, set_run_name};
 use crate::store::retention::prune_runs;
@@ -488,8 +489,8 @@ pub async fn run_workflow<F: Frontend>(
     };
     let claim = match shared {
         Some((record, except)) => {
-            let lock =
-                worktree::lock_claims(&workdir).map_err(|e| RunError::Failed(e.to_string()))?;
+            let lock = worktree::lock_claims(&data_dir(&workdir, config))
+                .map_err(|e| RunError::Failed(e.to_string()))?;
             if !Path::new(&record.native_tree()).is_dir() {
                 return Err(RunError::Workflow(vec![format!(
                     "worktree {} no longer exists; start a fresh run",
@@ -507,8 +508,7 @@ pub async fn run_workflow<F: Frontend>(
         None => None,
     };
     let (run_id, run_dir) = match &opts.resume {
-        None => create_run_dir(&workdir, &config.artifacts_dir)
-            .map_err(|e| RunError::Failed(e.to_string()))?,
+        None => create_run_dir(&workdir, config).map_err(|e| RunError::Failed(e.to_string()))?,
         Some(plan) => (plan.run_id.clone(), plan.run_dir.clone()),
     };
     if opts.resume.is_none()
@@ -833,7 +833,7 @@ impl<F: Frontend> Run<'_, F> {
         let base = render("base", &request.base)?;
         let created = worktree::create(
             Path::new(&self.repo_dir),
-            Path::new(&self.workspace),
+            Path::new(&data_dir(&self.workspace, &self.opts.config)),
             &self.run_id,
             &scope.run_slug,
             &branch,

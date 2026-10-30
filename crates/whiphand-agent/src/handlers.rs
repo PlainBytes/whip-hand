@@ -27,6 +27,7 @@ use whiphand_core::scaffold::{
     clone_workflow, create_workflow, delete_workflow, init_workspace, update_workflow,
 };
 use whiphand_core::schema::{parse_workflow, shape, validate_workflow_draft};
+use whiphand_core::storage::{Storage, resolve_layout};
 use whiphand_core::store::markers::set_run_locked;
 use whiphand_core::store::retention::{DeleteRun, delete_run, prune_runs};
 use whiphand_core::store::run_log::{ReadRunLogParams, read_run_log};
@@ -468,8 +469,12 @@ async fn doctor(agent: &Rc<Agent>, p: &Value) -> R {
     ))
 }
 
+/// The workspace-level config file: `config.yaml` in the workspace's data dir.
 fn project_config_path(workdir: &str) -> String {
-    node_path::join(&[workdir, ".whiphand", "config.yaml"])
+    resolve_layout(Path::new(workdir), &home())
+        .config_path()
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn layer_info(config: &whiphand_core::config::PartialConfig, path: &str) -> Value {
@@ -491,9 +496,17 @@ fn config_get(p: &Value) -> R {
             "global": layer_info(&global, &g_path),
         }));
     };
-    let p_path = project_config_path(&node_path::resolve(wd));
+    let wd = node_path::resolve(wd);
+    let p_path = project_config_path(&wd);
     let project = load_config_layer(Path::new(&p_path)).map_err(|e| e.to_string())?;
-    let config = merge_config(&defaults, &[&global, &project]);
+    // A user-storage workspace still honours a `.whiphand/config.yaml` over its own layer.
+    let local = resolve_layout(Path::new(&wd), &home());
+    let local_project = if local.storage == Storage::User {
+        load_config_layer(&local.project_dir.join("config.yaml")).map_err(|e| e.to_string())?
+    } else {
+        Default::default()
+    };
+    let config = merge_config(&defaults, &[&global, &project, &local_project]);
     Ok(json!({
         "config": serde_json::to_value(&config).expect("a config serializes"),
         "global": layer_info(&global, &g_path),

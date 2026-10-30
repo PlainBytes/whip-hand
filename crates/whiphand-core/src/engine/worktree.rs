@@ -53,7 +53,7 @@ pub fn resolve_request(workflow: &Workflow, run_override: Option<bool>) -> Optio
 }
 
 /// Where a workspace keeps its runs' worktrees, below the workspace root.
-pub const WORKTREES_DIR: &str = ".whiphand/worktrees";
+pub const WORKTREES_DIR: &str = crate::storage::WORKTREES_DIR_NAME;
 
 /// Recorded in run.json as `worktree`. `path` and `tree` are absolute, `/`-form (like `workdir`).
 #[derive(Clone, Debug, PartialEq)]
@@ -213,11 +213,11 @@ fn folder_name(run_id: &str, slug: &str) -> String {
 
 /// After auto-naming, before `run:start`. `branch` and `base` are rendered with the final scope.
 /// Git is asked in `repo` (the run's work directory); the worktree folder goes below
-/// `workspace`, which holds `.whiphand/`.
+/// `data_dir`, which holds the run data: `.whiphand/` or the user folder.
 #[allow(clippy::too_many_arguments)]
 pub async fn create(
     repo: &Path,
-    workspace: &Path,
+    data_dir: &Path,
     run_id: &str,
     slug: &str,
     branch: &str,
@@ -242,7 +242,7 @@ pub async fn create(
     }
     let local_sha = resolve_base(repo, base).await?;
     let start = choose_start(repo, base, local_sha, sync).await;
-    let parent = worktrees_parent(&workspace.to_string_lossy())
+    let parent = worktrees_parent(&data_dir.to_string_lossy())
         .map_err(|e| format!("worktree: cannot create {WORKTREES_DIR}: {e}"))?;
     let path = node_path::join(&[&parent, &folder_name(run_id, slug)]);
     match worktree_add(repo, Path::new(&path), branch, &start.sha).await {
@@ -396,9 +396,9 @@ pub fn record_to_event(r: &WorktreeRecord) -> JsObject {
     o
 }
 
-/// `<workspace>/.whiphand/worktrees`, created with a `.gitignore` that hides it from git.
-fn worktrees_parent(workspace: &str) -> std::io::Result<String> {
-    let parent = node_path::join(&[workspace, WORKTREES_DIR]);
+/// `<data dir>/worktrees`, created with a `.gitignore` that hides it from git.
+fn worktrees_parent(data_dir: &str) -> std::io::Result<String> {
+    let parent = crate::storage::worktrees_dir_of(data_dir);
     std::fs::create_dir_all(&parent)?;
     let ignore = node_path::join(&[&parent, ".gitignore"]);
     if !Path::new(&ignore).exists() {
@@ -419,9 +419,9 @@ pub struct ClaimLock {
     _file: std::fs::File,
 }
 
-/// Waits for the workspace's [`ClaimLock`].
-pub fn lock_claims(workspace: &str) -> std::io::Result<ClaimLock> {
-    let dir = worktrees_parent(workspace)?;
+/// Waits for the workspace's [`ClaimLock`]; `data_dir` is where its worktrees live.
+pub fn lock_claims(data_dir: &str) -> std::io::Result<ClaimLock> {
+    let dir = worktrees_parent(data_dir)?;
     let file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)

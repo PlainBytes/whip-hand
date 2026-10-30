@@ -26,7 +26,8 @@ use whiphand_core::scaffold::{create_workflow, init_workspace};
 use whiphand_core::schema::{
     WorkflowError, parse_workflow, unattended_problems, validate_workflow_warnings,
 };
-use whiphand_core::store::runs::{get_run, rename_run};
+use whiphand_core::storage::{data_dir, resolve_layout};
+use whiphand_core::store::runs::{get_run, rename_run, runs_dir};
 use whiphand_core::types::{OnFindings, Scope, Workflow};
 use whiphand_core::work_dir::{list_work_dirs, run_repo_dir, validate_subdir};
 use whiphand_core::workspace::{parse_input_pairs, resolve_workflow_path};
@@ -154,7 +155,8 @@ pub fn worktree_remove(run_id: &str, force: bool, dir: &str) -> CmdResult {
         return Ok(1);
     };
     // Held through the removal, so no run claims the worktree between the check and it.
-    let _claims = lock_claims(&workdir).map_err(|e| Thrown::error(e.to_string()))?;
+    let _claims =
+        lock_claims(&data_dir(&workdir, &config)).map_err(|e| Thrown::error(e.to_string()))?;
     if let Some(other) = busy_run(&workdir, &config, &record.path, None) {
         err_line(&format!(
             "✘ worktree {} is in use by run '{other}'",
@@ -306,6 +308,14 @@ fn with_leaf(config: &WorkspaceConfig, key: &str, raw: &str) -> Result<Workspace
     Ok(next)
 }
 
+/// The file `config set` writes for a workspace: `config.yaml` in its data dir.
+fn workspace_config_path(workdir: &str) -> String {
+    resolve_layout(Path::new(workdir), &host_config_home())
+        .config_path()
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn global_layer_config() -> Result<WorkspaceConfig, Thrown> {
     let global = load_config_layer(&global_config_path(&host_config_home()))?;
     Ok(merge_config(&default_config(), &[&global]))
@@ -360,7 +370,7 @@ pub fn config_set(key: &str, value: &str, global: bool, dir: &str) -> CmdResult 
     let path = if global {
         global_config_path(&home).to_string_lossy().into_owned()
     } else {
-        node_path::join(&[&node_path::resolve(dir), ".whiphand", "config.yaml"])
+        workspace_config_path(&node_path::resolve(dir))
     };
     if let Some(parent) = Path::new(&path).parent() {
         std::fs::create_dir_all(parent).map_err(|e| Thrown::error(e.to_string()))?;
@@ -644,12 +654,12 @@ pub async fn run(a: RunArgs) -> CmdResult {
         EventSink::Json
     } else if a.dry_run {
         // A dry run copies nothing, so it says where a real run would have put each file.
-        let (wd, artifacts_dir) = (workdir.clone(), config.artifacts_dir.clone());
+        let (wd, cfg) = (workdir.clone(), config.clone());
         EventSink::Human(Box::new(Renderer::new(
             Sinks::default(),
             RenderOptions {
                 run_dir_of: Some(Box::new(move |run_id| {
-                    node_path::resolve(&node_path::join(&[&wd, &artifacts_dir, run_id]))
+                    node_path::resolve(&node_path::join(&[&runs_dir(&wd, &cfg), run_id]))
                 })),
                 show_prompts: true,
             },

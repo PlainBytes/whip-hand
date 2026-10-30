@@ -33,6 +33,7 @@ pub mod scaffold;
 pub mod schema;
 pub mod segment;
 pub mod steps;
+pub mod storage;
 pub mod store;
 pub mod template;
 pub mod time;

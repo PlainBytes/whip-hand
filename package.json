@@ -10,7 +10,11 @@
     "apps/*"
   ],
   "scripts": {
-    "test": "node --test --test-timeout=30000 \"scripts/*.test.mjs\" \"scripts/lib/*.test.mjs\"",
+    "test": "npm run test:scripts && npm run test:rust && npm run test:desktop && npm run build:parity && npm run test:parity",
+    "test:scripts": "node --test --test-timeout=30000 \"scripts/*.test.mjs\" \"scripts/lib/*.test.mjs\"",
+    "test:rust": "cargo test --workspace && cargo test -p whiphand-agent --no-default-features",
+    "test:desktop": "npm run test -w desktop",
+    "build:parity": "cargo build --release -p whiphand-cli -p whiphand-agent",
     "test:parity": "node --test --test-timeout=120000 \"parity/**/*.test.ts\"",
     "parity:golden": "node parity/regenerate-golden.mjs",
     "typecheck": "tsc --noEmit",

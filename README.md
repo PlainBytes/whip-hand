@@ -395,8 +395,14 @@ librsvg2-dev`).
 
 ```bash
 npm run tauri dev -w desktop   # launch the desktop app in dev mode
+npm test                       # every test suite: scripts, Rust, desktop, parity
 npm run verify                 # local CI-equivalent gate — see below
 ```
+
+`npm test` runs every suite in one chain: the script tests (`test:scripts`), the
+Cargo workspace (`test:rust`), the desktop app (`test:desktop`), and the parity
+suite against freshly built release binaries (`build:parity`, then `test:parity`).
+Each piece also runs on its own under its name. It needs `cargo`.
 
 `npm run verify` runs the same checks as CI in one fail-fast chain: root
 typecheck/tests, the CLI/desktop parity suite (`npm run test:parity` — verifies the

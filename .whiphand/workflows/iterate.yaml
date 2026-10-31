@@ -172,5 +172,6 @@ steps:
 
   - id: commit
     kind: command
-    run: git commit -F ".whiphand/runs/{{ run.id }}/commit-message.md"
+    inputs: [commit-message]
+    run: git commit -F "$WHIPHAND_ARTIFACT_COMMIT_MESSAGE"
     output: commit.log

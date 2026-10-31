@@ -226,6 +226,8 @@ const PARSE_ERROR = /"parse error: [^"]*"/g;
 const NODE_VERSION = /"nodeVersion":"[^"]*"/g;
 const NODE_IN_LOG = /, node [^,]*, /g;
 const PLATFORM = /"platform":"[a-z0-9]+"/g;
+/** A workspace's user-storage key hashes its root path (`ws-<hash6>`). */
+const WORKSPACE_KEY = /\bws-[0-9a-f]{6}\b/g;
 
 /** Every way `text` can spell `value`: raw, escaped once or twice as JSON writes it. */
 function replaceAll(text: string, value: string, placeholder: string): string {
@@ -273,7 +275,8 @@ function normalize(t: Transcript, root: string): Transcript {
     .replace(PARSE_ERROR, '"parse error: <detail>"')
     .replace(NODE_VERSION, '"nodeVersion":"<NODE>"')
     .replace(NODE_IN_LOG, ', node <NODE>, ')
-    .replace(PLATFORM, '"platform":"<PLATFORM>"');
+    .replace(PLATFORM, '"platform":"<PLATFORM>"')
+    .replace(WORKSPACE_KEY, 'ws-<KEY>');
   if (port) text = text.split(`"port":${port}`).join('"port":"<PORT>"').split(`:${port}`).join(':<PORT>');
   const parsed = runEnvApart(JSON.parse(text) as Transcript);
   return parsed;

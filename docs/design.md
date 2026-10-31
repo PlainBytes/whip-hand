@@ -385,7 +385,7 @@ against HEAD *as it began*, so a resumed run never trips over a commit the inter
 made — that commit is the human's to have noticed.
 
 **In a worktree run, the main checkout is guarded too.** Every prompt, input and artifact path an
-agent sees lives under the main checkout's `.whiphand/runs`, so an agent can easily take the main
+agent sees lives under the workspace's run folder (`<data dir>/runs`, in the main checkout's `.whiphand` for local storage), so an agent can easily take the main
 checkout for the project. One planner wrote main-checkout absolute paths into its Verify commands,
 and the executor then built and edited the main checkout while the worktree stayed empty. So the
 guidance names the worktree and the main checkout, and says the main checkout is not the agent's.
@@ -401,8 +401,8 @@ layer 1 quietly weaker than it looks without layer 2 to still catch the result.
 
 ## Workflow format
 
-A workflow lives at `.whiphand/workflows/<name>.yaml` inside the working folder. Every step
-declares a `kind`; a step with no `kind` defaults to `agent`.
+A workflow is a `<name>.yaml` file in one of three scopes (see [Storage and scopes](#storage-and-scopes)).
+Every step declares a `kind`; a step with no `kind` defaults to `agent`.
 
 ### Step kinds
 
@@ -494,7 +494,7 @@ steps:
 ```
 
 `inputs: [plan]` on a step resolves to the referenced step's artifact path and injects it
-into that step's prompt context. Artifacts land under `.whiphand/runs/<run-id>/<output>` as
+into that step's prompt context. Artifacts land under `<data dir>/runs/<run-id>/<output>` as
 plain markdown — diffable and committable, not an opaque log.
 
 ### Verdicts
@@ -1290,14 +1290,16 @@ They contradict each other, and neither applies to `--resume`: a resumed run ret
 it started in. The desktop's New Run dialog has the same choice as a switch, defaulting to what
 the workflow says.
 
-**Where it lives.** At `<workspace>/.whiphand/worktrees/<run-id>-<slug>`, where the slug comes from the run's name
-(just `<run-id>` for an unnamed run); the recorded `worktree.path` is what resume, remove and the
-diff read, so older runs keep their plain `<run-id>` folder. The engine writes a
-`.gitignore` containing `*` in `.whiphand/worktrees` itself, so the checkouts never show up as
-untracked in the main tree, whatever the repository's own ignore rules say.
+**Where it lives.** At `<data dir>/wt/<suffix>-<short-slug>`: `<suffix>` is the random tail of the run
+id and the slug is the first 16 characters of the run's name (just `<suffix>` for an unnamed run).
+Folders are kept short to stay under the Windows path limit. If that folder is taken, the full
+`<run-id>-<slug>` is used instead. The recorded `worktree.path` is what resume, remove and the diff
+read, so older runs keep their `<workspace>/.whiphand/worktrees/<run-id>[-<slug>]` folder. The
+engine writes a `.gitignore` containing `*` in the `wt` folder itself, so in a local workspace the
+checkouts never show up as untracked in the main tree, whatever the repository's own ignore rules say.
 
 **Workspace versus execution tree.** The *workspace* is where the run was started: it holds
-`.whiphand/`, the run folder (`.whiphand/runs/<id>`, so artifacts, `run.json` and the journal),
+the data dir, the run folder (`<data dir>/runs/<id>`, so artifacts, `run.json` and the journal),
 config and workflows. The *execution tree* is where steps run: their `cwd`, an agent's working
 directory, `git diff`. Without a worktree they are the same directory. With one, the execution
 tree is the worktree root plus the workspace's own prefix inside its repository, so a workspace in
@@ -1389,10 +1391,53 @@ Templates written for the older flow, which fetched inside the worktree with a `
 redundant. `whiphand init` writes templates to new workspaces only; an existing workspace keeps its
 copies until you replace them.
 
+## Storage and scopes
+
+**The user root.** Per-user state lives in `~/.whiphand` on every platform; `WHIPHAND_CONFIG_HOME`
+overrides it. On first run (when the override is not set) the global `config.yaml` and
+`workflows/*.yaml` are copied once from the legacy per-platform config folder
+(`~/.config/whiphand`, `~/Library/Application Support/whiphand`, `%APPDATA%\whiphand`). Nothing is
+overwritten and the legacy files stay.
+
+**The workspace key** is `<basename>-<hash6>`: the folder's lowercased, filesystem-safe basename
+(at most 24 characters) and six hex digits of a hash of its canonical path. The workspace's user
+folder is `<user root>/<key>`.
+
+**Storage modes.** A workspace's *data dir* holds its runs (`runs/`), worktrees (`wt/`) and
+workspace `config.yaml`.
+
+- **Local** (the default, and every workspace that existed before): the data dir is
+  `<workspace>/.whiphand`.
+- **User**: the data dir is the user folder `<user root>/<key>`, which holds a `workspace.yaml`
+  marker with the workspace's `path:`. A workspace is in user storage only when that marker names
+  this very path; a missing, unreadable or mismatched marker (a key collision) means local.
+
+An explicit `artifacts_dir` in the config still decides where runs go.
+
+**Workflow scopes and priority.** Three scopes, searched in this order for a bare name:
+
+1. **project**: `<workspace>/.whiphand/workflows/`, committed with the repository to share with a team.
+2. **workspace**: `<user root>/<key>/workflows/`, private to this workspace and outside the repository.
+3. **global**: `<user root>/workflows/`, reused by every workspace.
+
+The first match wins and same-named workflows in later scopes are shadowed (listed as such).
+`project:<name>`, `workspace:<name>` and `global:<name>` select a scope explicitly; a path to a YAML
+file bypasses lookup. `whiphand new-workflow` writes to project by default, `--workspace` to the
+workspace scope and `--global` to global.
+
+**`init` choices.** `whiphand init --storage <local|user> --workflows <local|global>` (asked on a
+terminal when omitted; the TUI and desktop app ask too). `--storage user` writes the marker.
+`--workflows local` copies the starter workflows into this workspace's project scope;
+`--workflows global` adds only the missing ones to the global folder. For example,
+`whiphand init --storage user --workflows global` keeps the data in the user folder and the starter workflows global.
+
 ## Workspace configuration
 
-`.whiphand/config.yaml` holds machine/workspace-level settings, kept separate from portable
-workflows so a workflow can be shared across workspaces with different policies:
+Config layers, later over earlier: built-in defaults, the **global** `<user root>/config.yaml`,
+the **workspace** `config.yaml` in the data dir (read only in user storage; in local storage it is
+the project file below), then the **project** `<workspace>/.whiphand/config.yaml`. `whiphand config
+set` writes the workspace layer, or the global one with `--global`. Settings are kept separate from
+portable workflows so a workflow can be shared across workspaces with different policies:
 
 ```yaml
 defaults:
@@ -1400,7 +1445,7 @@ defaults:
 on_findings: report        # report | loop | interactive
 loop:
   max_iterations: 3
-artifacts_dir: .whiphand/runs
+artifacts_dir: .whiphand/runs   # default: <data dir>/runs
 runs:
   max_retained: null
   auto_name: false
@@ -1429,7 +1474,7 @@ specifically.
 Three principles hold the desktop shell to the same guarantees as the CLI:
 
 1. **The workspace stays the source of truth.** Everything authoritative already lives in
-   the workspace (`.whiphand/config.yaml`, `.whiphand/workflows/`, `.whiphand/runs/<id>/run.json` +
+   the workspace's data (`config.yaml`, `workflows/`, `runs/<id>/run.json` in its data dir, plus
    `events.ndjson`). The desktop's own app-state store holds only *convenience* data —
    pointers, preferences, history. Deleting it must lose zero work and break nothing.
 2. **The agent owns all disk I/O.** App-state persistence goes through the agent's RPCs

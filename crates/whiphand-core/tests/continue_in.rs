@@ -67,7 +67,7 @@ fn refused(result: Result<RunResult, RunError>) -> String {
 }
 
 fn worktree_dirs(ws: &Path) -> usize {
-    std::fs::read_dir(ws.join(".whiphand/worktrees"))
+    std::fs::read_dir(ws.join(".whiphand/wt"))
         .map(|d| d.flatten().filter(|e| e.path().is_dir()).count())
         .unwrap_or(0)
 }
@@ -120,7 +120,7 @@ fn a_continued_run_names_its_worktree_in_the_manifest_it_starts_with() {
                 run_dir: d.path().to_path_buf(),
                 run_id: "r".into(),
                 worktree: Some(
-                    whiphand_core::obj! { "path" => "/ws/.whiphand/worktrees/a", "branch" => "b" },
+                    whiphand_core::obj! { "path" => "/ws/.whiphand/wt/a", "branch" => "b" },
                 ),
                 ..JournalInit::default()
             },
@@ -130,7 +130,7 @@ fn a_continued_run_names_its_worktree_in_the_manifest_it_starts_with() {
         journal.close();
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(json["status"], "running");
-        assert_eq!(json["worktree"]["path"], "/ws/.whiphand/worktrees/a");
+        assert_eq!(json["worktree"]["path"], "/ws/.whiphand/wt/a");
     });
 }
 

@@ -18,6 +18,7 @@ const FOLDED: usize = 3;
 fn scope(entry: &WorkflowListEntry) -> &'static str {
     match entry.source {
         Scope::Global => " (global)",
+        Scope::Workspace => " (workspace)",
         Scope::Project => "",
     }
 }

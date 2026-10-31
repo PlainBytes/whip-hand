@@ -254,9 +254,9 @@ pub fn read_run_summary(run_dir: &str, dir_name: &str, mtime_ms: f64) -> RunSumm
     known(&repaired)
 }
 
-/// The runs directory under a workspace, spelled as Node's `path.join` would.
+/// The runs directory of a workspace: see [`crate::storage::runs_dir_of`].
 pub fn runs_dir(workdir: &str, config: &WorkspaceConfig) -> String {
-    node_path::join(&[workdir, &config.artifacts_dir])
+    crate::storage::runs_dir_of(workdir, config)
 }
 
 /// Every run under the workspace, newest first (run ids are timestamp-prefixed).
@@ -351,7 +351,7 @@ pub fn get_run(workdir: &str, config: &WorkspaceConfig, run_id: &str) -> Option<
     if !is_safe_run_id(run_id) {
         return None;
     }
-    let run_dir = node_path::join(&[workdir, &config.artifacts_dir, run_id]);
+    let run_dir = node_path::join(&[&runs_dir(workdir, config), run_id]);
     let meta = fs::metadata(&run_dir).ok().filter(fs::Metadata::is_dir)?;
     let mut summary = read_run_summary(&run_dir, run_id, mtime_ms(&meta));
     let artifacts: Vec<JsValue> = list_artifacts(&run_dir)
@@ -373,7 +373,7 @@ pub fn rename_run(
     if !is_safe_run_id(run_id) {
         return (false, None);
     }
-    let run_dir = node_path::join(&[workdir, &config.artifacts_dir, run_id]);
+    let run_dir = node_path::join(&[&runs_dir(workdir, config), run_id]);
     if !fs::metadata(&run_dir).is_ok_and(|m| m.is_dir()) {
         return (false, None);
     }

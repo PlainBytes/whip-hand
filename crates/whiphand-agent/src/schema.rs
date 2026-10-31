@@ -291,7 +291,7 @@ fn empty() -> Raw {
     Raw::Map(Record::new())
 }
 
-pub const SCOPE: S = Enum(&["project", "global"]);
+pub const SCOPE: S = Enum(&["project", "workspace", "global"]);
 const MANUAL_CHOICE: S = Enum(&["continue", "abort", "retry"]);
 const THEME: S = Enum(&["system", "light", "dark"]);
 
@@ -486,7 +486,12 @@ pub fn params(method: &str) -> Option<S> {
         "hello" | "getAppState" | "listJobs" | "remoteAccessGet" | "remoteAccessRotateToken" => {
             empty_default()
         }
-        "listWorkflows" | "initWorkspace" | "listRuns" | "listWorkDirs" => workdir(),
+        "listWorkflows" | "listRuns" | "listWorkDirs" => workdir(),
+        "initWorkspace" => object! {
+            "workdir" => StrMin1,
+            "storage" => o(Enum(&["local", "user"])),
+            "workflows" => o(Enum(&["local", "global"])),
+        },
         "getWorkingDiff" => object! { "workdir" => StrMin1, "runId" => o(StrMin1) },
         "getWorkflow" | "deleteWorkflow" => object! {
             "workdir" => StrMin1, "name" => WorkflowName, "scope" => o(SCOPE),

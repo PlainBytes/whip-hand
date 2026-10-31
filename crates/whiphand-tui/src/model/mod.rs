@@ -13,7 +13,9 @@ pub mod workflows;
 use std::collections::{BTreeMap, VecDeque};
 
 use serde_json::Value;
-use whiphand_protocol::{DoctorRow, JobStatus, RecentWorkspace, Scope, TuiPreferences};
+use whiphand_protocol::{
+    DoctorRow, InitStorage, JobStatus, RecentWorkspace, Scope, TuiPreferences,
+};
 
 use self::detail::RunDetail;
 use self::input::Input;
@@ -135,6 +137,10 @@ pub enum Ask {
         name: String,
         source: Scope,
     },
+    /// Set-up, first question: where the workspace keeps its data.
+    InitStorage,
+    /// Set-up, second question: where the shipped workflows go.
+    InitWorkflows(InitStorage),
     /// A folder to open as a workspace.
     OpenPath,
     /// A config leaf's new value; `global` for the global layer.

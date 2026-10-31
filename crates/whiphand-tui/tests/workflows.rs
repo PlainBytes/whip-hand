@@ -64,6 +64,8 @@ fn a_workflow_from_set_up_to_delete() {
     assert!(tui.model.workflows.needs_setup());
 
     tui.chr('i');
+    tui.chr('r');
+    tui.chr('c');
     tui.until("the set-up workspace's workflows", |m| {
         !m.workflows.needs_setup()
     });

@@ -10,6 +10,7 @@ use whiphand_core::config::{
     CONFIG_KEYS, WorkspaceConfig, config_to_js, default_config, diff_config_layer,
     load_config_layer, load_workspace_config, merge_config, partial_config_to_js,
 };
+use whiphand_core::config_home::global_workflows_dir;
 use whiphand_core::config_home::{global_config_path, host_config_home};
 use whiphand_core::doctor::config::{global_doctor_config_path, load_doctor_config};
 use whiphand_core::doctor::tools::{detect_tools, doctor_report};
@@ -22,11 +23,15 @@ use whiphand_core::engine::worktree::{
 use whiphand_core::js::number_to_string;
 use whiphand_core::node_path;
 use whiphand_core::process::container::Container;
-use whiphand_core::scaffold::{create_workflow, init_workspace};
+use whiphand_core::scaffold::{
+    InitOptions, InitWorkflows, create_workflow, existing_storage, init_workspace,
+};
 use whiphand_core::schema::{
     WorkflowError, parse_workflow, unattended_problems, validate_workflow_warnings,
 };
-use whiphand_core::store::runs::{get_run, rename_run};
+use whiphand_core::storage::Storage;
+use whiphand_core::storage::{data_dir, resolve_layout};
+use whiphand_core::store::runs::{get_run, rename_run, runs_dir};
 use whiphand_core::types::{OnFindings, Scope, Workflow};
 use whiphand_core::work_dir::{list_work_dirs, run_repo_dir, validate_subdir};
 use whiphand_core::workspace::{parse_input_pairs, resolve_workflow_path};
@@ -86,24 +91,86 @@ pub async fn doctor(dir: &str) -> CmdResult {
 
 // ---------------------------------------------------------------- init / new-workflow
 
-pub fn init(dir: &str) -> CmdResult {
-    let created = init_workspace(&node_path::resolve(dir), &host_config_home())
-        .map_err(|e| Thrown::error(e.to_string()))?;
-    out_line(&if created.is_empty() {
-        "workspace already initialized — nothing to do".to_string()
+/// Asks `question` on stderr and reads one line from stdin; an empty or
+/// unrecognised answer is `default`, the first of `choices`.
+fn ask_choice(question: &str, choices: [&str; 2]) -> String {
+    use std::io::{BufRead, Write};
+    eprint!(
+        "{question} [{}/{}] ({}): ",
+        choices[0], choices[1], choices[0]
+    );
+    let _ = std::io::stderr().flush();
+    let mut line = String::new();
+    let _ = std::io::stdin().lock().read_line(&mut line);
+    let answer = line.trim().to_lowercase();
+    choices
+        .into_iter()
+        .find(|c| !answer.is_empty() && c.starts_with(&answer))
+        .unwrap_or(choices[0])
+        .to_string()
+}
+
+pub fn init(storage: Option<&str>, workflows: Option<&str>, dir: &str) -> CmdResult {
+    use std::io::IsTerminal;
+    let workdir = node_path::resolve(dir);
+    let home = host_config_home();
+    let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let existing = existing_storage(&workdir, &home);
+    let storage = match (storage, existing) {
+        (Some(s), _) => s.to_string(),
+        (None, Some(s)) => if s == Storage::User { "user" } else { "local" }.to_string(),
+        (None, None) if interactive => ask_choice(
+            "Keep whiphand data in the workspace (local) or in your user folder (user)?",
+            ["local", "user"],
+        ),
+        (None, None) => "local".to_string(),
+    };
+    let workflows = match workflows {
+        Some(w) => w.to_string(),
+        None if interactive => ask_choice(
+            "Copy the starter workflows into this workspace (local) or use the global ones (global)?",
+            ["local", "global"],
+        ),
+        None => "local".to_string(),
+    };
+    let opts = InitOptions {
+        storage: if storage == "user" {
+            Storage::User
+        } else {
+            Storage::Local
+        },
+        workflows: if workflows == "global" {
+            InitWorkflows::Global
+        } else {
+            InitWorkflows::Local
+        },
+    };
+    let out = init_workspace(&workdir, &home, opts).map_err(|e| Thrown::error(e.to_string()))?;
+    let layout = resolve_layout(Path::new(&workdir), &home);
+    let data = match opts.storage {
+        Storage::Local => layout.project_dir.display().to_string(),
+        Storage::User => layout.user_dir.display().to_string(),
+    };
+    let flows = match opts.workflows {
+        InitWorkflows::Local => format!("{data}/workflows"),
+        InitWorkflows::Global => global_workflows_dir(&home).display().to_string(),
+    };
+    let mut lines: Vec<String> = if out.created.is_empty() {
+        vec!["workspace already initialized — nothing to do".to_string()]
     } else {
-        created
-            .iter()
-            .map(|p| format!("created {p}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    });
+        out.created.iter().map(|p| format!("created {p}")).collect()
+    };
+    lines.push(format!("data: {data}"));
+    lines.push(format!("workflows: {flows}"));
+    out_line(&lines.join("\n"));
     Ok(0)
 }
 
-pub fn new_workflow(name: &str, global: bool, dir: &str) -> CmdResult {
+pub fn new_workflow(name: &str, global: bool, workspace: bool, dir: &str) -> CmdResult {
     let scope = if global {
         Scope::Global
+    } else if workspace {
+        Scope::Workspace
     } else {
         Scope::Project
     };
@@ -154,7 +221,8 @@ pub fn worktree_remove(run_id: &str, force: bool, dir: &str) -> CmdResult {
         return Ok(1);
     };
     // Held through the removal, so no run claims the worktree between the check and it.
-    let _claims = lock_claims(&workdir).map_err(|e| Thrown::error(e.to_string()))?;
+    let _claims =
+        lock_claims(&data_dir(&workdir, &config)).map_err(|e| Thrown::error(e.to_string()))?;
     if let Some(other) = busy_run(&workdir, &config, &record.path, None) {
         err_line(&format!(
             "✘ worktree {} is in use by run '{other}'",
@@ -306,6 +374,14 @@ fn with_leaf(config: &WorkspaceConfig, key: &str, raw: &str) -> Result<Workspace
     Ok(next)
 }
 
+/// The file `config set` writes for a workspace: `config.yaml` in its data dir.
+fn workspace_config_path(workdir: &str) -> String {
+    resolve_layout(Path::new(workdir), &host_config_home())
+        .config_path()
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn global_layer_config() -> Result<WorkspaceConfig, Thrown> {
     let global = load_config_layer(&global_config_path(&host_config_home()))?;
     Ok(merge_config(&default_config(), &[&global]))
@@ -360,7 +436,7 @@ pub fn config_set(key: &str, value: &str, global: bool, dir: &str) -> CmdResult 
     let path = if global {
         global_config_path(&home).to_string_lossy().into_owned()
     } else {
-        node_path::join(&[&node_path::resolve(dir), ".whiphand", "config.yaml"])
+        workspace_config_path(&node_path::resolve(dir))
     };
     if let Some(parent) = Path::new(&path).parent() {
         std::fs::create_dir_all(parent).map_err(|e| Thrown::error(e.to_string()))?;
@@ -644,12 +720,12 @@ pub async fn run(a: RunArgs) -> CmdResult {
         EventSink::Json
     } else if a.dry_run {
         // A dry run copies nothing, so it says where a real run would have put each file.
-        let (wd, artifacts_dir) = (workdir.clone(), config.artifacts_dir.clone());
+        let (wd, cfg) = (workdir.clone(), config.clone());
         EventSink::Human(Box::new(Renderer::new(
             Sinks::default(),
             RenderOptions {
                 run_dir_of: Some(Box::new(move |run_id| {
-                    node_path::resolve(&node_path::join(&[&wd, &artifacts_dir, run_id]))
+                    node_path::resolve(&node_path::join(&[&runs_dir(&wd, &cfg), run_id]))
                 })),
                 show_prompts: true,
             },

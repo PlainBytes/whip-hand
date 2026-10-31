@@ -100,7 +100,7 @@
       "response": {
         "error": {
           "code": -32000,
-          "message": "workflow 'missing' not found — looked at <WS>/ws/.whiphand/workflows/missing.yaml and <WS>/home/workflows/missing.yaml"
+          "message": "workflow 'missing' not found — looked at <WS>/ws/.whiphand/workflows/missing.yaml, <WS>/home/ws-<KEY>/workflows/missing.yaml and <WS>/home/workflows/missing.yaml"
         }
       }
     },
@@ -261,7 +261,8 @@
             ".whiphand/workflows/iterate.yaml",
             ".whiphand/workflows/develop.yaml",
             ".whiphand/workflows/research.yaml"
-          ]
+          ],
+          "storage": "local"
         }
       }
     },
@@ -269,7 +270,8 @@
       "step": "initWorkspace again",
       "response": {
         "result": {
-          "created": []
+          "created": [],
+          "storage": "local"
         }
       }
     },
@@ -627,8 +629,11 @@
                 },
                 {
                   "id": "commit",
+                  "inputs": [
+                    "commit-message"
+                  ],
                   "kind": "command",
-                  "run": "git commit -F \".whiphand/runs/{{ run.id }}/commit-message.md\"",
+                  "run": "git commit -F \"$WHIPHAND_ARTIFACT_COMMIT_MESSAGE\"",
                   "output": "commit.log"
                 }
               ]
@@ -776,8 +781,11 @@
                 },
                 {
                   "id": "commit",
+                  "inputs": [
+                    "commit-message"
+                  ],
                   "kind": "command",
-                  "run": "git commit -F \".whiphand/runs/{{ run.id }}/commit-message.md\"",
+                  "run": "git commit -F \"$WHIPHAND_ARTIFACT_COMMIT_MESSAGE\"",
                   "output": "commit.log"
                 }
               ]

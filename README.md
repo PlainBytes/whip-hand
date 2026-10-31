@@ -49,7 +49,8 @@ target/release/whiphand --help          # or: cargo install --path crates/whipha
 
 ```bash
 whiphand doctor                                                              # check the tools whiphand needs are installed
-whiphand init                                                                # scaffold .whiphand/ (config + starter workflows) here
+whiphand init                                                                # set up this folder (asks where to keep data and the starter workflows)
+whiphand init --storage user --workflows global                              # keep data in ~/.whiphand, starter workflows shared by every workspace
 whiphand new-workflow review-pr                                              # scaffold .whiphand/workflows/review-pr.yaml
 whiphand run examples/cycle.yaml --dry-run --input feature=demo              # print every argv, spend nothing
 whiphand run examples/feature.yaml --input feature="oauth support"           # the real thing
@@ -61,16 +62,44 @@ whiphand rename-run 20260907-141233-a3f1 "Something better"                  # r
 whiphand run examples/feature.yaml --input feature=x --worktree              # run on a new branch in its own git worktree
 whiphand run develop --input feature=x --no-worktree                         # run in the working folder even if the workflow asks for a worktree
 whiphand run develop --input feature=y --in-worktree 20260907-141233-a3f1   # run again in that run's worktree, on its branch (refused while another run is using it)
-whiphand run develop -C ~/src --input feature=x --subdir api                 # in a folder of repositories: work in ~/src/api, runs stay in ~/src/.whiphand
+whiphand run develop -C ~/src --input feature=x --subdir api                 # in a folder of repositories: work in ~/src/api, runs stay with the ~/src workspace
 whiphand worktree remove 20260907-141233-a3f1                                # remove a run's worktree (--force discards uncommitted changes); the branch stays
 whiphand                                                                     # the terminal UI, on the current folder
 whiphand tui -C ~/src/shop                                                   # the terminal UI on another workspace
 whiphand desktop                                                             # start the desktop app
 ```
 
-Workflows live in `.whiphand/workflows/<name>.yaml` (so `whiphand run iterate` works) or anywhere as a
-path. Artifacts land in `.whiphand/runs/<run-id>/` as plain markdown. Workspace defaults live in
-`.whiphand/config.yaml`.
+Workflows live in one of three scopes (see below) or anywhere as a path, so `whiphand run iterate` works.
+Artifacts land in `<data dir>/runs/<run-id>/` as plain markdown. Workspace defaults live in
+`<data dir>/config.yaml`.
+
+### Where whiphand keeps things
+
+`whiphand init` asks two questions on a terminal; `--storage <local|user>` and
+`--workflows <local|global>` answer them up front.
+
+- **Storage** decides the *data dir*, which holds a workspace's runs (`runs/`), worktrees (`wt/`) and
+  `config.yaml`. `local` is `<folder>/.whiphand`. `user` is `~/.whiphand/<basename>-<hash6>`
+  (a `workspace.yaml` marker there names the workspace), so the repository stays free of whiphand runs and worktrees.
+  Workspaces that already have a `.whiphand/` stay local.
+- **Workflows** decides where the starter workflows are copied: into this workspace (`local`), or into
+  the global workflows folder (`global`; only the ones missing there are added).
+
+| Scope | Location | Use it to |
+|---|---|---|
+| project | `<folder>/.whiphand/workflows/` | commit workflows to the repository and share them with a team |
+| workspace | `~/.whiphand/<basename>-<hash6>/workflows/` | keep private workflows for one workspace, out of the repository |
+| global | `~/.whiphand/workflows/` | reuse workflows across all your workspaces |
+
+When a bare name such as `iterate` exists in several scopes, the first of project, workspace,
+global wins; the others are shadowed. Pick one explicitly with `project:<name>`, `workspace:<name>`
+or `global:<name>`. `new-workflow` writes to project by default, to workspace with `--workspace` and
+to global with `--global`. Config layers the same way: global (`~/.whiphand/config.yaml`), then the
+workspace's data dir, then the project's `.whiphand/config.yaml`; the later one wins.
+
+User storage keeps worktrees and runs at a short path under your home folder, which avoids Windows
+path-length problems that deep repository paths can cause. `~/.whiphand` is replaced by
+`WHIPHAND_CONFIG_HOME` when that is set.
 
 **Terminal UI.** `whiphand` on its own (or `whiphand tui`) drives runs from a terminal, tmux or an
 SSH session, beside the desktop app. See [Terminal UI](#terminal-ui).
@@ -87,7 +116,7 @@ and commits them one at a time, then pushes the branch (leave the push command b
 `whiphand new-workflow` scaffolds from `iterate`.
 
 **Running workflows side by side.** `develop` declares `worktree:`, so each run gets its own checkout
-under `.whiphand/worktrees/<run-id>-<slug>` (just `<run-id>` for an unnamed run) on a new branch, and your main checkout is never touched: start
+under `<data dir>/wt/<suffix>-<short-slug>` (`<suffix>` is the run id's random tail; just that for an unnamed run) on a new branch, and your main checkout is never touched: start
 two features at once and they cannot collide.
 `--worktree` / `--no-worktree` (or the New Run dialog's switch) override the workflow's choice for one
 run; `--in-worktree <run-id>` instead continues in the worktree an earlier run made, on its branch;
@@ -103,7 +132,7 @@ repository itself, each run can pick a **work directory**: `--subdir api`, or *w
 desktop's New Run dialog and the terminal UI's new-run form, which list the repositories found one
 or two levels down. Steps run there, and the
 git guard, the diff and worktrees use that repository, as if it had been opened on its own; runs,
-workflows, config and worktree folders stay in the workspace's `.whiphand/`, and the Files view
+workflows, config and worktree folders stay with the workspace (its data dir), and the Files view
 keeps showing the whole folder. Leaving the choice at the workspace root works as it always did,
 with no git guard and no worktree. A resumed run, or one continued with `--in-worktree`, keeps the
 work directory it started in.
@@ -175,13 +204,8 @@ headroom under the 260-character limit (open it through `subst` instead).
 ### Adding your own tools
 
 Doctor's built-in table lives in `crates/whiphand-core/src/doctor/tools.rs`. To extend it on your own
-machine, hand-write `doctor.yaml` beside your global `config.yaml`:
-
-| Platform | Path |
-|---|---|
-| Linux | `~/.config/whiphand/doctor.yaml` |
-| macOS | `~/Library/Application Support/whiphand/doctor.yaml` |
-| Windows | `%APPDATA%\whiphand\doctor.yaml` |
+machine, hand-write `doctor.yaml` beside your global `config.yaml`, at `~/.whiphand/doctor.yaml` on every platform
+(a `doctor.yaml` left in the old config folder is not copied over; move it by hand).
 
 (`WHIPHAND_CONFIG_HOME` overrides the directory.)
 

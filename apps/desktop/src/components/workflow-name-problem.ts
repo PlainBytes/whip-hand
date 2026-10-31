@@ -17,6 +17,9 @@ export function isWorkflowNameTaken(existing: WorkflowEntry[], candidate: string
   return existing.some(e => e.source === scope && e.name === candidate && isWorkflowFile(e));
 }
 
+/** Highest precedence first: a workflow in an earlier scope covers the same name in a later one. */
+export const SCOPE_ORDER: Scope[] = ['project', 'workspace', 'global'];
+
 export interface WorkflowNameProblem {
   message: string;
   /** An error blocks the action; a same-name-in-the-other-scope warning does not. */
@@ -26,7 +29,7 @@ export interface WorkflowNameProblem {
 /**
  * What, if anything, is wrong with naming a new workflow file `name` in
  * `scope`. The other-scope case is a warning, not an error: overriding a
- * global workflow per-project is a supported move, it just shouldn't happen
+ * lower-scope workflow is a supported move, it just shouldn't happen
  * by surprise.
  */
 export function workflowNameProblem(
@@ -40,12 +43,10 @@ export function workflowNameProblem(
   if (isWorkflowNameTaken(existing, name, scope)) {
     return { message: `A workflow named ${name} already exists`, blocking: true };
   }
-  const otherScope: Scope = scope === 'global' ? 'project' : 'global';
-  if (isWorkflowNameTaken(existing, name, otherScope)) {
-    const message = scope === 'project'
-      ? `Will override the global workflow ${name} in this workspace`
-      : `Hidden in this workspace by the project workflow ${name}`;
-    return { message, blocking: false };
-  }
+  const rank = SCOPE_ORDER.indexOf(scope);
+  const lower = SCOPE_ORDER.slice(rank + 1).find(s => isWorkflowNameTaken(existing, name, s));
+  if (lower) return { message: `Will override the ${lower} workflow ${name} in this workspace`, blocking: false };
+  const higher = SCOPE_ORDER.slice(0, rank).find(s => isWorkflowNameTaken(existing, name, s));
+  if (higher) return { message: `Hidden in this workspace by the ${higher} workflow ${name}`, blocking: false };
   return null;
 }

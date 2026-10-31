@@ -43,7 +43,7 @@ export function NewWorkflowDialog({ workdir, existing, onCreated, onDismiss }: N
         workdir, name,
         // Omitted rather than sent as 'project': keeps the common-case
         // request identical to before scopes existed.
-        ...(scope === 'global' ? { scope } : {}),
+        ...(scope !== 'project' ? { scope } : {}),
       });
       onCreated();
     } catch (err) {
@@ -82,6 +82,7 @@ export function NewWorkflowDialog({ workdir, existing, onCreated, onDismiss }: N
                   onChange={(_e, data) => setScope(data.value as Scope)}
                 >
                   <Radio value="project" label="This workspace" />
+                  <Radio value="workspace" label="Workspace (my user folder)" />
                   <Radio value="global" label="Global (every workspace)" />
                 </RadioGroup>
               </Field>

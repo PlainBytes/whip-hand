@@ -207,10 +207,10 @@ impl Renderer {
         let ty = e.str_prop("type").unwrap_or_default();
         match ty {
             "run:start" => {
-                let global = if e.str_prop("source") == Some("global") {
-                    " (global)"
-                } else {
-                    ""
+                let global = match e.str_prop("source") {
+                    Some("global") => " (global)",
+                    Some("workspace") => " (workspace)",
+                    _ => "",
                 };
                 self.out(&format!(
                     "whiphand run {}{} — workflow '{}'{global}",

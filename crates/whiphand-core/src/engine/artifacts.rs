@@ -103,14 +103,13 @@ fn local_stamp() -> String {
     )
 }
 
-/// A fresh run directory: `<local yyyymmdd-hhmmss>-<4 hex>` under the artifacts dir.
-pub fn create_run_dir(workdir: &str, artifacts_dir: &str) -> std::io::Result<(String, String)> {
+/// A fresh run directory: `<local yyyymmdd-hhmmss>-<4 hex>` under the runs dir.
+pub fn create_run_dir(
+    workdir: &str,
+    config: &crate::config::WorkspaceConfig,
+) -> std::io::Result<(String, String)> {
     let run_id = format!("{}-{}", local_stamp(), crate::random::hex(2));
-    let base = if node_path::is_absolute(artifacts_dir) {
-        artifacts_dir.to_string()
-    } else {
-        node_path::join(&[workdir, artifacts_dir])
-    };
+    let base = crate::storage::runs_dir_of(workdir, config);
     let run_dir = node_path::resolve(&node_path::join(&[&base, &run_id]));
     std::fs::create_dir_all(&run_dir)?;
     Ok((run_id, run_dir))

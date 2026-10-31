@@ -9,6 +9,7 @@ use crate::durable_fs::remove_tree;
 use crate::engine::worktree::{
     RemoveWorktree, lock_claims, record_from_manifest, remove_sync, sharing_runs,
 };
+use crate::storage::data_dir;
 use crate::store::runs::{HEARTBEAT_STALE_MS, get_run, is_safe_run_id, list_runs};
 use crate::time;
 use crate::work_dir::run_repo_dir;
@@ -46,7 +47,10 @@ pub fn delete_run(
     // Held until the directory is gone: a run starting in this worktree either claims it
     // first, and keeps it, or finds it removed.
     let record = record_from_manifest(&detail.obj);
-    let _claims = record.as_ref().map(|_| lock_claims(workdir)).transpose()?;
+    let _claims = record
+        .as_ref()
+        .map(|_| lock_claims(&data_dir(workdir, config)))
+        .transpose()?;
     if let Some(record) = record
         && sharing_runs(workdir, config, &record.path, &[run_id.to_string()]).is_empty()
     {
@@ -106,7 +110,10 @@ pub fn prune_runs(workdir: &str, config: &WorkspaceConfig, max: Option<u64>) -> 
     let has_worktree = chosen
         .iter()
         .any(|r| record_from_manifest(&r.obj).is_some());
-    let _claims = match has_worktree.then(|| lock_claims(workdir)).transpose() {
+    let _claims = match has_worktree
+        .then(|| lock_claims(&data_dir(workdir, config)))
+        .transpose()
+    {
         Ok(lock) => lock,
         Err(e) => {
             for id in chosen_ids {

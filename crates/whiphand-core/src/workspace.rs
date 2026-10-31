@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::config::read_text;
-use crate::config_home::global_workflows_dir;
+use crate::config_home::{global_workflows_dir, user_workspace_dir};
 use crate::js::{Record, locale_compare, utf16_cmp};
 use crate::schema::parse_workflow;
 use crate::types::{Scope, Workflow};
@@ -38,6 +38,15 @@ fn project_workflow_path(workdir: &Path, name: &str) -> PathBuf {
         .join(format!("{name}.yaml"))
 }
 
+/// `<user_dir>/workflows`: private to this workspace, outside the repo.
+fn workspace_workflows_dir(workdir: &Path, config_home: &Path) -> PathBuf {
+    user_workspace_dir(config_home, workdir).join("workflows")
+}
+
+fn workspace_workflow_path(workdir: &Path, config_home: &Path, name: &str) -> PathBuf {
+    workspace_workflows_dir(workdir, config_home).join(format!("{name}.yaml"))
+}
+
 fn global_workflow_path(config_home: &Path, name: &str) -> PathBuf {
     global_workflows_dir(config_home).join(format!("{name}.yaml"))
 }
@@ -61,12 +70,13 @@ fn resolve_lexically(base: &Path, p: &str) -> PathBuf {
 }
 
 /// JS `.` matches anything but a line terminator.
-static EXPLICIT_SCOPE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(global|project):([^\n\r\x{2028}\x{2029}]+)$").unwrap());
+static EXPLICIT_SCOPE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(global|project|workspace):([^\n\r\x{2028}\x{2029}]+)$").unwrap()
+});
 
 /// Resolves a workflow reference to a real path plus where it came from: an
-/// explicit `global:`/`project:` selector, then a path relative to `workdir`,
-/// then the project's workflows, then the global ones.
+/// explicit `global:`/`workspace:`/`project:` selector, then a path relative to
+/// `workdir`, then the project's workflows, the workspace's, then the global ones.
 pub fn resolve_workflow_path(
     workflow_ref: &str,
     workdir: &Path,
@@ -75,10 +85,13 @@ pub fn resolve_workflow_path(
     if let Some(caps) = EXPLICIT_SCOPE_RE.captures(workflow_ref) {
         let (scope, name) = (&caps[1], &caps[2]);
         assert_valid_workflow_name(name)?;
-        let (path, source) = if scope == "global" {
-            (global_workflow_path(config_home, name), Scope::Global)
-        } else {
-            (project_workflow_path(workdir, name), Scope::Project)
+        let (path, source) = match scope {
+            "global" => (global_workflow_path(config_home, name), Scope::Global),
+            "workspace" => (
+                workspace_workflow_path(workdir, config_home, name),
+                Scope::Workspace,
+            ),
+            _ => (project_workflow_path(workdir, name), Scope::Project),
         };
         if !path.exists() {
             return Err(format!(
@@ -110,6 +123,13 @@ pub fn resolve_workflow_path(
             source: Scope::Project,
         });
     }
+    let workspace_path = workspace_workflow_path(workdir, config_home, workflow_ref);
+    if workspace_path.exists() {
+        return Ok(ResolvedWorkflow {
+            path: workspace_path,
+            source: Scope::Workspace,
+        });
+    }
     let global_path = global_workflow_path(config_home, workflow_ref);
     if global_path.exists() {
         return Ok(ResolvedWorkflow {
@@ -118,8 +138,9 @@ pub fn resolve_workflow_path(
         });
     }
     Err(format!(
-        "workflow '{workflow_ref}' not found — looked at {} and {}",
+        "workflow '{workflow_ref}' not found — looked at {}, {} and {}",
         project_path.display(),
+        workspace_path.display(),
         global_path.display()
     ))
 }
@@ -129,7 +150,7 @@ pub struct WorkflowListEntry {
     pub name: String,
     pub path: PathBuf,
     pub source: Scope,
-    /// Set on a global entry whose name is also defined at project scope.
+    /// Set on an entry whose name is also defined in a higher scope.
     pub shadowed: bool,
     pub workflow: Option<Workflow>,
     pub error: Option<String>,
@@ -189,29 +210,157 @@ fn list_scope(dir: &Path, source: Scope) -> Vec<WorkflowListEntry> {
         .collect()
 }
 
-/// The workspace's own workflows and the global ones, sorted by name; where a
-/// name exists in both, the project entry comes first and the global one is `shadowed`.
+/// Project, workspace and global workflows, sorted by name; where a name exists
+/// in several scopes the highest comes first and the lower ones are `shadowed`.
 pub fn list_workflows(workdir: &Path, config_home: &Path) -> Vec<WorkflowListEntry> {
     let project = list_scope(&workdir.join(".whiphand").join("workflows"), Scope::Project);
+    let workspace = list_scope(
+        &workspace_workflows_dir(workdir, config_home),
+        Scope::Workspace,
+    );
     let global = list_scope(&global_workflows_dir(config_home), Scope::Global);
-    let project_names: Vec<String> = project
-        .iter()
-        .filter(|e| e.error.is_none())
-        .map(|e| e.name.clone())
-        .collect();
+    let names = |list: &[WorkflowListEntry]| -> Vec<String> {
+        list.iter()
+            .filter(|e| e.error.is_none())
+            .map(|e| e.name.clone())
+            .collect()
+    };
+    let project_names = names(&project);
+    let mut higher = project_names.clone();
+    higher.extend(names(&workspace));
     let mut all: Vec<WorkflowListEntry> = project
         .into_iter()
-        .chain(global.into_iter().map(|mut e| {
+        .chain(workspace.into_iter().map(|mut e| {
             e.shadowed = project_names.contains(&e.name);
             e
         }))
+        .chain(global.into_iter().map(|mut e| {
+            e.shadowed = higher.contains(&e.name);
+            e
+        }))
         .collect();
+    let rank = |s: Scope| match s {
+        Scope::Project => 0,
+        Scope::Workspace => 1,
+        Scope::Global => 2,
+    };
     all.sort_by(|a, b| {
-        locale_compare(&a.name, &b.name).then_with(|| match (a.source, b.source) {
-            (x, y) if x == y => std::cmp::Ordering::Equal,
-            (Scope::Project, _) => std::cmp::Ordering::Less,
-            _ => std::cmp::Ordering::Greater,
-        })
+        locale_compare(&a.name, &b.name).then_with(|| rank(a.source).cmp(&rank(b.source)))
     });
     all
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+    use crate::scaffold::{clone_workflow, create_workflow, delete_workflow};
+
+    struct Rig {
+        _dir: tempfile::TempDir,
+        ws: PathBuf,
+        home: PathBuf,
+    }
+
+    fn rig() -> Rig {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let home = dir.path().join("home");
+        Rig {
+            ws,
+            home,
+            _dir: dir,
+        }
+    }
+
+    fn wd(r: &Rig) -> String {
+        r.ws.to_string_lossy().into_owned()
+    }
+
+    fn all_three(r: &Rig, name: &str) {
+        for scope in [Scope::Project, Scope::Workspace, Scope::Global] {
+            create_workflow(&wd(r), name, scope, &r.home).unwrap();
+        }
+    }
+
+    #[test]
+    fn resolution_falls_project_workspace_global() {
+        let r = rig();
+        all_three(&r, "flow");
+        let source = |r: &Rig| {
+            resolve_workflow_path("flow", &r.ws, &r.home)
+                .unwrap()
+                .source
+        };
+        assert_eq!(source(&r), Scope::Project);
+        assert!(delete_workflow(&wd(&r), "flow", Scope::Project, &r.home).unwrap());
+        assert_eq!(source(&r), Scope::Workspace);
+        assert!(delete_workflow(&wd(&r), "flow", Scope::Workspace, &r.home).unwrap());
+        assert_eq!(source(&r), Scope::Global);
+    }
+
+    #[test]
+    fn workspace_selector_resolves_only_that_scope() {
+        let r = rig();
+        let err = resolve_workflow_path("workspace:flow", &r.ws, &r.home).unwrap_err();
+        let dir = user_workspace_dir(&r.home, &r.ws).join("workflows");
+        assert!(err.contains(&dir.to_string_lossy().into_owned()), "{err}");
+        create_workflow(&wd(&r), "flow", Scope::Global, &r.home).unwrap();
+        assert!(resolve_workflow_path("workspace:flow", &r.ws, &r.home).is_err());
+        create_workflow(&wd(&r), "flow", Scope::Workspace, &r.home).unwrap();
+        let got = resolve_workflow_path("workspace:flow", &r.ws, &r.home).unwrap();
+        assert_eq!(got.source, Scope::Workspace);
+        assert_eq!(got.path, dir.join("flow.yaml"));
+    }
+
+    #[test]
+    fn not_found_lists_all_three_places() {
+        let r = rig();
+        let err = resolve_workflow_path("nope", &r.ws, &r.home).unwrap_err();
+        assert!(err.contains(".whiphand/workflows") || err.contains(".whiphand\\workflows"));
+        assert!(
+            err.contains(
+                &user_workspace_dir(&r.home, &r.ws)
+                    .to_string_lossy()
+                    .into_owned()
+            )
+        );
+        assert!(err.contains(&global_workflows_dir(&r.home).to_string_lossy().into_owned()));
+    }
+
+    #[test]
+    fn listing_marks_shadowed_entries() {
+        let r = rig();
+        all_three(&r, "flow");
+        create_workflow(&wd(&r), "mid", Scope::Workspace, &r.home).unwrap();
+        create_workflow(&wd(&r), "mid", Scope::Global, &r.home).unwrap();
+        create_workflow(&wd(&r), "solo", Scope::Global, &r.home).unwrap();
+        let got: Vec<_> = list_workflows(&r.ws, &r.home)
+            .into_iter()
+            .map(|e| (e.name, e.source, e.shadowed))
+            .collect();
+        let s = |n: &str, sc, sh| (n.to_string(), sc, sh);
+        assert_eq!(
+            got,
+            vec![
+                s("flow", Scope::Project, false),
+                s("flow", Scope::Workspace, true),
+                s("flow", Scope::Global, true),
+                s("mid", Scope::Workspace, false),
+                s("mid", Scope::Global, true),
+                s("solo", Scope::Global, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn workspace_scope_writes_under_the_user_dir() {
+        let r = rig();
+        let path = create_workflow(&wd(&r), "flow", Scope::Workspace, &r.home).unwrap();
+        let dir = user_workspace_dir(&r.home, &r.ws).join("workflows");
+        assert_eq!(PathBuf::from(&path), dir.join("flow.yaml"));
+        let cloned = clone_workflow(&wd(&r), "flow", "copy", Scope::Workspace, &r.home).unwrap();
+        assert_eq!(PathBuf::from(cloned), dir.join("copy.yaml"));
+        assert!(!r.ws.join(".whiphand").exists());
+    }
 }

@@ -70,9 +70,10 @@ pub fn act(model: &mut Model, action: Action) -> Option<Vec<Cmd>> {
         Action::Refresh => return Some(vec![list(&workdir)]),
         Action::Edit => return Some(edit(model)),
         Action::Open | Action::RunWorkflow => return Some(run(model)),
-        Action::NewWorkflow | Action::NewGlobalWorkflow => {
+        Action::NewWorkflow | Action::NewWorkspaceWorkflow | Action::NewGlobalWorkflow => {
             let scope = match action {
                 Action::NewWorkflow => Scope::Project,
+                Action::NewWorkspaceWorkflow => Scope::Workspace,
                 _ => Scope::Global,
             };
             model.dialog = Some(Dialog::Prompt {
@@ -97,9 +98,11 @@ pub fn act(model: &mut Model, action: Action) -> Option<Vec<Cmd>> {
         Action::Delete => {
             let entry = ui.current()?;
             let (name, source) = (entry.name.clone(), entry.source);
-            let question = if ui.reveals_global(&name, source) {
+            let question = if let Some(next) = ui.reveals(&name, source) {
                 format!(
-                    "Delete the project workflow {name}? The global {name} takes its place. (y/n)"
+                    "Delete the {} workflow {name}? The {} {name} takes its place. (y/n)",
+                    scope_word(source),
+                    scope_word(next)
                 )
             } else {
                 format!("Delete the {} workflow {name}? (y/n)", scope_word(source))
@@ -115,17 +118,42 @@ pub fn act(model: &mut Model, action: Action) -> Option<Vec<Cmd>> {
             return Some(vec![Cmd::Suspend(External::Pager { path })]);
         }
         Action::InitWorkspace => {
-            return Some(vec![Cmd::Rpc(Call::new::<InitWorkspace>(
-                p::WorkdirParams {
-                    workdir: workdir.clone(),
-                },
-                Then::WorkspaceInit(workdir),
-            ))]);
+            model.dialog = Some(Dialog::Confirm {
+                question: "Keep whiphand data: r in this repo (.whiphand) · u in my user folder (~/.whiphand) · Esc cancels".into(),
+                ask: Ask::InitStorage,
+            });
+            return Some(vec![]);
         }
         _ => return None,
     };
     step(&mut ui.selected, len, delta);
     Some(vec![])
+}
+
+/// The storage is chosen; the workflows question is next.
+pub fn ask_workflows(model: &mut Model, storage: p::InitStorage) -> Vec<Cmd> {
+    model.dialog = Some(Dialog::Confirm {
+        question:
+            "Workflows: c copy them into this workspace · g use global workflows · Esc cancels"
+                .into(),
+        ask: Ask::InitWorkflows(storage),
+    });
+    vec![]
+}
+
+/// Both choices made: set the workspace up.
+pub fn init(model: &Model, storage: p::InitStorage, workflows: p::InitWorkflowsMode) -> Vec<Cmd> {
+    let Some(workdir) = model.workdir.clone() else {
+        return vec![];
+    };
+    vec![Cmd::Rpc(Call::new::<InitWorkspace>(
+        p::InitWorkspaceParams {
+            workdir: workdir.clone(),
+            storage: Some(storage),
+            workflows: Some(workflows),
+        },
+        Then::WorkspaceInit(workdir),
+    ))]
 }
 
 /// `r` (or Enter): the new-run form, on this workflow.
@@ -398,10 +426,16 @@ pub fn on_reply(model: &mut Model, then: &Then, value: Value) -> Result<Vec<Cmd>
         Then::WorkspaceInit(_) => {
             match client::decode::<InitWorkspace>(value) {
                 Ok(r) if r.created.is_empty() => toast(model, "already set up".into()),
-                Ok(r) => toast(
-                    model,
-                    format!("set up: {} files in .whiphand/", r.created.len()),
-                ),
+                Ok(r) => {
+                    let place = match r.storage {
+                        p::InitStorage::Local => ".whiphand/ in this repo",
+                        p::InitStorage::User => "~/.whiphand/ in your user folder",
+                    };
+                    toast(
+                        model,
+                        format!("set up: {} files in {place}", r.created.len()),
+                    );
+                }
                 Err(e) => model.notice = Some(e),
             }
             vec![list(&workdir)]

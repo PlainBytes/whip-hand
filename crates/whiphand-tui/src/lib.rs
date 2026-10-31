@@ -26,13 +26,22 @@ pub struct TuiOptions {
 }
 
 /// The workspace to open at start: `-C` as given, else the current
-/// directory when it has `.whiphand/`; `None` opens the workspaces screen.
+/// directory when it has `.whiphand/` or user-folder storage; `None` opens the
+/// workspaces screen.
 pub fn start_dir(dir: Option<PathBuf>, cwd: &Path) -> Option<PathBuf> {
     match dir {
         Some(d) => Some(d),
-        None if cwd.join(".whiphand").is_dir() => Some(cwd.to_path_buf()),
+        None if is_workspace(cwd) => Some(cwd.to_path_buf()),
         None => None,
     }
+}
+
+fn is_workspace(dir: &Path) -> bool {
+    let layout = whiphand_core::storage::resolve_layout(
+        dir,
+        &whiphand_core::config_home::host_config_home(),
+    );
+    layout.storage == whiphand_core::storage::Storage::User || layout.project_dir.is_dir()
 }
 
 /// Where stderr goes while the TUI owns the screen: beside the app state.

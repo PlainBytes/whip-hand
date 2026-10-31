@@ -53,6 +53,7 @@ fn render_list(model: &Model, frame: &mut Frame, area: Rect) {
         };
         let scope = match e.source {
             Scope::Project => Span::raw("project"),
+            Scope::Workspace => Span::styled("workspace", theme::dim()),
             Scope::Global => Span::styled("global", theme::dim()),
         };
         Row::new(vec![
@@ -66,7 +67,7 @@ fn render_list(model: &Model, frame: &mut Frame, area: Rect) {
         [
             Constraint::Length(1),
             Constraint::Fill(1),
-            Constraint::Length(7),
+            Constraint::Length(9),
         ],
     )
     .row_highlight_style(theme::selected());
@@ -104,7 +105,7 @@ fn preview_lines(entry: &WorkflowListEntry) -> Vec<Line<'static>> {
     )];
     if entry.shadowed == Some(true) {
         lines.push(Line::styled(
-            "A project workflow of the same name is used instead.",
+            "A workflow of the same name in a higher scope is used instead.",
             theme::dim(),
         ));
     }

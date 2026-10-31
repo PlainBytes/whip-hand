@@ -87,6 +87,7 @@ where
 #[serde(rename_all = "lowercase")]
 pub enum Scope {
     Project,
+    Workspace,
     Global,
 }
 
@@ -274,11 +275,39 @@ pub struct ValidateWorkflowResult {
     pub field_problems: Vec<WorkflowFieldProblem>,
 }
 
-pub type InitWorkspaceParams = WorkdirParams;
+/// Where a workspace keeps its whiphand data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum InitStorage {
+    Local,
+    User,
+}
+
+/// Where `init` puts the shipped workflows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum InitWorkflowsMode {
+    Local,
+    Global,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct InitWorkspaceParams {
+    pub workdir: String,
+    /// Absent: keep the storage the workspace already has, else local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub storage: Option<InitStorage>,
+    /// Absent: local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub workflows: Option<InitWorkflowsMode>,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct InitWorkspaceResult {
     pub created: Vec<String>,
+    pub storage: InitStorage,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]

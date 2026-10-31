@@ -524,15 +524,89 @@ fn config_set_rejects_invalid_values_and_writes_nothing() {
 
 // ------------------------------------------------------------------ init, new-workflow, rename-run
 
+fn names(dir: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir)
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort();
+    v
+}
+
+#[test]
+fn init_without_a_terminal_defaults_to_local_storage_and_workflows() {
+    let e = Env::new();
+    let out = e.run(&["init"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    assert!(e.ws().join(".whiphand/config.yaml").is_file());
+    assert_eq!(
+        names(&e.ws().join(".whiphand/workflows")),
+        ["develop.yaml", "iterate.yaml", "research.yaml"]
+    );
+    assert!(!e.home.path().join("workflows").exists());
+    assert!(out.stdout().contains("data: "), "{}", out.stdout());
+}
+
+#[test]
+fn init_user_storage_with_global_workflows() {
+    let e = Env::new();
+    std::fs::create_dir_all(e.home.path().join("workflows")).unwrap();
+    std::fs::write(e.home.path().join("workflows/iterate.yaml"), "mine").unwrap();
+    let out = e.run(&["init", "--storage", "user", "--workflows", "global"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    assert!(names(e.ws()).is_empty());
+    assert_eq!(
+        std::fs::read_to_string(e.home.path().join("workflows/iterate.yaml")).unwrap(),
+        "mine"
+    );
+    assert_eq!(
+        names(&e.home.path().join("workflows")),
+        ["develop.yaml", "iterate.yaml", "research.yaml"]
+    );
+    // a re-run keeps the storage and creates nothing; the other mode is refused
+    let again = e.run(&["init", "--workflows", "global"]);
+    assert_eq!(again.code(), 0, "{}", again.stderr());
+    assert!(again.stdout().starts_with("workspace already initialized"));
+    let switch = e.run(&["init", "--storage", "local"]);
+    assert_eq!(switch.code(), 1);
+    assert!(
+        switch.stderr().contains("not supported yet"),
+        "{}",
+        switch.stderr()
+    );
+    assert!(names(e.ws()).is_empty());
+}
+
+#[test]
+fn init_user_storage_with_local_workflows_keeps_everything_in_the_user_folder() {
+    let e = Env::new();
+    let out = e.run(&["init", "--storage", "user", "--workflows", "local"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    assert!(names(e.ws()).is_empty());
+    assert!(!e.home.path().join("workflows").exists());
+}
+
+#[test]
+fn init_rejects_unknown_flag_values() {
+    let e = Env::new();
+    assert_ne!(e.run(&["init", "--storage", "cloud"]).code(), 0);
+    assert_ne!(e.run(&["init", "--workflows", "x"]).code(), 0);
+    assert!(names(e.ws()).is_empty());
+}
+
 #[test]
 fn init_then_new_workflow() {
     let e = Env::new();
     let out = e.run(&["init"]);
     assert_eq!(out.code(), 0);
     assert!(out.stdout().contains("created "), "{}", out.stdout());
-    assert_eq!(
-        e.run(&["init"]).stdout(),
-        "workspace already initialized — nothing to do\n"
+    assert!(
+        e.run(&["init"])
+            .stdout()
+            .starts_with("workspace already initialized — nothing to do\n")
     );
     let out = e.run(&["new-workflow", "triage"]);
     assert_eq!(out.code(), 0);
@@ -638,6 +712,11 @@ fn recorded(run: &Path, name: &str) -> String {
         .to_string()
 }
 
+/// A run's worktree folder when it has no usable name: its id's random suffix.
+fn wt_suffix(id: &str) -> String {
+    id.rsplit('-').next().unwrap().to_string()
+}
+
 fn run_id(run: &Path) -> String {
     run.file_name().unwrap().to_string_lossy().into_owned()
 }
@@ -652,12 +731,12 @@ fn worktree_run_executes_on_a_new_branch_in_the_worktree() {
     let run = e.only_run();
     let id = run_id(&run);
     assert_eq!(recorded(&run, "branch.txt"), format!("whiphand/{id}"));
-    let expected = e.ws().join(".whiphand/worktrees").join(&id);
+    let expected = e.ws().join(".whiphand/wt").join(wt_suffix(&id));
     assert_eq!(
         canonical(Path::new(&recorded(&run, "pwd.txt"))),
         canonical(&expected)
     );
-    assert!(e.ws().join(".whiphand/worktrees/.gitignore").is_file());
+    assert!(e.ws().join(".whiphand/wt/.gitignore").is_file());
 }
 
 #[test]
@@ -674,12 +753,12 @@ fn named_run_worktree_folder_carries_the_slug_and_resume_and_remove_use_it() {
     let id = run_id(&e.only_run());
     let tree = e
         .ws()
-        .join(".whiphand/worktrees")
-        .join(format!("{id}-fix-login-bug"));
+        .join(".whiphand/wt")
+        .join(format!("{}-fix-login-bug", wt_suffix(&id)));
     assert!(tree.is_dir(), "{}", out.stdout());
     assert!(
         out.stdout()
-            .contains(&format!(".whiphand/worktrees/{id}-fix-login-bug")),
+            .contains(&format!(".whiphand/wt/{}-fix-login-bug", wt_suffix(&id))),
         "{}",
         out.stdout()
     );
@@ -702,7 +781,8 @@ fn worktree_flag_creates_a_worktree_for_a_workflow_without_the_field() {
     assert_eq!(recorded(&run, "branch.txt"), format!("whiphand/{id}"));
     assert!(
         out.stdout().contains(&format!(
-            "🌿 worktree .whiphand/worktrees/{id} on branch whiphand/{id}"
+            "🌿 worktree .whiphand/wt/{} on branch whiphand/{id}",
+            wt_suffix(&id)
         )),
         "{}",
         out.stdout()
@@ -724,8 +804,8 @@ fn no_worktree_flag_runs_in_the_workspace_despite_the_workflow() {
     assert!(!out.stdout().contains("🌿"), "{}", out.stdout());
     assert!(
         !e.ws()
-            .join(".whiphand/worktrees")
-            .join(run_id(&run))
+            .join(".whiphand/wt")
+            .join(wt_suffix(&run_id(&run)))
             .exists()
     );
 }
@@ -947,8 +1027,8 @@ fn worktree_run_keeps_the_main_tree_clean() {
     let id = run_id(&e.only_run());
     assert!(
         e.ws()
-            .join(".whiphand/worktrees")
-            .join(&id)
+            .join(".whiphand/wt")
+            .join(wt_suffix(&id))
             .join("new.txt")
             .is_file()
     );
@@ -999,8 +1079,8 @@ fn in_runs_a_worktree_from_the_repository_below_the_workspace() {
     assert_eq!(manifest_of(&run)["subdir"], "api");
     assert!(
         e.ws()
-            .join(".whiphand/worktrees")
-            .join(&id)
+            .join(".whiphand/wt")
+            .join(wt_suffix(&id))
             .join("new.txt")
             .is_file()
     );
@@ -1079,8 +1159,8 @@ fn worktree_branch_that_already_exists_fails_the_run() {
     );
     assert!(
         !e.ws()
-            .join(".whiphand/worktrees")
-            .join(run_id(&e.only_run()))
+            .join(".whiphand/wt")
+            .join(wt_suffix(&run_id(&e.only_run())))
             .exists()
     );
 }
@@ -1121,7 +1201,7 @@ fn resume_returns_to_the_same_worktree_and_refuses_a_missing_one() {
         .find(|p| *p != run)
         .unwrap();
     let second_id = run_id(&second);
-    let tree = e.ws().join(".whiphand/worktrees").join(&second_id);
+    let tree = e.ws().join(".whiphand/wt").join(wt_suffix(&second_id));
     git(
         e.ws(),
         &["worktree", "remove", "--force", &tree.to_string_lossy()],
@@ -1162,7 +1242,7 @@ fn worktree_is_recorded_in_run_json_and_run_start_is_workspace_relative() {
         .unwrap();
     assert_eq!(
         start["worktree"]["path"],
-        format!(".whiphand/worktrees/{id}")
+        format!(".whiphand/wt/{}", wt_suffix(&id))
     );
     assert_eq!(start["worktree"]["branch"], format!("whiphand/{id}"));
     assert_eq!(start["worktree"]["base"], "HEAD");
@@ -1194,7 +1274,7 @@ fn branch_listed(e: &Env, branch: &str) -> bool {
 }
 
 fn worktree_listed(e: &Env, id: &str) -> bool {
-    git(e.ws(), &["worktree", "list", "--porcelain"]).contains(&format!("worktrees/{id}"))
+    git(e.ws(), &["worktree", "list", "--porcelain"]).contains(&format!("wt/{}", wt_suffix(id)))
 }
 
 fn run_ids(e: &Env) -> Vec<String> {
@@ -1214,7 +1294,7 @@ fn worktree_remove_deletes_the_tree_and_keeps_the_branch() {
     worktree_workflow(&e, "worktree: true\n", "true");
     assert_eq!(e.run(&["run", "wt"]).code(), 0);
     let id = run_id(&e.only_run());
-    let tree = e.ws().join(".whiphand/worktrees").join(&id);
+    let tree = e.ws().join(".whiphand/wt").join(wt_suffix(&id));
     assert!(tree.is_dir());
 
     let out = e.run(&["worktree", "remove", &id]);
@@ -1239,7 +1319,7 @@ fn worktree_remove_refuses_a_dirty_tree_until_forced() {
     worktree_workflow(&e, "worktree: true\n", LEAVE_UNTRACKED_FILE);
     assert_eq!(e.run(&["run", "wt"]).code(), 0);
     let id = run_id(&e.only_run());
-    let tree = e.ws().join(".whiphand/worktrees").join(&id);
+    let tree = e.ws().join(".whiphand/wt").join(wt_suffix(&id));
     assert!(tree.join("scratch.txt").is_file());
 
     let out = e.run(&["worktree", "remove", &id]);
@@ -1280,7 +1360,7 @@ fn worktree_remove_names_the_other_runs_that_shared_the_tree() {
         "{}",
         out.stdout()
     );
-    assert!(!e.ws().join(".whiphand/worktrees").join(&id).exists());
+    assert!(!e.ws().join(".whiphand/wt").join(wt_suffix(&id)).exists());
 }
 
 #[test]
@@ -1310,7 +1390,7 @@ fn worktree_remove_refuses_while_another_run_is_running_in_the_tree() {
         "{}",
         out.stderr()
     );
-    assert!(e.ws().join(".whiphand/worktrees").join(&id).is_dir());
+    assert!(e.ws().join(".whiphand/wt").join(wt_suffix(&id)).is_dir());
 }
 
 #[test]
@@ -1360,10 +1440,15 @@ fn pruning_removes_the_oldest_runs_worktree_and_keeps_its_branch() {
     let ids = run_ids(&e);
     assert_eq!(ids.len(), 1, "{ids:?}");
     assert_ne!(ids[0], first);
-    assert!(!e.ws().join(".whiphand/worktrees").join(&first).exists());
+    assert!(!e.ws().join(".whiphand/wt").join(wt_suffix(&first)).exists());
     assert!(!worktree_listed(&e, &first));
     assert!(branch_listed(&e, &format!("whiphand/{first}")));
-    assert!(e.ws().join(".whiphand/worktrees").join(&ids[0]).is_dir());
+    assert!(
+        e.ws()
+            .join(".whiphand/wt")
+            .join(wt_suffix(&ids[0]))
+            .is_dir()
+    );
 }
 
 #[test]
@@ -1384,8 +1469,8 @@ fn pruning_keeps_a_dirty_worktree_run_and_says_so() {
     assert!(e.runs_dir().join(&first).is_dir());
     assert!(
         e.ws()
-            .join(".whiphand/worktrees")
-            .join(&first)
+            .join(".whiphand/wt")
+            .join(wt_suffix(&first))
             .join("scratch.txt")
             .is_file()
     );
@@ -1429,7 +1514,7 @@ fn in_worktree_runs_in_the_earlier_runs_worktree_and_says_so() {
     assert_eq!(recorded(second, "branch.txt"), format!("whiphand/{first}"));
     assert_eq!(
         canonical(Path::new(&recorded(second, "pwd.txt"))),
-        canonical(&e.ws().join(".whiphand/worktrees").join(&first))
+        canonical(&e.ws().join(".whiphand/wt").join(wt_suffix(&first)))
     );
     let manifest: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(second.join("run.json")).unwrap()).unwrap();

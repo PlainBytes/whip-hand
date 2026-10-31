@@ -100,8 +100,8 @@ pub fn build_cli() -> Command {
         .subcommand(
             sub("run", "run a workflow, or resume a stopped one")
                 .arg(Arg::new("workflow").help(
-                    "workflow name (project .whiphand/workflows/, falling back to the global ones), a path to a YAML file, \
-                     or an explicit 'project:<name>' / 'global:<name>' selector; omit when using --resume",
+                    "workflow name (project .whiphand/workflows/, then the workspace's, then the global ones), a path to a YAML file, \
+                     or an explicit 'project:<name>' / 'workspace:<name>' / 'global:<name>' selector; omit when using --resume",
                 ))
                 .arg(value(
                     "resume",
@@ -198,7 +198,23 @@ pub fn build_cli() -> Command {
         .subcommand(
             sub(
                 "init",
-                "initialize .whiphand/ (config + starter workflows) in the working folder",
+                "initialize whiphand data (config + starter workflows) for the working folder",
+            )
+            .arg(
+                value(
+                    "storage",
+                    "local|user",
+                    "keep data in <folder>/.whiphand (local) or in the user folder (user); asked on a terminal when omitted",
+                )
+                .value_parser(["local", "user"]),
+            )
+            .arg(
+                value(
+                    "workflows",
+                    "local|global",
+                    "copy the starter workflows into this workspace (local) or add the missing ones to the global workflows dir (global); asked on a terminal when omitted",
+                )
+                .value_parser(["local", "global"]),
             )
             .arg(dir_option("working folder"))
             .arg(extra()),
@@ -206,7 +222,7 @@ pub fn build_cli() -> Command {
         .subcommand(
             sub(
                 "new-workflow",
-                "scaffold a workflow into .whiphand/workflows/, or the global workflows dir with --global",
+                "scaffold a workflow into .whiphand/workflows/, the workspace's private dir with --workspace, or the global workflows dir with --global",
             )
             .arg(
                 Arg::new("name")
@@ -216,6 +232,10 @@ pub fn build_cli() -> Command {
             .arg(flag(
                 "global",
                 "write to the user-level workflows dir, shared by every workspace",
+            ))
+            .arg(flag(
+                "workspace",
+                "write to this workspace's private workflows dir under the user folder",
             ))
             .arg(dir_option("working folder"))
             .arg(extra()),

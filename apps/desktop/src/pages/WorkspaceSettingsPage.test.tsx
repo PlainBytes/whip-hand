@@ -337,6 +337,7 @@ describe('WorkspaceSettingsPage', () => {
     await respond(transport, 'configGet', scriptedConfig({
       config: { ...RESOLVED, artifacts_dir: '.whiphand/custom' },
       project: { artifacts_dir: '.whiphand/custom' },
+      global: { artifacts_dir: '.whiphand/runs' },
     }));
     await respond(transport, 'doctor', []);
 
@@ -345,6 +346,18 @@ describe('WorkspaceSettingsPage', () => {
 
     expect(screen.getByDisplayValue('.whiphand/runs')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+  });
+
+  it('does not claim "Inherited from global" for a project artifacts_dir with no global value', async () => {
+    const { transport } = renderWorkspaceSettingsPage();
+    await respond(transport, 'configGet', scriptedConfig({
+      config: { ...RESOLVED, artifacts_dir: '.whiphand/custom' },
+      project: { artifacts_dir: '.whiphand/custom' },
+    }));
+    await respond(transport, 'doctor', []);
+
+    expect(await screen.findByDisplayValue('.whiphand/custom')).toBeInTheDocument();
+    expect(screen.getByText(/set for this workspace/i)).toBeInTheDocument();
   });
 
   it('typing 2.5 into Max fix-loop iterations is rejected — Save stays disabled', async () => {

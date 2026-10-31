@@ -297,12 +297,24 @@ pub fn canonical(value: &Value) -> String {
     serde_json::to_string(&sort_keys(value)).expect("serializable")
 }
 
+/// Replaces the `-<hash6>` of a workspace key folder with `-<wskey>`: the hash
+/// covers the machine-specific absolute path, so it cannot sit in a golden.
+fn mask_workspace_keys(s: &str) -> String {
+    static KEY_HASH: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"-[0-9a-f]{6}/workflows").expect("valid regex")
+    });
+    KEY_HASH.replace_all(s, "-<wskey>/workflows").into_owned()
+}
+
 /// Rewrites every string under `value` that holds a path below `repo` to the
 /// portable `<repo>/…` form.
 pub fn normalize_paths(value: &mut Value, repo: &Path) {
     let root = repo.to_string_lossy().into_owned();
     match value {
-        Value::String(s) if s.contains(&root) => *s = s.replace(&root, "<repo>").replace('\\', "/"),
+        Value::String(s) if s.contains(&root) => {
+            let portable = s.replace(&root, "<repo>").replace('\\', "/");
+            *s = mask_workspace_keys(&portable);
+        }
         Value::Array(items) => items.iter_mut().for_each(|v| normalize_paths(v, repo)),
         Value::Object(map) => map.values_mut().for_each(|v| normalize_paths(v, repo)),
         _ => {}

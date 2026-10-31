@@ -46,19 +46,31 @@ impl WorkflowsUi {
             .is_some_and(|l| !l.iter().any(|e| e.source == Scope::Project))
     }
 
-    /// Deleting this project workflow uncovers a global one of its name.
-    pub fn reveals_global(&self, name: &str, source: Scope) -> bool {
-        source == Scope::Project
-            && self.list.as_ref().is_some_and(|l| {
-                l.iter()
-                    .any(|e| e.source == Scope::Global && e.name == name && e.error.is_none())
-            })
+    /// Deleting this workflow uncovers one of its name in a lower scope: the
+    /// highest such scope.
+    pub fn reveals(&self, name: &str, source: Scope) -> Option<Scope> {
+        self.list
+            .as_ref()?
+            .iter()
+            .filter(|e| e.name == name && e.error.is_none() && rank(e.source) > rank(source))
+            .map(|e| e.source)
+            .min_by_key(|s| rank(*s))
+    }
+}
+
+/// Project beats workspace beats global.
+fn rank(scope: Scope) -> u8 {
+    match scope {
+        Scope::Project => 0,
+        Scope::Workspace => 1,
+        Scope::Global => 2,
     }
 }
 
 pub fn scope_word(scope: Scope) -> &'static str {
     match scope {
         Scope::Project => "project",
+        Scope::Workspace => "workspace",
         Scope::Global => "global",
     }
 }
@@ -136,9 +148,9 @@ mod tests {
             entry("broken", Scope::Project, None),
             entry("broken", Scope::Global, Some("bad yaml")),
         ]);
-        assert!(ui.reveals_global("feature", Scope::Project));
-        assert!(!ui.reveals_global("feature", Scope::Global));
-        assert!(!ui.reveals_global("broken", Scope::Project));
+        assert_eq!(ui.reveals("feature", Scope::Project), Some(Scope::Global));
+        assert_eq!(ui.reveals("feature", Scope::Global), None);
+        assert_eq!(ui.reveals("broken", Scope::Project), None);
     }
 
     #[test]

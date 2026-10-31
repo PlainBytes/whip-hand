@@ -1,8 +1,17 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import {
   Button,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
+  Field,
   MessageBar,
   MessageBarBody,
+  Radio,
+  RadioGroup,
   Text,
 } from '@fluentui/react-components';
 import { Add20Regular } from '@fluentui/react-icons';
@@ -15,6 +24,8 @@ import { CloneWorkflowDialog } from '../components/CloneWorkflowDialog.tsx';
 import { NewWorkflowDialog } from '../components/NewWorkflowDialog.tsx';
 import type { WorkflowEntry } from '../components/workflow-lane/WorkflowLane.tsx';
 import type { Scope } from '../shared/types.ts';
+import type { InitStorage, InitWorkflowsMode } from '../shared/protocol.gen.ts';
+import { SCOPE_ORDER } from '../components/workflow-name-problem.ts';
 import { WorkflowEditor } from '../workflow-editor/WorkflowEditor.tsx';
 import { errorMessage } from '../lib/error-message.ts';
 
@@ -45,6 +56,10 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
 
   const [settingUp, setSettingUp] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
+  /** The set-up choices dialog is open. */
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [setupStorage, setSetupStorage] = useState<InitStorage>('user');
+  const [setupWorkflows, setSetupWorkflows] = useState<InitWorkflowsMode>('local');
 
   const [newWorkflowOpen, setNewWorkflowOpen] = useState(false);
 
@@ -77,10 +92,15 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
 
   async function setUp(): Promise<void> {
     if (!workspacePath) return;
+    setSetupOpen(false);
     setSettingUp(true);
     setSetupError(null);
     try {
-      await client.request('initWorkspace', { workdir: workspacePath });
+      await client.request('initWorkspace', {
+        workdir: workspacePath,
+        storage: setupStorage,
+        workflows: setupWorkflows,
+      });
       setReloadKey(k => k + 1);
     } catch (err) {
       setSetupError(errorMessage(err));
@@ -94,9 +114,10 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
     setEditing({ name: entry.name, source: entry.source });
   }
 
-  /** Deleting this project workflow uncovers a global one of the same name. */
-  function revealsGlobal(name: string, source: Scope): boolean {
-    return source === 'project' && workflows.some(w => w.source === 'global' && w.name === name && isWorkflowFile(w));
+  /** The next lower scope holding a same-named workflow that deleting this one uncovers, if any. */
+  function uncovers(name: string, source: Scope): Scope | null {
+    return SCOPE_ORDER.slice(SCOPE_ORDER.indexOf(source) + 1)
+      .find(s => workflows.some(w => w.source === s && w.name === name && isWorkflowFile(w))) ?? null;
   }
 
   if (!workspacePath) {
@@ -114,7 +135,7 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
           source={editing.source}
           workdir={workspacePath}
           onCancel={() => setEditing(null)}
-          revealsGlobal={revealsGlobal(editing.name, editing.source)}
+          uncovers={uncovers(editing.name, editing.source)}
           onSaved={() => {
             setEditing(null);
             setReloadKey(k => k + 1);
@@ -153,16 +174,16 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
     body = <Text>Loading workflows…</Text>;
   } else if (error) {
     body = <Text>Failed to load workflows: {error}</Text>;
-  } else if (!workflows.some(w => w.source === 'project')) {
-    // Not `workflows.length === 0`: a workspace that owns zero project
-    // workflows of its own still needs the setup CTA, but any global
+  } else if (!workflows.some(w => w.source !== 'global')) {
+    // Not `workflows.length === 0`: a workspace that owns zero project or
+    // workspace workflows of its own still needs the setup CTA, but any global
     // workflows it can already see are rendered alongside it rather than
     // hidden behind it — they're runnable right now, setup or not.
     body = (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
           <Text>No workflows found in this workspace.</Text>
-          <Button appearance="primary" disabled={settingUp} onClick={() => void setUp()}>
+          <Button appearance="primary" disabled={settingUp} onClick={() => setSetupOpen(true)}>
             {settingUp ? 'Setting up…' : 'Set up this workspace'}
           </Button>
           {setupError && <MessageBar intent="error"><MessageBarBody>{setupError}</MessageBarBody></MessageBar>}
@@ -188,6 +209,38 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
       }
     >
       {body}
+      {setupOpen && (
+        <Dialog open onOpenChange={(_e, data) => { if (!data.open) setSetupOpen(false); }}>
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>Set up this workspace</DialogTitle>
+              <DialogContent>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <Field label="Storage" hint="Where whiphand keeps this workspace's config, runs and worktrees.">
+                    <RadioGroup value={setupStorage} onChange={(_e, data) => setSetupStorage(data.value as InitStorage)}>
+                      <Radio value="user" label="My user folder (~/.whiphand) — recommended, keeps paths short" />
+                      <Radio value="local" label="This repo (.whiphand)" />
+                    </RadioGroup>
+                  </Field>
+                  <Field label="Workflows">
+                    <RadioGroup
+                      value={setupWorkflows}
+                      onChange={(_e, data) => setSetupWorkflows(data.value as InitWorkflowsMode)}
+                    >
+                      <Radio value="local" label="Copy workflows into this workspace" />
+                      <Radio value="global" label="Use global workflows" />
+                    </RadioGroup>
+                  </Field>
+                </div>
+              </DialogContent>
+              <DialogActions>
+                <Button appearance="primary" onClick={() => void setUp()}>Set up</Button>
+                <Button onClick={() => setSetupOpen(false)}>Cancel</Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
+      )}
       {newWorkflowOpen && (
         <NewWorkflowDialog
           workdir={workspacePath}
@@ -204,7 +257,7 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
           name={deleting.name}
           source={deleting.source}
           workdir={workspacePath}
-          revealsGlobal={revealsGlobal(deleting.name, deleting.source)}
+          uncovers={uncovers(deleting.name, deleting.source)}
           onDeleted={() => {
             setDeleting(null);
             setReloadKey(k => k + 1);

@@ -104,6 +104,7 @@ pub enum Action {
     Edit,
     RunWorkflow,
     NewWorkflow,
+    NewWorkspaceWorkflow,
     NewGlobalWorkflow,
     CloneWorkflow,
     InitWorkspace,
@@ -414,7 +415,14 @@ pub const BINDINGS: &[Binding] = &[
         &[Char('n')],
         "n",
         A::NewWorkflow,
-        "new workflow in this workspace",
+        "new workflow in this repo",
+    ),
+    b(
+        C::Workflows,
+        &[Char('w')],
+        "w",
+        A::NewWorkspaceWorkflow,
+        "new workflow for this workspace, kept in your user folder",
     ),
     b(
         C::Workflows,
@@ -437,7 +445,7 @@ pub const BINDINGS: &[Binding] = &[
         &[Char('i')],
         "i",
         A::InitWorkspace,
-        "set up this workspace (.whiphand/)",
+        "set up this workspace (asks where)",
     ),
     b(C::Workflows, &[Ctrl('r')], "Ctrl-r", A::Refresh, "reload"),
     b(

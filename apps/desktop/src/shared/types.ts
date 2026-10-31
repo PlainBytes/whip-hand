@@ -11,11 +11,13 @@ export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type OnFindings = 'report' | 'loop' | 'interactive';
 
 /**
- * Where a workflow definition or a config layer lives: this workspace's own
- * `.whiphand/`, or the user-level directory under resolveConfigHome() that
- * every workspace on the machine shares.
+ * Where a workflow definition or a config layer lives: `project` is the
+ * workspace's own checked-in `.whiphand/`, `workspace` is the per-workspace
+ * folder in the user's storage, and `global` is the user-level directory under
+ * resolveConfigHome() that every workspace on the machine shares. Resolution
+ * order is project, then workspace, then global.
  */
-export type Scope = 'project' | 'global';
+export type Scope = 'project' | 'workspace' | 'global';
 
 /**
  * What a step *is*. `agent` is the original (and only) kind and stays the
@@ -522,7 +524,7 @@ export interface WorkspaceConfig {
   defaults: { runner: string };
   on_findings: OnFindings;
   loop: { max_iterations: number };
-  artifacts_dir: string;                 // relative to workdir, default '.whiphand/runs'
+  artifacts_dir: string;                 // relative to workdir; default is the runs folder of the workspace's storage
   runs: {
     // null: inherit the app-level preference. 0: keep everything. n >= 1: keep n.
     max_retained: number | null;

@@ -1,6 +1,6 @@
 //! Config layering (`config.ts`): DEFAULT_CONFIG, then the global
-//! `config.yaml`, then the workspace's own `.whiphand/config.yaml`, merged per
-//! leaf.
+//! `config.yaml`, then the user-workspace `config.yaml` (user storage only), then
+//! the workspace's own `.whiphand/config.yaml`, merged per leaf.
 
 use std::path::Path;
 
@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::config_home::global_config_path;
 use crate::raw::{Raw, parse_yaml};
 use crate::schema::WorkflowError;
+use crate::storage::{Storage, resolve_layout};
 use crate::types::OnFindings;
 use crate::zod::{self, Bound, Ctx};
 
@@ -51,6 +52,11 @@ pub struct WorkspaceConfig {
     pub loop_: LoopConfig,
     pub artifacts_dir: String,
     pub runs: RunsConfig,
+    /// The user folder a user-storage workspace keeps its data in; set by
+    /// [`load_workspace_config`], never read from or written to a config file.
+    /// `None` means `<workspace>/.whiphand`.
+    #[serde(skip)]
+    pub data_dir: Option<String>,
 }
 
 pub fn default_config() -> WorkspaceConfig {
@@ -66,6 +72,7 @@ pub fn default_config() -> WorkspaceConfig {
             auto_name: false,
             max_attachment_mb: 25.0,
         },
+        data_dir: None,
     }
 }
 
@@ -332,14 +339,24 @@ pub fn diff_config_layer(
     layer
 }
 
-/// The resolved config a workspace runs with: defaults, then the global layer, then the project's.
+/// The resolved config a workspace runs with: defaults, then the global layer, then the
+/// user-workspace layer (user storage only), then the project's `.whiphand/config.yaml`.
 pub fn load_workspace_config(
     workdir: &Path,
     config_home: &Path,
 ) -> Result<WorkspaceConfig, WorkflowError> {
+    let layout = resolve_layout(workdir, config_home);
     let global = load_config_layer(&global_config_path(config_home))?;
-    let project = load_config_layer(&workdir.join(".whiphand").join("config.yaml"))?;
-    Ok(merge_config(&default_config(), &[&global, &project]))
+    let user = match layout.storage {
+        Storage::User => load_config_layer(&layout.config_path())?,
+        Storage::Local => PartialConfig::default(),
+    };
+    let project = load_config_layer(&layout.project_dir.join("config.yaml"))?;
+    let mut config = merge_config(&default_config(), &[&global, &user, &project]);
+    if layout.storage == Storage::User {
+        config.data_dir = Some(layout.data_dir.to_string_lossy().into_owned());
+    }
+    Ok(config)
 }
 
 /// The config as the JS object `stringifyYaml` writes: keys in declaration

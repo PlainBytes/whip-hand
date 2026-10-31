@@ -75,6 +75,7 @@ pub enum ManualDefault {
 #[serde(rename_all = "lowercase")]
 pub enum Scope {
     Project,
+    Workspace,
     Global,
 }
 
@@ -82,6 +83,7 @@ impl Scope {
     pub fn as_str(self) -> &'static str {
         match self {
             Scope::Project => "project",
+            Scope::Workspace => "workspace",
             Scope::Global => "global",
         }
     }

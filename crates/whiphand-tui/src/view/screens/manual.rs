@@ -12,7 +12,7 @@ use crate::model::detail::DiffState;
 use crate::model::input::Input;
 use crate::model::manual::{Focus, Manual, choice_key};
 use crate::view::theme;
-use crate::view::widgets::{diff, markdown};
+use crate::view::widgets::{artifact, diff, markdown};
 
 /// Lines a note or a comment shows when it is not being edited.
 const FOLDED: usize = 2;
@@ -88,7 +88,7 @@ fn list_lines(m: &Manual) -> (Vec<Line<'static>>, usize) {
     }
     let artifacts = &m.request.context.artifacts;
     if !artifacts.is_empty() {
-        lines.push(Line::styled("  Artifacts (Enter pages one)", theme::bold()));
+        lines.push(Line::styled("  Artifacts (Enter opens one)", theme::bold()));
     }
     for (i, a) in artifacts.iter().enumerate() {
         if m.focus == Focus::Artifact(i) {
@@ -194,6 +194,22 @@ pub fn render(model: &Model, frame: &mut Frame, area: Rect) {
     if let Some(s) = m.request.subtitle() {
         frame.render_widget(Line::styled(format!(" {s}"), theme::dim()), subtitle);
     }
+    if let Some(view) = &m.artifact_view {
+        artifact::render(view, "Esc", frame, top);
+    } else {
+        render_top(m, frame, top);
+    }
+    frame.render_widget(
+        Line::styled("─".repeat(usize::from(rule.width)), theme::dim()),
+        rule,
+    );
+    let scroll = (focus_line + 2).saturating_sub(usize::from(list_height));
+    frame.render_widget(Paragraph::new(list).scroll((scroll as u16, 0)), bottom);
+    frame.render_widget(choices_line(m), choices);
+}
+
+/// The instructions, or the focused file's patch.
+fn render_top(m: &Manual, frame: &mut Frame, top: Rect) {
     let body: Text = match m.focus {
         Focus::File(i) => match m.files().get(i) {
             Some(f) => Text::from(diff::patch_lines(f)),
@@ -207,13 +223,6 @@ pub fn render(model: &Model, frame: &mut Frame, area: Rect) {
             .scroll((m.scroll, 0)),
         top,
     );
-    frame.render_widget(
-        Line::styled("─".repeat(usize::from(rule.width)), theme::dim()),
-        rule,
-    );
-    let scroll = (focus_line + 2).saturating_sub(usize::from(list_height));
-    frame.render_widget(Paragraph::new(list).scroll((scroll as u16, 0)), bottom);
-    frame.render_widget(choices_line(m), choices);
 }
 
 /// The footer while the note or a comment is being written.

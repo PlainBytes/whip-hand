@@ -7,7 +7,7 @@ use serde_json::Value;
 use whiphand_core::format::stage_label;
 use whiphand_protocol::{FileComment, ManualChoice};
 
-use super::detail::DiffState;
+use super::detail::{ArtifactView, DiffState};
 use super::input::Input;
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -131,11 +131,26 @@ pub fn choice_key(choice: ManualChoice) -> char {
     }
 }
 
+/// The run-directory-relative name of a workspace-relative artifact `path`
+/// (`<artifacts_dir>/<runId>/<name>`): what follows the `/<runId>/` segment.
+pub fn artifact_name(path: &str, run_id: &str) -> Option<String> {
+    if run_id.is_empty() {
+        return None;
+    }
+    let marker = format!("/{run_id}/");
+    let rest = if let Some(rest) = path.strip_prefix(&marker[1..]) {
+        rest
+    } else {
+        &path[path.find(&marker)? + marker.len()..]
+    };
+    (!rest.is_empty()).then(|| rest.to_string())
+}
+
 /// What the screen's keys move through.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Focus {
     Note,
-    /// An artifact of the context, by index: Enter pages it.
+    /// An artifact of the context, by index: Enter opens it.
     Artifact(usize),
     /// A file of the diff, by index.
     File(usize),
@@ -156,6 +171,10 @@ pub struct Manual {
     pub editing: bool,
     /// Instructions scrolled by this many lines.
     pub scroll: u16,
+    /// The artifact open in the top pane instead of the instructions.
+    pub artifact_view: Option<ArtifactView>,
+    /// An artifact edit `writeArtifact` refused: kept for the next `e`.
+    pub artifact_draft: Option<(String, String)>,
     /// Sent; waiting for `manualResolved`.
     pub sent: Option<ManualChoice>,
     /// Asked "abort the run?"; `X` again answers.
@@ -180,6 +199,8 @@ impl Manual {
             focus: Focus::Note,
             editing: false,
             scroll: 0,
+            artifact_view: None,
+            artifact_draft: None,
             sent: None,
             confirm_abort: false,
         }
@@ -200,6 +221,12 @@ impl Manual {
             Some(DiffState::Loaded(Some(d))) => &d.files,
             _ => &[],
         }
+    }
+
+    /// The name the agent's artifact calls know `path` by, when it is a
+    /// file of this run's directory.
+    pub fn artifact_name(&self, path: &str) -> Option<String> {
+        artifact_name(path, self.run_id.as_deref()?)
     }
 
     /// The comment on `path`, if one was left.
@@ -275,6 +302,33 @@ mod tests {
             "stage": { "stagesId": "s", "id": "two", "title": "Build", "index": 2, "total": 3, "attempt": 2, "maxAttempts": 3 },
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn an_artifact_path_maps_to_its_name_in_the_run_dir() {
+        assert_eq!(
+            artifact_name(".whiphand/runs/r1/plan.md", "r1").as_deref(),
+            Some("plan.md")
+        );
+        assert_eq!(
+            artifact_name(".whiphand/runs/r1/out/a.md", "r1").as_deref(),
+            Some("out/a.md")
+        );
+        assert_eq!(
+            artifact_name("r1/plan.md", "r1").as_deref(),
+            Some("plan.md")
+        );
+        assert_eq!(artifact_name(".whiphand/runs/r2/plan.md", "r1"), None);
+        assert_eq!(artifact_name(".whiphand/runs/r1", "r1"), None);
+        assert_eq!(artifact_name(".whiphand/runs/r1/", "r1"), None);
+        assert_eq!(artifact_name(".whiphand/runs/r1/plan.md", ""), None);
+        let mut m = Manual::new("j1".into(), None, "/w".into(), review());
+        assert_eq!(m.artifact_name(".whiphand/runs/r1/plan.md"), None);
+        m.run_id = Some("r1".into());
+        assert_eq!(
+            m.artifact_name(".whiphand/runs/r1/plan.md").as_deref(),
+            Some("plan.md")
+        );
     }
 
     #[test]

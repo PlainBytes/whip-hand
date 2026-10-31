@@ -3,16 +3,17 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
-use whiphand_core::path_form::to_native;
+use whiphand_core::path_form::{is_absolute_any_platform, to_native};
 use whiphand_protocol::{self as p, ManualChoice};
 
+use super::artifact::{self, Edited};
 use super::{PAGE, TOAST_MS, step};
 use crate::client::{self, Call, GetWorkingDiff, ResolveManual};
 use crate::cmd::{Cmd, External, Then};
-use crate::model::detail::DiffState;
+use crate::model::detail::{ArtifactView, DiffState};
 use crate::model::input::Edit;
 use crate::model::manual::{Focus, Manual, Request};
-use crate::model::{Ask, Dialog, Model, Route};
+use crate::model::{ArtifactOwner, Ask, Dialog, EditTarget, Model, Route};
 use crate::view::keymap::Action;
 
 const FOREIGN: &str = "owned by another whiphand process; answer it where the run was started";
@@ -186,9 +187,119 @@ fn stops(m: &Manual) -> Vec<Focus> {
     out
 }
 
+fn owner(m: &Manual) -> ArtifactOwner {
+    ArtifactOwner::Manual {
+        job_id: m.job_id.clone(),
+    }
+}
+
+/// Enter on an artifact: shown rendered when the agent can read it by name,
+/// else paged.
+fn open_artifact(m: &mut Manual, i: usize) -> Vec<Cmd> {
+    let path = m.request.context.artifacts[i].path.clone();
+    let native = to_native(&path, &m.workdir);
+    match (m.artifact_name(&path), m.run_id.clone()) {
+        (Some(name), Some(run_id)) => {
+            if m.artifact_view.is_some() {
+                return vec![];
+            }
+            let (view, cmd) = artifact::open(owner(m), &m.workdir, &run_id, name, native);
+            m.artifact_view = Some(view);
+            m.scroll = 0;
+            vec![cmd]
+        }
+        _ => vec![Cmd::Suspend(External::Pager { path: native })],
+    }
+}
+
+/// `e`: the open artifact in `$EDITOR`, or the edit that was refused last time.
+fn edit_artifact(model: &mut Model) -> Vec<Cmd> {
+    let Some(m) = model.manual.as_ref() else {
+        return vec![];
+    };
+    let (Some(view), Some(run_id)) = (m.artifact_view.as_ref(), m.run_id.as_deref()) else {
+        model.notice = Some("open the artifact first (Enter)".into());
+        return vec![];
+    };
+    let draft = m
+        .artifact_draft
+        .as_ref()
+        .filter(|(n, _)| *n == view.name)
+        .map(|(_, t)| t.clone());
+    match artifact::edit(view, owner(m), &m.workdir, run_id, draft) {
+        Ok((target, cmd)) => {
+            model.edit_target = Some(target);
+            vec![cmd]
+        }
+        Err(why) => {
+            model.notice = Some(why);
+            vec![]
+        }
+    }
+}
+
+/// `o`: the open (or focused) artifact in `$PAGER`.
+fn page_artifact(m: &Manual) -> Vec<Cmd> {
+    let path = match (&m.artifact_view, m.focus) {
+        (Some(v), _) => Some(v.path.clone()),
+        (None, Focus::Artifact(i)) => m
+            .request
+            .context
+            .artifacts
+            .get(i)
+            .map(|a| to_native(&a.path, &m.workdir)),
+        _ => None,
+    };
+    // Only an absolute path: the pager must never read one as an option.
+    path.filter(|p| is_absolute_any_platform(p))
+        .map(|path| Cmd::Suspend(External::Pager { path }))
+        .into_iter()
+        .collect()
+}
+
+/// The open artifact scrolled by `delta` lines.
+fn scroll_view(view: &mut ArtifactView, delta: i64) {
+    view.scroll = i64::from(view.scroll)
+        .saturating_add(delta)
+        .clamp(0, i64::from(u16::MAX)) as u16;
+}
+
 /// The screen's keys while nothing is being edited.
 pub fn act(model: &mut Model, action: Action) -> Option<Vec<Cmd>> {
+    match action {
+        Action::Edit => return Some(edit_artifact(model)),
+        Action::Pager => return model.manual.as_ref().map(page_artifact),
+        _ => {}
+    }
     let m = model.manual.as_mut()?;
+    if m.artifact_view.is_some() {
+        // The open artifact takes the scrolling keys; Esc closes it first.
+        let delta = match action {
+            Action::Back => {
+                m.artifact_view = None;
+                return Some(vec![]);
+            }
+            Action::Down => 1,
+            Action::Up => -1,
+            Action::PageDown => PAGE as i64,
+            Action::PageUp => -(PAGE as i64),
+            Action::Top => i64::MIN / 2,
+            Action::Bottom => i64::MAX / 2,
+            Action::Open => return Some(vec![]),
+            // Writing the note leaves the artifact for the note.
+            Action::EditNote => {
+                m.artifact_view = None;
+                0
+            }
+            _ => 0,
+        };
+        if delta != 0
+            && let Some(view) = m.artifact_view.as_mut()
+        {
+            scroll_view(view, delta);
+            return Some(vec![]);
+        }
+    }
     let delta = match action {
         Action::Approve => return Some(choose(model, ManualChoice::Continue)),
         Action::SendBack => return Some(choose(model, ManualChoice::Retry)),
@@ -212,11 +323,7 @@ pub fn act(model: &mut Model, action: Action) -> Option<Vec<Cmd>> {
         }
         Action::Open => {
             return Some(match m.focus {
-                Focus::Artifact(i) => {
-                    let path = &m.request.context.artifacts[i].path;
-                    let path = to_native(path, &m.workdir);
-                    vec![Cmd::Suspend(External::Pager { path })]
-                }
+                Focus::Artifact(i) => open_artifact(m, i),
                 Focus::Note | Focus::File(_) => {
                     let takes = m.focused_input().is_some();
                     m.editing = takes;
@@ -285,9 +392,131 @@ pub fn on_edited(model: &mut Model, text: &str) -> bool {
     true
 }
 
+/// The open artifact, when it is `name` of the screen for `job_id`.
+fn view_for<'a>(model: &'a mut Model, job_id: &str, name: &str) -> Option<&'a mut ArtifactView> {
+    model
+        .manual
+        .as_mut()
+        .filter(|m| m.job_id == job_id)
+        .and_then(|m| m.artifact_view.as_mut())
+        .filter(|v| v.name == name)
+}
+
+/// The artifact as it is on disk now, read again.
+fn reread_artifact(model: &mut Model, job_id: &str, name: &str) -> Vec<Cmd> {
+    let Some(m) = model.manual.as_mut().filter(|m| m.job_id == job_id) else {
+        return vec![];
+    };
+    let Some(run_id) = m.run_id.clone() else {
+        return vec![];
+    };
+    let (owner, workdir) = (owner(m), m.workdir.clone());
+    let view = m.artifact_view.as_mut().filter(|v| v.name == name);
+    vec![artifact::reread(view, owner, &workdir, &run_id, name)]
+}
+
+/// `$EDITOR` is back with an artifact: saved when it changed, as long as the
+/// file is still what was read. Dropped when the screen has gone.
+pub fn on_artifact_edited(
+    model: &mut Model,
+    target: EditTarget,
+    result: Result<String, String>,
+) -> Vec<Cmd> {
+    let EditTarget::Artifact {
+        owner: ArtifactOwner::Manual { job_id },
+        name,
+        ..
+    } = &target
+    else {
+        return vec![];
+    };
+    let (job_id, name) = (job_id.clone(), name.clone());
+    if model.manual.as_ref().is_none_or(|m| m.job_id != job_id) {
+        return vec![];
+    }
+    let edited = match result {
+        Ok(edited) => edited,
+        Err(why) => {
+            model.notice = Some(why);
+            return vec![];
+        }
+    };
+    let Some(m) = model.manual.as_mut() else {
+        return vec![];
+    };
+    match artifact::on_edited(target, edited) {
+        Some(Edited::Unchanged) => {
+            m.artifact_draft = None;
+            model.toast = Some((format!("{name} unchanged"), model.now_ms + TOAST_MS));
+            vec![]
+        }
+        Some(Edited::Save { draft, cmd }) => {
+            m.artifact_draft = Some((name, draft));
+            vec![cmd]
+        }
+        None => vec![],
+    }
+}
+
+/// `writeArtifact` refused (the run wrote the file since it was read): the
+/// edit is kept for the next `e`, and the file is shown as it is now.
+pub fn on_write_refused(model: &mut Model, job_id: &str, name: &str, message: &str) -> Vec<Cmd> {
+    if model.manual.as_ref().is_none_or(|m| m.job_id != job_id) {
+        return vec![];
+    }
+    model.notice = Some(format!(
+        "{name} was not saved: {message}. e opens your edit again"
+    ));
+    reread_artifact(model, job_id, name)
+}
+
 /// This screen's replies; any other's value comes back untouched.
 pub fn on_reply(model: &mut Model, then: &Then, value: Value) -> Result<Vec<Cmd>, Value> {
     match then {
+        Then::ArtifactStat {
+            owner: ArtifactOwner::Manual { job_id },
+            run_id,
+            name,
+        } => {
+            let Some(m) = model.manual.as_mut().filter(|m| m.job_id == *job_id) else {
+                return Ok(vec![]);
+            };
+            let (owner, workdir) = (owner(m), m.workdir.clone());
+            let Some(view) = m.artifact_view.as_mut().filter(|v| v.name == *name) else {
+                return Ok(vec![]);
+            };
+            Ok(artifact::on_stat(view, owner, &workdir, run_id, value)
+                .into_iter()
+                .collect())
+        }
+        Then::Artifact {
+            owner: ArtifactOwner::Manual { job_id },
+            name,
+            ..
+        } => {
+            if let Some(view) = view_for(model, job_id, name) {
+                artifact::on_read(view, value);
+            }
+            Ok(vec![])
+        }
+        Then::ArtifactWritten {
+            owner: ArtifactOwner::Manual { job_id },
+            name,
+            ..
+        } => {
+            if model.manual.as_ref().is_none_or(|m| m.job_id != *job_id) {
+                return Ok(vec![]);
+            }
+            if let Err(e) = artifact::on_written(value) {
+                model.notice = Some(e);
+                return Ok(vec![]);
+            }
+            if let Some(m) = model.manual.as_mut() {
+                m.artifact_draft = None;
+            }
+            model.toast = Some((format!("saved {name}"), model.now_ms + TOAST_MS));
+            Ok(reread_artifact(model, job_id, name))
+        }
         Then::Resolved(_) => {
             if let Ok(r) = client::decode::<ResolveManual>(value)
                 && !r.ok
@@ -317,6 +546,21 @@ pub fn on_reply(model: &mut Model, then: &Then, value: Value) -> Result<Vec<Cmd>
 /// A failed reply this screen owns; whether it was one.
 pub fn on_error(model: &mut Model, then: &Then, message: &str) -> bool {
     match then {
+        Then::ArtifactStat {
+            owner: ArtifactOwner::Manual { job_id },
+            name,
+            ..
+        }
+        | Then::Artifact {
+            owner: ArtifactOwner::Manual { job_id },
+            name,
+            ..
+        } => {
+            if let Some(view) = view_for(model, job_id, name) {
+                artifact::on_error(view, message);
+            }
+            true
+        }
         Then::Resolved(_) => {
             if let Some(m) = model.manual.as_mut() {
                 m.sent = None;

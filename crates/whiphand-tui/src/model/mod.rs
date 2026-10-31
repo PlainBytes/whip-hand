@@ -148,6 +148,16 @@ pub enum Ask {
     },
 }
 
+/// The screen an artifact viewer belongs to: replies and edits find their
+/// way back to it by this.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ArtifactOwner {
+    /// The run detail's Artifacts tab.
+    Detail,
+    /// A manual step's request on the manual screen.
+    Manual { job_id: String },
+}
+
 /// What `$EDITOR` is editing, for the screens that ask for it by name.
 #[derive(Clone, Debug, PartialEq)]
 pub enum EditTarget {
@@ -155,6 +165,7 @@ pub enum EditTarget {
     Workflow,
     /// A run's artifact, as it was read.
     Artifact {
+        owner: ArtifactOwner,
         workdir: String,
         run_id: String,
         name: String,

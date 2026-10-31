@@ -3,6 +3,7 @@
 //! [`actions`].
 
 pub mod actions;
+pub mod artifact;
 pub mod attach;
 pub mod detail;
 pub mod manual;
@@ -22,7 +23,7 @@ use crate::client::{
 };
 use crate::cmd::{Cmd, Notice, Then};
 use crate::model::log::LogEntry;
-use crate::model::{Ask, Dialog, EditTarget, JOB_LOG_CAP, Job, Model, Route};
+use crate::model::{ArtifactOwner, Ask, Dialog, EditTarget, JOB_LOG_CAP, Job, Model, Route};
 use crate::msg::Msg;
 use crate::view::keymap::{self, Action};
 
@@ -124,8 +125,20 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             match result {
                 Ok(value) => on_reply(model, then, value),
                 Err(e) => {
-                    if let Then::ArtifactWritten { run_id, name } = &then {
-                        return detail::on_write_refused(model, run_id, name, &e.message);
+                    if let Then::ArtifactWritten {
+                        owner,
+                        run_id,
+                        name,
+                    } = &then
+                    {
+                        return match owner {
+                            ArtifactOwner::Detail => {
+                                detail::on_write_refused(model, run_id, name, &e.message)
+                            }
+                            ArtifactOwner::Manual { job_id } => {
+                                manual::on_write_refused(model, job_id, name, &e.message)
+                            }
+                        };
                     }
                     if then == Then::RecentRuns {
                         model.runs_ui.recent_failed = true;
@@ -152,9 +165,18 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.dirty = true;
             match model.edit_target.take() {
                 Some(EditTarget::Workflow) => return workflows::on_edited(model, result),
-                Some(target @ EditTarget::Artifact { .. }) => {
-                    return detail::on_artifact_edited(model, target, result);
-                }
+                Some(
+                    target @ EditTarget::Artifact {
+                        owner: ArtifactOwner::Detail,
+                        ..
+                    },
+                ) => return detail::on_artifact_edited(model, target, result),
+                Some(
+                    target @ EditTarget::Artifact {
+                        owner: ArtifactOwner::Manual { .. },
+                        ..
+                    },
+                ) => return manual::on_artifact_edited(model, target, result),
                 None => {}
             }
             match result {

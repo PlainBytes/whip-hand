@@ -387,6 +387,20 @@ pub const BINDINGS: &[Binding] = &[
         A::EditNote,
         "write the note (Ctrl-e: $EDITOR)",
     ),
+    b(
+        C::Manual,
+        &[Char('e')],
+        "e",
+        A::Edit,
+        "edit the open artifact in $EDITOR",
+    ),
+    b(
+        C::Manual,
+        &[Char('o')],
+        "o",
+        A::Pager,
+        "open the artifact in $PAGER",
+    ),
     b(C::Workflows, &[Char('r')], "r", A::RunWorkflow, "run it"),
     b(
         C::Workflows,

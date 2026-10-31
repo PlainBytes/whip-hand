@@ -110,7 +110,7 @@
       "response": {
         "error": {
           "code": -32602,
-          "message": "invalid params: name: Invalid input: expected string, received number; scope: Invalid option: expected one of \"project\"|\"global\""
+          "message": "invalid params: name: Invalid input: expected string, received number; scope: Invalid option: expected one of \"project\"|\"workspace\"|\"global\""
         }
       }
     },

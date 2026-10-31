@@ -72,17 +72,17 @@ export const uiActions: Record<string, Record<string, string>> = {
     // WorkflowsPage empty state's "Set up this workspace" button.
     _command: 'workflows:setUpWorkspaceButton',
     '-C': 'sidebar:workspaceSwitcher',
-    // The desktop button sends no options yet, so it keeps local storage and
-    // local workflows; the choice dialog arrives with the desktop init UI.
-    '--storage': 'exempt:desktop-init-dialog-pending',
-    '--workflows': 'exempt:desktop-init-dialog-pending',
+    // The set-up dialog's Storage and Workflows choices, sent to initWorkspace.
+    '--storage': 'workflows:setUpStorageChoice',
+    '--workflows': 'workflows:setUpWorkflowsChoice',
   },
   'new-workflow': {
     // WorkflowsPage's "New workflow" dialog.
     _command: 'workflows:newWorkflowButton',
     '<name>': 'workflows:newWorkflowNameInput',
     '-C': 'sidebar:workspaceSwitcher',
-    // The dialog's Project/Global choice, driving createWorkflow's `scope`.
+    // The dialog's Project/Workspace/Global choice, driving createWorkflow's `scope`.
+    '--workspace': 'workflows:newWorkflowScopeChoice',
     '--global': 'workflows:newWorkflowScopeChoice',
   },
   // Removing a worktree on its own has no desktop button yet; deleting the run

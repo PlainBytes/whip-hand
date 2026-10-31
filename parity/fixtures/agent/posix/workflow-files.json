@@ -100,7 +100,7 @@
       "response": {
         "error": {
           "code": -32000,
-          "message": "workflow 'missing' not found — looked at <WS>/ws/.whiphand/workflows/missing.yaml and <WS>/home/workflows/missing.yaml"
+          "message": "workflow 'missing' not found — looked at <WS>/ws/.whiphand/workflows/missing.yaml, <WS>/home/ws-<KEY>/workflows/missing.yaml and <WS>/home/workflows/missing.yaml"
         }
       }
     },

@@ -200,7 +200,7 @@ fn a_worktree_run_branches_from_the_subdir_repo_and_lives_under_the_root() {
         // Clean, so removal is not refused as dirty; git is asked in the sub-repo.
         std::fs::remove_file(Path::new(&record.native_tree()).join("marker.txt")).unwrap();
         assert_eq!(
-            delete_run(&ws, &config(), &result.run_id).unwrap(),
+            delete_run(&ws, &config(), &result.run_id, false).unwrap(),
             DeleteRun::Deleted
         );
         assert_eq!(worktrees(&api), 1);

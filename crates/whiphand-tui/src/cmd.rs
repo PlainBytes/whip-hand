@@ -3,6 +3,7 @@
 use whiphand_protocol::Scope;
 
 use crate::client::Call;
+use crate::model::RunRef;
 
 #[derive(Debug, PartialEq)]
 pub enum Cmd {
@@ -89,7 +90,9 @@ pub enum Then {
     Resumed(String),
     Renamed(String),
     Locked(String),
-    Deleted(String),
+    Deleted(RunRef),
+    /// The retry of a delete with `force`, after the user agreed to discard.
+    ForceDeleted(String),
     SessionEnded(String),
     /// The new-run screen's requests, by the generation of the screen that
     /// asked: a reply for one the user has left is dropped.

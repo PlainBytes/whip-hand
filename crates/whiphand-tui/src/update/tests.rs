@@ -1084,9 +1084,13 @@ fn manual_diff() -> Value {
 
 /// The run's detail open, its job asking for a sign-off; the screen is up.
 fn signing_off() -> Model {
+    signing_off_on(sign_off())
+}
+
+fn signing_off_on(request: Value) -> Model {
     let mut model = detail_on(json!({ "runId": "r1", "status": "running" }));
     running(&mut model, "j1", "r1");
-    let cmds = ask(&mut model, sign_off());
+    let cmds = ask(&mut model, request);
     let call = rpc(&cmds[..1]);
     assert_eq!(call.then, Then::ManualDiff("j1".into()));
     assert_eq!(*model.screen(), Route::Manual);
@@ -1134,7 +1138,10 @@ fn read_then() -> Then {
 
 /// The sign-off with its plan opened and read.
 fn reading_the_plan(content: &str, mtime: f64) -> Model {
-    let mut model = signing_off();
+    reading_the_plan_of(signing_off(), content, mtime)
+}
+
+fn reading_the_plan_of(mut model: Model, content: &str, mtime: f64) -> Model {
     update(&mut model, key('j'));
     update(&mut model, code(KeyCode::Enter));
     update(
@@ -1214,11 +1221,14 @@ fn manual_the_choices_still_answer_with_an_artifact_open() {
 
 #[test]
 fn manual_o_pages_the_open_artifact() {
-    let mut model = reading_the_plan("# Plan", 1.0);
+    // A drive path: the fixture's `/w` is not absolute on Windows.
+    let mut request = sign_off();
+    request["context"]["artifacts"][0]["path"] = json!("C:/w/.whiphand/runs/r1/plan.md");
+    let mut model = reading_the_plan_of(signing_off_on(request), "# Plan", 1.0);
     assert_eq!(
         update(&mut model, key('o')),
         [Cmd::Suspend(External::Pager {
-            path: whiphand_core::path_form::to_native(".whiphand/runs/r1/plan.md", "/w")
+            path: r"C:\w\.whiphand\runs\r1\plan.md".into()
         })]
     );
 }

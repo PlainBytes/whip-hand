@@ -261,10 +261,10 @@
       "response": {
         "result": {
           "created": [
-            ".whiphand\\config.yaml",
-            ".whiphand\\workflows\\iterate.yaml",
-            ".whiphand\\workflows\\develop.yaml",
-            ".whiphand\\workflows\\research.yaml"
+            ".whiphand/config.yaml",
+            ".whiphand/workflows/iterate.yaml",
+            ".whiphand/workflows/develop.yaml",
+            ".whiphand/workflows/research.yaml"
           ],
           "storage": "local"
         }

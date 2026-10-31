@@ -113,8 +113,9 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       # Includes scripts/invariants.test.mjs — the platform-gate allowlist and the
-      # grep-shaped invariant checks — so both legs enforce them.
-      - run: npm test
+      # grep-shaped invariant checks — so both legs enforce them. `npm test`
+      # runs every suite; the other jobs below each run their own share.
+      - run: npm run test:scripts
 
   parity:
     needs: changes

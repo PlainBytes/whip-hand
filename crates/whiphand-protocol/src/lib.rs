@@ -543,7 +543,17 @@ pub enum CancelRunParams {
 }
 
 pub type CancelRunResult = OkResult;
-pub type DeleteRunParams = RunRefParams;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteRunParams {
+    pub workdir: String,
+    pub run_id: String,
+    /// Remove a dirty worktree too, discarding its uncommitted changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub force: Option<bool>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]

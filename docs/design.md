@@ -1343,7 +1343,8 @@ in the main checkout.
 shared by several runs (a new run may continue in an earlier one's): it is removed only with the last
 run that records it, so deleting or pruning any other run removes just that run's folder. A worktree
 with modified or untracked files is *dirty*: delete of the last run refuses (`worktree-dirty`) and
-keeps the run, and pruning skips the runs of that worktree and records one reason. A worktree already gone from disk is not an error; git's
+keeps the run unless the request carries `force`, which the desktop app and TUI send after the user confirms
+discarding the changes (`git worktree remove --force`; `locked` and `running` still refuse), and pruning skips the runs of that worktree and records one reason. A worktree already gone from disk is not an error; git's
 record of it is pruned. `whiphand worktree remove <run-id>` removes one by hand, keeping the run
 (and naming any other runs that shared it, which can no longer be resumed),
 and `--force` discards a dirty tree's changes. **Branches are never deleted** by any of this:

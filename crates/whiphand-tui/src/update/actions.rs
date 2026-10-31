@@ -371,11 +371,20 @@ fn answer(ask: Ask) -> Vec<Cmd> {
             Then::Cancelled(run_id),
         )),
         Ask::Delete(run) => Cmd::Rpc(client::Call::new::<DeleteRun>(
-            p::RunRefParams {
+            p::DeleteRunParams {
+                workdir: run.workdir.clone(),
+                run_id: run.run_id.clone(),
+                force: None,
+            },
+            Then::Deleted(run),
+        )),
+        Ask::ForceDelete(run) => Cmd::Rpc(client::Call::new::<DeleteRun>(
+            p::DeleteRunParams {
                 workdir: run.workdir,
                 run_id: run.run_id.clone(),
+                force: Some(true),
             },
-            Then::Deleted(run.run_id),
+            Then::ForceDeleted(run.run_id),
         )),
         Ask::EndSession { job_id, run_id } => Cmd::Rpc(client::Call::new::<EndSession>(
             p::JobParams { job_id },
@@ -444,16 +453,20 @@ pub fn on_reply(
             Err(e) => refuse(model, &e),
         },
         Then::Renamed(run_id) | Then::Locked(run_id) => reread(model, run_id),
-        Then::Deleted(run_id) => match client::decode::<DeleteRun>(value) {
-            Ok(r) if r.deleted => {
-                if model.detail.as_ref().is_some_and(|d| d.run_id == *run_id) {
-                    model.detail = None;
-                    model.route.retain(|r| *r != Route::RunDetail);
-                }
-                model.toast = Some((format!("deleted {run_id}"), model.now_ms + super::TOAST_MS));
-                model.since_poll = 0;
-                refresh_runs(model)
+        Then::Deleted(run) => match client::decode::<DeleteRun>(value) {
+            Ok(r) if r.deleted => deleted(model, &run.run_id),
+            Ok(r) if r.reason == Some(DeleteRefusal::WorktreeDirty) => {
+                let question = format!(
+                    "Run {}'s worktree has uncommitted changes. Discard them and delete the run? Its branch is kept. (y/n)",
+                    run.run_id
+                );
+                confirm(model, question, Ask::ForceDelete(run.clone()))
             }
+            Ok(r) => refuse(model, refusal(r.reason)),
+            Err(e) => refuse(model, &e),
+        },
+        Then::ForceDeleted(run_id) => match client::decode::<DeleteRun>(value) {
+            Ok(r) if r.deleted => deleted(model, run_id),
             Ok(r) => refuse(model, refusal(r.reason)),
             Err(e) => refuse(model, &e),
         },
@@ -467,4 +480,15 @@ pub fn on_reply(
         }
         _ => return Err(value),
     })
+}
+
+/// A delete went through: leave its detail, toast, list again.
+fn deleted(model: &mut Model, run_id: &str) -> Vec<Cmd> {
+    if model.detail.as_ref().is_some_and(|d| d.run_id == *run_id) {
+        model.detail = None;
+        model.route.retain(|r| *r != Route::RunDetail);
+    }
+    model.toast = Some((format!("deleted {run_id}"), model.now_ms + super::TOAST_MS));
+    model.since_poll = 0;
+    refresh_runs(model)
 }

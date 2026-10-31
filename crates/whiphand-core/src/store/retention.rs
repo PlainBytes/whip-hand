@@ -23,11 +23,14 @@ pub enum DeleteRun {
 /// Deletes one run's directory outright, or says why not (`locked`,
 /// `running`, `missing`, `worktree-dirty`). A user's own click, so a removal
 /// failure surfaces. The run's worktree goes first, unless another run still
-/// records it: then only this run goes. Its branch always stays.
+/// records it: then only this run goes. Its branch always stays. `force` removes
+/// a dirty worktree (uncommitted changes discarded) instead of refusing it; it
+/// never overrides `locked`, `running` or `missing`.
 pub fn delete_run(
     workdir: &str,
     config: &WorkspaceConfig,
     run_id: &str,
+    force: bool,
 ) -> std::io::Result<DeleteRun> {
     if !is_safe_run_id(run_id) {
         return Ok(DeleteRun::Refused("missing"));
@@ -51,7 +54,7 @@ pub fn delete_run(
     if let Some(record) = record
         && sharing_runs(workdir, config, &record.path, &[run_id.to_string()]).is_empty()
     {
-        match remove_sync(&run_repo_dir(workdir, &detail.obj), &record, false) {
+        match remove_sync(&run_repo_dir(workdir, &detail.obj), &record, force) {
             RemoveWorktree::Removed | RemoveWorktree::Absent => {}
             RemoveWorktree::Dirty(_) => return Ok(DeleteRun::Refused("worktree-dirty")),
             RemoveWorktree::Failed(reason) => return Err(std::io::Error::other(reason)),
@@ -210,7 +213,7 @@ mod tests {
         )
         .unwrap();
 
-        let got = delete_run(&workdir, &config, "20260101-000000-aaaa").unwrap();
+        let got = delete_run(&workdir, &config, "20260101-000000-aaaa", false).unwrap();
         assert_eq!(got, DeleteRun::Refused("worktree-dirty"));
         assert!(run_dir.is_dir());
         assert!(tree.join("scratch").is_file());
@@ -263,18 +266,70 @@ mod tests {
     }
 
     #[test]
+    fn forced_delete_removes_a_dirty_worktree_and_keeps_the_branch() {
+        let (ws, workdir, config, tree) = shared(&["20260101-000000-aaaa"]);
+        std::fs::write(tree.join("scratch"), "wip").unwrap();
+        assert_eq!(
+            delete_run(&workdir, &config, "20260101-000000-aaaa", false).unwrap(),
+            DeleteRun::Refused("worktree-dirty")
+        );
+        assert_eq!(
+            delete_run(&workdir, &config, "20260101-000000-aaaa", true).unwrap(),
+            DeleteRun::Deleted
+        );
+        assert!(
+            !ws.path()
+                .join(&config.artifacts_dir)
+                .join("20260101-000000-aaaa")
+                .exists()
+        );
+        assert!(!tree.exists());
+        sh(ws.path(), &["rev-parse", "--verify", "-q", "b"]);
+    }
+
+    #[test]
+    fn force_does_not_override_locked_or_running() {
+        let (ws, workdir, config, tree) = shared(&["20260101-000000-aaaa", "20260102-000000-bbbb"]);
+        std::fs::write(tree.join("scratch"), "wip").unwrap();
+        let runs = ws.path().join(&config.artifacts_dir);
+        let patch = |id: &str, key: &str, value: serde_json::Value| {
+            let file = runs.join(id).join("run.json");
+            let mut v: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+            v[key] = value;
+            std::fs::write(&file, v.to_string()).unwrap();
+        };
+        crate::store::markers::set_run_locked(&runs.join("20260101-000000-aaaa"), true).unwrap();
+        patch("20260102-000000-bbbb", "status", "running".into());
+        patch(
+            "20260102-000000-bbbb",
+            "heartbeatAt",
+            crate::time::now_iso().into(),
+        );
+        assert_eq!(
+            delete_run(&workdir, &config, "20260101-000000-aaaa", true).unwrap(),
+            DeleteRun::Refused("locked")
+        );
+        assert_eq!(
+            delete_run(&workdir, &config, "20260102-000000-bbbb", true).unwrap(),
+            DeleteRun::Refused("running")
+        );
+        assert!(tree.join("scratch").is_file());
+    }
+
+    #[test]
     fn delete_run_keeps_a_worktree_another_run_still_records() {
         let (ws, workdir, config, tree) = shared(&["20260101-000000-aaaa", "20260102-000000-bbbb"]);
         let runs = ws.path().join(&config.artifacts_dir);
         assert_eq!(
-            delete_run(&workdir, &config, "20260101-000000-aaaa").unwrap(),
+            delete_run(&workdir, &config, "20260101-000000-aaaa", false).unwrap(),
             DeleteRun::Deleted
         );
         assert!(!runs.join("20260101-000000-aaaa").exists());
         assert!(runs.join("20260102-000000-bbbb").is_dir());
         assert!(tree.is_dir());
         assert_eq!(
-            delete_run(&workdir, &config, "20260102-000000-bbbb").unwrap(),
+            delete_run(&workdir, &config, "20260102-000000-bbbb", false).unwrap(),
             DeleteRun::Deleted
         );
         assert!(!tree.exists());
@@ -286,11 +341,11 @@ mod tests {
             shared(&["20260101-000000-aaaa", "20260102-000000-bbbb"]);
         std::fs::write(tree.join("scratch"), "wip").unwrap();
         assert_eq!(
-            delete_run(&workdir, &config, "20260101-000000-aaaa").unwrap(),
+            delete_run(&workdir, &config, "20260101-000000-aaaa", false).unwrap(),
             DeleteRun::Deleted
         );
         assert_eq!(
-            delete_run(&workdir, &config, "20260102-000000-bbbb").unwrap(),
+            delete_run(&workdir, &config, "20260102-000000-bbbb", false).unwrap(),
             DeleteRun::Refused("worktree-dirty")
         );
         assert!(tree.join("scratch").is_file());

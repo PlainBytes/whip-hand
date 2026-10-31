@@ -136,6 +136,12 @@ export type RunRefParams = { workdir: string, runId: string, };
 
 export type CancelRunParams = JobParams | RunRefParams;
 
+export type DeleteRunParams = { workdir: string, runId: string, 
+/**
+ * Remove a dirty worktree too, discarding its uncommitted changes.
+ */
+force?: boolean, };
+
 export type DeleteRefusal = "locked" | "running" | "missing" | "worktree-dirty";
 
 export type DeleteRunResult = { deleted: boolean, reason?: DeleteRefusal, };
@@ -391,7 +397,6 @@ export type ConfigSetResult = OkTrue;
 export type StartRunResult = JobIdResult;
 export type ResumeRunResult = JobIdResult;
 export type CancelRunResult = OkResult;
-export type DeleteRunParams = RunRefParams;
 export type EndSessionParams = JobParams;
 export type EndSessionResult = OkResult;
 export type ResolveManualResult = OkResult;

@@ -26,11 +26,11 @@ export interface DeleteRunDialogProps {
  * the request itself succeeded — so it lands in the same error slot a thrown
  * RPC does but never reaches `onDeleted`.
  */
-function refusalMessage(reason: DeleteRunResult['reason'], runId: string): string {
+function refusalMessage(reason: DeleteRunResult['reason']): string {
   if (reason === 'locked') return 'This run is locked.';
   if (reason === 'running') return 'This run is still running.';
   if (reason === 'worktree-dirty') {
-    return `This run's worktree has uncommitted changes. Commit or discard them in the worktree, or run \`whiphand worktree remove ${runId} --force\`.`;
+    return "This run's worktree still has uncommitted changes.";
   }
   return 'This run no longer exists.';
 }
@@ -51,14 +51,19 @@ export function DeleteRunDialog({ workdir, runId, name, worktreePath, onDeleted,
     : state.runs.find(run => run.runId !== runId && run.worktree?.path === worktreePath));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A dirty worktree is not an error: it asks for a second, explicit confirmation.
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   async function confirm(): Promise<void> {
     setBusy(true);
     setError(null);
     try {
-      const result = await client.request('deleteRun', { workdir, runId });
+      const result = await client.request('deleteRun', confirmDiscard
+        ? { workdir, runId, force: true }
+        : { workdir, runId });
       if (result.deleted) onDeleted();
-      else setError(refusalMessage(result.reason, runId));
+      else if (result.reason === 'worktree-dirty' && !confirmDiscard) setConfirmDiscard(true);
+      else setError(refusalMessage(result.reason));
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -81,6 +86,11 @@ export function DeleteRunDialog({ workdir, runId, name, worktreePath, onDeleted,
           <DialogContent>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <Text>This deletes the run's directory and everything in it. This cannot be undone.</Text>
+              {confirmDiscard && (
+                <Text data-testid="delete-discard-warning">
+                  This run's worktree has uncommitted changes. Deleting will discard them. The run's branch is kept.
+                </Text>
+              )}
               {sharer && (
                 <Text data-testid="delete-worktree-kept">
                   The worktree is kept because run {sharer.name ?? sharer.runId} still uses it.
@@ -91,7 +101,7 @@ export function DeleteRunDialog({ workdir, runId, name, worktreePath, onDeleted,
           </DialogContent>
           <DialogActions>
             <DangerButton disabled={busy} onClick={() => void confirm()}>
-              {busy ? <Spinner size="tiny" /> : 'Delete'}
+              {busy ? <Spinner size="tiny" /> : confirmDiscard ? 'Discard changes and delete' : 'Delete'}
             </DangerButton>
             <Button disabled={busy} onClick={onDismiss}>Cancel</Button>
           </DialogActions>

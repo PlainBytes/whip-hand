@@ -815,18 +815,78 @@ fn delete_asks_then_leaves_the_detail() {
     let mut model = detail_on(json!({ "runId": "r1", "status": "succeeded" }));
     update(&mut model, key('x'));
     let cmds = update(&mut model, key('y'));
-    assert_eq!(rpc(&cmds).method, "deleteRun");
-    let reply = |deleted: Value| Msg::Reply(Then::Deleted("r1".into()), Ok(deleted));
-    update(
+    let call = rpc(&cmds);
+    assert_eq!(call.method, "deleteRun");
+    assert!(call.params.get("force").is_none());
+    let reply = |deleted: Value| Msg::Reply(Then::Deleted(run_ref()), Ok(deleted));
+    let cmds = update(
         &mut model,
         reply(json!({ "deleted": false, "reason": "worktree-dirty" })),
     );
-    assert!(model.notice.as_deref().unwrap().contains("uncommitted"));
+    assert!(cmds.is_empty());
+    assert!(model.notice.is_none());
     assert_eq!(*model.screen(), Route::RunDetail);
+    let Some(Dialog::Confirm { question, .. }) = &model.dialog else {
+        panic!("no confirm");
+    };
+    assert!(question.contains("r1") && question.contains("uncommitted"));
+    assert!(question.contains("branch is kept"));
+    update(&mut model, key('n'));
     let cmds = update(&mut model, reply(json!({ "deleted": true })));
     assert_eq!(methods(&cmds), ["listRuns"]);
     assert_eq!(*model.screen(), Route::Runs);
     assert!(model.detail.is_none());
+}
+
+fn run_ref() -> crate::model::RunRef {
+    crate::model::RunRef {
+        workdir: "/w".into(),
+        run_id: "r1".into(),
+    }
+}
+
+fn dirty_delete_confirm() -> Model {
+    let mut model = detail_on(json!({ "runId": "r1", "status": "succeeded" }));
+    update(&mut model, key('x'));
+    update(&mut model, key('y'));
+    update(
+        &mut model,
+        Msg::Reply(
+            Then::Deleted(run_ref()),
+            Ok(json!({ "deleted": false, "reason": "worktree-dirty" })),
+        ),
+    );
+    model
+}
+
+#[test]
+fn confirming_a_dirty_delete_sends_force_and_leaves_the_detail() {
+    let mut model = dirty_delete_confirm();
+    let cmds = update(&mut model, key('y'));
+    let call = rpc(&cmds);
+    assert_eq!(call.method, "deleteRun");
+    assert_eq!(call.params["force"], json!(true));
+    assert_eq!(call.params["runId"], json!("r1"));
+    assert_eq!(call.params["workdir"], json!("/w"));
+    assert_eq!(cmds.len(), 1);
+    let cmds = update(
+        &mut model,
+        Msg::Reply(
+            Then::ForceDeleted("r1".into()),
+            Ok(json!({ "deleted": true })),
+        ),
+    );
+    assert_eq!(methods(&cmds), ["listRuns"]);
+    assert_eq!(*model.screen(), Route::Runs);
+    assert!(model.detail.is_none());
+}
+
+#[test]
+fn declining_a_dirty_delete_sends_nothing() {
+    let mut model = dirty_delete_confirm();
+    assert!(update(&mut model, key('n')).is_empty());
+    assert!(model.dialog.is_none());
+    assert_eq!(*model.screen(), Route::RunDetail);
 }
 
 #[test]

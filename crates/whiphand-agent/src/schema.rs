@@ -532,7 +532,8 @@ pub fn params(method: &str) -> Option<S> {
             "extraIterations" => o(Num(Num::POSITIVE_INT)),
         },
         "cancelRun" => Union(b(job()), b(run_ref())),
-        "deleteRun" | "getRun" => run_ref(),
+        "deleteRun" => object! { "workdir" => StrMin1, "runId" => StrMin1, "force" => o(Bool) },
+        "getRun" => run_ref(),
         "setRunLocked" => object! { "workdir" => StrMin1, "runId" => StrMin1, "locked" => Bool },
         "renameRun" => object! {
             "workdir" => StrMin1, "runId" => StrMin1, "name" => Nullable(b(Str)),

@@ -189,7 +189,8 @@ pub async fn call(agent: &Rc<Agent>, ctx: RequestCtx, method: &str, p: Value) ->
         "configSet" => config_set(&p),
         "deleteRun" => {
             let (wd, config) = workspace_config(&p)?;
-            match delete_run(&wd, &config, s(&p, "runId")).map_err(|e| e.to_string())? {
+            let force = p["force"] == true;
+            match delete_run(&wd, &config, s(&p, "runId"), force).map_err(|e| e.to_string())? {
                 DeleteRun::Deleted => Ok(json!({ "deleted": true })),
                 DeleteRun::Refused(reason) => Ok(json!({ "deleted": false, "reason": reason })),
             }

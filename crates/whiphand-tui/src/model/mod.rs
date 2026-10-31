@@ -112,6 +112,8 @@ pub enum Ask {
         run_id: String,
     },
     Delete(RunRef),
+    /// The worktree is dirty: `y` discards its changes and deletes anyway.
+    ForceDelete(RunRef),
     EndSession {
         job_id: String,
         run_id: String,

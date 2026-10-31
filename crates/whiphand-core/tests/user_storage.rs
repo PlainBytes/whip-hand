@@ -101,7 +101,7 @@ fn a_run_in_a_user_storage_workspace_lands_in_the_user_folder() {
 
         // Retention finds the run in the user folder; its worktree holds an uncommitted file.
         assert_eq!(
-            delete_run(&wd, &config, &result.run_id).unwrap(),
+            delete_run(&wd, &config, &result.run_id, false).unwrap(),
             DeleteRun::Refused("worktree-dirty")
         );
     });

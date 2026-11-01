@@ -1,6 +1,6 @@
 [package]
 name = "whiphand-job"
-version = "0.8.0"
+version = "0.9.0"
 description = "Process guard: one Windows Job Object per whiphand run, with kill-on-close"
 edition = "2021"
 publish = false

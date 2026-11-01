@@ -1,6 +1,6 @@
 [package]
 name = "whiphand-core"
-version = "0.8.0"
+version = "0.9.0"
 description = "Whiphand's workflow schema, validation, config, workspace lookup and run store"
 edition = "2024"
 publish = false

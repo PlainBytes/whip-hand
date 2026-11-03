@@ -4,7 +4,9 @@ import type {
   ConfigGetResult,
   DoctorResult,
   JobStatus,
+  ListMcpServersResult,
   ListModelsResult,
+  ListPluginsResult,
   ListWorkflowsResult,
   WhiphandEventParams,
   PtyDataParams,
@@ -921,6 +923,16 @@ export interface AppState {
   modelCatalog: ListModelsResult | null;
   setModelCatalog: (result: ListModelsResult | null) => void;
 
+  /**
+   * The runners' MCP servers and plugins, for the workflow editor's pickers.
+   * Unlike `modelCatalog` these take a workdir (project-scoped servers and
+   * plugins differ per workspace), so they are cleared on a workspace switch.
+   */
+  mcpCatalog: ListMcpServersResult | null;
+  setMcpCatalog: (result: ListMcpServersResult | null) => void;
+  pluginCatalog: ListPluginsResult | null;
+  setPluginCatalog: (result: ListPluginsResult | null) => void;
+
   config: ConfigGetResult | null;
   setConfig: (config: ConfigGetResult | null) => void;
 
@@ -1188,6 +1200,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       runs: [],
       workflows: [],
       config: null,
+      mcpCatalog: null,
+      pluginCatalog: null,
       // The tabs stay open across workspaces, but the list of the workspace
       // just opened is what should show.
       activeTabKey: null,
@@ -1210,6 +1224,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   modelCatalog: null,
   setModelCatalog: modelCatalog => set({ modelCatalog }),
+
+  mcpCatalog: null,
+  setMcpCatalog: mcpCatalog => set({ mcpCatalog }),
+  pluginCatalog: null,
+  setPluginCatalog: pluginCatalog => set({ pluginCatalog }),
 
   config: null,
   setConfig: config => set({ config }),

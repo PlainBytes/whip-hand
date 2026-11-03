@@ -157,7 +157,7 @@ describe('WorkflowEditor: the step rail', () => {
   // field is its own grid cell. A wrapper <div> around a kind's fields would
   // make them one tall cell, and the two columns would come out lopsided.
   it.each([
-    ['agent', 'execute', ['Runner', 'Model', 'Mode', 'Effort', 'Writes', 'Allow commits', 'Allowed paths']],
+    ['agent', 'execute', ['Runner', 'Model', 'Mode', 'Effort', 'Writes', 'Allow commits', 'Allowed paths', 'MCP servers mode', 'Plugins mode']],
     ['command', 'sync-base', ['Working directory', 'Successful exit codes', 'Timeout (ms)']],
     ['approval', 'sign-off', ['Title', 'Capture', 'Show the diff', 'Default without a human']],
   ])('every field of a %s step is a direct child of the rail', (_kind, id, kindFields) => {
@@ -1013,5 +1013,121 @@ describe('WorkflowEditor: a stages step', () => {
     const stepA: AgentStep = { kind: 'agent', id: 'a', runner: 'claude', mode: 'headless', writes: false, prompt: 'p', output: 'a.md' };
     const loop = convertStep({ kind: 'stages', id: 'x', items: 'p/*.md', max_retries: 3, steps: [stepA] }, 'loop');
     expect(loop).toEqual({ kind: 'loop', id: 'x', until: '', enabled: undefined, steps: [stepA] });
+  });
+});
+
+describe('WorkflowEditor: step MCP and plugin pickers', () => {
+  const MCP_CATALOG = {
+    runners: {
+      claude: { source: 'live' as const, servers: [{ name: 'github', origin: 'user' as const }, { name: 'pw', origin: 'user' as const }] },
+      copilot: { source: 'live' as const, servers: [{ name: 'copilot-only', origin: 'user' as const }] },
+    },
+  };
+  afterEach(() => {
+    useAppStore.setState({ doctorResult: null, modelCatalog: null, mcpCatalog: null, pluginCatalog: null });
+  });
+  function seed(): void {
+    useAppStore.setState({
+      doctorResult: [runnerRow('claude'), runnerRow('copilot')],
+      modelCatalog: {},
+      mcpCatalog: MCP_CATALOG,
+      pluginCatalog: { runners: { claude: { source: 'live', plugins: [] } } },
+    });
+  }
+  async function savedStep(transport: MockTransport, id: string): Promise<AgentStep> {
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    const req = await lastRequest(transport, 'updateWorkflow');
+    return (req.params as { workflow: Workflow }).workflow.steps.find(s => s.id === id) as AgentStep;
+  }
+  function pick(testId: string, label: RegExp): void {
+    fireEvent.click(within(screen.getByTestId(testId)).getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: label }));
+  }
+
+  it('Inherit writes no mcp key', async () => {
+    seed();
+    const { transport } = renderEditor(oneStepWorkflow({ id: 'a' }));
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+    expect(within(screen.getByTestId('step-mcp-a')).getByRole('combobox')).toHaveTextContent('Inherit from workflow');
+    expect(await savedStep(transport, 'a')).not.toHaveProperty('mcp');
+  });
+
+  it('All on a step writes mcp: { deny: [] } so it overrides the workflow, and reloads as All', async () => {
+    seed();
+    const { transport } = renderEditor(oneStepWorkflow({ id: 'a' }));
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+    pick('step-mcp-a', /^all$/i);
+    expect((await savedStep(transport, 'a')).mcp).toEqual({ deny: [] });
+  });
+
+  it('a step with mcp: { deny: [] } shows All', () => {
+    seed();
+    renderEditor(oneStepWorkflow({ id: 'a', mcp: { deny: [] } }));
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+    expect(within(screen.getByTestId('step-mcp-a')).getByRole('combobox')).toHaveTextContent('All');
+  });
+
+  it('Only these with nothing checked writes mcp: { allow: [] }', async () => {
+    seed();
+    const { transport } = renderEditor(oneStepWorkflow({ id: 'a' }));
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+    pick('step-mcp-a', /only these/i);
+    expect((await savedStep(transport, 'a')).mcp).toEqual({ allow: [] });
+  });
+
+  it('setting a step back to Inherit removes the key', async () => {
+    seed();
+    const { transport } = renderEditor(oneStepWorkflow({ id: 'a', mcp: { allow: ['github'] } }));
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+    pick('step-mcp-a', /inherit/i);
+    expect(await savedStep(transport, 'a')).not.toHaveProperty('mcp');
+  });
+
+  it('offers only the step\'s runner\'s servers, refilters on a runner switch, and keeps a name missing from the catalog with a warning', () => {
+    seed();
+    renderEditor(oneStepWorkflow({ id: 'a', runner: 'claude', mcp: { allow: ['gone'] } }));
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+    const mcp = within(screen.getByTestId('step-mcp-a'));
+    expect(mcp.getByLabelText('github')).toBeInTheDocument();
+    expect(mcp.queryByLabelText('copilot-only')).not.toBeInTheDocument();
+    expect(mcp.getByLabelText('gone')).toBeChecked();
+    expect(mcp.getByText('not found')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('combobox', { name: /^Runner/ }));
+    fireEvent.click(screen.getByRole('option', { name: 'copilot' }));
+    const after = within(screen.getByTestId('step-mcp-a'));
+    expect(after.queryByLabelText('github')).not.toBeInTheDocument();
+    expect(after.getByLabelText('copilot-only')).toBeInTheDocument();
+    expect(after.getByLabelText('gone')).toBeChecked();
+  });
+
+  it('a server the workflow defines is offered in step pickers', () => {
+    seed();
+    const wf = oneStepWorkflow({ id: 'a', mcp: { allow: [] } });
+    renderEditor({ ...wf, mcp: { servers: { mine: { command: 'npx', args: ['x'] } } } });
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+    expect(within(screen.getByTestId('step-mcp-a')).getByLabelText('mine')).toBeInTheDocument();
+  });
+
+  it('Only these → github on the workflow card saves mcp.allow', async () => {
+    seed();
+    const { transport } = renderEditor(oneStepWorkflow({ id: 'a' }));
+    fireEvent.click(screen.getByTestId('workflow-settings-collapse'));
+    pick('workflow-mcp', /only these/i);
+    fireEvent.click(within(screen.getByTestId('workflow-mcp')).getByLabelText('github'));
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    const req = await lastRequest(transport, 'updateWorkflow');
+    expect((req.params as { workflow: Workflow }).workflow.mcp).toEqual({ allow: ['github'] });
+  });
+
+  it('with no catalog (request rejected) the step picker is still usable as free text', async () => {
+    useAppStore.setState({ doctorResult: [runnerRow('claude')], modelCatalog: {}, mcpCatalog: null, pluginCatalog: null });
+    const { transport } = renderEditor(oneStepWorkflow({ id: 'a', mcp: { allow: [] } }));
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+    const mcp = within(screen.getByTestId('step-mcp-a'));
+    fireEvent.change(mcp.getByLabelText(/Add MCP servers name/), { target: { value: 'github' } });
+    fireEvent.click(mcp.getByRole('button', { name: /Add MCP servers entry/ }));
+    expect(mcp.queryByText('not found')).not.toBeInTheDocument();
+    expect((await savedStep(transport, 'a')).mcp).toEqual({ allow: ['github'] });
   });
 });

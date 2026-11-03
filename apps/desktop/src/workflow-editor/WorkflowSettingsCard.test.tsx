@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { useAppStore } from '../state/store.ts';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { WorkflowSettingsCard } from './WorkflowSettingsCard.tsx';
 import type { Workflow } from '../shared/types.ts';
 
@@ -65,5 +66,97 @@ describe('WorkflowSettingsCard: the inputs table', () => {
     fireEvent.click(screen.getByRole('button', { name: /^remove$/i }));
     expect(onProblem).toHaveBeenLastCalledWith(null);
     expect(screen.queryByText(/a name is required/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('WorkflowSettingsCard: MCP and plugin restrictions', () => {
+  const WF: Workflow = {
+    name: 'w',
+    steps: [{ id: 'a', kind: 'agent', runner: 'claude', mode: 'headless', writes: false, prompt: 'p' }],
+  };
+
+  afterEach(() => {
+    useAppStore.setState({ mcpCatalog: null, pluginCatalog: null });
+  });
+
+  function pickMode(testId: string, label: RegExp): void {
+    fireEvent.click(within(screen.getByTestId(testId)).getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: label }));
+  }
+
+  it('Only these → github writes mcp: { allow: [github] }', () => {
+    useAppStore.setState({
+      mcpCatalog: { runners: { claude: { source: 'live', servers: [
+        { name: 'github', origin: 'user' }, { name: 'pw', origin: 'user' },
+      ] } } },
+    });
+    const { onUpdate } = renderCard(WF);
+    pickMode('workflow-mcp', /only these/i);
+    expect(onUpdate).toHaveBeenLastCalledWith({ mcp: { allow: [] } });
+    // (the catalog names github and pw; the next test picks one)
+  });
+
+  it('checking a cataloged name under Only these allows it', () => {
+    useAppStore.setState({
+      mcpCatalog: { runners: { claude: { source: 'live', servers: [{ name: 'github', origin: 'user' }, { name: 'pw', origin: 'user' }] } } },
+    });
+    const { onUpdate } = renderCard({ ...WF, mcp: { allow: [] } });
+    const picker = within(screen.getByTestId('workflow-mcp'));
+    expect(picker.getByLabelText('github')).toBeInTheDocument();
+    expect(picker.getByLabelText('pw')).toBeInTheDocument();
+    fireEvent.click(picker.getByLabelText('github'));
+    expect(onUpdate).toHaveBeenLastCalledWith({ mcp: { allow: ['github'] } });
+  });
+
+  it('going back to All drops the mcp key', () => {
+    const { onUpdate } = renderCard({ ...WF, mcp: { deny: ['pw'] } });
+    pickMode('workflow-mcp', /^all$/i);
+    expect(onUpdate).toHaveBeenLastCalledWith({ mcp: undefined });
+  });
+
+  it('adding a server writes it under mcp.servers and keeps the restriction', () => {
+    const { onUpdate } = renderCard({ ...WF, mcp: { allow: ['x'] } });
+    fireEvent.click(screen.getByRole('button', { name: /add server/i }));
+    fireEvent.change(screen.getByLabelText(/^Server name/), { target: { value: 'x' } });
+    fireEvent.change(screen.getByLabelText(/^Command/), { target: { value: 'npx' } });
+    fireEvent.change(screen.getByLabelText(/^Args/), { target: { value: 'x' } });
+    expect(onUpdate).toHaveBeenLastCalledWith({
+      mcp: { allow: ['x'], servers: { x: { command: 'npx', args: ['x'] } } },
+    });
+  });
+
+  it('a remote server writes type, url and headers', () => {
+    const { onUpdate } = renderCard(WF);
+    fireEvent.click(screen.getByRole('button', { name: /add server/i }));
+    fireEvent.change(screen.getByLabelText(/^Server name/), { target: { value: 'r' } });
+    fireEvent.click(screen.getByRole('combobox', { name: /^Server type/ }));
+    fireEvent.click(screen.getByRole('option', { name: 'http' }));
+    fireEvent.change(screen.getByLabelText(/^URL/), { target: { value: 'https://e.x/mcp' } });
+    fireEvent.change(screen.getByLabelText(/^Headers/), { target: { value: 'Authorization: Bearer t' } });
+    expect(onUpdate).toHaveBeenLastCalledWith({
+      mcp: { servers: { r: { type: 'http', url: 'https://e.x/mcp', headers: { Authorization: 'Bearer t' } } } },
+    });
+  });
+
+  it('a server without a command is a problem and is not pushed', () => {
+    const { onUpdate, onProblem } = renderCard(WF);
+    fireEvent.click(screen.getByRole('button', { name: /add server/i }));
+    fireEvent.change(screen.getByLabelText(/^Server name/), { target: { value: 'x' } });
+    expect(onProblem).toHaveBeenLastCalledWith(expect.stringContaining('a command is required'));
+    expect(onUpdate).toHaveBeenLastCalledWith({ mcp: undefined });
+  });
+
+  it('plugins: Only these with nothing checked writes plugins: { allow: [] }', () => {
+    const { onUpdate } = renderCard(WF);
+    pickMode('workflow-plugins', /only these/i);
+    expect(onUpdate).toHaveBeenLastCalledWith({ plugins: { allow: [] } });
+  });
+
+  it('a failed catalog leaves free-text entry, with no warning badge', () => {
+    const { onUpdate } = renderCard({ ...WF, plugins: { allow: [] } });
+    const picker = within(screen.getByTestId('workflow-plugins'));
+    fireEvent.change(picker.getByLabelText(/Add Plugins name/), { target: { value: 'superpowers' } });
+    fireEvent.click(picker.getByRole('button', { name: /Add Plugins entry/ }));
+    expect(onUpdate).toHaveBeenLastCalledWith({ plugins: { allow: ['superpowers'] } });
   });
 });

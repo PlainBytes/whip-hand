@@ -168,6 +168,8 @@ const ALIASES: &[(&str, &str)] = &[
     ("UpdateWorkflowResult", "PathResult"),
     ("DeleteWorkflowParams", "WorkflowRefParams"),
     ("CloneWorkflowResult", "PathResult"),
+    ("ListMcpServersParams", "ListCatalogParams"),
+    ("ListPluginsParams", "ListCatalogParams"),
     ("DoctorParams", "OptionalWorkdirParams"),
     ("DoctorResult", "DoctorRow[]"),
     ("ConfigGetParams", "OptionalWorkdirParams"),

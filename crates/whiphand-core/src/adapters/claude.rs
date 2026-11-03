@@ -412,6 +412,7 @@ mod tests {
             AppliedRestrictions {
                 mcp: mcp.map(|v| v.into_iter().map(|(n, d)| (n.to_string(), d)).collect()),
                 disabled_plugins: off.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
             },
         );
     }

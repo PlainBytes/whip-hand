@@ -816,7 +816,10 @@ mod tests {
         let mut wf = js(RESTRICTED);
         step_mut(&mut wf, &[0]).insert("enabled".into(), JsValue::Bool(false));
         let out = merge_workflow(RESTRICTED, &wf);
-        assert!(out.contains("    # only the docs server\n    mcp: { allow: [docs] } # narrow\n"), "{out}");
+        assert!(
+            out.contains("    # only the docs server\n    mcp: { allow: [docs] } # narrow\n"),
+            "{out}"
+        );
         assert!(out.contains("# what this workflow brings\nmcp:"), "{out}");
         assert!(out.contains("# remote\n"), "{out}");
     }

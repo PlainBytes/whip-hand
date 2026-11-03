@@ -975,7 +975,17 @@ mod tests {
             Err(std::fs::TryLockError::WouldBlock)
         ));
         drop(held);
-        other.try_lock().unwrap();
+        // A sibling test may be between fork and exec with a copy of the
+        // descriptor, which keeps the lock alive for a few milliseconds.
+        let mut acquired = false;
+        for _ in 0..200 {
+            if other.try_lock().is_ok() {
+                acquired = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(acquired, "the lock was not released after the holder dropped");
         assert_eq!(
             std::fs::read_to_string(d.path().join(WORKTREES_DIR).join(".gitignore")).unwrap(),
             "*\n"

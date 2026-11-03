@@ -71,11 +71,22 @@ fn field_label(key: Option<&PathSeg>) -> String {
 fn restriction_address(issue: &Issue, rest: &[PathSeg], raw: &Raw) -> (String, String) {
     if let Code::InvalidKey { nested } = &issue.code {
         let parent = &rest[..rest.len().saturating_sub(1)];
-        let label = parent.iter().map(PathSeg::display).collect::<Vec<_>>().join(".");
-        let phrase = nested.first().cloned().unwrap_or_else(|| issue.message.clone());
+        let label = parent
+            .iter()
+            .map(PathSeg::display)
+            .collect::<Vec<_>>()
+            .join(".");
+        let phrase = nested
+            .first()
+            .cloned()
+            .unwrap_or_else(|| issue.message.clone());
         return (label, format!(": {phrase}"));
     }
-    let label = rest.iter().map(PathSeg::display).collect::<Vec<_>>().join(".");
+    let label = rest
+        .iter()
+        .map(PathSeg::display)
+        .collect::<Vec<_>>()
+        .join(".");
     (label, phrase_for(issue, raw))
 }
 

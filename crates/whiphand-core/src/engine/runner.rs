@@ -1501,9 +1501,10 @@ impl<F: Frontend> Run<'_, F> {
     async fn apply_restrictions(&self, adapter: Adapter, step: &AgentStep) -> Result<(), String> {
         use crate::adapters::harness_catalog::{list_mcp_servers, list_plugins};
         use crate::engine::restrictions::{
-            AppliedRestrictions, McpPolicy, PluginPolicy, materialize_mcp, plugins_to_disable,
+            AppliedRestrictions, McpPolicy, PluginPolicy, copilot_mcp, materialize_mcp,
+            plugins_to_disable,
         };
-        if adapter != Adapter::Claude {
+        if !matches!(adapter, Adapter::Claude | Adapter::Copilot) {
             return Ok(());
         }
         let Some(policy) = self.st.borrow().ctx.restrictions.get(&step.id).cloned() else {
@@ -1511,13 +1512,33 @@ impl<F: Frontend> Run<'_, F> {
         };
         let tree = self.tree();
         let mut applied = AppliedRestrictions::default();
-        if policy.mcp != McpPolicy::Unrestricted {
+        if adapter == Adapter::Copilot {
+            if policy.mcp != McpPolicy::Unrestricted {
+                let listing = list_mcp_servers(adapter, &tree).await;
+                if let Some((flags, degraded)) = copilot_mcp(&step.id, &policy.mcp, &listing)? {
+                    applied.copilot_mcp = Some(flags);
+                    applied.degradations.extend(degraded);
+                }
+            }
+            if policy.plugins != PluginPolicy::Unrestricted {
+                applied.degradations.push(
+                    "plugin policy not applied: copilot has no per-session way to switch an installed plugin off, so every installed plugin stays on"
+                        .to_string(),
+                );
+            }
+        } else if policy.mcp != McpPolicy::Unrestricted {
             let listing = list_mcp_servers(adapter, &tree).await;
             applied.mcp = materialize_mcp(&step.id, &policy.mcp, &listing)?;
         }
-        if policy.plugins != PluginPolicy::Unrestricted {
+        if adapter == Adapter::Claude && policy.plugins != PluginPolicy::Unrestricted {
             let listing = list_plugins(adapter, &tree).await;
             applied.disabled_plugins = plugins_to_disable(&step.id, &policy.plugins, &listing)?;
+        }
+        for reason in &applied.degradations {
+            self.emit(obj! {
+                "type" => "run:degraded", "capability" => "agent-restrictions",
+                "stepId" => step.id.as_str(), "reason" => reason.as_str(),
+            });
         }
         let mut st = self.st.borrow_mut();
         if applied.is_empty() {

@@ -369,12 +369,19 @@ mod restriction_tests {
         );
         let w = parse_workflow(&doc).unwrap();
         let mcp = w.mcp.unwrap();
-        assert_eq!(mcp.restriction, Some(Restriction::Allow(vec!["github".into()])));
+        assert_eq!(
+            mcp.restriction,
+            Some(Restriction::Allow(vec!["github".into()]))
+        );
         let servers = mcp.servers.unwrap();
         assert_eq!(servers.keys().collect::<Vec<_>>(), ["docs", "pw", "bare"]);
         assert!(matches!(
             servers.get("docs"),
-            Some(McpServerDef::Remote { kind: McpRemoteKind::Http, headers: Some(_), .. })
+            Some(McpServerDef::Remote {
+                kind: McpRemoteKind::Http,
+                headers: Some(_),
+                ..
+            })
         ));
         assert!(matches!(
             servers.get("pw"),
@@ -382,13 +389,19 @@ mod restriction_tests {
         ));
         assert!(matches!(
             servers.get("bare"),
-            Some(McpServerDef::Stdio { args: None, env: None, .. })
+            Some(McpServerDef::Stdio {
+                args: None,
+                env: None,
+                ..
+            })
         ));
         assert_eq!(
             w.plugins.unwrap().restriction,
             Some(Restriction::Deny(vec!["superpowers".into()]))
         );
-        let Step::Agent(a) = &w.steps[0] else { panic!() };
+        let Step::Agent(a) = &w.steps[0] else {
+            panic!()
+        };
         let step_mcp = a.mcp.as_ref().unwrap();
         assert_eq!(step_mcp.servers, None);
         assert_eq!(
@@ -446,7 +459,13 @@ mod restriction_tests {
             let _ = shape::workflow(&mut cx, Some(&raw));
             cx.issues
                 .iter()
-                .map(|i| i.path.iter().map(PathSeg::display).collect::<Vec<_>>().join("."))
+                .map(|i| {
+                    i.path
+                        .iter()
+                        .map(PathSeg::display)
+                        .collect::<Vec<_>>()
+                        .join(".")
+                })
                 .collect::<Vec<_>>()
         };
         assert_eq!(paths(&wf("mcp: { allow: [a], deny: [b] }\n")), ["mcp"]);
@@ -481,13 +500,27 @@ mod restriction_tests {
     fn unknown_keys_name_the_allowed_ones() {
         let found = problems(&wf("mcp:\n  servers:\n    x: { command: c, cwd: /tmp }\n"));
         assert_eq!(found.len(), 1, "{found:?}");
-        assert!(found[0].contains("unknown key 'cwd' (allowed: command, args, env)"), "{found:?}");
-        let found = problems(&wf("mcp:\n  servers:\n    x: { type: sse, url: u, command: c }\n"));
-        assert!(found[0].contains("unknown key 'command' (allowed: type, url, headers)"), "{found:?}");
+        assert!(
+            found[0].contains("unknown key 'cwd' (allowed: command, args, env)"),
+            "{found:?}"
+        );
+        let found = problems(&wf(
+            "mcp:\n  servers:\n    x: { type: sse, url: u, command: c }\n",
+        ));
+        assert!(
+            found[0].contains("unknown key 'command' (allowed: type, url, headers)"),
+            "{found:?}"
+        );
         let found = problems(&wf("plugins: { nope: 1 }\n"));
-        assert!(found[0].contains("unknown key 'nope' (allowed: allow, deny)"), "{found:?}");
+        assert!(
+            found[0].contains("unknown key 'nope' (allowed: allow, deny)"),
+            "{found:?}"
+        );
         let found = problems(&wf("mcp: { nope: 1 }\n"));
-        assert!(found[0].contains("(allowed: servers, allow, deny)"), "{found:?}");
+        assert!(
+            found[0].contains("(allowed: servers, allow, deny)"),
+            "{found:?}"
+        );
     }
 
     #[test]
@@ -499,9 +532,15 @@ mod restriction_tests {
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].contains("mcp.servers.x.url"), "{found:?}");
         let found = problems(&wf("mcp:\n  servers:\n    x: { url: u }\n"));
-        assert!(found.iter().any(|p| p.contains("mcp.servers.x.type")), "{found:?}");
+        assert!(
+            found.iter().any(|p| p.contains("mcp.servers.x.type")),
+            "{found:?}"
+        );
         let found = problems(&wf("mcp:\n  servers:\n    x: { type: ws, url: u }\n"));
-        assert!(found.iter().any(|p| p.contains("mcp.servers.x.type")), "{found:?}");
+        assert!(
+            found.iter().any(|p| p.contains("mcp.servers.x.type")),
+            "{found:?}"
+        );
         assert_eq!(problems(&wf("mcp:\n  servers:\n    x: 3\n")).len(), 1);
     }
 
@@ -517,6 +556,11 @@ mod restriction_tests {
         let found = problems(&format!(
             "name: w\nsteps:\n  - id: a\n    kind: command\n    run: x\n    mcp: {{ allow: [] }}\n"
         ));
-        assert!(found.iter().any(|p| p.contains("kind 'command' has no 'mcp'")), "{found:?}");
+        assert!(
+            found
+                .iter()
+                .any(|p| p.contains("kind 'command' has no 'mcp'")),
+            "{found:?}"
+        );
     }
 }

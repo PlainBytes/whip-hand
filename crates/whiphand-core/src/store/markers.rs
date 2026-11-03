@@ -202,6 +202,7 @@ pub fn is_spawn_file_name(name: &str) -> bool {
         "settings.json",
         "mcp.json",
         "harvest-settings.json",
+        "copilot-mcp.json",
     ]
     .iter()
     .any(|suffix| is_step_state_name(name, suffix))

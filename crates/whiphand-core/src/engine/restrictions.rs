@@ -204,11 +204,120 @@ pub struct AppliedRestrictions {
     pub mcp: Option<Vec<(String, serde_json::Value)>>,
     /// Runner ids of the plugins to switch off.
     pub disabled_plugins: Vec<String>,
+    /// Copilot only: it takes servers to switch off, not a complete set.
+    pub copilot_mcp: Option<CopilotMcp>,
+    /// `agent-restrictions` degradation reasons for the step, emitted before it spawns.
+    pub degradations: Vec<String>,
 }
 
 impl AppliedRestrictions {
     pub fn is_empty(&self) -> bool {
-        self.mcp.is_none() && self.disabled_plugins.is_empty()
+        self.mcp.is_none()
+            && self.disabled_plugins.is_empty()
+            && self.copilot_mcp.is_none()
+            && self.degradations.is_empty()
+    }
+}
+
+/// What a copilot spawn does about MCP servers.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CopilotMcp {
+    /// Workflow-defined servers to add (`--additional-mcp-config`).
+    pub servers: Vec<(String, serde_json::Value)>,
+    /// Servers to switch off one by one (`--disable-mcp-server`).
+    pub disable: Vec<String>,
+    /// Switch every builtin server off (`--disable-builtin-mcps`).
+    pub disable_builtins: bool,
+}
+
+/// Copilot's builtin MCP servers, whether or not a listing shows them.
+const COPILOT_BUILTINS: [&str; 2] = ["github-mcp-server", "githubiq"];
+
+/// A copilot step's MCP flags, plus a degradation reason when an allowlist could not be
+/// made exact. A deny needs no listing: every denied name is switched off.
+pub fn copilot_mcp(
+    step_id: &str,
+    policy: &McpPolicy,
+    listing: &McpList,
+) -> Result<Option<(CopilotMcp, Option<String>)>, String> {
+    use crate::adapters::harness_catalog::{CatalogSource, Origin};
+    let push = |v: &mut Vec<String>, n: &str| {
+        if !v.iter().any(|x| x == n) {
+            v.push(n.to_string());
+        }
+    };
+    match policy {
+        McpPolicy::Unrestricted => Ok(None),
+        McpPolicy::Deny(names) => {
+            let mut out = CopilotMcp::default();
+            for n in names {
+                push(&mut out.disable, n);
+            }
+            Ok(Some((out, None)))
+        }
+        McpPolicy::Allow(allowed) => {
+            let unavailable = listing.source == CatalogSource::Unavailable;
+            let mut out = CopilotMcp::default();
+            let mut missing = Vec::new();
+            for a in allowed {
+                match a {
+                    AllowedServer::Workflow { name, def } => out.servers.push((
+                        name.clone(),
+                        serde_json::to_value(def).map_err(|e| e.to_string())?,
+                    )),
+                    AllowedServer::Harness { name }
+                        if unavailable || listing.servers.iter().any(|s| &s.name == name) => {}
+                    AllowedServer::Harness { name }
+                        if COPILOT_BUILTINS.contains(&name.as_str()) => {}
+                    AllowedServer::Harness { name } => missing.push(name.clone()),
+                }
+            }
+            if !missing.is_empty() {
+                return Err(MissingServers {
+                    step_id: step_id.to_string(),
+                    servers: missing,
+                }
+                .to_string());
+            }
+            if unavailable {
+                let why = listing
+                    .note
+                    .as_ref()
+                    .map(|n| format!(": {n}"))
+                    .unwrap_or_default();
+                return Ok(Some((
+                    out,
+                    Some(format!(
+                        "MCP allowlist not exact: the servers copilot has configured could not be listed{why}, so none were switched off"
+                    )),
+                )));
+            }
+            let is_allowed = |n: &str| allowed.iter().any(|a| a.name() == n);
+            let mut builtins: Vec<&str> = COPILOT_BUILTINS.to_vec();
+            for s in &listing.servers {
+                if s.origin == Origin::Builtin && !builtins.contains(&s.name.as_str()) {
+                    builtins.push(&s.name);
+                }
+            }
+            if builtins.iter().all(|b| !is_allowed(b)) {
+                out.disable_builtins = true;
+            }
+            for s in &listing.servers {
+                let builtin = builtins.contains(&s.name.as_str());
+                if is_allowed(&s.name) || (builtin && out.disable_builtins) {
+                    continue;
+                }
+                push(&mut out.disable, &s.name);
+            }
+            if !out.disable_builtins {
+                for b in builtins {
+                    if !is_allowed(b) {
+                        push(&mut out.disable, b);
+                    }
+                }
+            }
+            Ok(Some((out, None)))
+        }
     }
 }
 
@@ -754,5 +863,81 @@ mod tests {
         l.source = CatalogSource::Unavailable;
         let e = plugins_to_disable("s", &PluginPolicy::Allow(vec![]), &l).unwrap_err();
         assert!(e.contains("'s'"), "{e}");
+    }
+
+    // ---- copilot ----
+
+    fn flags(
+        policy: &McpPolicy,
+        l: &McpList,
+    ) -> Result<Option<(CopilotMcp, Option<String>)>, String> {
+        copilot_mcp("s", policy, l)
+    }
+
+    #[test]
+    fn copilot_allow_disables_the_rest_and_the_builtins() {
+        let w = workflow(Some(mcp(allow(&["a", "docs"]), &["docs"])), None);
+        let r = resolve(&w, &step());
+        let l = listing(&[
+            ("a", Origin::User, true),
+            ("b", Origin::User, true),
+            ("github-mcp-server", Origin::Builtin, false),
+        ]);
+        let (m, d) = flags(&r.mcp, &l).unwrap().unwrap();
+        assert_eq!(d, None);
+        assert_eq!(m.disable, ["b"]);
+        assert!(m.disable_builtins);
+        assert_eq!(keys(&m.servers), ["docs"]);
+    }
+
+    #[test]
+    fn copilot_allow_of_one_builtin_disables_the_others_singly() {
+        let r = resolve(
+            &workflow(Some(mcp(allow(&["githubiq"]), &[])), None),
+            &step(),
+        );
+        let l = listing(&[
+            ("githubiq", Origin::Builtin, false),
+            ("github-mcp-server", Origin::Builtin, false),
+        ]);
+        let (m, _) = flags(&r.mcp, &l).unwrap().unwrap();
+        assert!(!m.disable_builtins);
+        assert_eq!(m.disable, ["github-mcp-server"]);
+    }
+
+    #[test]
+    fn copilot_deny_disables_exactly_the_denied_names() {
+        let r = resolve(&workflow(Some(mcp(deny(&["a"]), &[])), None), &step());
+        let mut l = listing(&[("a", Origin::User, true), ("b", Origin::User, true)]);
+        l.source = CatalogSource::Unavailable;
+        let (m, d) = flags(&r.mcp, &l).unwrap().unwrap();
+        assert_eq!((m.disable, d), (vec!["a".to_string()], None));
+        assert!(!m.disable_builtins && m.servers.is_empty());
+    }
+
+    #[test]
+    fn copilot_allow_on_an_unavailable_listing_degrades_instead_of_failing() {
+        let r = resolve(
+            &workflow(Some(mcp(allow(&["x", "docs"]), &["docs"])), None),
+            &step(),
+        );
+        let mut l = listing(&[]);
+        l.source = CatalogSource::Unavailable;
+        l.note = Some("no cli".into());
+        let (m, d) = flags(&r.mcp, &l).unwrap().unwrap();
+        assert!(m.disable.is_empty() && !m.disable_builtins);
+        assert_eq!(keys(&m.servers), ["docs"]);
+        let d = d.unwrap();
+        assert!(
+            d.contains("could not be listed") && d.contains("no cli"),
+            "{d}"
+        );
+    }
+
+    #[test]
+    fn copilot_missing_allowed_server_is_an_error() {
+        let r = resolve(&workflow(Some(mcp(allow(&["ghost"]), &[])), None), &step());
+        let e = flags(&r.mcp, &listing(&[("a", Origin::User, true)])).unwrap_err();
+        assert!(e.contains("'s'") && e.contains("'ghost'"), "{e}");
     }
 }

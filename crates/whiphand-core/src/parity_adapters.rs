@@ -153,6 +153,7 @@ fn run_ctx(raw: &Value) -> RunCtx {
             .collect(),
         attempts: Record::new(),
         verdicts: record(&raw["verdicts"]),
+        restrictions: Record::new(),
         inputs: record(&raw["inputs"]),
         loop_frame,
         frame,

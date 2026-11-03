@@ -34,6 +34,7 @@ use crate::engine::frontend::Frontend;
 use crate::engine::guidance::headless_prompt;
 use crate::engine::manual::{ManualExtras, build_manual_request, note_artifact, review_artifact};
 use crate::engine::progress::{ProgressParser, progress_error_message, stderr_error_message};
+use crate::engine::restrictions;
 use crate::engine::resume::{DoneExecution, ResumePlan, stage_budget_key};
 use crate::engine::spec::{self, write_spec_files};
 use crate::engine::stages::{DEFAULT_STAGE_RETRIES, discover_stages, next_stage, odd_stage_names};
@@ -551,6 +552,7 @@ pub async fn run_workflow<F: Frontend>(
             .map(|r| r.attempts.clone())
             .unwrap_or_default(),
         verdicts: Record::new(),
+        restrictions: restrictions::resolve_all(&effective),
         inputs: inputs.clone(),
         loop_frame: None,
         frame: None,

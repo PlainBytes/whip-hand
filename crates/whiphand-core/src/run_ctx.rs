@@ -4,6 +4,7 @@
 
 use std::collections::HashSet;
 
+use crate::engine::restrictions::StepRestrictions;
 use crate::js::Record;
 use crate::template::{Frame, LoopFrame, TemplateScope, nearest_loop};
 
@@ -31,6 +32,8 @@ pub struct RunCtx {
     pub attempts: Record<Vec<String>>,
     /// step id → `pass`/`fail` of the execution that wrote `artifacts[id]`.
     pub verdicts: Record<String>,
+    /// step id → the MCP and plugin policy resolved for that agent step.
+    pub restrictions: Record<StepRestrictions>,
     /// Resolved workflow inputs.
     pub inputs: Record<String>,
     /// The nearest enclosing loop: a projection of `frame`.

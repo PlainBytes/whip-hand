@@ -327,7 +327,6 @@
                 "test_command": {
                   "required": false,
                   "prompt": "Test command (leave blank to skip tests)",
-                  "default": "npm test",
                   "remember": true,
                   "multiline": false
                 },

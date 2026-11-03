@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### The shipped `develop` workflow no longer assumes `npm test`
+
+- The `develop` template's `test_command` has no default now. Leave it blank to skip tests, or
+  enter your project's command; with `remember`, it is asked for once. A fresh worktree has no
+  installed dependencies, so include the install step, e.g. `npm ci && npm test`. Existing
+  workspaces keep their old copy until replaced.
+
 ### Where whiphand keeps things
 
 - The global root is now `~/.whiphand` on every platform (override: `WHIPHAND_CONFIG_HOME`). On

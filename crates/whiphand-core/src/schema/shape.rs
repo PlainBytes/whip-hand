@@ -105,6 +105,14 @@ fn agent(cx: &mut Ctx, m: &Record<Raw>) -> Option<Step> {
         v,
         |cx, v| zod::uint(cx, v, Bound::Positive)
     ));
+    let mcp = field!(cx, m, "mcp", |cx, v| zod::optional(cx, v, |cx, v| {
+        mcp_settings(cx, v, false)
+    }));
+    let plugins = field!(cx, m, "plugins", |cx, v| zod::optional(
+        cx,
+        v,
+        plugin_settings
+    ));
     Some(Step::Agent(AgentStep {
         id: b.id?,
         inputs: b.inputs?,
@@ -120,6 +128,8 @@ fn agent(cx: &mut Ctx, m: &Record<Raw>) -> Option<Step> {
         allow_commits: allow_commits?,
         effort: effort?,
         harvest_timeout_ms: harvest_timeout_ms?,
+        mcp: mcp?,
+        plugins: plugins?,
     }))
 }
 
@@ -369,6 +379,150 @@ fn worktree_setting(cx: &mut Ctx, v: Option<&Raw>) -> Option<WorktreeSetting> {
     }
 }
 
+/// Reports every key of `m` outside `allowed`; false when there was one.
+fn only_keys(cx: &mut Ctx, m: &Record<Raw>, allowed: &[&str]) -> bool {
+    let mut ok = true;
+    for key in m.keys() {
+        if !allowed.contains(&key) {
+            cx.push(
+                Code::Custom,
+                format!("has unknown key '{key}' (allowed: {})", allowed.join(", ")),
+                true,
+            );
+            ok = false;
+        }
+    }
+    ok
+}
+
+/// A name list for `allow:` / `deny:`; empty is valid.
+fn name_list(cx: &mut Ctx, v: Option<&Raw>) -> Option<Vec<String>> {
+    zod::array(cx, v, false, required_text)
+}
+
+/// The `allow` / `deny` pair of an `mcp:` or `plugins:` block: at most one of them.
+/// `Some(None)` is neither; `None` is a problem, already reported.
+fn restriction(cx: &mut Ctx, m: &Record<Raw>) -> Option<Option<Restriction>> {
+    let allow = field!(cx, m, "allow", |cx, v| zod::optional(cx, v, name_list));
+    let deny = field!(cx, m, "deny", |cx, v| zod::optional(cx, v, name_list));
+    if m.get("allow").is_some() && m.get("deny").is_some() {
+        cx.push(Code::Custom, "can't have both allow and deny", true);
+        return None;
+    }
+    match (allow?, deny?) {
+        (Some(a), _) => Some(Some(Restriction::Allow(a))),
+        (_, Some(d)) => Some(Some(Restriction::Deny(d))),
+        _ => Some(None),
+    }
+}
+
+/// `plugins:` — only `allow` or `deny`.
+fn plugin_settings(cx: &mut Ctx, v: Option<&Raw>) -> Option<PluginSettings> {
+    let m = zod::object(cx, v)?;
+    let keys_ok = only_keys(cx, m, &["allow", "deny"]);
+    let restriction = restriction(cx, m);
+    if !keys_ok {
+        return None;
+    }
+    Some(PluginSettings {
+        restriction: restriction?,
+    })
+}
+
+/// `mcp:` — `servers` (workflow level only) plus `allow` or `deny`.
+fn mcp_settings(cx: &mut Ctx, v: Option<&Raw>, workflow_level: bool) -> Option<McpSettings> {
+    let m = zod::object(cx, v)?;
+    let mut keys_ok = true;
+    if workflow_level {
+        keys_ok = only_keys(cx, m, &["servers", "allow", "deny"]);
+    } else {
+        for key in m.keys() {
+            let message = match key {
+                "allow" | "deny" => continue,
+                "servers" => "can't define servers; define them at workflow level and name them in allow or deny"
+                    .to_string(),
+                _ => format!("has unknown key '{key}' (allowed: allow, deny)"),
+            };
+            if key == "servers" {
+                cx.key(key, |cx| cx.push(Code::Custom, message, true));
+            } else {
+                cx.push(Code::Custom, message, true);
+            }
+            keys_ok = false;
+        }
+    }
+    let servers = if workflow_level {
+        field!(cx, m, "servers", |cx, v| zod::optional(cx, v, |cx, v| {
+            zod::record(cx, v, input_name_problem_server, mcp_server_def)
+        }))
+    } else {
+        Some(None)
+    };
+    let restriction = restriction(cx, m);
+    if !keys_ok {
+        return None;
+    }
+    Some(McpSettings {
+        servers: servers?,
+        restriction: restriction?,
+    })
+}
+
+fn input_name_problem_server(name: &str) -> Option<String> {
+    if zod::blank(name) {
+        Some("server name is required".into())
+    } else if !INPUT_NAME_RE.is_match(name) {
+        Some(format!(
+            "server name '{name}' must use letters, digits, '-' or '_'"
+        ))
+    } else {
+        None
+    }
+}
+
+fn string_map(cx: &mut Ctx, v: Option<&Raw>) -> Option<Record<String>> {
+    zod::record(cx, v, |_| None, zod::string)
+}
+
+/// A server definition: the stdio form (`command`, `args`, `env`) or the remote form
+/// (`type: http | sse`, `url`, `headers`). Either `type` or `url` selects the remote form.
+fn mcp_server_def(cx: &mut Ctx, v: Option<&Raw>) -> Option<McpServerDef> {
+    let m = zod::object(cx, v)?;
+    if m.get("type").is_some() || m.get("url").is_some() {
+        let keys_ok = only_keys(cx, m, &["type", "url", "headers"]);
+        let kind = field!(cx, m, "type", |cx, v| zod::enumeration(
+            cx,
+            v,
+            &[("http", McpRemoteKind::Http), ("sse", McpRemoteKind::Sse)]
+        ));
+        let url = field!(cx, m, "url", required_text);
+        let headers = field!(cx, m, "headers", |cx, v| zod::optional(cx, v, string_map));
+        if !keys_ok {
+            return None;
+        }
+        Some(McpServerDef::Remote {
+            kind: kind?,
+            url: url?,
+            headers: headers?,
+        })
+    } else {
+        let keys_ok = only_keys(cx, m, &["command", "args", "env"]);
+        let command = field!(cx, m, "command", required_text);
+        let args = field!(cx, m, "args", |cx, v| zod::optional(cx, v, |cx, v| {
+            zod::array(cx, v, false, zod::string)
+        }));
+        let env = field!(cx, m, "env", |cx, v| zod::optional(cx, v, string_map));
+        if !keys_ok {
+            return None;
+        }
+        Some(McpServerDef::Stdio {
+            command: command?,
+            args: args?,
+            env: env?,
+        })
+    }
+}
+
 /// `workflowSchema`.
 pub fn workflow(cx: &mut Ctx, v: Option<&Raw>) -> Option<Workflow> {
     let m = zod::object(cx, v)?;
@@ -387,6 +541,14 @@ pub fn workflow(cx: &mut Ctx, v: Option<&Raw>) -> Option<Workflow> {
         v,
         worktree_setting
     ));
+    let mcp = field!(cx, m, "mcp", |cx, v| zod::optional(cx, v, |cx, v| {
+        mcp_settings(cx, v, true)
+    }));
+    let plugins = field!(cx, m, "plugins", |cx, v| zod::optional(
+        cx,
+        v,
+        plugin_settings
+    ));
     let steps = field!(cx, m, "steps", |cx, v| zod::array(cx, v, true, step));
     Some(Workflow {
         name: name?,
@@ -394,6 +556,8 @@ pub fn workflow(cx: &mut Ctx, v: Option<&Raw>) -> Option<Workflow> {
         inputs: inputs?,
         on_findings: on_findings?,
         worktree: worktree?,
+        mcp: mcp?,
+        plugins: plugins?,
         steps: steps?,
     })
 }

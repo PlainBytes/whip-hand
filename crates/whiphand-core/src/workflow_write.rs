@@ -796,6 +796,31 @@ mod tests {
         }
     }
 
+    const RESTRICTED: &str = "name: w\n# what this workflow brings\nmcp:\n  servers:\n    docs: { type: http, url: 'https://example.test/mcp', headers: { A: b } } # remote\n    pw:\n      command: npx\n      args: ['@playwright/mcp@1.2.3']\n      env: { K: v }\n  allow: [github]\nplugins:\n  deny: [superpowers]\nsteps:\n  - id: a\n    runner: claude\n    mode: headless\n    writes: false\n    prompt: p\n    output: o\n    # only the docs server\n    mcp: { allow: [docs] } # narrow\n    plugins: { allow: [] }\n";
+
+    #[test]
+    fn restriction_fields_round_trip_unchanged() {
+        assert_eq!(merge_workflow(RESTRICTED, &js(RESTRICTED)), RESTRICTED);
+    }
+
+    #[test]
+    fn an_edit_keeps_the_restriction_fields_and_their_comments() {
+        let mut wf = js(RESTRICTED);
+        step_mut(&mut wf, &[0]).insert("prompt".into(), JsValue::Str("q".into()));
+        let out = merge_workflow(RESTRICTED, &wf);
+        assert_eq!(out, RESTRICTED.replace("prompt: p", "prompt: q"));
+    }
+
+    #[test]
+    fn disabling_a_step_keeps_the_restriction_comments() {
+        let mut wf = js(RESTRICTED);
+        step_mut(&mut wf, &[0]).insert("enabled".into(), JsValue::Bool(false));
+        let out = merge_workflow(RESTRICTED, &wf);
+        assert!(out.contains("    # only the docs server\n    mcp: { allow: [docs] } # narrow\n"), "{out}");
+        assert!(out.contains("# what this workflow brings\nmcp:"), "{out}");
+        assert!(out.contains("# remote\n"), "{out}");
+    }
+
     #[test]
     fn each_worktree_shape_round_trips_unchanged() {
         for shape in [

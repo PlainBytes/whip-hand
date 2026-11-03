@@ -545,6 +545,8 @@ mod tests {
             inputs: None,
             on_findings: None,
             worktree,
+            mcp: None,
+            plugins: None,
             steps: vec![],
         }
     }

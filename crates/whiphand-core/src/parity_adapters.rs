@@ -118,6 +118,8 @@ fn agent_step(raw: &Value) -> AgentStep {
         allow_commits: None,
         effort,
         harvest_timeout_ms: None,
+        mcp: None,
+        plugins: None,
     }
 }
 

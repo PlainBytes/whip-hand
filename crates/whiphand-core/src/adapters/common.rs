@@ -128,6 +128,8 @@ pub(crate) mod test_support {
             allow_commits: None,
             effort: None,
             harvest_timeout_ms: None,
+            mcp: None,
+            plugins: None,
         }
     }
 

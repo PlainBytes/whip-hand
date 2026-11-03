@@ -49,7 +49,7 @@ impl std::error::Error for WorkflowError {}
 fn field_owner(key: &str) -> Option<&'static str> {
     Some(match key {
         "runner" | "model" | "mode" | "writes" | "prompt" | "allow_paths" | "allow_commits"
-        | "effort" => "agent",
+        | "effort" | "mcp" | "plugins" => "agent",
         "run" | "shell" | "expect_exit" | "timeout_ms" => "command",
         "title" | "instructions" | "capture" | "show_diff" => "manual",
         "steps" | "until" | "max_iterations" | "on_exhausted" => "loop",
@@ -94,12 +94,14 @@ fn check_misplaced_fields(raw: &Raw, problems: &mut Vec<String>) {
     }
 }
 
-const ROOT_KEYS: [&str; 6] = [
+const ROOT_KEYS: [&str; 8] = [
     "name",
     "description",
     "inputs",
     "on_findings",
     "worktree",
+    "mcp",
+    "plugins",
     "steps",
 ];
 
@@ -335,5 +337,186 @@ mod worktree_tests {
                 .iter()
                 .any(|p| p.contains("belongs on a step"))
         );
+    }
+}
+
+#[cfg(test)]
+mod restriction_tests {
+    use super::*;
+    use crate::types::{McpRemoteKind, McpServerDef, Restriction, Step};
+
+    const STEP: &str = "  - id: a\n    kind: command\n    run: echo a\n";
+
+    fn wf(head: &str) -> String {
+        format!("name: w\n{head}steps:\n{STEP}")
+    }
+
+    fn agent_wf(head: &str, step_extra: &str) -> String {
+        format!(
+            "name: w\n{head}steps:\n  - id: a\n    runner: claude\n    mode: headless\n    writes: false\n    prompt: p\n    output: o\n{step_extra}"
+        )
+    }
+
+    fn problems(doc: &str) -> Vec<String> {
+        parse_workflow(doc).unwrap_err().problems
+    }
+
+    #[test]
+    fn every_new_field_parses() {
+        let doc = agent_wf(
+            "mcp:\n  servers:\n    docs: { type: http, url: 'https://example.test/mcp', headers: { A: b } }\n    pw: { command: npx, args: ['@playwright/mcp@1.2.3'], env: { K: v } }\n    bare: { command: tool }\n  allow: [github]\nplugins:\n  deny: [superpowers]\n",
+            "    mcp: { allow: [docs, pw] }\n    plugins: { allow: [] }\n",
+        );
+        let w = parse_workflow(&doc).unwrap();
+        let mcp = w.mcp.unwrap();
+        assert_eq!(mcp.restriction, Some(Restriction::Allow(vec!["github".into()])));
+        let servers = mcp.servers.unwrap();
+        assert_eq!(servers.keys().collect::<Vec<_>>(), ["docs", "pw", "bare"]);
+        assert!(matches!(
+            servers.get("docs"),
+            Some(McpServerDef::Remote { kind: McpRemoteKind::Http, headers: Some(_), .. })
+        ));
+        assert!(matches!(
+            servers.get("pw"),
+            Some(McpServerDef::Stdio { args: Some(a), env: Some(_), .. }) if a == &["@playwright/mcp@1.2.3"]
+        ));
+        assert!(matches!(
+            servers.get("bare"),
+            Some(McpServerDef::Stdio { args: None, env: None, .. })
+        ));
+        assert_eq!(
+            w.plugins.unwrap().restriction,
+            Some(Restriction::Deny(vec!["superpowers".into()]))
+        );
+        let Step::Agent(a) = &w.steps[0] else { panic!() };
+        let step_mcp = a.mcp.as_ref().unwrap();
+        assert_eq!(step_mcp.servers, None);
+        assert_eq!(
+            step_mcp.restriction,
+            Some(Restriction::Allow(vec!["docs".into(), "pw".into()]))
+        );
+        // `allow: []` is an empty allowlist, not an absent one.
+        assert_eq!(
+            a.plugins.as_ref().unwrap().restriction,
+            Some(Restriction::Allow(vec![]))
+        );
+    }
+
+    #[test]
+    fn empty_deny_and_bare_blocks_parse() {
+        let w = parse_workflow(&wf("mcp: { deny: [] }\nplugins: {}\n")).unwrap();
+        assert_eq!(w.mcp.unwrap().restriction, Some(Restriction::Deny(vec![])));
+        assert_eq!(w.plugins.unwrap().restriction, None);
+    }
+
+    #[test]
+    fn absent_fields_stay_absent() {
+        let w = parse_workflow(&wf("")).unwrap();
+        assert!(w.mcp.is_none() && w.plugins.is_none());
+    }
+
+    #[test]
+    fn allow_with_deny_is_one_problem_at_the_block() {
+        assert_eq!(
+            problems(&wf("mcp: { allow: [a], deny: [b] }\n")),
+            vec!["workflow: mcp can't have both allow and deny"]
+        );
+        assert_eq!(
+            problems(&wf("plugins: { allow: [a], deny: [b] }\n")),
+            vec!["workflow: plugins can't have both allow and deny"]
+        );
+        let doc = agent_wf("", "    mcp: { allow: [a], deny: [b] }\n");
+        assert_eq!(
+            problems(&doc),
+            vec!["step 'a': mcp can't have both allow and deny"]
+        );
+        let doc = agent_wf("", "    plugins: { allow: [a], deny: [b] }\n");
+        assert_eq!(
+            problems(&doc),
+            vec!["step 'a': plugins can't have both allow and deny"]
+        );
+    }
+
+    #[test]
+    fn issues_carry_the_raw_paths() {
+        use crate::zod::{Ctx, PathSeg};
+        let paths = |doc: &str| {
+            let raw = crate::raw::parse_yaml(doc).unwrap();
+            let mut cx = Ctx::new();
+            let _ = shape::workflow(&mut cx, Some(&raw));
+            cx.issues
+                .iter()
+                .map(|i| i.path.iter().map(PathSeg::display).collect::<Vec<_>>().join("."))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(paths(&wf("mcp: { allow: [a], deny: [b] }\n")), ["mcp"]);
+        assert_eq!(
+            paths(&agent_wf("", "    mcp: { allow: [a], deny: [b] }\n")),
+            ["steps.0.mcp"]
+        );
+        assert_eq!(
+            paths(&agent_wf("", "    plugins: { allow: [a], deny: [b] }\n")),
+            ["steps.0.plugins"]
+        );
+    }
+
+    #[test]
+    fn blank_names_are_refused() {
+        let found = problems(&wf("mcp: { allow: ['', b] }\n"));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("mcp.allow.0"), "{found:?}");
+        assert_eq!(problems(&wf("plugins: { deny: ['  '] }\n")).len(), 1);
+    }
+
+    #[test]
+    fn servers_on_a_step_are_refused() {
+        let doc = agent_wf("", "    mcp:\n      servers:\n        x: { command: c }\n");
+        let found = problems(&doc);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].starts_with("step 'a': mcp.servers"), "{found:?}");
+        assert!(found[0].contains("workflow level"), "{found:?}");
+    }
+
+    #[test]
+    fn unknown_keys_name_the_allowed_ones() {
+        let found = problems(&wf("mcp:\n  servers:\n    x: { command: c, cwd: /tmp }\n"));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("unknown key 'cwd' (allowed: command, args, env)"), "{found:?}");
+        let found = problems(&wf("mcp:\n  servers:\n    x: { type: sse, url: u, command: c }\n"));
+        assert!(found[0].contains("unknown key 'command' (allowed: type, url, headers)"), "{found:?}");
+        let found = problems(&wf("plugins: { nope: 1 }\n"));
+        assert!(found[0].contains("unknown key 'nope' (allowed: allow, deny)"), "{found:?}");
+        let found = problems(&wf("mcp: { nope: 1 }\n"));
+        assert!(found[0].contains("(allowed: servers, allow, deny)"), "{found:?}");
+    }
+
+    #[test]
+    fn server_definitions_need_their_required_field() {
+        let found = problems(&wf("mcp:\n  servers:\n    x: { args: [a] }\n"));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("mcp.servers.x.command"), "{found:?}");
+        let found = problems(&wf("mcp:\n  servers:\n    x: { type: http }\n"));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("mcp.servers.x.url"), "{found:?}");
+        let found = problems(&wf("mcp:\n  servers:\n    x: { url: u }\n"));
+        assert!(found.iter().any(|p| p.contains("mcp.servers.x.type")), "{found:?}");
+        let found = problems(&wf("mcp:\n  servers:\n    x: { type: ws, url: u }\n"));
+        assert!(found.iter().any(|p| p.contains("mcp.servers.x.type")), "{found:?}");
+        assert_eq!(problems(&wf("mcp:\n  servers:\n    x: 3\n")).len(), 1);
+    }
+
+    #[test]
+    fn server_names_follow_the_input_name_rule() {
+        let found = problems(&wf("mcp:\n  servers:\n    'bad name': { command: c }\n"));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("letters, digits"), "{found:?}");
+    }
+
+    #[test]
+    fn root_and_misplaced_keys() {
+        let found = problems(&format!(
+            "name: w\nsteps:\n  - id: a\n    kind: command\n    run: x\n    mcp: {{ allow: [] }}\n"
+        ));
+        assert!(found.iter().any(|p| p.contains("kind 'command' has no 'mcp'")), "{found:?}");
     }
 }

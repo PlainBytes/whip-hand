@@ -298,6 +298,8 @@ mod tests {
             allow_commits: None,
             effort: None,
             harvest_timeout_ms: None,
+            mcp: None,
+            plugins: None,
         };
         let pointer = prompt_pointer(&format!("{}/prompt.md", ctx.run_dir), &ctx);
         assert_eq!(

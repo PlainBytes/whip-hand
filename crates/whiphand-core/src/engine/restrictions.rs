@@ -6,6 +6,7 @@
 
 use std::fmt;
 
+use crate::adapters::harness_catalog::{McpList, PluginInfo, PluginList};
 use crate::js::Record;
 use crate::steps::flatten_steps;
 use crate::types::{AgentStep, McpServerDef, Restriction, Step, Workflow};
@@ -191,6 +192,133 @@ pub fn apply(
                     servers: missing,
                 })
             }
+        }
+    }
+}
+
+/// What a restricted step's spawn carries, once the policy has met the harness listing.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AppliedRestrictions {
+    /// The complete server set for the step (`None` = MCP unrestricted): workflow servers
+    /// first, then harness definitions copied from the listing.
+    pub mcp: Option<Vec<(String, serde_json::Value)>>,
+    /// Runner ids of the plugins to switch off.
+    pub disabled_plugins: Vec<String>,
+}
+
+impl AppliedRestrictions {
+    pub fn is_empty(&self) -> bool {
+        self.mcp.is_none() && self.disabled_plugins.is_empty()
+    }
+}
+
+/// The server set of a step whose MCP policy is not `Unrestricted`.
+pub fn materialize_mcp(
+    step_id: &str,
+    policy: &McpPolicy,
+    listing: &McpList,
+) -> Result<Option<Vec<(String, serde_json::Value)>>, String> {
+    use crate::adapters::harness_catalog::{CatalogSource, Origin};
+    let needs_harness = match policy {
+        McpPolicy::Unrestricted => return Ok(None),
+        McpPolicy::Deny(_) => true,
+        McpPolicy::Allow(a) => a.iter().any(|s| matches!(s, AllowedServer::Harness { .. })),
+    };
+    if needs_harness && listing.source == CatalogSource::Unavailable {
+        return Err(format!(
+            "step '{step_id}' restricts MCP servers the harness provides, but the harness's servers could not be listed{}",
+            listing
+                .note
+                .as_ref()
+                .map(|n| format!(": {n}"))
+                .unwrap_or_default()
+        ));
+    }
+    let harness = HarnessServers {
+        names: listing.servers.iter().map(|s| s.name.clone()).collect(),
+    };
+    let eff = apply(step_id, policy, &harness).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for (name, def) in &eff.workflow {
+        let value = serde_json::to_value(def).map_err(|e| e.to_string())?;
+        out.push((name.clone(), value));
+    }
+    let deny = matches!(policy, McpPolicy::Deny(_));
+    for name in &eff.harness {
+        let server = listing.servers.iter().find(|s| &s.name == name);
+        match server.and_then(|s| s.definition.clone()) {
+            // Under a deny, only servers that can be copied and are on are kept: a
+            // plugin's bundled servers come from the plugin, not from this file.
+            Some(_) if deny && server.is_some_and(|s| s.origin == Origin::Plugin) => {}
+            Some(_) if deny && server.is_some_and(|s| s.enabled == Some(false)) => {}
+            Some(def) => out.push((name.clone(), def)),
+            None if deny => {}
+            None => {
+                return Err(format!(
+                    "step '{step_id}' allows MCP server '{name}', but its definition could not be read from the harness"
+                ));
+            }
+        }
+    }
+    Ok(Some(out))
+}
+
+/// Does a policy name `plugin` (by runner id or by base name)?
+fn names_plugin(names: &[String], p: &PluginInfo) -> bool {
+    names
+        .iter()
+        .any(|n| n == &p.name || p.key.as_deref() == Some(n.as_str()))
+}
+
+/// The runner ids of the enabled plugins a policy switches off.
+pub fn plugins_to_disable(
+    step_id: &str,
+    policy: &PluginPolicy,
+    listing: &PluginList,
+) -> Result<Vec<String>, String> {
+    use crate::adapters::harness_catalog::CatalogSource;
+    let id_of = |p: &PluginInfo| p.key.clone().unwrap_or_else(|| p.name.clone());
+    match policy {
+        PluginPolicy::Unrestricted => Ok(Vec::new()),
+        PluginPolicy::Deny(names) => {
+            let mut out: Vec<String> = Vec::new();
+            for n in names {
+                let hits: Vec<String> = listing
+                    .plugins
+                    .iter()
+                    .filter(|p| names_plugin(std::slice::from_ref(n), p))
+                    .map(id_of)
+                    .collect();
+                let hits = if hits.is_empty() {
+                    vec![n.clone()]
+                } else {
+                    hits
+                };
+                for h in hits {
+                    if !out.contains(&h) {
+                        out.push(h);
+                    }
+                }
+            }
+            Ok(out)
+        }
+        PluginPolicy::Allow(names) => {
+            if listing.source == CatalogSource::Unavailable {
+                return Err(format!(
+                    "step '{step_id}' allows only some plugins, but the harness's plugins could not be listed{}",
+                    listing
+                        .note
+                        .as_ref()
+                        .map(|n| format!(": {n}"))
+                        .unwrap_or_default()
+                ));
+            }
+            Ok(listing
+                .plugins
+                .iter()
+                .filter(|p| p.enabled && !names_plugin(names, p))
+                .map(id_of)
+                .collect())
         }
     }
 }
@@ -483,5 +611,148 @@ mod tests {
         let r = resolve(&w, &step());
         assert_eq!(names(&r.mcp), ["docs"]);
         assert_eq!(r.plugins, PluginPolicy::Deny(vec!["p".into()]));
+    }
+
+    // ---- materialize / plugins_to_disable ----
+
+    use crate::adapters::harness_catalog::{CatalogSource, McpServer, Origin};
+
+    fn listing(servers: &[(&str, Origin, bool)]) -> McpList {
+        McpList {
+            source: CatalogSource::Live,
+            servers: servers
+                .iter()
+                .map(|(n, origin, with_def)| McpServer {
+                    name: n.to_string(),
+                    origin: *origin,
+                    plugin: None,
+                    enabled: None,
+                    definition: with_def.then(|| serde_json::json!({ "command": n })),
+                })
+                .collect(),
+            note: None,
+        }
+    }
+
+    fn keys(v: &[(String, serde_json::Value)]) -> Vec<&str> {
+        v.iter().map(|(k, _)| k.as_str()).collect()
+    }
+
+    #[test]
+    fn allow_mixes_workflow_and_harness_definitions() {
+        let w = workflow(Some(mcp(allow(&["docs", "github"]), &["docs"])), None);
+        let r = resolve(&w, &step());
+        let l = listing(&[
+            ("github", Origin::User, true),
+            ("other", Origin::User, true),
+        ]);
+        let out = materialize_mcp("s", &r.mcp, &l).unwrap().unwrap();
+        assert_eq!(keys(&out), ["docs", "github"]);
+        assert_eq!(out[0].1["command"], "docs");
+        assert_eq!(out[1].1["command"], "github");
+    }
+
+    #[test]
+    fn allow_none_is_an_empty_set_and_needs_no_listing() {
+        let r = resolve(&workflow(Some(mcp(allow(&[]), &[])), None), &step());
+        let mut l = listing(&[]);
+        l.source = CatalogSource::Unavailable;
+        assert_eq!(materialize_mcp("s", &r.mcp, &l).unwrap(), Some(vec![]));
+    }
+
+    #[test]
+    fn deny_keeps_every_other_copyable_harness_server() {
+        let r = resolve(&workflow(Some(mcp(deny(&["github"]), &[])), None), &step());
+        let l = listing(&[
+            ("github", Origin::User, true),
+            ("a", Origin::User, true),
+            ("nodef", Origin::User, false),
+            ("plugin:x:y", Origin::Plugin, true),
+            ("b", Origin::Project, true),
+        ]);
+        let out = materialize_mcp("s", &r.mcp, &l).unwrap().unwrap();
+        assert_eq!(keys(&out), ["a", "b"]);
+    }
+
+    #[test]
+    fn unrestricted_materializes_nothing() {
+        assert_eq!(
+            materialize_mcp("s", &McpPolicy::Unrestricted, &listing(&[])).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn missing_allowed_server_names_step_and_server() {
+        let r = resolve(&workflow(Some(mcp(allow(&["ghost"]), &[])), None), &step());
+        let e = materialize_mcp("build", &r.mcp, &listing(&[])).unwrap_err();
+        assert!(e.contains("'build'") && e.contains("'ghost'"), "{e}");
+    }
+
+    #[test]
+    fn allowed_harness_server_without_a_definition_is_an_error() {
+        let r = resolve(&workflow(Some(mcp(allow(&["x"]), &[])), None), &step());
+        let e = materialize_mcp("s", &r.mcp, &listing(&[("x", Origin::User, false)])).unwrap_err();
+        assert!(e.contains("'x'") && e.contains("definition"), "{e}");
+    }
+
+    #[test]
+    fn harness_restrictions_fail_when_the_listing_is_unavailable() {
+        let r = resolve(&workflow(Some(mcp(deny(&["x"]), &[])), None), &step());
+        let mut l = listing(&[]);
+        l.source = CatalogSource::Unavailable;
+        l.note = Some("no config".into());
+        let e = materialize_mcp("s", &r.mcp, &l).unwrap_err();
+        assert!(e.contains("no config"), "{e}");
+    }
+
+    fn plugin(name: &str, key: &str, enabled: bool) -> PluginInfo {
+        PluginInfo {
+            name: name.into(),
+            origin: Origin::User,
+            version: None,
+            enabled,
+            key: Some(key.into()),
+        }
+    }
+
+    fn plugins(list: Vec<PluginInfo>) -> PluginList {
+        PluginList {
+            source: CatalogSource::Live,
+            plugins: list,
+            note: None,
+        }
+    }
+
+    #[test]
+    fn plugin_deny_resolves_base_names_and_passes_unknown_ids_through() {
+        let l = plugins(vec![plugin("a", "a@m", true), plugin("b", "b@m", true)]);
+        let p = PluginPolicy::Deny(vec!["a".into(), "c@m".into()]);
+        assert_eq!(plugins_to_disable("s", &p, &l).unwrap(), ["a@m", "c@m"]);
+    }
+
+    #[test]
+    fn plugin_allow_disables_every_other_enabled_plugin() {
+        let l = plugins(vec![
+            plugin("a", "a@m", true),
+            plugin("b", "b@m", true),
+            plugin("c", "c@m", false),
+            plugin("d", "d@m", true),
+        ]);
+        let p = PluginPolicy::Allow(vec!["a".into(), "d@m".into()]);
+        assert_eq!(plugins_to_disable("s", &p, &l).unwrap(), ["b@m"]);
+        let none = PluginPolicy::Allow(vec![]);
+        assert_eq!(
+            plugins_to_disable("s", &none, &l).unwrap(),
+            ["a@m", "b@m", "d@m"]
+        );
+    }
+
+    #[test]
+    fn plugin_allow_fails_when_the_listing_is_unavailable() {
+        let mut l = plugins(vec![]);
+        l.source = CatalogSource::Unavailable;
+        let e = plugins_to_disable("s", &PluginPolicy::Allow(vec![]), &l).unwrap_err();
+        assert!(e.contains("'s'"), "{e}");
     }
 }

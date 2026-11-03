@@ -103,6 +103,10 @@ pub struct PluginInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     pub enabled: bool,
+    /// The id a runner's own settings use for it (claude: `name@marketplace`),
+    /// when that differs from `name`. Not part of the editor listing.
+    #[serde(skip)]
+    pub key: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -567,6 +571,7 @@ fn claude_plugin_list(ctx: &Ctx) -> PluginList {
                 origin: p.origin,
                 version,
                 enabled: p.enabled,
+                key: Some(p.key),
             }
         })
         .collect();
@@ -700,6 +705,7 @@ fn parse_copilot_plugins(text: &str) -> Vec<PluginInfo> {
                     origin,
                     version,
                     enabled: !rest.to_lowercase().contains("[disabled]"),
+                    key: None,
                 });
             }
             None if trimmed.ends_with(':') => {
@@ -789,6 +795,7 @@ fn opencode_plugin_list(ctx: &Ctx) -> PluginList {
                 origin,
                 version: None,
                 enabled: true,
+                key: None,
             };
             match plugins.iter_mut().find(|p| p.name == info.name) {
                 Some(slot) => *slot = info,

@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use crate::engine::restrictions::StepRestrictions;
+use crate::engine::restrictions::{AppliedRestrictions, StepRestrictions};
 use crate::js::Record;
 use crate::template::{Frame, LoopFrame, TemplateScope, nearest_loop};
 
@@ -34,6 +34,9 @@ pub struct RunCtx {
     pub verdicts: Record<String>,
     /// step id → the MCP and plugin policy resolved for that agent step.
     pub restrictions: Record<StepRestrictions>,
+    /// step id → the restrictions resolved against the harness listing, set just before
+    /// the step spawns and only for steps whose policy restricts something.
+    pub applied: Record<AppliedRestrictions>,
     /// Resolved workflow inputs.
     pub inputs: Record<String>,
     /// The nearest enclosing loop: a projection of `frame`.

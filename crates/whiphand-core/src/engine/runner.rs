@@ -553,6 +553,7 @@ pub async fn run_workflow<F: Frontend>(
             .unwrap_or_default(),
         verdicts: Record::new(),
         restrictions: restrictions::resolve_all(&effective),
+        applied: Record::new(),
         inputs: inputs.clone(),
         loop_frame: None,
         frame: None,
@@ -1493,12 +1494,49 @@ impl<F: Frontend> Run<'_, F> {
         })
     }
 
+    /// Meets a step's resolved MCP and plugin policy with the runner's listing and records
+    /// the result on the context for the adapter. Only steps whose policy restricts
+    /// something touch the listing; the others leave the context alone. Today only claude
+    /// enforces; the other runners follow in their own stages.
+    async fn apply_restrictions(&self, adapter: Adapter, step: &AgentStep) -> Result<(), String> {
+        use crate::adapters::harness_catalog::{list_mcp_servers, list_plugins};
+        use crate::engine::restrictions::{
+            AppliedRestrictions, McpPolicy, PluginPolicy, materialize_mcp, plugins_to_disable,
+        };
+        if adapter != Adapter::Claude {
+            return Ok(());
+        }
+        let Some(policy) = self.st.borrow().ctx.restrictions.get(&step.id).cloned() else {
+            return Ok(());
+        };
+        let tree = self.tree();
+        let mut applied = AppliedRestrictions::default();
+        if policy.mcp != McpPolicy::Unrestricted {
+            let listing = list_mcp_servers(adapter, &tree).await;
+            applied.mcp = materialize_mcp(&step.id, &policy.mcp, &listing)?;
+        }
+        if policy.plugins != PluginPolicy::Unrestricted {
+            let listing = list_plugins(adapter, &tree).await;
+            applied.disabled_plugins = plugins_to_disable(&step.id, &policy.plugins, &listing)?;
+        }
+        let mut st = self.st.borrow_mut();
+        if applied.is_empty() {
+            st.ctx.applied.remove(&step.id);
+        } else {
+            st.ctx.applied.insert(step.id.clone(), applied);
+        }
+        Ok(())
+    }
+
     async fn execute_agent(
         &self,
         step: &AgentStep,
         frame: Option<&Frame>,
     ) -> Result<Outcome, String> {
         let adapter = Adapter::get(&step.runner).expect("validated at start");
+        if let Err(msg) = self.apply_restrictions(adapter, step).await {
+            return Ok(self.fail(&msg, Some(&step.id)));
+        }
         let artifact = artifact_path(&self.run_dir, &step.output, frame);
         self.record_artifact(&step.id, &artifact);
         ensure_artifact_dir(&artifact).map_err(|e| e.to_string())?;

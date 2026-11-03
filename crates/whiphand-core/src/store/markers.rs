@@ -200,6 +200,8 @@ pub fn is_spawn_file_name(name: &str) -> bool {
         "harvest-prompt",
         "system-prompt.md",
         "settings.json",
+        "mcp.json",
+        "harvest-settings.json",
     ]
     .iter()
     .any(|suffix| is_step_state_name(name, suffix))

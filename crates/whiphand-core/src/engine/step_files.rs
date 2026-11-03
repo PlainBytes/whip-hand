@@ -37,10 +37,21 @@ pub const PROMPT: &str = "prompt";
 pub const HARVEST_PROMPT: &str = "harvest-prompt";
 pub const SYSTEM_PROMPT: &str = "system-prompt.md";
 pub const SETTINGS: &str = "settings.json";
+/// The MCP server set of a step with an MCP restriction (`--mcp-config`).
+pub const MCP_CONFIG: &str = "mcp.json";
+/// The settings a harvest spawn gets: plugin switches only, none of the session's hooks.
+pub const HARVEST_SETTINGS: &str = "harvest-settings.json";
 pub const OPENCODE_GUIDANCE: &str = "guidance.md";
 
 /// The spawn files every agent spawn may write; cleared before each spawn.
-pub const SPAWN_FILES: [&str; 4] = [PROMPT, HARVEST_PROMPT, SYSTEM_PROMPT, SETTINGS];
+pub const SPAWN_FILES: [&str; 6] = [
+    PROMPT,
+    HARVEST_PROMPT,
+    SYSTEM_PROMPT,
+    SETTINGS,
+    MCP_CONFIG,
+    HARVEST_SETTINGS,
+];
 
 pub fn clear_spawn_files(run_dir: &str, step_id: &str) {
     for suffix in SPAWN_FILES {

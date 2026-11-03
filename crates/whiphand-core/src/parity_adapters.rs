@@ -154,6 +154,7 @@ fn run_ctx(raw: &Value) -> RunCtx {
         attempts: Record::new(),
         verdicts: record(&raw["verdicts"]),
         restrictions: Record::new(),
+        applied: Record::new(),
         inputs: record(&raw["inputs"]),
         loop_frame,
         frame,

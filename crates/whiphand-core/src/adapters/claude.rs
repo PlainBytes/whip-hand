@@ -6,7 +6,8 @@ use crate::adapters::common::{
 };
 use crate::engine::guidance::interactive_guidance;
 use crate::engine::step_files::{
-    AWAIT_STATE, END_MARKER, HARVEST_PROMPT, PROMPT, SETTINGS, SYSTEM_PROMPT, step_file_path,
+    AWAIT_STATE, END_MARKER, HARVEST_PROMPT, HARVEST_SETTINGS, MCP_CONFIG, PROMPT, SETTINGS,
+    SYSTEM_PROMPT, step_file_path,
 };
 use crate::jsval::{self, JsObject, JsValue, ObjExt};
 use crate::node_path;
@@ -51,6 +52,67 @@ fn permission_path(native_abs: &str) -> String {
     } else {
         format!("/{fwd}")
     }
+}
+
+/// The MCP flags and the config file a step with an MCP restriction needs; nothing for
+/// an unrestricted one, so its argv stays as it was.
+///
+/// `--mcp-config` is variadic and would swallow the prompt argument that follows, so it
+/// is passed in the `=` form. `--strict-mcp-config` makes claude ignore every other MCP
+/// source (user, project, local scope), so the file is the whole set.
+///
+/// Not verified: whether `--strict-mcp-config` also drops servers a still-enabled plugin
+/// bundles. Treat it as not: a plugin left enabled may bring its servers back, so an MCP
+/// restriction that must hold needs the matching `plugins:` restriction too.
+fn mcp_args(step: &AgentStep, ctx: &RunCtx) -> Result<Option<(Vec<String>, JsValue)>, String> {
+    let Some(servers) = ctx.applied.get(&step.id).and_then(|a| a.mcp.as_ref()) else {
+        return Ok(None);
+    };
+    let path = step_file_path(&ctx.run_dir, &step.id, MCP_CONFIG)?;
+    let map: serde_json::Map<String, serde_json::Value> = servers.iter().cloned().collect();
+    let body = serde_json::json!({ "mcpServers": map });
+    let text = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&body).map_err(|e| e.to_string())?
+    );
+    Ok(Some((
+        vec![
+            "--strict-mcp-config".to_string(),
+            format!("--mcp-config={}", to_fwd_abs(&path)),
+        ],
+        file(&path, &text),
+    )))
+}
+
+/// `enabledPlugins` entries switching off the step's restricted plugins, or None.
+fn plugin_switches(step: &AgentStep, ctx: &RunCtx) -> Option<JsValue> {
+    let off = &ctx.applied.get(&step.id)?.disabled_plugins;
+    if off.is_empty() {
+        return None;
+    }
+    let mut o = JsObject::new();
+    for id in off {
+        o.set(id.as_str(), false);
+    }
+    Some(JsValue::Obj(o))
+}
+
+/// Settings text holding only the plugin switches, when there are any.
+fn plugin_settings_file(
+    step: &AgentStep,
+    ctx: &RunCtx,
+    suffix: &str,
+) -> Result<Option<(String, JsValue)>, String> {
+    let Some(off) = plugin_switches(step, ctx) else {
+        return Ok(None);
+    };
+    let path = step_file_path(&ctx.run_dir, &step.id, suffix)?;
+    let text = format!(
+        "{}\n",
+        jsval::stringify(&obj! { "enabledPlugins" => off }.into(), Some(2)).unwrap_or_default()
+    );
+    let entry = file(&path, &text);
+    Ok(Some((path, entry)))
 }
 
 /// A read-only headless step's settings: Write and Edit allowed for its
@@ -110,6 +172,10 @@ pub fn interactive(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
     if !step.writes {
         argv.push(format!("--disallowedTools={CLAUDE_WRITE_TOOLS}"));
     }
+    let mcp = mcp_args(step, ctx)?;
+    if let Some((flags, _)) = &mcp {
+        argv.extend(flags.iter().cloned());
+    }
     argv.extend([
         "--append-system-prompt-file".into(),
         to_fwd_abs(&system),
@@ -121,23 +187,25 @@ pub fn interactive(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
         &build_prompt(&step.prompt, step.inputs.as_deref().unwrap_or(&[]), ctx).map_err(|e| e.0)?,
     );
     let guidance = lf(&interactive_guidance(step, ctx)?);
-    let settings_json = interactive_settings(
+    let mut settings_json = interactive_settings(
         &to_workspace(&marker, &ctx.workdir),
         &to_fwd_abs(&await_path),
     )?;
+    if let Some(off) = plugin_switches(step, ctx) {
+        settings_json.set("enabledPlugins", off);
+    }
     let settings_text = format!(
         "{}\n",
         jsval::stringify(&settings_json.into(), Some(2)).unwrap_or_default()
     );
     let mut spec = spawn_spec(ctx, &argv, true, JsObject::new());
-    spec.set(
-        "files",
-        vec![
-            file(&prompt, &prompt_text),
-            file(&system, &guidance),
-            file(&settings, &settings_text),
-        ],
-    );
+    let mut files = vec![
+        file(&prompt, &prompt_text),
+        file(&system, &guidance),
+        file(&settings, &settings_text),
+    ];
+    files.extend(mcp.map(|(_, f)| f));
+    spec.set("files", files);
     spec.set(
         "endSession",
         obj! { "markerPath" => marker.as_str(), "quitSequence" => CLAUDE_QUIT_SEQUENCE },
@@ -169,6 +237,10 @@ pub fn headless(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
     argv.extend(effort_args(step));
     argv.extend(tools);
     argv.extend(add_dir_args(ctx));
+    let mcp = mcp_args(step, ctx)?;
+    if let Some((flags, _)) = &mcp {
+        argv.extend(flags.iter().cloned());
+    }
     let prompt = step_file_path(&ctx.run_dir, &step.id, PROMPT)?;
     let text = lf(
         &build_prompt(&step.prompt, step.inputs.as_deref().unwrap_or(&[]), ctx).map_err(|e| e.0)?,
@@ -176,14 +248,22 @@ pub fn headless(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
     let mut files = vec![file(&prompt, &text)];
     if !step.writes {
         let settings = step_file_path(&ctx.run_dir, &step.id, SETTINGS)?;
+        let mut settings_json = artifact_settings(&artifact_of(step, ctx));
+        if let Some(off) = plugin_switches(step, ctx) {
+            settings_json.set("enabledPlugins", off);
+        }
         let settings_text = format!(
             "{}\n",
-            jsval::stringify(&artifact_settings(&artifact_of(step, ctx)).into(), Some(2))
-                .unwrap_or_default()
+            jsval::stringify(&settings_json.into(), Some(2)).unwrap_or_default()
         );
         argv.extend(["--settings".into(), to_fwd_abs(&settings)]);
         files.push(file(&settings, &settings_text));
+    } else if let Some((path, entry)) = plugin_settings_file(step, ctx, SETTINGS)? {
+        // A writes step has no settings file otherwise; restricted plugins need one.
+        argv.extend(["--settings".into(), to_fwd_abs(&path)]);
+        files.push(entry);
     }
+    files.extend(mcp.map(|(_, f)| f));
     let mut spec = spawn_spec(ctx, &argv, false, JsObject::new());
     spec.set("files", files);
     spec.set("stdinFile", prompt.as_str());
@@ -218,8 +298,19 @@ pub fn harvest(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
     argv.push("--allowedTools=Write".into());
     argv.extend(add_dir_args(ctx));
     let path = step_file_path(&ctx.run_dir, &step.id, HARVEST_PROMPT)?;
+    let mut files = vec![file(&path, &lf(&harvest_prompt(step, ctx)))];
+    // The resumed session's restrictions, repeated: the session's own settings file
+    // carries hooks a harvest must not run, so the plugin switches get their own file.
+    if let Some((settings, entry)) = plugin_settings_file(step, ctx, HARVEST_SETTINGS)? {
+        argv.extend(["--settings".into(), to_fwd_abs(&settings)]);
+        files.push(entry);
+    }
+    if let Some((flags, entry)) = mcp_args(step, ctx)? {
+        argv.extend(flags);
+        files.push(entry);
+    }
     let mut spec = spawn_spec(ctx, &argv, false, JsObject::new());
-    spec.set("files", vec![file(&path, &lf(&harvest_prompt(step, ctx)))]);
+    spec.set("files", files);
     spec.set("stdinFile", path.as_str());
     Ok(spec)
 }
@@ -294,5 +385,159 @@ mod tests {
             !rw.iter()
                 .any(|a| a == "--settings" || a.starts_with("--disallowedTools"))
         );
+    }
+
+    // ---- restrictions ----
+
+    use crate::engine::restrictions::AppliedRestrictions;
+    use serde_json::json;
+
+    fn files_of(spec: &JsObject) -> Vec<(String, String)> {
+        spec.prop("files")
+            .as_arr()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                (
+                    f.get("path").to_js_string(),
+                    f.get("content").to_js_string(),
+                )
+            })
+            .collect()
+    }
+
+    fn restrict(ctx: &mut RunCtx, mcp: Option<Vec<(&str, serde_json::Value)>>, off: &[&str]) {
+        ctx.applied.insert(
+            "s".into(),
+            AppliedRestrictions {
+                mcp: mcp.map(|v| v.into_iter().map(|(n, d)| (n.to_string(), d)).collect()),
+                disabled_plugins: off.iter().map(|s| s.to_string()).collect(),
+            },
+        );
+    }
+
+    #[test]
+    fn unrestricted_steps_carry_no_restriction_flags_or_files() {
+        let root = tempfile::tempdir().unwrap();
+        let c = ctx(root.path(), root.path());
+        for argv in builds(&c) {
+            assert!(!argv.iter().any(|a| a.contains("mcp")));
+        }
+        let rw = headless(&step("claude", StepMode::Headless), &c).unwrap();
+        assert_eq!(files_of(&rw).len(), 1);
+    }
+
+    #[test]
+    fn mcp_allow_writes_exactly_the_given_servers_in_the_equals_form() {
+        let root = tempfile::tempdir().unwrap();
+        let mut c = ctx(root.path(), root.path());
+        restrict(
+            &mut c,
+            Some(vec![
+                ("docs", json!({ "command": "docs-mcp" })),
+                ("github", json!({ "type": "http", "url": "https://x" })),
+            ]),
+            &[],
+        );
+        let path = to_fwd_abs(&step_file_path(&c.run_dir, "s", MCP_CONFIG).unwrap());
+        for (spec, last_is_prompt) in [
+            (
+                interactive(&step("claude", StepMode::Interactive), &c).unwrap(),
+                true,
+            ),
+            (
+                headless(&step("claude", StepMode::Headless), &c).unwrap(),
+                false,
+            ),
+            (
+                harvest(&step("claude", StepMode::Headless), &c).unwrap(),
+                false,
+            ),
+        ] {
+            let a = argv(&spec);
+            assert!(a.contains(&"--strict-mcp-config".to_string()), "{a:?}");
+            assert_eq!(
+                a.iter()
+                    .filter(|x| **x == format!("--mcp-config={path}"))
+                    .count(),
+                1,
+                "{a:?}"
+            );
+            assert!(!a.iter().any(|x| x == "--mcp-config"), "{a:?}");
+            if last_is_prompt {
+                assert!(a.last().unwrap().starts_with("Read and follow"), "{a:?}");
+            }
+            let (_, body) = files_of(&spec)
+                .into_iter()
+                .find(|(p, _)| p.ends_with(".mcp.json"))
+                .expect("mcp.json in spec files");
+            let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+            let names: Vec<&String> = v["mcpServers"].as_object().unwrap().keys().collect();
+            assert_eq!(names, ["docs", "github"]);
+            assert_eq!(v["mcpServers"]["docs"]["command"], "docs-mcp");
+        }
+    }
+
+    #[test]
+    fn mcp_allow_none_writes_an_empty_server_map() {
+        let root = tempfile::tempdir().unwrap();
+        let mut c = ctx(root.path(), root.path());
+        restrict(&mut c, Some(vec![]), &[]);
+        let spec = headless(&step("claude", StepMode::Headless), &c).unwrap();
+        assert!(argv(&spec).contains(&"--strict-mcp-config".to_string()));
+        let (_, body) = files_of(&spec).pop().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v, json!({ "mcpServers": {} }));
+    }
+
+    #[test]
+    fn mcp_config_path_uses_forward_slashes_for_a_windows_run_dir() {
+        let root = tempfile::tempdir().unwrap();
+        let mut c = ctx(root.path(), root.path());
+        c.run_dir = "D:\\w\\runs\\r1".into();
+        restrict(&mut c, Some(vec![]), &[]);
+        let a = argv(&headless(&step("claude", StepMode::Headless), &c).unwrap());
+        assert!(
+            a.contains(&"--mcp-config=D:/w/runs/r1/.s.mcp.json".to_string()),
+            "{a:?}"
+        );
+    }
+
+    #[test]
+    fn disabled_plugins_reach_every_settings_file() {
+        let root = tempfile::tempdir().unwrap();
+        let mut c = ctx(root.path(), root.path());
+        restrict(&mut c, None, &["a@m", "b@m"]);
+        let want = json!({ "a@m": false, "b@m": false });
+        let enabled = |spec: &JsObject, suffix: &str| {
+            let a = argv(spec);
+            let settings = to_fwd_abs(&step_file_path(&c.run_dir, "s", suffix).unwrap());
+            assert!(
+                a.windows(2)
+                    .any(|w| w[0] == "--settings" && w[1] == settings),
+                "{a:?}"
+            );
+            assert!(!a.contains(&"--strict-mcp-config".to_string()));
+            let (_, body) = files_of(spec)
+                .into_iter()
+                .find(|(p, _)| p.ends_with(suffix))
+                .unwrap();
+            serde_json::from_str::<serde_json::Value>(&body).unwrap()["enabledPlugins"].clone()
+        };
+        let i = interactive(&step("claude", StepMode::Interactive), &c).unwrap();
+        assert_eq!(enabled(&i, SETTINGS), want);
+        let mut h = step("claude", StepMode::Headless);
+        h.writes = false;
+        assert_eq!(enabled(&headless(&h, &c).unwrap(), SETTINGS), want);
+        h.writes = true;
+        let w = headless(&h, &c).unwrap();
+        assert_eq!(enabled(&w, SETTINGS), want);
+        assert_eq!(enabled(&harvest(&h, &c).unwrap(), HARVEST_SETTINGS), want);
+        // The harvest file carries no hooks of the session.
+        let (_, body) = files_of(&harvest(&h, &c).unwrap())
+            .into_iter()
+            .find(|(p, _)| p.ends_with(HARVEST_SETTINGS))
+            .unwrap();
+        assert!(!body.contains("hooks"));
     }
 }

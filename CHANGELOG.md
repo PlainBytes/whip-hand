@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Restrict a step's MCP servers and plugins
+
+- New `mcp:` and `plugins:` fields, on the workflow and on each agent step, with `allow` or
+  `deny` lists; the workflow can also define `mcp.servers`, which a step gets only if it
+  allows them. A step's setting replaces the workflow's. `allow: []` means none, and an
+  allowlisted server that doesn't exist fails the step before it starts.
+- Claude enforces both. Copilot and opencode enforce MCP servers by switching off the ones not
+  allowed, but cannot switch plugins off per session; what a runner can't enforce is reported
+  as an `agent-restrictions` degradation and the step still runs. The desktop workflow editor
+  has pickers for both.
+
 ### Where whiphand keeps things
 
 - The global root is now `~/.whiphand` on every platform (override: `WHIPHAND_CONFIG_HOME`). On

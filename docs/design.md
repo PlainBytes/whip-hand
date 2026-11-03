@@ -927,6 +927,47 @@ Their loops replay at exactly the budget and rounds the manifest recorded, whate
 `--max-iterations` or `--extra-iterations` say, so a resume never spawns an implementer inside
 work a human has already answered.
 
+## Agent restrictions
+
+`mcp:` and `plugins:` (workflow level, overridable per agent step) narrow what an agent step
+may use. The user-facing description is in the README; this is why it works the way it does.
+
+**Resolution.** `engine/restrictions.rs` holds one pure `resolve(workflow, step)`, so the
+precedence lives in a single place: the step's setting if present, else the workflow's, else
+unrestricted. A step *replaces* the workflow default and never merges with it — merging would
+make `allow: []` on a step impossible to express, and "this step has no tools" must be
+writable. Workflow-defined `mcp.servers` are on only when a resolved `allow` names them, so
+declaring a server is not the same as granting it. `apply` then checks the policy against the
+runner's listing; an allowlisted name found in neither place fails the step before spawn
+(`MissingServers`), because silently dropping it would run the step with less than the
+author intended. The result is carried on `RunCtx` per step id and adapters only read it.
+
+**Enforcement differs per runner.** Claude can take an exact server set (`--strict-mcp-config`
+with a per-step `--mcp-config=<file>`; the `=` form because the flag is variadic and would
+swallow the prompt) and per-plugin `enabledPlugins` in `--settings`. Copilot and opencode
+only add and switch off, so an allowlist is *simulated*: every configured server not in the
+allowlist is disabled (`--disable-mcp-server` and `--disable-builtin-mcps` on copilot;
+`{ enabled: false }` entries in `OPENCODE_CONFIG_CONTENT` on opencode), and a deny disables
+just the named ones. That needs the runner's server list, so when it can't be read an
+allowlist is spawned as far as known and reported as a degradation. Neither copilot nor
+opencode has a per-session plugin switch, so a `plugins:` restriction there is a degradation
+only; whiphand's own await-state plugin is mounted regardless and is never listed. All of
+these gaps use one degradation id, `agent-restrictions`.
+
+**Discovery never starts a server.** The listing of configured servers and plugins is read
+from each runner's config (`adapters/harness_catalog.rs`), never taken from `claude mcp list`
+or `opencode mcp list`: those connect to every server to report health, which would launch
+arbitrary processes (and spend network and credentials) just to answer a question about
+configuration. Copilot's `mcp list --json` is used because it reads config only, with a
+config-file fallback. A listing records its `source` (`live`, or `unavailable` with a note);
+a runner that can't be asked is `unavailable`, not an error. Only steps whose policy is
+restricted trigger a listing.
+
+**Definitions never cross the RPC.** `listMcpServers` / `listPlugins` return names, origin
+and enabled state only — never a server's `command`, `args`, `env`, `url` or `headers`, which
+hold tokens. The desktop editor needs names for its pickers and nothing more. Definitions are
+copied from config into the per-step file inside the engine process.
+
 ## Disabling a step
 
 `enabled: false` parks a step without deleting it or its prompt. Absent means enabled —

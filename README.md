@@ -358,6 +358,72 @@ file, if it touched anything outside the given globs. See the shipped
 That workflow's commit steps are POSIX shell lines; command steps run through a POSIX shell on every
 OS (see *Windows* below), so it runs unchanged on Linux, macOS and Windows.
 
+**Restricting MCP servers and plugins.** An agent step normally gets whatever MCP servers
+and plugins its runner has configured. `mcp:` and `plugins:` narrow that, per workflow and
+per step:
+
+```yaml
+mcp:                         # workflow level: the default for every agent step
+  servers:                   # servers this workflow brings; steps can only name them
+    docs: { type: http, url: "https://example.test/mcp", headers: { Authorization: "Bearer x" } }
+    pw:   { command: npx, args: ["@playwright/mcp@1.2.3"], env: { DEBUG: "0" } }
+  deny: [github]             # or allow: [...], never both
+plugins:
+  deny: [superpowers]        # or allow: [...], never both
+steps:
+  - id: research
+    runner: claude
+    mode: headless
+    writes: false
+    output: findings.md
+    mcp: { allow: [docs] }   # replaces the workflow default; it does not merge
+    prompt: Find the answer using the docs server.
+  - id: build
+    runner: claude
+    mode: headless
+    writes: true
+    output: build.md
+    mcp: { allow: [] }       # no MCP servers at all
+    plugins: { allow: [] }   # no plugins
+    prompt: Make the change.
+```
+
+- **Fields.** `mcp` takes `servers` (workflow level only), and at most one of `allow` /
+  `deny`, each a list of non-blank names. `plugins` takes at most one of `allow` / `deny`.
+  `allow` and `deny` together is an error, and so is any unknown key.
+- **Server definitions.** Either stdio — `command` (required), `args`, `env` — or remote —
+  `type: http | sse` and `url` (required), `headers`. Server names use letters, digits, `-`
+  and `_`.
+- **Precedence.** A step's `mcp` / `plugins` replaces the workflow's whole setting. With
+  neither set, nothing is restricted and the step runs as it always did.
+- **`allow` is exact, `deny` is subtractive.** `allow: [a, b]` leaves exactly `a` and `b`;
+  `allow: []` leaves none. `deny: [a]` leaves everything the runner has except `a`
+  (`deny: []` does nothing).
+- **Workflow-defined servers are off unless allowed.** A server in `mcp.servers` reaches a
+  step only when that step's resolved `allow` names it. Under `deny`, or with no `mcp`
+  restriction on the step, no workflow-defined server is added.
+- **Names not defined by the workflow** are expected to exist in the runner's own config.
+  An allowlisted name that is neither workflow-defined nor configured fails the step before
+  it starts, naming the step and the server. A mistyped name never silently gives a step
+  fewer servers than you meant.
+
+What each runner enforces:
+
+| Runner | MCP `allow` / `deny` | Plugins `allow` / `deny` |
+| --- | --- | --- |
+| claude | Full. A per-step `--strict-mcp-config` file holds exactly the allowed servers. | Full. Plugins that must be off are set `false` in the step's `enabledPlugins`. An `allow` needs the plugin list to be readable, or the step fails. |
+| copilot | Servers switched off with `--disable-mcp-server` (`--disable-builtin-mcps` when no built-in is allowed); allowed workflow servers added with `--additional-mcp-config`. | Not enforceable: copilot has no per-session way to switch an installed plugin off. |
+| opencode | Per-step config: allowed workflow servers added, every other configured server set `enabled: false`. | Not enforceable: opencode has no per-session way to switch a configured plugin off. |
+
+Whatever a runner can't enforce is reported, not hidden: the step still runs and a
+`run:degraded` event with capability `agent-restrictions` ("Agent restriction not
+enforceable for this runner") names what was not applied. It is emitted for a `plugins:`
+restriction on copilot or opencode, and for an MCP `allow` on copilot or opencode when the
+runner's configured servers could not be read (so none could be switched off). On claude, an
+MCP restriction does not by itself stop a still-enabled plugin from bringing its own servers
+back; pair it with a `plugins:` restriction if that matters. whiphand's own await-state hooks
+are never restricted.
+
 **Attachments.** `--attach <path>` (repeatable — or the desktop's New Run dialog: pick,
 drop, or paste an image) copies a file into the run before step one; a step reads them by
 naming the reserved ref `attachments` in its `inputs:`.

@@ -390,6 +390,89 @@ pub struct ModelListRow {
 #[ts(type = "Record<string, ModelListRow>")]
 pub struct ListModelsResult(pub serde_json::Map<String, Value>);
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct ListCatalogParams {
+    pub workdir: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub refresh: Option<bool>,
+}
+
+pub type ListMcpServersParams = ListCatalogParams;
+pub type ListPluginsParams = ListCatalogParams;
+
+/// Where a configured MCP server or plugin comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum CatalogOrigin {
+    User,
+    Project,
+    Plugin,
+    Builtin,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum CatalogSource {
+    Live,
+    Unavailable,
+}
+
+/// A configured MCP server. Names only: the definition (its `env` and
+/// `headers` may hold secrets) never goes over the wire.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct McpServerInfo {
+    pub name: String,
+    pub origin: CatalogOrigin,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plugin: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub enabled: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct McpListRow {
+    pub source: CatalogSource,
+    pub servers: Vec<McpServerInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct PluginInfoRow {
+    pub name: String,
+    pub origin: CatalogOrigin,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub version: Option<String>,
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct PluginListRow {
+    pub source: CatalogSource,
+    pub plugins: Vec<PluginInfoRow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub note: Option<String>,
+}
+
+/// `runners` is keyed by runner id, in registration order.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct ListMcpServersResult {
+    #[ts(type = "Record<string, McpListRow>")]
+    pub runners: serde_json::Map<String, Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct ListPluginsResult {
+    #[ts(type = "Record<string, PluginListRow>")]
+    pub runners: serde_json::Map<String, Value>,
+}
+
 pub type ConfigGetParams = OptionalWorkdirParams;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -1489,6 +1572,12 @@ pub const METHODS: &[(&str, &str, &str)] = &[
     ),
     ("doctor", "DoctorParams", "DoctorResult"),
     ("listModels", "ListModelsParams", "ListModelsResult"),
+    (
+        "listMcpServers",
+        "ListMcpServersParams",
+        "ListMcpServersResult",
+    ),
+    ("listPlugins", "ListPluginsParams", "ListPluginsResult"),
     ("configGet", "ConfigGetParams", "ConfigGetResult"),
     ("configSet", "ConfigSetParams", "ConfigSetResult"),
     ("startRun", "StartRunParams", "StartRunResult"),
@@ -1719,7 +1808,7 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), METHODS.len());
-        assert_eq!(METHODS.len(), 46);
+        assert_eq!(METHODS.len(), 48);
         assert_eq!(NOTIFICATIONS.len(), 11);
     }
 }

@@ -27,6 +27,8 @@ pub const REMOTE_METHODS: &[&str] = &[
     "initWorkspace",
     "doctor",
     "listModels",
+    "listMcpServers",
+    "listPlugins",
     "configGet",
     "configSet",
     "startRun",

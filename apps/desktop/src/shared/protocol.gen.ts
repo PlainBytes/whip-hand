@@ -99,6 +99,24 @@ export type ModelListRow = { source: ModelSource, models: Array<ModelInfo>, note
 
 export type ListModelsResult = Record<string, ModelListRow>;
 
+export type ListCatalogParams = { workdir: string, refresh?: boolean, };
+
+export type CatalogOrigin = "user" | "project" | "plugin" | "builtin";
+
+export type CatalogSource = "live" | "unavailable";
+
+export type McpServerInfo = { name: string, origin: CatalogOrigin, plugin?: string, enabled?: boolean, };
+
+export type McpListRow = { source: CatalogSource, servers: Array<McpServerInfo>, note?: string, };
+
+export type PluginInfoRow = { name: string, origin: CatalogOrigin, version?: string, enabled: boolean, };
+
+export type PluginListRow = { source: CatalogSource, plugins: Array<PluginInfoRow>, note?: string, };
+
+export type ListMcpServersResult = { runners: Record<string, McpListRow>, };
+
+export type ListPluginsResult = { runners: Record<string, PluginListRow>, };
+
 export type ConfigLayerInfo = { config: PartialConfig, path: string, exists: boolean, };
 
 export type ConfigGetResult = { config: WorkspaceConfig, global: ConfigLayerInfo, project?: ConfigLayerInfo, };
@@ -436,6 +454,8 @@ export interface MethodMap {
   initWorkspace: { params: InitWorkspaceParams; result: InitWorkspaceResult };
   doctor: { params: DoctorParams; result: DoctorResult };
   listModels: { params: ListModelsParams; result: ListModelsResult };
+  listMcpServers: { params: ListMcpServersParams; result: ListMcpServersResult };
+  listPlugins: { params: ListPluginsParams; result: ListPluginsResult };
   configGet: { params: ConfigGetParams; result: ConfigGetResult };
   configSet: { params: ConfigSetParams; result: ConfigSetResult };
   startRun: { params: StartRunParams; result: StartRunResult };

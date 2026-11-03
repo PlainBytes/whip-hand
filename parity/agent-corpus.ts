@@ -54,6 +54,8 @@ const BAD_PARAMS: Array<[string, unknown]> = [
   ['deleteWorkflow', { workdir: 'w', name: 'a/b' }], ['cloneWorkflow', { workdir: 'w', name: 'a', newName: '' }],
   ['validateWorkflow', {}], ['initWorkspace', { workdir: 3 }],
   ['doctor', { workdir: '' }], ['listModels', { refresh: 'yes' }],
+  ['listMcpServers', {}], ['listMcpServers', { workdir: 'w', refresh: 'yes' }],
+  ['listPlugins', {}], ['listPlugins', { workdir: 'w', extra: 1 }],
   ['configGet', { workdir: '' }],
   ['configSet', { config: { defaults: {}, on_findings: 'x', loop: { max_iterations: 0 }, artifacts_dir: '', runs: { max_retained: 0, auto_name: 1, max_attachment_mb: 0 } }, explicitKeys: ['nope'] }],
   ['startRun', { workdir: 'w', workflow: 'f', inputs: { a: 1 }, maxIterations: 1.5 }],
@@ -424,6 +426,9 @@ export const SCENARIOS: Scenario[] = [
       { call: 'listModels' },
       { call: 'doctor' },
       { call: 'listModels', params: { refresh: true }, label: 'listModels refresh' },
+      { call: 'listMcpServers', params: (c: Ctx) => ({ workdir: c.ws }) },
+      { call: 'listPlugins', params: (c: Ctx) => ({ workdir: c.ws }) },
+      { call: 'listMcpServers', params: (c: Ctx) => ({ workdir: c.ws, refresh: true }), label: 'listMcpServers refresh' },
     ],
   },
   {

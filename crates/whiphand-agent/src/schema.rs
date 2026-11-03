@@ -507,6 +507,9 @@ pub fn params(method: &str) -> Option<S> {
         },
         "validateWorkflow" => object! { "draft" => Unknown },
         "doctor" => Default(b(object! { "workdir" => o(StrMin1) }), empty),
+        "listMcpServers" | "listPlugins" => {
+            object!(Strictness::Strict; "workdir" => StrMin1, "refresh" => o(Bool))
+        }
         "listModels" => Default(b(object! { "refresh" => o(Bool) }), empty),
         "configGet" => object! { "workdir" => o(StrMin1) },
         "configSet" => object! {
@@ -709,6 +712,23 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn catalog_params_need_a_workdir() {
+        for m in ["listMcpServers", "listPlugins"] {
+            assert_eq!(
+                check(m, serde_json::json!({ "workdir": "/w" })),
+                Ok(serde_json::json!({ "workdir": "/w" }))
+            );
+            assert_eq!(
+                check(m, serde_json::json!({ "workdir": "/w", "refresh": true })),
+                Ok(serde_json::json!({ "workdir": "/w", "refresh": true }))
+            );
+            assert!(check(m, serde_json::json!({ "workdir": "/w", "x": 1 })).is_err());
+            assert!(check(m, serde_json::json!({})).is_err());
+            assert!(check(m, serde_json::json!({ "refresh": true })).is_err());
+        }
     }
 
     #[test]

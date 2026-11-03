@@ -187,6 +187,42 @@
       }
     },
     {
+      "step": "listMcpServers {}",
+      "response": {
+        "error": {
+          "code": -32602,
+          "message": "invalid params: workdir: Invalid input: expected string, received undefined"
+        }
+      }
+    },
+    {
+      "step": "listMcpServers {\"workdir\":\"w\",\"refresh\":\"yes\"}",
+      "response": {
+        "error": {
+          "code": -32602,
+          "message": "invalid params: refresh: Invalid input: expected boolean, received string"
+        }
+      }
+    },
+    {
+      "step": "listPlugins {}",
+      "response": {
+        "error": {
+          "code": -32602,
+          "message": "invalid params: workdir: Invalid input: expected string, received undefined"
+        }
+      }
+    },
+    {
+      "step": "listPlugins {\"workdir\":\"w\",\"extra\":1}",
+      "response": {
+        "error": {
+          "code": -32602,
+          "message": "invalid params: (root): Unrecognized key: \"extra\""
+        }
+      }
+    },
+    {
       "step": "configGet {\"workdir\":\"\"}",
       "response": {
         "error": {

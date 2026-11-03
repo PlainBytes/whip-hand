@@ -7,6 +7,8 @@ use std::rc::Rc;
 
 use base64::Engine as _;
 use serde_json::{Map, Value, json};
+use whiphand_core::adapters::ADAPTERS;
+use whiphand_core::adapters::harness_catalog::{CatalogSource, McpList, Origin, PluginList};
 use whiphand_core::canonicalize::open_workspace;
 use whiphand_core::config::{
     WorkspaceConfig, default_config, diff_config_layer, load_config_layer, load_workspace_config,
@@ -58,6 +60,8 @@ const METHODS: &[&str] = &[
     "initWorkspace",
     "doctor",
     "listModels",
+    "listMcpServers",
+    "listPlugins",
     "configGet",
     "configSet",
     "deleteRun",
@@ -202,6 +206,24 @@ pub async fn call(agent: &Rc<Agent>, ctx: RequestCtx, method: &str, p: Value) ->
                 })
                 .collect();
             Ok(Value::Object(map))
+        }
+        "listMcpServers" => {
+            let (wd, refresh) = (workdir(&p), p["refresh"] == true);
+            let mut runners = Map::new();
+            for runner in ADAPTERS {
+                let list = agent.harness.mcp_servers(runner, &wd, refresh).await;
+                runners.insert(runner.id().to_string(), mcp_row(&list));
+            }
+            Ok(json!({ "runners": runners }))
+        }
+        "listPlugins" => {
+            let (wd, refresh) = (workdir(&p), p["refresh"] == true);
+            let mut runners = Map::new();
+            for runner in ADAPTERS {
+                let list = agent.harness.plugins(runner, &wd, refresh).await;
+                runners.insert(runner.id().to_string(), plugin_row(&list));
+            }
+            Ok(json!({ "runners": runners }))
         }
         "configGet" => config_get(&p),
         "configSet" => config_set(&p),
@@ -454,10 +476,79 @@ fn validate_workflow(draft: &Value) -> Value {
     Value::Object(out)
 }
 
+fn origin_str(o: Origin) -> &'static str {
+    match o {
+        Origin::User => "user",
+        Origin::Project => "project",
+        Origin::Plugin => "plugin",
+        Origin::Builtin => "builtin",
+    }
+}
+
+fn source_str(s: CatalogSource) -> &'static str {
+    match s {
+        CatalogSource::Live => "live",
+        CatalogSource::Unavailable => "unavailable",
+    }
+}
+
+/// The wire form of an MCP listing: names and origins only. A server's
+/// definition (`env`, `headers`) is deliberately not copied.
+fn mcp_row(list: &McpList) -> Value {
+    let servers: Vec<Value> = list
+        .servers
+        .iter()
+        .map(|s| {
+            let mut o = Map::new();
+            o.insert("name".into(), json!(s.name));
+            o.insert("origin".into(), json!(origin_str(s.origin)));
+            if let Some(p) = &s.plugin {
+                o.insert("plugin".into(), json!(p));
+            }
+            if let Some(e) = s.enabled {
+                o.insert("enabled".into(), json!(e));
+            }
+            Value::Object(o)
+        })
+        .collect();
+    let mut o = Map::new();
+    o.insert("source".into(), json!(source_str(list.source)));
+    o.insert("servers".into(), Value::Array(servers));
+    if let Some(n) = &list.note {
+        o.insert("note".into(), json!(n));
+    }
+    Value::Object(o)
+}
+
+fn plugin_row(list: &PluginList) -> Value {
+    let plugins: Vec<Value> = list
+        .plugins
+        .iter()
+        .map(|p| {
+            let mut o = Map::new();
+            o.insert("name".into(), json!(p.name));
+            o.insert("origin".into(), json!(origin_str(p.origin)));
+            if let Some(v) = &p.version {
+                o.insert("version".into(), json!(v));
+            }
+            o.insert("enabled".into(), json!(p.enabled));
+            Value::Object(o)
+        })
+        .collect();
+    let mut o = Map::new();
+    o.insert("source".into(), json!(source_str(list.source)));
+    o.insert("plugins".into(), Value::Array(plugins));
+    if let Some(n) = &list.note {
+        o.insert("note".into(), json!(n));
+    }
+    Value::Object(o)
+}
+
 async fn doctor(agent: &Rc<Agent>, p: &Value) -> R {
     // A user lands on Doctor after upgrading or logging into a harness, so
     // the model list is re-probed from here too.
     agent.models.invalidate();
+    agent.harness.invalidate();
     let config = load_doctor_config(&global_doctor_config_path()).map_err(|e| e.to_string())?;
     let rows = detect_tools(&config, p["workdir"].as_str())
         .await
@@ -835,6 +926,111 @@ fn list_recent_runs(agent: &Rc<Agent>, p: &Value) -> Value {
     });
     all.truncate(limit);
     Value::Array(all)
+}
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::*;
+    use whiphand_core::adapters::Adapter;
+    use whiphand_core::adapters::harness_catalog::{
+        Ctx, list_mcp_servers_with, list_plugins_with,
+    };
+
+    fn fixture() -> (std::path::PathBuf, Ctx) {
+        let root = std::env::temp_dir().join(format!("wh-catalog-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (home, wd) = (root.join("home"), root.join("wd"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(wd.join(".claude")).unwrap();
+        std::fs::write(
+            home.join(".claude.json"),
+            r#"{"mcpServers":{"fs":{"command":"x","env":{"TOKEN":"SECRET"}}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            wd.join(".mcp.json"),
+            r#"{"mcpServers":{"web":{"type":"http","url":"http://x","headers":{"Authorization":"SECRET"}}}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        std::fs::write(
+            home.join(".claude/settings.json"),
+            r#"{"enabledPlugins":{"demo@market":true}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(home.join(".copilot")).unwrap();
+        std::fs::write(
+            home.join(".copilot/mcp-config.json"),
+            r#"{"mcpServers":{"cop":{"command":"x","env":{"TOKEN":"SECRET"}}}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(home.join(".config/opencode")).unwrap();
+        std::fs::write(
+            home.join(".config/opencode/opencode.json"),
+            r#"{"mcp":{"oc":{"type":"remote","url":"http://x","headers":{"Authorization":"SECRET"},"environment":{"TOKEN":"SECRET"}}},"plugin":["oc-plugin"]}"#,
+        )
+        .unwrap();
+        // A copilot that runs but prints no JSON, so its config files answer.
+        #[cfg(unix)]
+        let copilot_argv = {
+            use std::os::unix::fs::PermissionsExt;
+            let bin = root.join("copilot");
+            std::fs::write(&bin, "#!/bin/sh\necho 'unknown option --json'\n").unwrap();
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+            vec![bin.to_string_lossy().into_owned()]
+        };
+        #[cfg(not(unix))]
+        let copilot_argv = vec!["wh-no-such-copilot-binary".to_string()];
+        let ctx = Ctx {
+            workdir: wd.to_string_lossy().into(),
+            home: home.to_string_lossy().into(),
+            claude_config_dir: None,
+            xdg_config_home: None,
+            copilot_home: None,
+            opencode_config: None,
+            copilot_argv,
+            timeout: std::time::Duration::from_secs(2),
+        };
+        (root, ctx)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn wire_rows_carry_names_and_origins_but_no_definitions() {
+        let (root, ctx) = fixture();
+        let want: [(Adapter, &str, &str); 3] = [
+            (Adapter::Claude, "fs", "user"),
+            (Adapter::Copilot, "cop", "user"),
+            (Adapter::Opencode, "oc", "user"),
+        ];
+        for (adapter, name, origin) in want {
+            if cfg!(not(unix)) && adapter == Adapter::Copilot {
+                continue; // needs a fake copilot script
+            }
+            let mcp = mcp_row(&list_mcp_servers_with(adapter, &ctx).await);
+            let plugins = plugin_row(&list_plugins_with(adapter, &ctx).await);
+            let names: Vec<(&str, &str)> = mcp["servers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| (s["name"].as_str().unwrap(), s["origin"].as_str().unwrap()))
+                .collect();
+            assert!(names.contains(&(name, origin)), "{adapter:?}: {names:?}");
+            if adapter == Adapter::Claude {
+                assert!(names.contains(&("web", "project")), "{names:?}");
+                assert_eq!(plugins["plugins"][0]["name"], "demo");
+            }
+            if adapter == Adapter::Opencode {
+                assert_eq!(plugins["plugins"][0]["name"], "oc-plugin");
+            }
+            for v in [&mcp, &plugins] {
+                let text = v.to_string();
+                for banned in ["SECRET", "env", "headers", "definition", "command", "url"] {
+                    assert!(!text.contains(banned), "{adapter:?}: {banned} leaked: {text}");
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
 
 #[cfg(test)]

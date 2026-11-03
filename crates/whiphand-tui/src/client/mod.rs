@@ -76,6 +76,8 @@ methods! {
     ValidateWorkflow = "validateWorkflow" (p::ValidateWorkflowParams) -> p::ValidateWorkflowResult;
     InitWorkspace = "initWorkspace" (p::InitWorkspaceParams) -> p::InitWorkspaceResult;
     ListModels = "listModels" (p::ListModelsParams) -> p::ListModelsResult;
+    ListMcpServers = "listMcpServers" (p::ListMcpServersParams) -> p::ListMcpServersResult;
+    ListPlugins = "listPlugins" (p::ListPluginsParams) -> p::ListPluginsResult;
     ConfigGet = "configGet" (p::ConfigGetParams) -> p::ConfigGetResult;
     ConfigSet = "configSet" (p::ConfigSetParams) -> p::ConfigSetResult;
     PruneRuns = "pruneRuns" (p::PruneRunsParams) -> p::PruneRunsResult;

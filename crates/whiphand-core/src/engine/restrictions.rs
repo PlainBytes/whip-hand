@@ -206,6 +206,9 @@ pub struct AppliedRestrictions {
     pub disabled_plugins: Vec<String>,
     /// Copilot only: it takes servers to switch off, not a complete set.
     pub copilot_mcp: Option<CopilotMcp>,
+    /// Opencode only: the `mcp` config entries (`None` = MCP unrestricted). Workflow servers
+    /// carry their opencode definition; every other entry is `{ enabled: false }`.
+    pub opencode_mcp: Option<Vec<(String, serde_json::Value)>>,
     /// `agent-restrictions` degradation reasons for the step, emitted before it spawns.
     pub degradations: Vec<String>,
 }
@@ -215,6 +218,7 @@ impl AppliedRestrictions {
         self.mcp.is_none()
             && self.disabled_plugins.is_empty()
             && self.copilot_mcp.is_none()
+            && self.opencode_mcp.is_none()
             && self.degradations.is_empty()
     }
 }
@@ -314,6 +318,96 @@ pub fn copilot_mcp(
                     if !is_allowed(b) {
                         push(&mut out.disable, b);
                     }
+                }
+            }
+            Ok(Some((out, None)))
+        }
+    }
+}
+
+/// A workflow-defined server in opencode's `mcp` shape: `local` (command array plus
+/// `environment`) or `remote` (`url` plus `headers`).
+pub fn opencode_server(def: &McpServerDef) -> serde_json::Value {
+    match def {
+        McpServerDef::Stdio { command, args, env } => {
+            let mut cmd = vec![command.clone()];
+            cmd.extend(args.iter().flatten().cloned());
+            let mut o = serde_json::json!({ "type": "local", "command": cmd });
+            if let Some(env) = env {
+                o["environment"] = serde_json::to_value(env).unwrap_or_default();
+            }
+            o
+        }
+        McpServerDef::Remote { url, headers, .. } => {
+            let mut o = serde_json::json!({ "type": "remote", "url": url });
+            if let Some(h) = headers {
+                o["headers"] = serde_json::to_value(h).unwrap_or_default();
+            }
+            o
+        }
+    }
+}
+
+/// An opencode step's `mcp` config entries, plus a degradation reason when an allowlist
+/// could not be made exact. Opencode merges the config over the user's, so servers are
+/// switched off by name: a deny needs no listing, an allowlist does.
+pub fn opencode_mcp(
+    step_id: &str,
+    policy: &McpPolicy,
+    listing: &McpList,
+) -> Result<Option<(Vec<(String, serde_json::Value)>, Option<String>)>, String> {
+    use crate::adapters::harness_catalog::CatalogSource;
+    let off = || serde_json::json!({ "enabled": false });
+    match policy {
+        McpPolicy::Unrestricted => Ok(None),
+        McpPolicy::Deny(names) => {
+            let mut out: Vec<(String, serde_json::Value)> = Vec::new();
+            for n in names {
+                if !out.iter().any(|(k, _)| k == n) {
+                    out.push((n.clone(), off()));
+                }
+            }
+            Ok(Some((out, None)))
+        }
+        McpPolicy::Allow(allowed) => {
+            let unavailable = listing.source == CatalogSource::Unavailable;
+            let mut out: Vec<(String, serde_json::Value)> = Vec::new();
+            let mut missing = Vec::new();
+            for a in allowed {
+                match a {
+                    AllowedServer::Workflow { name, def } => {
+                        out.push((name.clone(), opencode_server(def)))
+                    }
+                    AllowedServer::Harness { name }
+                        if unavailable || listing.servers.iter().any(|s| &s.name == name) => {}
+                    AllowedServer::Harness { name } => missing.push(name.clone()),
+                }
+            }
+            if !missing.is_empty() {
+                return Err(MissingServers {
+                    step_id: step_id.to_string(),
+                    servers: missing,
+                }
+                .to_string());
+            }
+            if unavailable {
+                let why = listing
+                    .note
+                    .as_ref()
+                    .map(|n| format!(": {n}"))
+                    .unwrap_or_default();
+                return Ok(Some((
+                    out,
+                    Some(format!(
+                        "MCP allowlist not exact: the servers opencode has configured could not be listed{why}, so none were switched off"
+                    )),
+                )));
+            }
+            for s in &listing.servers {
+                if !out.iter().any(|(k, _)| k == &s.name)
+                    && !allowed.iter().any(|a| a.name() == s.name)
+                {
+                    out.push((s.name.clone(), off()));
                 }
             }
             Ok(Some((out, None)))
@@ -939,5 +1033,66 @@ mod tests {
         let r = resolve(&workflow(Some(mcp(allow(&["ghost"]), &[])), None), &step());
         let e = flags(&r.mcp, &listing(&[("a", Origin::User, true)])).unwrap_err();
         assert!(e.contains("'s'") && e.contains("'ghost'"), "{e}");
+    }
+
+    // ---- opencode ----
+
+    #[test]
+    fn opencode_allow_translates_workflow_servers_and_disables_the_rest() {
+        let mut w = workflow(Some(mcp(allow(&["docs", "gh"]), &["docs"])), None);
+        w.mcp.as_mut().unwrap().servers.as_mut().unwrap().insert(
+            "docs".into(),
+            McpServerDef::Stdio {
+                command: "docs-mcp".into(),
+                args: Some(vec!["--x".into()]),
+                env: Some([("K".to_string(), "v".to_string())].into_iter().collect()),
+            },
+        );
+        let r = resolve(&w, &step());
+        let l = listing(&[("gh", Origin::User, true), ("other", Origin::User, true)]);
+        let (out, d) = opencode_mcp("s", &r.mcp, &l).unwrap().unwrap();
+        assert!(d.is_none());
+        assert_eq!(keys(&out), ["docs", "other"]);
+        assert_eq!(out[0].1["type"], "local");
+        assert_eq!(out[0].1["command"], serde_json::json!(["docs-mcp", "--x"]));
+        assert_eq!(out[0].1["environment"]["K"], "v");
+        assert_eq!(out[1].1, serde_json::json!({ "enabled": false }));
+    }
+
+    #[test]
+    fn opencode_remote_server_keeps_url_and_headers() {
+        let v = opencode_server(&McpServerDef::Remote {
+            kind: crate::types::McpRemoteKind::Http,
+            url: "https://x".into(),
+            headers: Some([("A".to_string(), "b".to_string())].into_iter().collect()),
+        });
+        assert_eq!(
+            v,
+            serde_json::json!({ "type": "remote", "url": "https://x", "headers": { "A": "b" } })
+        );
+    }
+
+    #[test]
+    fn opencode_deny_only_disables_the_named_servers() {
+        let r = resolve(&workflow(Some(mcp(deny(&["x"]), &[])), None), &step());
+        let mut l = listing(&[]);
+        l.source = CatalogSource::Unavailable;
+        let (out, d) = opencode_mcp("s", &r.mcp, &l).unwrap().unwrap();
+        assert!(d.is_none());
+        assert_eq!(
+            out,
+            vec![("x".to_string(), serde_json::json!({ "enabled": false }))]
+        );
+    }
+
+    #[test]
+    fn opencode_allow_degrades_on_an_unavailable_listing_and_fails_on_a_missing_server() {
+        let r = resolve(&workflow(Some(mcp(allow(&["x"]), &[])), None), &step());
+        let mut l = listing(&[]);
+        l.source = CatalogSource::Unavailable;
+        let (out, d) = opencode_mcp("s", &r.mcp, &l).unwrap().unwrap();
+        assert!(out.is_empty() && d.unwrap().contains("could not be listed"));
+        let e = opencode_mcp("s", &r.mcp, &listing(&[("a", Origin::User, true)])).unwrap_err();
+        assert!(e.contains("'x'"), "{e}");
     }
 }

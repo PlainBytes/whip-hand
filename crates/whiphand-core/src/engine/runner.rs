@@ -1502,9 +1502,12 @@ impl<F: Frontend> Run<'_, F> {
         use crate::adapters::harness_catalog::{list_mcp_servers, list_plugins};
         use crate::engine::restrictions::{
             AppliedRestrictions, McpPolicy, PluginPolicy, copilot_mcp, materialize_mcp,
-            plugins_to_disable,
+            opencode_mcp, plugins_to_disable,
         };
-        if !matches!(adapter, Adapter::Claude | Adapter::Copilot) {
+        if !matches!(
+            adapter,
+            Adapter::Claude | Adapter::Copilot | Adapter::Opencode
+        ) {
             return Ok(());
         }
         let Some(policy) = self.st.borrow().ctx.restrictions.get(&step.id).cloned() else {
@@ -1523,6 +1526,20 @@ impl<F: Frontend> Run<'_, F> {
             if policy.plugins != PluginPolicy::Unrestricted {
                 applied.degradations.push(
                     "plugin policy not applied: copilot has no per-session way to switch an installed plugin off, so every installed plugin stays on"
+                        .to_string(),
+                );
+            }
+        } else if adapter == Adapter::Opencode {
+            if policy.mcp != McpPolicy::Unrestricted {
+                let listing = list_mcp_servers(adapter, &tree).await;
+                if let Some((entries, degraded)) = opencode_mcp(&step.id, &policy.mcp, &listing)? {
+                    applied.opencode_mcp = Some(entries);
+                    applied.degradations.extend(degraded);
+                }
+            }
+            if policy.plugins != PluginPolicy::Unrestricted {
+                applied.degradations.push(
+                    "plugin policy not applied: opencode has no per-session way to switch a configured plugin off, so every configured plugin stays on"
                         .to_string(),
                 );
             }

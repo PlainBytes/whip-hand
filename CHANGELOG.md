@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Runs from workspace-scoped workflows can be resumed
+
+- A run started from a workflow in the workspace's own folder showed as `unknown` and could not be
+  resumed ("has no readable run.json"), though its `run.json` was intact. It now lists with its real
+  status and resumes. Existing runs recover after upgrading; nothing needs migrating.
+
 ### The shipped `develop` workflow no longer assumes `npm test`
 
 - The `develop` template's `test_command` has no default now. Leave it blank to skip tests, or

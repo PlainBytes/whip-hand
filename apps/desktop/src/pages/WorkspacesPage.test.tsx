@@ -165,4 +165,85 @@ describe('WorkspacesPage', () => {
     const req = await nextRequest(transport, 'touchRecentWorkspace');
     expect(req.params).toEqual({ path: '/dev/picked' });
   });
+
+  describe('remove from list', () => {
+    const removeBtn = (name: string) =>
+      within(rowOf(name)).getByRole('button', { name: `Remove ${name} from list` });
+
+    async function loaded() {
+      const transport = renderPage();
+      await respond(transport, 'describeWorkspaces', { workspaces: WORKSPACES });
+      await screen.findByText('recent');
+      return transport;
+    }
+
+    it('disables Remove on the current workspace and explains why', async () => {
+      await loaded();
+      expect(removeBtn('recent')).toHaveAttribute('aria-disabled', 'true');
+      expect(removeBtn('plain')).not.toHaveAttribute('aria-disabled');
+      fireEvent.click(removeBtn('recent'));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      act(() => removeBtn('recent').focus());
+      expect(await screen.findByText('Switch to another workspace first')).toBeInTheDocument();
+    });
+
+    it('confirms with a no-files-deleted notice; Cancel sends no RPC', async () => {
+      const transport = await loaded();
+      fireEvent.click(removeBtn('plain'));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('Remove plain?')).toBeInTheDocument();
+      expect(within(dialog).getByText(/No files are deleted/)).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(transport.sent.some(l => (JSON.parse(l) as { method: string }).method === 'forgetWorkspace')).toBe(false);
+    });
+
+    it('Escape cancels without an RPC', async () => {
+      const transport = await loaded();
+      fireEvent.click(removeBtn('plain'));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.keyDown(dialog, { key: 'Escape' });
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(transport.sent.some(l => (JSON.parse(l) as { method: string }).method === 'forgetWorkspace')).toBe(false);
+    });
+
+    it('forgets once, updates the store and drops the row; a pinned one mentions the pin', async () => {
+      const transport = await loaded();
+      fireEvent.click(removeBtn('plain'));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText(/unpinned/)).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+
+      const recentWorkspaces = [{ path: '/dev/recent', lastOpenedAt: '2026-01-02T00:00:00Z' }];
+      const req = await respond(transport, 'forgetWorkspace', { recentWorkspaces });
+      expect(req.params).toEqual({ path: '/dev/plain' });
+      await waitFor(() => expect(useAppStore.getState().appState?.recentWorkspaces).toEqual(recentWorkspaces));
+
+      await respond(transport, 'describeWorkspaces', { workspaces: [WORKSPACES[0], WORKSPACES[2]] }, 1);
+      await waitFor(() => expect(screen.queryByText('plain')).not.toBeInTheDocument());
+      expect(transport.sent.filter(l => (JSON.parse(l) as { method: string }).method === 'forgetWorkspace')).toHaveLength(1);
+    });
+
+    it('removes a missing-folder workspace; the dialog has no pin note', async () => {
+      const transport = await loaded();
+      fireEvent.click(removeBtn('gone'));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).queryByText(/unpinned/)).not.toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+      const req = await respond(transport, 'forgetWorkspace', { recentWorkspaces: [] });
+      expect(req.params).toEqual({ path: '/dev/gone' });
+    });
+
+    it('shows an inline error and keeps the row when forgetting fails', async () => {
+      const transport = await loaded();
+      fireEvent.click(removeBtn('plain'));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+      const req = await nextRequest(transport, 'forgetWorkspace');
+      transport.emitLine({ id: req.id, error: { code: -32000, message: 'nope' } });
+
+      expect(await screen.findByText(/nope/)).toBeInTheDocument();
+      expect(screen.getByText('plain')).toBeInTheDocument();
+    });
+  });
 });

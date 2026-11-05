@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Badge, Button, createTableColumn, DataGrid, DataGridBody, DataGridCell, DataGridHeader,
-  DataGridHeaderCell, DataGridRow, Text, type TableColumnDefinition,
+  DataGridHeaderCell, DataGridRow, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface,
+  DialogTitle, Text, Tooltip, type TableColumnDefinition,
 } from '@fluentui/react-components';
-import { FolderOpenRegular, PinOffRegular, PinRegular } from '@fluentui/react-icons';
+import { DeleteRegular, FolderOpenRegular, PinOffRegular, PinRegular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useCapabilities } from '../capabilities.tsx';
 import { useAppStore } from '../state/store.ts';
@@ -37,9 +38,10 @@ interface ColumnActions {
   isCurrent: (w: WorkspaceDetails) => boolean;
   open: (w: WorkspaceDetails) => void;
   togglePin: (w: WorkspaceDetails) => void;
+  remove: (w: WorkspaceDetails) => void;
 }
 
-const makeColumns = ({ isCurrent, open, togglePin }: ColumnActions): TableColumnDefinition<WorkspaceDetails>[] => [
+const makeColumns = ({ isCurrent, open, togglePin, remove }: ColumnActions): TableColumnDefinition<WorkspaceDetails>[] => [
   createTableColumn<WorkspaceDetails>({
     columnId: 'workspace',
     renderHeaderCell: () => 'Workspace',
@@ -117,6 +119,17 @@ const makeColumns = ({ isCurrent, open, togglePin }: ColumnActions): TableColumn
         >
           {w.pinned ? 'Unpin' : 'Pin'}
         </Button>
+        <Tooltip
+          content={isCurrent(w) ? 'Switch to another workspace first' : 'Remove from list'}
+          relationship="description"
+        >
+          <Button
+            size="small" icon={<DeleteRegular />}
+            aria-label={`Remove ${basename(w.path)} from list`}
+            disabledFocusable={isCurrent(w)}
+            onClick={() => remove(w)}
+          />
+        </Tooltip>
       </span>
     ),
   }),
@@ -138,6 +151,7 @@ export function WorkspacesPage() {
   const [workspaces, setWorkspaces] = useState<WorkspaceDetails[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<WorkspaceDetails | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -172,9 +186,23 @@ export function WorkspacesPage() {
     }
   }, [client]);
 
+  // The store's recents change reloads the list (the effect above), so the row
+  // goes away without a second describeWorkspaces call here.
+  async function confirmRemove(w: WorkspaceDetails): Promise<void> {
+    setRemoving(null);
+    setActionError(null);
+    try {
+      const result = await client.request('forgetWorkspace', { path: w.path });
+      patchAppState({ recentWorkspaces: result.recentWorkspaces });
+    } catch (err) {
+      setActionError(errorMessage(err));
+    }
+  }
+
   const columns = useMemo(() => makeColumns({
     isCurrent,
     open: w => void open(w.path),
+    remove: w => { if (!isCurrent(w)) setRemoving(w); },
     togglePin: w => {
       setActionError(null);
       client.request('setWorkspacePinned', { path: w.path, pinned: !w.pinned })
@@ -228,6 +256,28 @@ export function WorkspacesPage() {
           </DataGrid>
         )}
       </div>
+      {removing && (
+        <Dialog open onOpenChange={(_event, data) => { if (!data.open) setRemoving(null); }}>
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>Remove {basename(removing.path)}?</DialogTitle>
+              <DialogContent>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <Text>
+                    This workspace is forgotten from the list and its remembered workflow and inputs are
+                    cleared. No files are deleted. You can reopen it any time.
+                  </Text>
+                  {removing.pinned && <Text>It is pinned, so it will also be unpinned.</Text>}
+                </div>
+              </DialogContent>
+              <DialogActions>
+                <Button appearance="primary" onClick={() => void confirmRemove(removing)}>Remove</Button>
+                <Button onClick={() => setRemoving(null)}>Cancel</Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
+      )}
     </Page>
   );
 }

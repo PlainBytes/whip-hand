@@ -62,6 +62,10 @@ pub struct ResumePlan {
     pub warnings: Vec<String>,
     /// The worktree the run executed in, when it had one.
     pub worktree: Option<WorktreeRecord>,
+    /// A real run with no worktree record and a step that has started: it ran in its work
+    /// directory on purpose. A dry run never creates its worktree, and a run with no started
+    /// step may have failed while creating one, so neither counts.
+    pub ran_in_place: bool,
 }
 
 /// A run's row, read the way resume.ts reads its fields.
@@ -484,6 +488,15 @@ fn adoptable(path: &str, started_at: Option<&str>) -> bool {
     assert_artifact(path, path).is_ok()
 }
 
+/// Whether any step row shows its step started: a status past `pending`/`disabled`, or `attempted`.
+fn any_step_started(detail: &JsObject) -> bool {
+    rows(detail).iter().any(|r| {
+        let row = Row(r);
+        let status = row.status();
+        (status != "pending" && status != "disabled") || row.is_true("attempted")
+    })
+}
+
 /// Rows the manifest calls `done` that never recorded their artifact: adopt
 /// the artifact the step really left, or mark the row failed to re-run it.
 fn heal_orphaned_done(
@@ -760,6 +773,9 @@ pub async fn plan_resume(
     }
     let attachments = recorded_attachments(&detail, &run_dir)?;
     let worktree = record_from_manifest(&detail);
+    let ran_in_place = worktree.is_none()
+        && detail.prop("dryRun") != &JsValue::Bool(true)
+        && any_step_started(&detail);
     let tree = worktree.as_ref().map_or_else(
         || run_repo_dir(workdir, &detail),
         WorktreeRecord::native_tree,
@@ -798,5 +814,6 @@ pub async fn plan_resume(
         stages_started: stages.started.clone(),
         warnings,
         worktree,
+        ran_in_place,
     })
 }

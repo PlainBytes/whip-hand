@@ -37,7 +37,7 @@ describe('page actions', () => {
 
 describe('resolveKeymap', () => {
   it("yields today's chord for each bound action", () => {
-    expect(ACTIONS).toHaveLength(Object.keys(TODAY_OTHER).length + 2 + 9 + 6);
+    expect(ACTIONS).toHaveLength(Object.keys(TODAY_OTHER).length + 2 + 9 + 7);
     const other = resolveKeymap({}, false);
     expect(other.get('tabs.closeOthers')).toBeNull();
     expect(other.get('tabs.keepPreview')).toBeNull();

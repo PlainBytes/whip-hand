@@ -66,7 +66,7 @@ export function workspaceColorVar(path: string, identityKey?: string): string {
  * persisted order stays pure recency (see the agent's touchRecent) — pinning
  * is presentation, and lives here.
  */
-export function sortWorkspaces(recents: readonly RecentWorkspace[]): RecentWorkspace[] {
+export function sortWorkspaces<T extends RecentWorkspace>(recents: readonly T[]): T[] {
   return [...recents.filter(r => r.pinned), ...recents.filter(r => !r.pinned)];
 }
 

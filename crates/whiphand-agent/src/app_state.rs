@@ -159,6 +159,41 @@ pub fn touch_recent(
     out
 }
 
+/// Removes every recent entry and every per-workspace memory entry that is
+/// `raw` (the exact stored path) or the same workspace as `opened`
+/// (`(root, identity key)`, absent when the directory is gone). Pinned
+/// entries go too. Only state changes; nothing on disk is touched.
+pub fn forget_workspace(state: &mut Value, raw: &str, opened: Option<(&str, &str)>) {
+    let target = opened.map(|(path, key)| WorkspaceRef {
+        path,
+        identity_key: Some(key),
+    });
+    let matches = |path: &str, key: Option<&str>| {
+        path == raw
+            || opened.is_some_and(|(root, _)| path == root)
+            || target.is_some_and(|t| {
+                same_workspace(
+                    WorkspaceRef {
+                        path,
+                        identity_key: key,
+                    },
+                    t,
+                )
+            })
+    };
+    if let Some(list) = state["recentWorkspaces"].as_array_mut() {
+        list.retain(|r| {
+            !matches(
+                r["path"].as_str().unwrap_or_default(),
+                r["identityKey"].as_str(),
+            )
+        });
+    }
+    if let Some(memory) = state["workspaces"].as_object_mut() {
+        memory.retain(|k, v| !matches(k, v["identityKey"].as_str()));
+    }
+}
+
 /// Records that `workflow` just ran in `workspace` with `inputs`, keyed by
 /// whichever spelling of the workspace the state already knows.
 pub fn remember_run(
@@ -399,6 +434,59 @@ mod tests {
         let unpinned = out.iter().filter(|r| r["pinned"] != true).count();
         assert_eq!(unpinned, MAX_RECENT_WORKSPACES);
         assert_eq!(out.iter().filter(|r| r["pinned"] == true).count(), 3);
+    }
+
+    #[test]
+    fn forgetting_removes_pinned_entry_and_memory_but_not_others() {
+        let mut state = empty_app_state();
+        state["recentWorkspaces"] = json!([
+            { "path": "/a", "lastOpenedAt": "t", "pinned": true, "identityKey": "ka" },
+            { "path": "/b", "lastOpenedAt": "t", "identityKey": "kb" },
+        ]);
+        state["workspaces"] = json!({
+            "/a": { "lastInputs": {}, "identityKey": "ka" },
+            "/b": { "lastInputs": {}, "identityKey": "kb" },
+        });
+        forget_workspace(&mut state, "/a", Some(("/a", "ka")));
+        assert_eq!(state["recentWorkspaces"].as_array().unwrap().len(), 1);
+        assert_eq!(state["recentWorkspaces"][0]["path"], "/b");
+        assert!(state["workspaces"].get("/a").is_none());
+        assert!(state["workspaces"].get("/b").is_some());
+    }
+
+    #[test]
+    fn forgetting_matches_memory_by_identity_under_another_spelling() {
+        let mut state = empty_app_state();
+        state["recentWorkspaces"] =
+            json!([{ "path": "/a", "lastOpenedAt": "t", "identityKey": "ka" }]);
+        state["workspaces"] = json!({ "/alias": { "lastInputs": {}, "identityKey": "ka" } });
+        forget_workspace(&mut state, "/a", Some(("/a", "ka")));
+        assert!(state["recentWorkspaces"].as_array().unwrap().is_empty());
+        assert!(state["workspaces"].as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn forgetting_a_miss_changes_nothing() {
+        let mut state = empty_app_state();
+        state["recentWorkspaces"] =
+            json!([{ "path": "/a", "lastOpenedAt": "t", "identityKey": "ka" }]);
+        state["workspaces"] = json!({ "/a": { "lastInputs": {}, "identityKey": "ka" } });
+        let before = state.clone();
+        forget_workspace(&mut state, "/zzz", Some(("/zzz", "kz")));
+        forget_workspace(&mut state, "/zzz", None);
+        assert_eq!(state, before);
+    }
+
+    #[test]
+    fn forgetting_a_vanished_directory_works_by_exact_path() {
+        let mut state = empty_app_state();
+        state["recentWorkspaces"] = json!([
+            { "path": "/gone", "lastOpenedAt": "t", "pinned": true, "identityKey": "kg" },
+        ]);
+        state["workspaces"] = json!({ "/gone": { "lastInputs": {}, "identityKey": "kg" } });
+        forget_workspace(&mut state, "/gone", None);
+        assert!(state["recentWorkspaces"].as_array().unwrap().is_empty());
+        assert!(state["workspaces"].as_object().unwrap().is_empty());
     }
 
     #[test]

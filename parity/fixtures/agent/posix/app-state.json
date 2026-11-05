@@ -110,6 +110,86 @@
       }
     },
     {
+      "step": "describeWorkspaces",
+      "response": {
+        "result": {
+          "workspaces": [
+            {
+              "path": "<WS>/other",
+              "lastOpenedAt": "<TS>",
+              "identityKey": "/<WS>/other",
+              "exists": true,
+              "initialized": false,
+              "git": null,
+              "storage": "local",
+              "runCount": 0
+            },
+            {
+              "path": "<WS>/ws",
+              "lastOpenedAt": "<TS>",
+              "pinned": true,
+              "identityKey": "/<WS>/ws",
+              "exists": true,
+              "initialized": false,
+              "git": null,
+              "storage": "local",
+              "runCount": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": "forgetWorkspace",
+      "response": {
+        "result": {
+          "recentWorkspaces": [
+            {
+              "path": "<WS>/ws",
+              "lastOpenedAt": "<TS>",
+              "pinned": true,
+              "identityKey": "/<WS>/ws"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": "forget unknown",
+      "response": {
+        "result": {
+          "recentWorkspaces": [
+            {
+              "path": "<WS>/ws",
+              "lastOpenedAt": "<TS>",
+              "pinned": true,
+              "identityKey": "/<WS>/ws"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": "describeWorkspaces after forget",
+      "response": {
+        "result": {
+          "workspaces": [
+            {
+              "path": "<WS>/ws",
+              "lastOpenedAt": "<TS>",
+              "pinned": true,
+              "identityKey": "/<WS>/ws",
+              "exists": true,
+              "initialized": false,
+              "git": null,
+              "storage": "local",
+              "runCount": 0
+            }
+          ]
+        }
+      }
+    },
+    {
       "step": "setUiState",
       "response": {
         "result": {
@@ -131,11 +211,6 @@
         "result": {
           "schemaVersion": 1,
           "recentWorkspaces": [
-            {
-              "path": "<WS>/other",
-              "lastOpenedAt": "<TS>",
-              "identityKey": "/<WS>/other"
-            },
             {
               "path": "<WS>/ws",
               "lastOpenedAt": "<TS>",
@@ -181,11 +256,6 @@
       "response": {
         "result": {
           "recentWorkspaces": [
-            {
-              "path": "<WS>/other",
-              "lastOpenedAt": "<TS>",
-              "identityKey": "/<WS>/other"
-            },
             {
               "path": "<WS>/ws",
               "lastOpenedAt": "<TS>",
@@ -331,10 +401,63 @@
         "schemaVersion": 1,
         "recentWorkspaces": [
           {
-            "path": "<WS>/other",
+            "path": "<WS>/ws",
             "lastOpenedAt": "<TS>",
-            "identityKey": "/<WS>/other"
-          },
+            "pinned": true,
+            "identityKey": "/<WS>/ws"
+          }
+        ],
+        "window": null,
+        "lastPage": null,
+        "theme": "system",
+        "workspaces": {},
+        "runsRetention": {
+          "maxPerWorkspace": 0
+        },
+        "showOngoingRuns": true,
+        "sidebarCollapsed": false,
+        "editor": {
+          "kind": "vscode"
+        },
+        "keybindings": {},
+        "runDrafts": [],
+        "runTabs": {
+          "tabs": [],
+          "active": null
+        }
+      },
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [
+          {
+            "path": "<WS>/ws",
+            "lastOpenedAt": "<TS>",
+            "pinned": true,
+            "identityKey": "/<WS>/ws"
+          }
+        ],
+        "window": null,
+        "lastPage": null,
+        "theme": "system",
+        "workspaces": {},
+        "runsRetention": {
+          "maxPerWorkspace": 0
+        },
+        "showOngoingRuns": true,
+        "sidebarCollapsed": false,
+        "editor": {
+          "kind": "vscode"
+        },
+        "keybindings": {},
+        "runDrafts": [],
+        "runTabs": {
+          "tabs": [],
+          "active": null
+        }
+      },
+      {
+        "schemaVersion": 1,
+        "recentWorkspaces": [
           {
             "path": "<WS>/ws",
             "lastOpenedAt": "<TS>",
@@ -370,11 +493,6 @@
         "schemaVersion": 1,
         "recentWorkspaces": [
           {
-            "path": "<WS>/other",
-            "lastOpenedAt": "<TS>",
-            "identityKey": "/<WS>/other"
-          },
-          {
             "path": "<WS>/ws",
             "lastOpenedAt": "<TS>",
             "pinned": true,
@@ -403,11 +521,6 @@
       {
         "schemaVersion": 1,
         "recentWorkspaces": [
-          {
-            "path": "<WS>/other",
-            "lastOpenedAt": "<TS>",
-            "identityKey": "/<WS>/other"
-          },
           {
             "path": "<WS>/ws",
             "lastOpenedAt": "<TS>",

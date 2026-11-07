@@ -11,6 +11,11 @@ describe('nav registry', () => {
       .toEqual(['runs', 'workflows', 'files', 'workspace-settings']);
   });
 
+  it('lists the app group in sidebar order, Workspaces needing no workspace', () => {
+    expect(pagesInGroup('app').map(p => p.id)).toEqual(['activity', 'workspaces', 'doctor', 'preferences']);
+    expect(requiresWorkspace('workspaces')).toBe(false);
+  });
+
   it('puts every page in exactly one group', () => {
     const grouped = [...pagesInGroup('workspace'), ...pagesInGroup('app')];
     expect(grouped).toHaveLength(PAGES.length);
@@ -29,6 +34,7 @@ describe('nav registry', () => {
 
   it('resolves a persisted page, and reports nothing usable as null', () => {
     expect(resolvePersistedPage('workflows')).toBe('workflows');
+    expect(resolvePersistedPage('workspaces')).toBe('workspaces');
     // 'settings' used to name the combined page; its bulk was the workspace
     // config form, so that is where it restores to.
     expect(resolvePersistedPage('settings')).toBe('workspace-settings');

@@ -56,6 +56,7 @@ export const ACTIONS = [
   { id: 'page.files', label: 'Go to Files', group: 'pages', defaultChord: null },
   { id: 'page.workspaceSettings', label: 'Go to Workspace settings', group: 'pages', defaultChord: null },
   { id: 'page.activity', label: 'Go to Activity', group: 'pages', defaultChord: null },
+  { id: 'page.workspaces', label: 'Go to Workspaces', group: 'pages', defaultChord: null },
   { id: 'page.doctor', label: 'Go to Doctor', group: 'pages', defaultChord: null },
   { id: 'page.preferences', label: 'Go to Preferences', group: 'pages', defaultChord: both('Mod+Comma') },
   { id: 'run.focusTerminal', label: 'Focus terminal', group: 'run', defaultChord: both('Mod+Alt+KeyT') },

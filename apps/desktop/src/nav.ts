@@ -3,13 +3,13 @@
  * restore all read one source instead of three hand-kept lists.
  */
 import {
-  BookRegular, FolderRegular, OptionsRegular, PlayRegular, PulseRegular,
+  BookRegular, FolderListRegular, FolderRegular, OptionsRegular, PlayRegular, PulseRegular,
   SettingsRegular, StethoscopeRegular, type FluentIcon,
 } from '@fluentui/react-icons';
 
 export type PageId =
   | 'runs' | 'workflows' | 'files' | 'workspace-settings'
-  | 'activity' | 'doctor' | 'preferences';
+  | 'activity' | 'workspaces' | 'doctor' | 'preferences';
 
 /** Which block of the sidebar a page sits in: the workspace's, or the app's. */
 export type NavGroup = 'workspace' | 'app';
@@ -21,7 +21,8 @@ export interface PageDef {
   /**
    * False means the page reads no `workspacePath` and calls only
    * workspace-free RPCs (`doctor`, `getAppState`, `setUiState`,
-   * `listRecentRuns`), so it works with no workspace open. It tracks `group`
+   * `listRecentRuns`, `describeWorkspaces`, `setWorkspacePinned`,
+   * `forgetWorkspace`), so it works with no workspace open. It tracks `group`
    * today, and is kept separate because it answers a different question:
    * `group` is where the item is drawn, this is whether the page can run at
    * all.
@@ -59,6 +60,10 @@ export const PAGES: readonly PageDef[] = [
     requiresWorkspace: true, icon: SettingsRegular,
   },
   { id: 'activity', label: 'Activity', group: 'app', requiresWorkspace: false, icon: PulseRegular },
+  {
+    id: 'workspaces', label: 'Workspaces', group: 'app',
+    requiresWorkspace: false, icon: FolderListRegular,
+  },
   { id: 'doctor', label: 'Doctor', group: 'app', requiresWorkspace: false, icon: StethoscopeRegular },
   {
     id: 'preferences', label: 'Preferences', group: 'app',

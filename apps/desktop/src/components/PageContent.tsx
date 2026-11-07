@@ -9,6 +9,7 @@ import { DoctorPage } from '../pages/DoctorPage.tsx';
 import { WorkspaceSettingsPage } from '../pages/WorkspaceSettingsPage.tsx';
 import { PreferencesPage } from '../pages/PreferencesPage.tsx';
 import { ActivityPage } from '../pages/ActivityPage.tsx';
+import { WorkspacesPage } from '../pages/WorkspacesPage.tsx';
 import { RunTabStrip } from './RunTabStrip.tsx';
 import { NewRunForm } from './NewRunForm.tsx';
 import type { RunAgain } from '../lib/new-run-draft.ts';
@@ -151,6 +152,7 @@ function PageBody({ page, onNavigate }: PageContentProps) {
       {page === 'files' && (localFiles ? <FilesPage /> : <LocalFilesUnavailable />)}
       {page === 'workspace-settings' && <WorkspaceSettingsPage />}
       {page === 'activity' && <ActivityPage onSelectRun={runId => openRun({ runId }, false)} />}
+      {page === 'workspaces' && <WorkspacesPage />}
       {page === 'doctor' && <DoctorPage />}
       {page === 'preferences' && <PreferencesPage />}
     </>

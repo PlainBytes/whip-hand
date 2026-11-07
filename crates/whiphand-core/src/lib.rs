@@ -42,6 +42,7 @@ pub mod work_dir;
 pub mod workflow_name;
 pub mod workflow_write;
 pub mod workspace;
+pub mod workspace_info;
 pub mod yaml_emit;
 pub mod zod;
 

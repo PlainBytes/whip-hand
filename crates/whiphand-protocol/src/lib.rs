@@ -1870,7 +1870,7 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), METHODS.len());
-        assert_eq!(METHODS.len(), 48);
+        assert_eq!(METHODS.len(), 50);
         assert_eq!(NOTIFICATIONS.len(), 11);
     }
 }

@@ -81,6 +81,9 @@ const METHODS: &[&str] = &[
     "setWorkspacePinned",
     "describeWorkspaces",
     "forgetWorkspace",
+    "listSecrets",
+    "setSecret",
+    "deleteSecret",
     "setUiState",
     "saveRunDraft",
     "deleteRunDraft",
@@ -336,6 +339,17 @@ pub async fn call(agent: &Rc<Agent>, ctx: RequestCtx, method: &str, p: Value) ->
         "setWorkspacePinned" => set_workspace_pinned(agent, &p),
         "describeWorkspaces" => describe_workspaces(agent).await,
         "forgetWorkspace" => forget_workspace(agent, &p),
+        "listSecrets" => secrets_of(&secret_store(&p)),
+        "setSecret" => {
+            let store = secret_store(&p);
+            store.set(s(&p, "name"), s(&p, "value"))?;
+            secrets_of(&store)
+        }
+        "deleteSecret" => {
+            let store = secret_store(&p);
+            store.remove(s(&p, "name"))?;
+            secrets_of(&store)
+        }
         "setUiState" => {
             agent.app_state.mutate(|state| {
                 for key in [
@@ -915,6 +929,19 @@ fn forget_workspace(agent: &Rc<Agent>, p: &Value) -> R {
         );
     })?;
     Ok(json!({ "recentWorkspaces": next["recentWorkspaces"] }))
+}
+
+fn secret_store(p: &Value) -> whiphand_core::secret_store::SecretStore {
+    let workdir = node_path::resolve(s(p, "workdir"));
+    whiphand_core::secret_store::SecretStore::for_workspace(Path::new(&workdir), &home())
+}
+
+/// What a client gets back from any secret method: the names, never a value.
+fn secrets_of(store: &whiphand_core::secret_store::SecretStore) -> R {
+    Ok(json!({
+        "names": store.names()?,
+        "path": store.path().to_string_lossy(),
+    }))
 }
 
 /// A decoded paste above this is refused: a stash is a convenience copy, and

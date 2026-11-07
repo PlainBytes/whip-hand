@@ -962,6 +962,24 @@ event, since the journal keeps the first per (capability, step). A listing that 
 read in full counts as unavailable: enforcing from one that may lack entries would look exact
 without being so, while the editor still offers the names it did get.
 
+**References, not values, in workflows.** Workflow files get committed and each run snapshots its
+workflow, and resume re-parses that snapshot, so redacting it would leave a resumed run with
+`<redacted>` as a token. So credentials are `${NAME}` references, expanded by one function
+(`restrictions::expand_mcp_references`) on `apply_restrictions`' own copy of the policy, before any
+adapter sees it. `ctx.restrictions` and the snapshot keep the reference, and a resume resolves it
+again. Whiphand expands rather than leaving it to the runners because Claude passes a missing
+`${X}` through as literal text and starts the server anyway; the check has to happen here, and it
+then works the same on every runner. Definitions copied from a runner's own config aren't expanded.
+
+**The workspace secret store.** `secret_store.rs` keeps values in `secrets.yaml` under the per-user
+workspace folder for both storage modes, since a local workspace's data dir is inside its repository.
+Only the marker decides storage, so the file doesn't change a workspace's mode. It records its
+workspace because two can share a `<basename>-<hash6>` key, and one must never read or overwrite the
+other's values. The store's errors don't repeat the YAML parser's message, which can quote a line of
+the file. The RPCs answer with names only and are left out of `REMOTE_METHODS`. A private file was
+chosen over an OS keychain so desktop, CLI, TUI and headless Linux behave the same; it isn't
+encrypted, and agents run as the same user.
+
 **Server definitions are credentials.** They carry `env` and `headers`, so the per-step config
 files are written owner-only and removed when the step ends, and `spec::redact_spawn_event`
 replaces their content (and opencode's `mcp` config) where core emits `step:spawn`. Every event

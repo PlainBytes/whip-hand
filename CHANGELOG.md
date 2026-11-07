@@ -14,6 +14,12 @@
   allowed, but cannot switch plugins off per session; what a runner can't enforce is reported
   as an `agent-restrictions` degradation and the step still runs. The desktop workflow editor
   has pickers for both.
+- Workflow-defined servers can use `${NAME}` references in `env`, `headers`, `url` and `args`,
+  filled in from the workspace's secrets, then the environment, then a `${NAME:-default}`. The
+  workflow file and run snapshot keep the reference, and a missing value fails the step before it
+  starts. Manage secrets in the desktop app under Settings → Secrets; they stay outside the
+  repository, are readable only by your user on POSIX, and are not encrypted. Literal credentials
+  still work but now get a warning, and run snapshots are owner-only on POSIX.
 
 ### A run started without a worktree resumes where it ran
 

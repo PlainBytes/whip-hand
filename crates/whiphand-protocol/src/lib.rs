@@ -1220,6 +1220,33 @@ pub struct ForgetWorkspaceParams {
     pub path: String,
 }
 
+pub type ListSecretsParams = WorkdirParams;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct SetSecretParams {
+    pub workdir: String,
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct DeleteSecretParams {
+    pub workdir: String,
+    pub name: String,
+}
+
+/// A workspace's secrets as a client may see them: names and where they are kept, never a
+/// value. Every secret method answers with this.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct SecretsResult {
+    pub names: Vec<String>,
+    pub path: String,
+}
+
+pub type ListSecretsResult = SecretsResult;
+pub type SetSecretResult = SecretsResult;
+pub type DeleteSecretResult = SecretsResult;
+
 /// Where the repo enclosing a workspace has its `HEAD`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -1674,6 +1701,9 @@ pub const METHODS: &[(&str, &str, &str)] = &[
         "ForgetWorkspaceParams",
         "ForgetWorkspaceResult",
     ),
+    ("listSecrets", "ListSecretsParams", "ListSecretsResult"),
+    ("setSecret", "SetSecretParams", "SetSecretResult"),
+    ("deleteSecret", "DeleteSecretParams", "DeleteSecretResult"),
     (
         "touchRecentWorkspace",
         "TouchRecentWorkspaceParams",
@@ -1870,7 +1900,7 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), METHODS.len());
-        assert_eq!(METHODS.len(), 50);
+        assert_eq!(METHODS.len(), 53);
         assert_eq!(NOTIFICATIONS.len(), 11);
     }
 }

@@ -480,8 +480,18 @@ fn input_name_problem_server(name: &str) -> Option<String> {
     }
 }
 
-fn string_map(cx: &mut Ctx, v: Option<&Raw>) -> Option<Record<String>> {
-    zod::record(cx, v, |_| None, zod::string)
+/// A string that may hold `${NAME}` references, refused when one is malformed.
+fn reference_text(cx: &mut Ctx, v: Option<&Raw>) -> Option<String> {
+    let s = zod::string(cx, v)?;
+    if let Some(problem) = crate::secrets::reference_problem(&s) {
+        cx.push(Code::Custom, problem, true);
+        return None;
+    }
+    Some(s)
+}
+
+fn reference_map(cx: &mut Ctx, v: Option<&Raw>) -> Option<Record<String>> {
+    zod::record(cx, v, |_| None, reference_text)
 }
 
 /// A server definition: the stdio form (`command`, `args`, `env`) or the remote form
@@ -495,8 +505,21 @@ fn mcp_server_def(cx: &mut Ctx, v: Option<&Raw>) -> Option<McpServerDef> {
             v,
             &[("http", McpRemoteKind::Http), ("sse", McpRemoteKind::Sse)]
         ));
-        let url = field!(cx, m, "url", required_text);
-        let headers = field!(cx, m, "headers", |cx, v| zod::optional(cx, v, string_map));
+        let url = field!(cx, m, "url", |cx: &mut Ctx, v| {
+            let url = required_text(cx, v)?;
+            match crate::secrets::reference_problem(&url) {
+                Some(problem) => {
+                    cx.push(Code::Custom, problem, true);
+                    None
+                }
+                None => Some(url),
+            }
+        });
+        let headers = field!(cx, m, "headers", |cx, v| zod::optional(
+            cx,
+            v,
+            reference_map
+        ));
         if !keys_ok {
             return None;
         }
@@ -509,9 +532,9 @@ fn mcp_server_def(cx: &mut Ctx, v: Option<&Raw>) -> Option<McpServerDef> {
         let keys_ok = only_keys(cx, m, &["command", "args", "env"]);
         let command = field!(cx, m, "command", required_text);
         let args = field!(cx, m, "args", |cx, v| zod::optional(cx, v, |cx, v| {
-            zod::array(cx, v, false, zod::string)
+            zod::array(cx, v, false, reference_text)
         }));
-        let env = field!(cx, m, "env", |cx, v| zod::optional(cx, v, string_map));
+        let env = field!(cx, m, "env", |cx, v| zod::optional(cx, v, reference_map));
         if !keys_ok {
             return None;
         }

@@ -318,6 +318,12 @@ export type SetWorkspacePinnedParams = { path: string, pinned: boolean, };
 
 export type ForgetWorkspaceParams = { path: string, };
 
+export type SetSecretParams = { workdir: string, name: string, value: string, };
+
+export type DeleteSecretParams = { workdir: string, name: string, };
+
+export type SecretsResult = { names: Array<string>, path: string, };
+
 export type WorkspaceGit = { "kind": "branch", name: string, } | { "kind": "detached", sha: string, } | { "kind": "unknown" };
 
 export type WorkspaceStorage = "local" | "user";
@@ -441,6 +447,10 @@ export type TouchRecentWorkspaceResult = RecentWorkspacesResult;
 export type SetWorkspacePinnedResult = RecentWorkspacesResult;
 export type DescribeWorkspacesParams = Empty;
 export type ForgetWorkspaceResult = RecentWorkspacesResult;
+export type ListSecretsParams = WorkdirParams;
+export type ListSecretsResult = SecretsResult;
+export type SetSecretResult = SecretsResult;
+export type DeleteSecretResult = SecretsResult;
 export type SetUiStateResult = OkTrue;
 export type SaveRunDraftResult = OkTrue;
 export type DeleteRunDraftResult = OkTrue;
@@ -494,6 +504,9 @@ export interface MethodMap {
   getAppState: { params: GetAppStateParams; result: GetAppStateResult };
   describeWorkspaces: { params: DescribeWorkspacesParams; result: DescribeWorkspacesResult };
   forgetWorkspace: { params: ForgetWorkspaceParams; result: ForgetWorkspaceResult };
+  listSecrets: { params: ListSecretsParams; result: ListSecretsResult };
+  setSecret: { params: SetSecretParams; result: SetSecretResult };
+  deleteSecret: { params: DeleteSecretParams; result: DeleteSecretResult };
   touchRecentWorkspace: { params: TouchRecentWorkspaceParams; result: TouchRecentWorkspaceResult };
   setWorkspacePinned: { params: SetWorkspacePinnedParams; result: SetWorkspacePinnedResult };
   setUiState: { params: SetUiStateParams; result: SetUiStateResult };

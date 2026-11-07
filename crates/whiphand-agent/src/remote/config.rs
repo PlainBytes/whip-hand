@@ -3,10 +3,10 @@
 //! closed: remote access off, with a fresh token.
 
 use std::cell::RefCell;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use whiphand_core::durable_fs::{rename_replacing, temp_name_for};
+use whiphand_core::durable_fs::write_file_private_atomic;
 
 use super::auth::generate_token;
 
@@ -38,25 +38,6 @@ impl RemoteAccessConfig {
 }
 
 pub use crate::app_state::resolve_remote_config_path;
-
-/// Atomic, and readable by its owner only (where the OS can enforce it).
-fn write_private(target: &Path, data: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    if let Some(dir) = target.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = temp_name_for(target);
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
-    let written = opts.open(&tmp).and_then(|mut f| f.write_all(data));
-    if let Err(e) = written.and_then(|()| rename_replacing(&tmp, target)) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
-    Ok(())
-}
 
 pub struct RemoteAccessStore {
     path: PathBuf,
@@ -102,7 +83,8 @@ impl RemoteAccessStore {
             return Err("invalid remote access config".into());
         }
         let text = serde_json::to_string_pretty(&next).map_err(|e| e.to_string())?;
-        write_private(&self.path, format!("{text}\n").as_bytes()).map_err(|e| e.to_string())?;
+        write_file_private_atomic(&self.path, format!("{text}\n").as_bytes())
+            .map_err(|e| e.to_string())?;
         *self.config.borrow_mut() = Some(next.clone());
         Ok(next)
     }

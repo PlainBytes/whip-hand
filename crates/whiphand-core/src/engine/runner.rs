@@ -523,9 +523,11 @@ pub async fn run_workflow<F: Frontend>(
     }
     let run_name = read_run_name(Path::new(&run_dir));
     if opts.resume.is_none() {
-        std::fs::write(
-            node_path::join(&[&run_dir, WORKFLOW_SNAPSHOT_NAME]),
-            stringify_yaml(&workflow_to_js(workflow)),
+        // Owner-only: a credential written directly in the workflow is still in it. A
+        // redacted copy would leave a resumed run without the real definition.
+        crate::durable_fs::write_file_private_atomic(
+            Path::new(&node_path::join(&[&run_dir, WORKFLOW_SNAPSHOT_NAME])),
+            stringify_yaml(&workflow_to_js(workflow)).as_bytes(),
         )
         .map_err(|e| RunError::Failed(e.to_string()))?;
     }
@@ -1504,19 +1506,27 @@ impl<F: Frontend> Run<'_, F> {
     /// enforces; the other runners follow in their own stages.
     async fn apply_restrictions(&self, adapter: Adapter, step: &AgentStep) -> Result<(), String> {
         use crate::adapters::harness_catalog::{list_mcp_servers, list_plugins};
+        use crate::config_home::host_config_home;
         use crate::engine::restrictions::{
-            AppliedRestrictions, McpPolicy, PluginPolicy, copilot_mcp, materialize_mcp,
-            opencode_mcp, plugins_to_disable,
+            AppliedRestrictions, McpPolicy, PluginPolicy, copilot_mcp, expand_mcp_references,
+            materialize_mcp, opencode_mcp, plugins_to_disable,
         };
+        use crate::secret_store::SecretStore;
         if !matches!(
             adapter,
             Adapter::Claude | Adapter::Copilot | Adapter::Opencode
         ) {
             return Ok(());
         }
-        let Some(policy) = self.st.borrow().ctx.restrictions.get(&step.id).cloned() else {
+        let Some(mut policy) = self.st.borrow().ctx.restrictions.get(&step.id).cloned() else {
             return Ok(());
         };
+        policy.mcp = expand_mcp_references(
+            &step.id,
+            &policy.mcp,
+            || SecretStore::for_workspace(Path::new(&self.workspace), &host_config_home()).load(),
+            &|name| std::env::var(name).ok(),
+        )?;
         let tree = self.tree();
         let mut applied = AppliedRestrictions::default();
         if adapter == Adapter::Copilot {

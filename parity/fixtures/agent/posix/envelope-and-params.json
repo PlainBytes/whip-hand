@@ -493,6 +493,33 @@
       }
     },
     {
+      "step": "listSecrets {}",
+      "response": {
+        "error": {
+          "code": -32602,
+          "message": "invalid params: workdir: Invalid input: expected string, received undefined"
+        }
+      }
+    },
+    {
+      "step": "setSecret {\"workdir\":\"w\",\"name\":\"\"}",
+      "response": {
+        "error": {
+          "code": -32602,
+          "message": "invalid params: name: Too small: expected string to have >=1 characters; value: Invalid input: expected string, received undefined"
+        }
+      }
+    },
+    {
+      "step": "deleteSecret {\"workdir\":\"w\"}",
+      "response": {
+        "error": {
+          "code": -32602,
+          "message": "invalid params: name: Invalid input: expected string, received undefined"
+        }
+      }
+    },
+    {
       "step": "setUiState {\"window\":{\"width\":0,\"height\":1,\"x\":0.5,\"y\":\"a\"},\"theme\":\"blue\"}",
       "response": {
         "error": {

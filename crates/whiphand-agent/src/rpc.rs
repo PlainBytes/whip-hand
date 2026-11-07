@@ -159,6 +159,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_browser_on_the_lan_cannot_touch_secrets() {
+        for method in ["listSecrets", "setSecret", "deleteSecret"] {
+            assert!(!REMOTE_METHODS.contains(&method), "{method}");
+            assert!(crate::schema::params(method).is_some(), "{method}");
+        }
+    }
+
+    #[test]
     fn a_panicked_request_is_answered_with_its_own_id() {
         assert_eq!(
             panicked(r#"{"id":7,"method":"hello"}"#),

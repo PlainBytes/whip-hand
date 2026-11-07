@@ -586,6 +586,9 @@ pub fn params(method: &str) -> Option<S> {
         },
         "touchRecentWorkspace" => object! { "path" => StrMin1 },
         "forgetWorkspace" => object! { "path" => StrMin1 },
+        "listSecrets" => workdir(),
+        "setSecret" => object! { "workdir" => StrMin1, "name" => StrMin1, "value" => Str },
+        "deleteSecret" => object! { "workdir" => StrMin1, "name" => StrMin1 },
         "setWorkspacePinned" => object! { "path" => StrMin1, "pinned" => Bool },
         "setUiState" => object! {
             "window" => o(Nullable(b(window_state()))),

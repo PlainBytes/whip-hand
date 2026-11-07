@@ -123,6 +123,16 @@ function ArgsEditor({ values, onChange }: { values: string[]; onChange: (next: s
   );
 }
 
+/** Holds a `${NAME}` reference? `$${` is an escaped literal, not one. */
+const REFERENCE = /(^|[^$])\$\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\}/;
+/** Mirrors `looks_like_credential` in whiphand-core's secrets.rs. */
+const CREDENTIAL_NAME = /TOKEN|KEY|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|COOKIE/i;
+
+/** The value is written out in the workflow under a name that suggests a credential. */
+function isLiteralCredential(pair: Pair): boolean {
+  return CREDENTIAL_NAME.test(pair.name) && pair.value !== '' && !REFERENCE.test(pair.value);
+}
+
 function PairsEditor({ label, addLabel, pairs, onChange }: {
   label: string;
   addLabel: string;
@@ -134,10 +144,17 @@ function PairsEditor({ label, addLabel, pairs, onChange }: {
     <div role="group" aria-label={label} style={LIST_STYLE}>
       <Text size={200}>{label}</Text>
       {pairs.map((pair, i) => (
-        <div key={i} style={LIST_ROW_STYLE}>
+        <div key={i} style={LIST_STYLE}>
+          <div style={LIST_ROW_STYLE}>
           <Input aria-label={`${label} ${i + 1} name`} value={pair.name} onChange={(_e, data) => patch(i, { name: data.value })} />
-          <Textarea aria-label={`${label} ${i + 1} value`} rows={1} value={pair.value} onChange={(_e, data) => patch(i, { value: data.value })} />
+          <Textarea aria-label={`${label} ${i + 1} value`} rows={1} placeholder="${NAME}" value={pair.value} onChange={(_e, data) => patch(i, { value: data.value })} />
           <Button size="small" appearance="subtle" aria-label={`Remove ${label} ${i + 1}`} onClick={() => onChange(pairs.filter((_p, j) => j !== i))}>×</Button>
+          </div>
+          {isLiteralCredential(pair) && (
+            <Text size={200} style={{ color: 'var(--colorStatusWarningForeground1)' }}>
+              This looks like a credential and would stay in the workflow file and every run&apos;s snapshot. Use {'${NAME}'} and add the value under Settings → Secrets.
+            </Text>
+          )}
         </div>
       ))}
       <Button size="small" appearance="secondary" onClick={() => onChange([...pairs, { name: '', value: '' }])}>{addLabel}</Button>

@@ -192,6 +192,32 @@ describe('WorkflowSettingsCard: MCP and plugin restrictions', () => {
     });
   });
 
+  describe('credentials written directly in a server', () => {
+    const warning = /looks like a credential/i;
+
+    it('warns on a literal under a credential-like name, but still saves it', () => {
+      const servers = { s: { command: 'npx', env: { API_KEY: 'abc' } } };
+      const { onUpdate } = renderCard({ ...WF, mcp: { servers } });
+      expect(screen.getByText(warning)).toBeInTheDocument();
+      pickMode('workflow-mcp', /only these/i);
+      expect(onUpdate).toHaveBeenLastCalledWith({ mcp: { allow: [], servers } });
+    });
+
+    it('a reference clears the warning, and an ordinary setting never has one', () => {
+      renderCard({ ...WF, mcp: { servers: { s: { command: 'npx', env: { API_KEY: 'abc', DEBUG: '1' } } } } });
+      expect(screen.getAllByText(warning)).toHaveLength(1);
+      fireEvent.change(screen.getByLabelText('Env 1 value'), { target: { value: '${API_KEY}' } });
+      expect(screen.queryByText(warning)).not.toBeInTheDocument();
+      fireEvent.change(screen.getByLabelText('Env 1 value'), { target: { value: '$${API_KEY}' } });
+      expect(screen.getByText(warning)).toBeInTheDocument();
+    });
+
+    it('covers headers too', () => {
+      renderCard({ ...WF, mcp: { servers: { r: { type: 'http', url: 'https://e.x', headers: { Authorization: 'Bearer t' } } } } });
+      expect(screen.getByText(warning)).toBeInTheDocument();
+    });
+  });
+
   it('a partly read catalog still offers its names but flags no other name as missing', () => {
     useAppStore.setState({
       mcpCatalog: { runners: { claude: { source: 'unavailable', servers: [{ name: 'github', origin: 'user' }], note: "couldn't parse x" } } },

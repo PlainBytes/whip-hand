@@ -74,6 +74,7 @@ const BAD_PARAMS: Array<[string, unknown]> = [
   ['ptyInput', { jobId: 'j' }], ['ptyResize', { jobId: 'j', cols: 0, rows: 2.5 }],
   ['getAppState', []], ['touchRecentWorkspace', { path: '' }], ['setWorkspacePinned', { path: 'p' }],
   ['forgetWorkspace', {}], ['forgetWorkspace', { path: '' }], ['describeWorkspaces', []],
+  ['listSecrets', {}], ['setSecret', { workdir: 'w', name: '' }], ['deleteSecret', { workdir: 'w' }],
   ['setUiState', { window: { width: 0, height: 1, x: 0.5, y: 'a' }, theme: 'blue' }],
   ['saveRunDraft', { draft: { id: '', workdir: 'w', inputs: { a: 1 }, dryRun: 'no', attachments: [{ path: '' }] } }],
   ['saveRunDraft', {}], ['deleteRunDraft', { id: '' }],
@@ -358,6 +359,17 @@ export const SCENARIOS: Scenario[] = [
       { call: 'endSession', params: (c: Ctx) => ({ jobId: job(c) }), label: 'endSession after exit' },
       { call: 'listRuns', params: (c: Ctx) => ({ workdir: c.ws }), keep: (r: any, c: Ctx) => { c.vars.runId = r[0].runId; } },
       { call: 'readArtifact', params: (c: Ctx) => ({ workdir: c.ws, runId: c.vars.runId, name: 'chat.md' }) },
+    ],
+  },
+  {
+    name: 'workspace secrets',
+    steps: [
+      { call: 'listSecrets', params: (c: Ctx) => ({ workdir: c.ws }), label: 'listSecrets empty' },
+      { call: 'setSecret', params: (c: Ctx) => ({ workdir: c.ws, name: 'API_TOKEN', value: 'parity-value' }) },
+      { call: 'setSecret', params: (c: Ctx) => ({ workdir: c.ws, name: 'not valid', value: 'parity-value' }), label: 'setSecret bad name' },
+      { call: 'listSecrets', params: (c: Ctx) => ({ workdir: c.ws }), label: 'listSecrets after set' },
+      { call: 'deleteSecret', params: (c: Ctx) => ({ workdir: c.ws, name: 'API_TOKEN' }) },
+      { call: 'deleteSecret', params: (c: Ctx) => ({ workdir: c.ws, name: 'API_TOKEN' }), label: 'deleteSecret again' },
     ],
   },
   {

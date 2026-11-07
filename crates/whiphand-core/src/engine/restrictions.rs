@@ -431,6 +431,59 @@ pub fn opencode_mcp(
     }
 }
 
+/// `policy` with the `${NAME}` references of its workflow-defined servers filled in, or what
+/// is missing. Only servers the step actually uses are looked at, and the secrets are read
+/// only when one of them holds a reference. The result stays in memory for this spawn: the
+/// resolved policy on the context, and so the snapshot, keep the references.
+pub fn expand_mcp_references(
+    step_id: &str,
+    policy: &McpPolicy,
+    secrets: impl FnOnce() -> Result<std::collections::BTreeMap<String, String>, String>,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<McpPolicy, String> {
+    use crate::secrets::{expand_server, server_uses_references};
+    let McpPolicy::Allow(allowed) = policy else {
+        return Ok(policy.clone());
+    };
+    let uses_references = allowed
+        .iter()
+        .any(|s| matches!(s, AllowedServer::Workflow { def, .. } if server_uses_references(def)));
+    if !uses_references {
+        return Ok(policy.clone());
+    }
+    let stored = secrets().map_err(|e| format!("step '{step_id}' needs secrets: {e}"))?;
+    let lookup = |name: &str| stored.get(name).cloned().or_else(|| env(name));
+    let mut out = Vec::with_capacity(allowed.len());
+    let mut problems = Vec::new();
+    for server in allowed {
+        match server {
+            AllowedServer::Workflow { name, def } => match expand_server(def, &lookup) {
+                Ok(def) => out.push(AllowedServer::Workflow {
+                    name: name.clone(),
+                    def,
+                }),
+                Err(missing) => problems.push(format!(
+                    "MCP server '{name}' needs {}",
+                    missing
+                        .iter()
+                        .map(|m| format!("'{m}'"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )),
+            },
+            other => out.push(other.clone()),
+        }
+    }
+    if problems.is_empty() {
+        Ok(McpPolicy::Allow(out))
+    } else {
+        Err(format!(
+            "step '{step_id}': {}, which is not set; add it to the workspace's secrets or the environment",
+            problems.join("; ")
+        ))
+    }
+}
+
 /// The exact server set of a step under an `allow`; `None` under any other policy.
 pub fn materialize_mcp(
     step_id: &str,
@@ -897,6 +950,105 @@ mod tests {
         let mut l = listing(&[]);
         l.source = CatalogSource::Unavailable;
         assert_eq!(materialize_mcp("s", &r.mcp, &l).unwrap(), Some(vec![]));
+    }
+
+    fn referencing(name: &str, value: &str) -> AllowedServer {
+        AllowedServer::Workflow {
+            name: name.into(),
+            def: McpServerDef::Stdio {
+                command: "c".into(),
+                args: None,
+                env: Some([("K".to_string(), value.to_string())].into_iter().collect()),
+            },
+        }
+    }
+
+    fn env_of(def: &AllowedServer) -> String {
+        let AllowedServer::Workflow {
+            def: McpServerDef::Stdio { env: Some(env), .. },
+            ..
+        } = def
+        else {
+            panic!("{def:?}");
+        };
+        env.iter().next().unwrap().1.clone()
+    }
+
+    fn no_env(_: &str) -> Option<String> {
+        None
+    }
+
+    fn stored(
+        pairs: &[(&str, &str)],
+    ) -> Result<std::collections::BTreeMap<String, String>, String> {
+        Ok(pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect())
+    }
+
+    #[test]
+    fn the_workspace_store_beats_the_environment_which_beats_a_default() {
+        let policy = McpPolicy::Allow(vec![
+            referencing("a", "${BOTH}"),
+            referencing("b", "${ENV_ONLY}"),
+            referencing("c", "${NEITHER:-fallback}"),
+            referencing("d", "${BOTH:-fallback}"),
+        ]);
+        let env = |k: &str| matches!(k, "BOTH" | "ENV_ONLY").then(|| format!("env-{k}"));
+        let McpPolicy::Allow(out) =
+            expand_mcp_references("s", &policy, || stored(&[("BOTH", "stored")]), &env).unwrap()
+        else {
+            panic!();
+        };
+        assert_eq!(env_of(&out[0]), "stored");
+        assert_eq!(env_of(&out[1]), "env-ENV_ONLY");
+        assert_eq!(env_of(&out[2]), "fallback");
+        assert_eq!(env_of(&out[3]), "stored");
+    }
+
+    #[test]
+    fn a_missing_reference_names_step_server_and_variable_but_no_value() {
+        let policy = McpPolicy::Allow(vec![
+            referencing("ok", "${HAVE}"),
+            referencing("docs", "${GONE}"),
+        ]);
+        let e = expand_mcp_references("build", &policy, || stored(&[("HAVE", "VALUE")]), &no_env)
+            .unwrap_err();
+        assert!(
+            e.contains("'build'") && e.contains("'docs'") && e.contains("'GONE'"),
+            "{e}"
+        );
+        assert!(!e.contains("VALUE"), "{e}");
+    }
+
+    #[test]
+    fn the_store_is_not_read_unless_a_used_server_holds_a_reference() {
+        let boom = || -> Result<std::collections::BTreeMap<String, String>, String> {
+            panic!("the store was read")
+        };
+        let literal = McpPolicy::Allow(vec![referencing("a", "literal")]);
+        assert_eq!(
+            expand_mcp_references("s", &literal, boom, &no_env).unwrap(),
+            literal
+        );
+        let denied = McpPolicy::Deny(vec!["a".into()]);
+        assert_eq!(
+            expand_mcp_references("s", &denied, boom, &no_env).unwrap(),
+            denied
+        );
+        assert_eq!(
+            expand_mcp_references("s", &McpPolicy::Unrestricted, boom, &no_env).unwrap(),
+            McpPolicy::Unrestricted
+        );
+    }
+
+    #[test]
+    fn an_unreadable_store_fails_only_a_step_that_needs_it() {
+        let policy = McpPolicy::Allow(vec![referencing("a", "${X}")]);
+        let e = expand_mcp_references("s", &policy, || Err("broken file".to_string()), &no_env)
+            .unwrap_err();
+        assert!(e.contains("'s'") && e.contains("broken file"), "{e}");
     }
 
     #[test]

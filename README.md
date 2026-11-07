@@ -97,6 +97,10 @@ or `global:<name>`. `new-workflow` writes to project by default, to workspace wi
 to global with `--global`. Config layers the same way: global (`~/.whiphand/config.yaml`), then the
 workspace's data dir, then the project's `.whiphand/config.yaml`; the later one wins.
 
+A workspace's [secrets](#restricting-mcp-servers-and-plugins) are always in
+`~/.whiphand/<basename>-<hash6>/secrets.yaml`, even with `local` storage, so they stay out of the
+repository. That file alone doesn't make the workspace user-stored.
+
 User storage keeps worktrees and runs at a short path under your home folder, which avoids Windows
 path-length problems that deep repository paths can cause. `~/.whiphand` is replaced by
 `WHIPHAND_CONFIG_HOME` when that is set.
@@ -365,7 +369,7 @@ per step:
 ```yaml
 mcp:                         # workflow level: the default for every agent step
   servers:                   # servers this workflow brings; steps can only name them
-    docs: { type: http, url: "https://example.test/mcp", headers: { Authorization: "Bearer x" } }
+    docs: { type: http, url: "https://example.test/mcp", headers: { Authorization: "Bearer ${DOCS_TOKEN}" } }
     pw:   { command: npx, args: ["@playwright/mcp@1.2.3"], env: { DEBUG: "0" } }
   deny: [github]             # or allow: [...], never both
 plugins:
@@ -414,6 +418,28 @@ steps:
   An allowlisted name that is neither workflow-defined nor configured fails the step before
   it starts, naming the step and the server. A mistyped name never silently gives a step
   fewer servers than you meant.
+
+**Keeping credentials out of workflows.** In a workflow-defined server's `env`, `headers`, `url`
+or `args`, `${NAME}` stands for a value kept elsewhere, and `${NAME:-default}` gives a fallback.
+`$${` is a literal `${`. A run fills references in just before each spawn, looking in the
+workspace's secrets, then the environment, then the default. Only servers a step actually uses
+need values: a missing one fails that step before it starts, naming the step, server and variable.
+Add the value and `--resume`. The workflow file and the run's snapshot keep the reference, and the
+value goes only into the step's private config, which is deleted when the step ends.
+
+The workspace's secrets are managed in the desktop app under **Settings → Secrets**, which only
+ever shows names; a browser using remote access can't reach them. They live in
+`~/.whiphand/<basename>-<hash6>/secrets.yaml`, outside the repository whichever storage the
+workspace uses, and terminal runs read the same file. Without the desktop app, edit that file
+(`path:` names the workspace, and `secrets:` maps names to quoted values) or use environment variables.
+
+- The file is **not encrypted**. It is readable only by your user on POSIX; on Windows it relies on
+  your home folder's permissions. It keeps secrets out of repositories and logs, but an agent
+  running as you could read it, so it does not hide them from agents.
+- Removing a workspace from the Workspaces list leaves its secrets file in place.
+- A literal value still works. A name such as `API_KEY` or `Authorization` with a literal value
+  gets a warning, because the value stays in the workflow file and in every run's snapshot. Snapshots
+  are readable only by their owner on POSIX, but aren't redacted: resume needs the real definition.
 
 What each runner enforces:
 

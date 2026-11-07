@@ -102,6 +102,10 @@ pub const DESKTOP_ONLY: &[&str] = &[
     // The desktop's Workspaces page; the TUI has its own workspace picker.
     "describeWorkspaces",
     "forgetWorkspace",
+    // Managed from the desktop's workspace settings; runs read the store either way.
+    "listSecrets",
+    "setSecret",
+    "deleteSecret",
 ];
 
 /// A request as `update` describes it: no id yet, and what to do with the

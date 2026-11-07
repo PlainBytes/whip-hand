@@ -147,6 +147,9 @@ export function WorkspacesPage() {
   const workspacePath = useAppStore(state => state.workspacePath);
   const identityKey = useAppStore(state => state.workspaceIdentityKey);
   const recents = useAppStore(state => state.appState?.recentWorkspaces ?? EMPTY_RECENTS);
+  // Every `appStateChanged` brings a new array, even for a moved window; only a
+  // different list is worth rescanning every workspace's disk for.
+  const recentsKey = useMemo(() => JSON.stringify(recents), [recents]);
   const patchAppState = useAppStore(state => state.patchAppState);
   const [workspaces, setWorkspaces] = useState<WorkspaceDetails[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -166,7 +169,7 @@ export function WorkspacesPage() {
         if (!cancelled) setLoadError(errorMessage(err));
       });
     return () => { cancelled = true; };
-  }, [client, recents]);
+  }, [client, recentsKey]);
 
   const sorted = useMemo(() => sortWorkspaces(workspaces), [workspaces]);
 

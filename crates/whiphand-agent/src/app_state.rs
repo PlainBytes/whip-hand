@@ -161,8 +161,10 @@ pub fn touch_recent(
 
 /// Removes every recent entry and every per-workspace memory entry that is
 /// `raw` (the exact stored path) or the same workspace as `opened`
-/// (`(root, identity key)`, absent when the directory is gone). Pinned
-/// entries go too. Only state changes; nothing on disk is touched.
+/// (`(root, identity key)`, absent when the directory is gone), or that shares
+/// a removed recent's stored identity key: a vanished alias can only recompute
+/// a lexical key, which no longer names memory kept under the real path.
+/// Pinned entries go too. Only state changes; nothing on disk is touched.
 pub fn forget_workspace(state: &mut Value, raw: &str, opened: Option<(&str, &str)>) {
     let target = opened.map(|(path, key)| WorkspaceRef {
         path,
@@ -181,16 +183,31 @@ pub fn forget_workspace(state: &mut Value, raw: &str, opened: Option<(&str, &str
                 )
             })
     };
+    let stored_keys: Vec<String> = state["recentWorkspaces"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| {
+            matches(
+                r["path"].as_str().unwrap_or_default(),
+                r["identityKey"].as_str(),
+            )
+        })
+        .filter_map(|r| r["identityKey"].as_str().map(str::to_string))
+        .collect();
+    let gone = |path: &str, key: Option<&str>| {
+        matches(path, key) || key.is_some_and(|k| stored_keys.iter().any(|s| s == k))
+    };
     if let Some(list) = state["recentWorkspaces"].as_array_mut() {
         list.retain(|r| {
-            !matches(
+            !gone(
                 r["path"].as_str().unwrap_or_default(),
                 r["identityKey"].as_str(),
             )
         });
     }
     if let Some(memory) = state["workspaces"].as_object_mut() {
-        memory.retain(|k, v| !matches(k, v["identityKey"].as_str()));
+        memory.retain(|k, v| !gone(k, v["identityKey"].as_str()));
     }
 }
 
@@ -487,6 +504,25 @@ mod tests {
         forget_workspace(&mut state, "/gone", None);
         assert!(state["recentWorkspaces"].as_array().unwrap().is_empty());
         assert!(state["workspaces"].as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn forgetting_a_vanished_alias_clears_memory_under_its_stored_identity() {
+        let mut state = empty_app_state();
+        state["recentWorkspaces"] = json!([
+            { "path": "/alias", "lastOpenedAt": "t", "identityKey": "kreal" },
+            { "path": "/b", "lastOpenedAt": "t", "identityKey": "kb" },
+        ]);
+        state["workspaces"] = json!({
+            "/real": { "lastInputs": {}, "identityKey": "kreal" },
+            "/b": { "lastInputs": {}, "identityKey": "kb" },
+        });
+        // The alias is gone, so `open_workspace` fell back to its lexical key.
+        forget_workspace(&mut state, "/alias", Some(("/alias", "klexical")));
+        assert_eq!(state["recentWorkspaces"].as_array().unwrap().len(), 1);
+        assert_eq!(state["recentWorkspaces"][0]["path"], "/b");
+        assert!(state["workspaces"].get("/real").is_none());
+        assert!(state["workspaces"].get("/b").is_some());
     }
 
     #[test]

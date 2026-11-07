@@ -126,6 +126,24 @@ describe('WorkspacesPage', () => {
     expect(unpin.params).toEqual({ path: '/dev/plain', pinned: false });
   });
 
+  it('does not rescan when app state changes but the recents are the same', async () => {
+    const transport = renderPage();
+    await respond(transport, 'describeWorkspaces', { workspaces: WORKSPACES });
+    await screen.findByText('recent');
+
+    // What an `appStateChanged` for a moved window does: a new object throughout.
+    act(() => {
+      const appState = useAppStore.getState().appState!;
+      useAppStore.getState().setAppState({
+        ...structuredClone(appState), sidebarCollapsed: !appState.sidebarCollapsed,
+      });
+    });
+
+    const describes = transport.sent.filter(line =>
+      (JSON.parse(line) as { method: string }).method === 'describeWorkspaces');
+    expect(describes).toHaveLength(1);
+  });
+
   it('reloads when the store recents change, e.g. a pin from the switcher', async () => {
     const transport = renderPage();
     await respond(transport, 'describeWorkspaces', { workspaces: WORKSPACES });

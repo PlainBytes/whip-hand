@@ -4,10 +4,11 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::canonicalize::realpath;
 use crate::config::load_workspace_config;
-use crate::jsval::ObjExt;
+use crate::scaffold::existing_storage;
 use crate::storage::{Storage, resolve_layout};
-use crate::store::runs::list_runs;
+use crate::store::runs::run_history;
 
 /// Where the enclosing repository's `HEAD` points.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,7 +25,7 @@ pub enum GitHead {
 pub struct WorkspaceInfo {
     /// The path is an existing directory.
     pub exists: bool,
-    /// `<workspace>/.whiphand` is a directory.
+    /// `init` has set it up: it has a user-folder marker or a `.whiphand` directory.
     pub initialized: bool,
     /// The enclosing repo's head, `None` when no `.git` is found up the tree.
     pub git: Option<GitHead>,
@@ -66,9 +67,12 @@ fn git_dir_of(dot_git: &Path, holder: &Path) -> Option<PathBuf> {
     Some(holder.join(target))
 }
 
-/// The head of the first repo at or above `workspace`.
+/// The head of the first repo at or above `workspace`. A workspace keeps the
+/// alias it was opened through, so the walk starts from where that really is.
 fn find_git_head(workspace: &Path) -> Option<GitHead> {
-    for dir in workspace.ancestors() {
+    let real = realpath(&workspace.to_string_lossy())
+        .map_or_else(|_| workspace.to_path_buf(), PathBuf::from);
+    for dir in real.ancestors() {
         let dot_git = dir.join(".git");
         if std::fs::symlink_metadata(&dot_git).is_err() {
             continue;
@@ -94,21 +98,14 @@ pub fn workspace_info(workspace: &Path, config_home: &Path) -> WorkspaceInfo {
             last_run_at: None,
         };
     }
+    let workdir = workspace.to_string_lossy();
     let (run_count, last_run_at) = match load_workspace_config(workspace, config_home) {
-        Ok(config) => {
-            let runs = list_runs(&workspace.to_string_lossy(), &config);
-            let last = runs
-                .iter()
-                .filter_map(|r| r.obj.str_prop("startedAt"))
-                .max()
-                .map(str::to_string);
-            (runs.len(), last)
-        }
+        Ok(config) => run_history(&workdir, &config),
         Err(_) => (0, None),
     };
     WorkspaceInfo {
         exists: true,
-        initialized: workspace.join(".whiphand").is_dir(),
+        initialized: existing_storage(&workdir, config_home).is_some(),
         git: find_git_head(workspace),
         storage,
         run_count,
@@ -260,6 +257,74 @@ mod tests {
         assert_eq!(
             info.last_run_at.as_deref(),
             Some("2026-02-02T00:00:00.000Z")
+        );
+    }
+
+    #[test]
+    fn a_user_storage_workspace_is_initialized_without_a_project_dir() {
+        let (_d, ws, home) = setup();
+        write_user_marker(&resolve_layout(&ws, &home)).unwrap();
+        let info = workspace_info(&ws, &home);
+        assert!(info.initialized);
+        assert!(!ws.join(".whiphand").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_workspace_reports_the_repo_it_points_into() {
+        let (d, ws, home) = setup();
+        repo(&ws, "ref: refs/heads/real\n");
+        let target = ws.join("packages/api");
+        fs::create_dir_all(&target).unwrap();
+        let alias = d.path().join("alias");
+        std::os::unix::fs::symlink(&target, &alias).unwrap();
+        assert_eq!(
+            workspace_info(&alias, &home).git,
+            Some(GitHead::Branch("real".into()))
+        );
+    }
+
+    #[test]
+    fn describing_never_repairs_an_abandoned_run() {
+        let (_d, ws, home) = setup();
+        let dir = ws.join(".whiphand/runs/20260101-000000-aaaa");
+        fs::create_dir_all(&dir).unwrap();
+        let json = r#"{"version":1,"runId":"20260101-000000-aaaa","workflow":"wf","workdir":"/w","dryRun":false,"startedAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z","heartbeatAt":"2026-01-01T00:00:00.000Z","leaseId":"lease","status":"running","inputs":{},"sessionIds":{},"steps":[]}"#;
+        fs::write(dir.join("run.json"), json).unwrap();
+        let before: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        let info = workspace_info(&ws, &home);
+        assert_eq!(info.run_count, 1);
+        assert_eq!(
+            info.last_run_at.as_deref(),
+            Some("2026-01-01T00:00:00.000Z")
+        );
+        assert_eq!(fs::read_to_string(dir.join("run.json")).unwrap(), json);
+        let after: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn an_unreadable_newest_run_still_counts_and_the_next_one_dates_the_history() {
+        let (_d, ws, home) = setup();
+        let runs = ws.join(".whiphand/runs");
+        write_run(&runs, "20260101-000000-aaaa", "2026-01-01T00:00:00.000Z");
+        let broken = runs.join("20260202-000000-bbbb");
+        fs::create_dir_all(&broken).unwrap();
+        fs::write(broken.join("run.json"), "{ not json").unwrap();
+        fs::write(runs.join("stray-file"), "").unwrap();
+        let info = workspace_info(&ws, &home);
+        assert_eq!(info.run_count, 2);
+        assert_eq!(
+            info.last_run_at.as_deref(),
+            Some("2026-01-01T00:00:00.000Z")
         );
     }
 

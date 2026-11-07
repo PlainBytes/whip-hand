@@ -312,7 +312,7 @@ pub async fn call(agent: &Rc<Agent>, ctx: RequestCtx, method: &str, p: Value) ->
         "getAppState" => get_app_state(agent),
         "touchRecentWorkspace" => touch_recent_workspace(agent, &p),
         "setWorkspacePinned" => set_workspace_pinned(agent, &p),
-        "describeWorkspaces" => Ok(describe_workspaces(agent)),
+        "describeWorkspaces" => describe_workspaces(agent).await,
         "forgetWorkspace" => forget_workspace(agent, &p),
         "setUiState" => {
             agent.app_state.mutate(|state| {
@@ -756,45 +756,55 @@ fn set_workspace_pinned(agent: &Rc<Agent>, p: &Value) -> R {
 
 /// Every recent workspace, in stored order, with what is on disk for it now.
 /// Read-only: a missing folder is reported (`exists: false`), never pruned.
-fn describe_workspaces(agent: &Rc<Agent>) -> Value {
+/// Runs on a blocking worker: a slow or unmounted drive must not stall the
+/// engine thread, which serves every other request.
+async fn describe_workspaces(agent: &Rc<Agent>) -> R {
+    let state = agent.app_state.get();
+    let recents = state["recentWorkspaces"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let home = host_config_home();
+    let workspaces: Vec<Value> = tokio::task::spawn_blocking(move || {
+        recents
+            .iter()
+            .map(|r| describe_workspace(r, &home))
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(json!({ "workspaces": workspaces }))
+}
+
+fn describe_workspace(recent: &Value, home: &Path) -> Value {
     use whiphand_core::storage::Storage;
     use whiphand_core::workspace_info::{GitHead, workspace_info};
-    let state = agent.app_state.get();
-    let home = host_config_home();
-    let workspaces: Vec<Value> = state["recentWorkspaces"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|r| {
-            let path = r["path"].as_str().unwrap_or_default();
-            let info = workspace_info(Path::new(path), &home);
-            let mut obj = r.as_object().cloned().unwrap_or_default();
-            obj.insert("exists".into(), json!(info.exists));
-            obj.insert("initialized".into(), json!(info.initialized));
-            obj.insert(
-                "git".into(),
-                match info.git {
-                    None => Value::Null,
-                    Some(GitHead::Branch(name)) => json!({ "kind": "branch", "name": name }),
-                    Some(GitHead::Detached(sha)) => json!({ "kind": "detached", "sha": sha }),
-                    Some(GitHead::Unknown) => json!({ "kind": "unknown" }),
-                },
-            );
-            obj.insert(
-                "storage".into(),
-                json!(match info.storage {
-                    Storage::Local => "local",
-                    Storage::User => "user",
-                }),
-            );
-            obj.insert("runCount".into(), json!(info.run_count));
-            if let Some(at) = info.last_run_at {
-                obj.insert("lastRunAt".into(), json!(at));
-            }
-            Value::Object(obj)
-        })
-        .collect();
-    json!({ "workspaces": workspaces })
+    let path = recent["path"].as_str().unwrap_or_default();
+    let info = workspace_info(Path::new(path), home);
+    let mut obj = recent.as_object().cloned().unwrap_or_default();
+    obj.insert("exists".into(), json!(info.exists));
+    obj.insert("initialized".into(), json!(info.initialized));
+    obj.insert(
+        "git".into(),
+        match info.git {
+            None => Value::Null,
+            Some(GitHead::Branch(name)) => json!({ "kind": "branch", "name": name }),
+            Some(GitHead::Detached(sha)) => json!({ "kind": "detached", "sha": sha }),
+            Some(GitHead::Unknown) => json!({ "kind": "unknown" }),
+        },
+    );
+    obj.insert(
+        "storage".into(),
+        json!(match info.storage {
+            Storage::Local => "local",
+            Storage::User => "user",
+        }),
+    );
+    obj.insert("runCount".into(), json!(info.run_count));
+    if let Some(at) = info.last_run_at {
+        obj.insert("lastRunAt".into(), json!(at));
+    }
+    Value::Object(obj)
 }
 
 /// Drops a workspace from the recents and clears its remembered inputs.

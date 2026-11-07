@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### A run started without a worktree resumes where it ran
+
+- Resuming a run that had skipped its workflow's worktree (`--no-worktree`) tried to create one.
+  It was refused ("worktree: base 'main' is not a commit") when the base was missing, and otherwise
+  continued in a fresh worktree without the earlier steps' work. It now resumes in the folder it
+  ran in. A run stopped before any step started, and a stopped dry run, still get their worktree.
+
+### Runs from workspace-scoped workflows can be resumed
+
+- A run started from a workflow in the workspace's own folder showed as `unknown` and could not be
+  resumed ("has no readable run.json"), though its `run.json` was intact. It now lists with its real
+  status and resumes. Existing runs recover after upgrading; nothing needs migrating.
+
 ### The shipped `develop` workflow no longer assumes `npm test`
 
 - The `develop` template's `test_command` has no default now. Leave it blank to skip tests, or

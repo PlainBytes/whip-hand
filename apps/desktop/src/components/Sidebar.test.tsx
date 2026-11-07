@@ -184,7 +184,7 @@ describe('Sidebar', () => {
 
     expect(screen.queryByRole('button', { name: /^Files$/ })).not.toBeInTheDocument();
     // Everything else still reaches the agent over RPC and stays.
-    for (const label of ['Runs', 'Workflows', 'Settings', 'Activity', 'Doctor', 'Preferences']) {
+    for (const label of ['Runs', 'Workflows', 'Settings', 'Activity', 'Workspaces', 'Doctor', 'Preferences']) {
       expect(screen.getByRole('button', { name: new RegExp(`^${label}$`) })).toBeInTheDocument();
     }
   });

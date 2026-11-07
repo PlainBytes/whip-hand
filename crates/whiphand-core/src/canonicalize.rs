@@ -48,7 +48,7 @@ pub fn headroom_warning(root: &str) -> Option<String> {
 }
 
 /// Node's `fs.realpath.native` (on Windows, without the `\\?\` prefix std adds).
-fn realpath(p: &str) -> std::io::Result<String> {
+pub(crate) fn realpath(p: &str) -> std::io::Result<String> {
     let canonical = std::fs::canonicalize(p)?.to_string_lossy().into_owned();
     if cfg!(windows)
         && let Some(rest) = canonical.strip_prefix(r"\\?\")

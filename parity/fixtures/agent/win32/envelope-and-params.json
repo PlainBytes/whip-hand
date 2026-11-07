@@ -430,6 +430,33 @@
       }
     },
     {
+      "step": "forgetWorkspace {}",
+      "response": {
+        "error": {
+          "code": -32602,
+          "message": "invalid params: path: Invalid input: expected string, received undefined"
+        }
+      }
+    },
+    {
+      "step": "forgetWorkspace {\"path\":\"\"}",
+      "response": {
+        "error": {
+          "code": -32602,
+          "message": "invalid params: path: Too small: expected string to have >=1 characters"
+        }
+      }
+    },
+    {
+      "step": "describeWorkspaces []",
+      "response": {
+        "error": {
+          "code": -32602,
+          "message": "invalid params: (root): Invalid input: expected object, received array"
+        }
+      }
+    },
+    {
       "step": "setUiState {\"window\":{\"width\":0,\"height\":1,\"x\":0.5,\"y\":\"a\"},\"theme\":\"blue\"}",
       "response": {
         "error": {

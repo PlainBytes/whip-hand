@@ -19,7 +19,7 @@ export interface RestrictionPickerProps {
   value: Restriction | undefined;
   /** A step can inherit the workflow's setting; the workflow itself cannot. */
   inheritable: boolean;
-  /** Names the catalog (and the workflow) offer. Empty when the catalog is unavailable: free-text entry only. */
+  /** Names the catalog (and the workflow) offer; free-text entry covers any the catalog could not read. */
   offered: string[];
   /** The offered list is complete enough to call an unmatched name wrong. False before the catalog answers. */
   complete: boolean;
@@ -62,24 +62,32 @@ export function RestrictionPicker({
   label, testId, value, inheritable, offered, complete, onChange,
 }: RestrictionPickerProps) {
   const [draftName, setDraftName] = useState('');
-  const mode = modeOf(value, inheritable);
+  // On a step, "All except these" with nothing listed yet is saved as the same
+  // `{ deny: [] }` as All. Only this picker knows the list is being edited, so
+  // the controls for entering the first name stay up until the mode changes.
+  const [editingDeny, setEditingDeny] = useState(false);
+  const stored = modeOf(value, inheritable);
+  const mode: Mode = stored === 'all' && editingDeny && value?.deny !== undefined ? 'deny' : stored;
   const selected = namesOf(value);
   const choices = [...offered, ...selected.filter(n => !offered.includes(n))];
   const modes: Mode[] = inheritable ? ['inherit', 'all', 'allow', 'deny'] : ['all', 'allow', 'deny'];
 
+  function commit(next: Mode, names: string[]): void {
+    setEditingDeny(next === 'deny');
+    onChange(build(next, names, inheritable));
+  }
   function setMode(next: Mode): void {
     // Switching between the two list modes keeps the names already picked.
-    onChange(build(next, next === 'allow' || next === 'deny' ? selected : [], inheritable));
+    commit(next, next === 'allow' || next === 'deny' ? selected : []);
   }
   function toggle(name: string, on: boolean): void {
-    const next = on ? [...selected, name] : selected.filter(n => n !== name);
-    onChange(build(mode, next, inheritable));
+    commit(mode, on ? [...selected, name] : selected.filter(n => n !== name));
   }
   function addTyped(): void {
     const name = draftName.trim();
     if (name === '') return;
     setDraftName('');
-    if (!selected.includes(name)) onChange(build(mode, [...selected, name], inheritable));
+    if (!selected.includes(name)) commit(mode, [...selected, name]);
   }
 
   return (
@@ -141,7 +149,10 @@ export function catalogNames(
   let complete = true;
   for (const runner of runners) {
     const row = rows[runner];
-    if (row === undefined || row.source === 'unavailable') { complete = false; continue; }
+    if (row === undefined) { complete = false; continue; }
+    // An unavailable row may still hold what the readable config files gave:
+    // worth offering, but not enough to call any other name wrong.
+    if (row.source === 'unavailable') complete = false;
     for (const item of (row[key] as Array<{ name: string }>)) {
       if (!names.includes(item.name)) names.push(item.name);
     }

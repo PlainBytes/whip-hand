@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import type { AgentClient } from '../agent/client.ts';
 import { useAppStore } from '../state/store.ts';
@@ -45,6 +45,31 @@ export function useHarnessCatalog(workdir?: string): { refresh: () => void } {
   const pluginCatalog = useAppStore(state => state.pluginCatalog);
   const setPluginCatalog = useAppStore(state => state.setPluginCatalog);
 
+  // The store holds one workspace's lists and answers can arrive in any order,
+  // so only the newest request of each list may commit. Leaving the workspace
+  // (or unmounting) supersedes whatever is in flight; the list is null by then,
+  // so the next mount asks again.
+  const newest = useRef({ mcp: 0, plugins: 0 });
+  const fetchMcp = (dir: string, params: { refresh?: true }): void => {
+    const id = ++newest.current.mcp;
+    client.request('listMcpServers', { workdir: dir, ...params })
+      .then(result => { if (newest.current.mcp === id) setMcpCatalog(result); })
+      .catch((err: unknown) => console.error('listMcpServers failed', err));
+  };
+  const fetchPlugins = (dir: string, params: { refresh?: true }): void => {
+    const id = ++newest.current.plugins;
+    client.request('listPlugins', { workdir: dir, ...params })
+      .then(result => { if (newest.current.plugins === id) setPluginCatalog(result); })
+      .catch((err: unknown) => console.error('listPlugins failed', err));
+  };
+  useEffect(() => {
+    const requests = newest.current;
+    return () => {
+      requests.mcp++;
+      requests.plugins++;
+    };
+  }, [client, catalogWorkdir]);
+
   useEffect(() => {
     if (agentStatus !== 'connected') return;
     if (modelCatalog === null) {
@@ -66,28 +91,17 @@ export function useHarnessCatalog(workdir?: string): { refresh: () => void } {
   // plain name entry, with no error state.
   useEffect(() => {
     if (agentStatus !== 'connected' || catalogWorkdir === null) return;
-    if (mcpCatalog === null) {
-      client.request('listMcpServers', { workdir: catalogWorkdir })
-        .then(setMcpCatalog)
-        .catch((err: unknown) => console.error('listMcpServers failed', err));
-    }
-    if (pluginCatalog === null) {
-      client.request('listPlugins', { workdir: catalogWorkdir })
-        .then(setPluginCatalog)
-        .catch((err: unknown) => console.error('listPlugins failed', err));
-    }
+    if (mcpCatalog === null) fetchMcp(catalogWorkdir, {});
+    if (pluginCatalog === null) fetchPlugins(catalogWorkdir, {});
     // eslint-disable-next-line react-hooks/exhaustive-deps -- prefetch once per mount/connect/workspace
   }, [client, agentStatus, catalogWorkdir]);
 
   const refresh = useCallback(() => {
     refreshModelCatalog(client, setModelCatalog);
     if (catalogWorkdir === null) return;
-    client.request('listMcpServers', { workdir: catalogWorkdir, refresh: true })
-      .then(setMcpCatalog)
-      .catch((err: unknown) => console.error('listMcpServers refresh failed', err));
-    client.request('listPlugins', { workdir: catalogWorkdir, refresh: true })
-      .then(setPluginCatalog)
-      .catch((err: unknown) => console.error('listPlugins refresh failed', err));
+    fetchMcp(catalogWorkdir, { refresh: true });
+    fetchPlugins(catalogWorkdir, { refresh: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchMcp/fetchPlugins only close over these deps and a ref
   }, [client, setModelCatalog, catalogWorkdir, setMcpCatalog, setPluginCatalog]);
 
   return { refresh };

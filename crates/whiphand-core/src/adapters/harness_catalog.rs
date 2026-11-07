@@ -3,7 +3,9 @@
 //! editor's picker. Read-only: nothing here edits a user's harness config.
 //!
 //! No call fails: a runner that cannot be asked is a list with `source`
-//! `unavailable` and, where useful, a `note`. A server is **never started or
+//! `unavailable` and, where useful, a `note`. So is one with a config file that
+//! could not be read: what the other files gave is kept for the picker, but
+//! nothing may be enforced from a list that can be missing entries. A server is **never started or
 //! health-checked**: claude's `mcp list` and opencode's `mcp list` connect to
 //! every server, so neither is called; their config files are read instead.
 //!
@@ -27,7 +29,7 @@
 //!   `{ "mcpServers": { name: { source: user|workspace|plugin|builtin,
 //!   enabled, ...definition } } }` from config only (it does not connect), and
 //!   `copilot plugin list` with text: `Built-in plugins:` / installed headings
-//!   over `  • name (vX) [disabled]` lines. If the JSON form is missing or not
+//!   over `  • name (vX) [disabled]` lines. If the JSON form fails or is not
 //!   JSON, `~/.copilot/mcp-config.json` (`$COPILOT_HOME` if set) and the
 //!   workspace `.mcp.json` / `.github/mcp.json` are read instead.
 //! - **opencode** reads `opencode.json[c]` from `$XDG_CONFIG_HOME/opencode`
@@ -69,7 +71,9 @@ pub enum Origin {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CatalogSource {
+    /// The whole of what the runner has configured.
     Live,
+    /// Not known in full: the list holds whatever could be read, possibly nothing.
     Unavailable,
 }
 
@@ -115,16 +119,6 @@ pub struct PluginList {
     pub plugins: Vec<PluginInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-}
-
-impl McpList {
-    fn unavailable(note: impl Into<String>) -> Self {
-        Self {
-            source: CatalogSource::Unavailable,
-            servers: Vec::new(),
-            note: Some(note.into()),
-        }
-    }
 }
 
 impl PluginList {
@@ -327,7 +321,9 @@ impl Sources {
         (!self.problems.is_empty()).then(|| self.problems.join("; "))
     }
 
-    /// `live` once anything was read; otherwise `unavailable` with the reason.
+    /// `live` once something was read and nothing failed. A file that failed may hold
+    /// servers or plugins the list then lacks, so that is `unavailable`, with the items
+    /// the other files gave and the reason.
     fn finish<T>(self, items: Vec<T>) -> (CatalogSource, Vec<T>, Option<String>) {
         if self.read == 0 {
             let note = self
@@ -335,7 +331,12 @@ impl Sources {
                 .unwrap_or_else(|| "no configuration found".to_string());
             return (CatalogSource::Unavailable, Vec::new(), Some(note));
         }
-        (CatalogSource::Live, items, self.note())
+        let source = if self.problems.is_empty() {
+            CatalogSource::Live
+        } else {
+            CatalogSource::Unavailable
+        };
+        (source, items, self.note())
     }
 }
 
@@ -507,16 +508,16 @@ fn claude_mcp(ctx: &Ctx) -> McpList {
             &mut servers,
         );
         let wd = norm_path_key(&ctx.workdir);
-        if let Some(projects) = json.get("projects").and_then(Value::as_object) {
-            if let Some((_, project)) = projects.iter().find(|(k, _)| norm_path_key(k) == wd) {
-                servers_from(
-                    project.get("mcpServers"),
-                    Origin::Project,
-                    None,
-                    same_name,
-                    &mut servers,
-                );
-            }
+        if let Some(projects) = json.get("projects").and_then(Value::as_object)
+            && let Some((_, project)) = projects.iter().find(|(k, _)| norm_path_key(k) == wd)
+        {
+            servers_from(
+                project.get("mcpServers"),
+                Origin::Project,
+                None,
+                same_name,
+                &mut servers,
+            );
         }
     }
     if let Some(json) = src.json(&ctx.at_workdir(&[".mcp.json"]), false) {
@@ -650,11 +651,9 @@ fn copilot_mcp_from_files(ctx: &Ctx) -> McpList {
     }
     let (source, servers, note) = src.finish(servers);
     let note = match (source, note) {
-        (CatalogSource::Live, n) => Some(match n {
-            Some(n) => format!("read config files (no JSON listing from copilot); {n}"),
-            None => "read config files (no JSON listing from copilot); built-in servers not listed"
-                .into(),
-        }),
+        (CatalogSource::Live, _) => Some(
+            "read config files (no JSON listing from copilot); built-in servers not listed".into(),
+        ),
         (_, n) => n,
     };
     McpList {
@@ -674,7 +673,18 @@ async fn copilot_mcp(ctx: &Ctx) -> McpList {
             },
             None => copilot_mcp_from_files(ctx),
         },
-        Err(e) => McpList::unavailable(format!("couldn't run copilot: {e}")),
+        // A copilot too old for `--json` may exit nonzero rather than print text.
+        Err(e) => {
+            let mut list = copilot_mcp_from_files(ctx);
+            if list.source == CatalogSource::Unavailable {
+                let ran = format!("couldn't run copilot: {e}");
+                list.note = Some(match list.note.take() {
+                    Some(n) if n != "no configuration found" => format!("{ran}; {n}"),
+                    _ => ran,
+                });
+            }
+            list
+        }
     }
 }
 
@@ -1049,16 +1059,32 @@ mod tests {
         assert_eq!(l.source, CatalogSource::Unavailable);
         assert!(l.note.unwrap().contains("couldn't parse"));
 
-        // A good file beside a bad one: a partial list with a note.
+        // A good file beside a bad one: the bad one may hold more, so the list is partial
+        // for the picker and unavailable to anything enforcing from it.
         write(
             root.path(),
             "work/.mcp.json",
             r#"{"mcpServers":{"ok":{"command":"x"}}}"#,
         );
         let l = list_mcp_servers_with(Adapter::Claude, &ctx(root.path())).await;
-        assert_eq!(l.source, CatalogSource::Live);
+        assert_eq!(l.source, CatalogSource::Unavailable);
         assert_eq!(l.servers.len(), 1);
         assert!(l.note.unwrap().contains(".claude.json"));
+    }
+
+    #[tokio::test]
+    async fn one_unreadable_plugin_settings_file_makes_the_plugin_list_unavailable() {
+        let root = tempfile::tempdir().unwrap();
+        write(
+            root.path(),
+            "home/.claude/settings.json",
+            r#"{"enabledPlugins":{"a@m":true}}"#,
+        );
+        write(root.path(), "work/.claude/settings.json", "{ not json");
+        let p = list_plugins_with(Adapter::Claude, &ctx(root.path())).await;
+        assert_eq!(p.source, CatalogSource::Unavailable);
+        assert_eq!(p.plugins.len(), 1);
+        assert!(p.note.unwrap().contains("couldn't parse"));
     }
 
     #[tokio::test]
@@ -1215,6 +1241,38 @@ esac"#,
         assert_eq!(find(&m, "f").origin, Origin::User);
         assert_eq!(find(&m, "w").origin, Origin::Project);
         assert!(m.note.is_some());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_copilot_rejecting_json_falls_back_to_files_and_keeps_its_error_without_them() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("work")).unwrap();
+        let mut c = ctx(root.path());
+        c.copilot_argv = fake_copilot(root.path(), "echo 'unknown option' >&2; exit 2");
+
+        let none = list_mcp_servers_with(Adapter::Copilot, &c).await;
+        assert_eq!(none.source, CatalogSource::Unavailable);
+        assert!(none.note.unwrap().contains("couldn't run copilot"));
+
+        write(
+            root.path(),
+            "home/.copilot/mcp-config.json",
+            r#"{"mcpServers":{"f":{"command":"x"}}}"#,
+        );
+        let m = list_mcp_servers_with(Adapter::Copilot, &c).await;
+        assert_eq!(m.source, CatalogSource::Live);
+        assert_eq!(find(&m, "f").origin, Origin::User);
+        assert!(m.note.unwrap().contains("read config files"));
+
+        write(root.path(), "work/.mcp.json", "{ not json");
+        let bad = list_mcp_servers_with(Adapter::Copilot, &c).await;
+        assert_eq!(bad.source, CatalogSource::Unavailable);
+        let note = bad.note.unwrap();
+        assert!(
+            note.contains("couldn't run copilot") && note.contains("couldn't parse"),
+            "{note}"
+        );
     }
 
     #[cfg(unix)]

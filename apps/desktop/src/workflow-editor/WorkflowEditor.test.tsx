@@ -1067,6 +1067,31 @@ describe('WorkflowEditor: step MCP and plugin pickers', () => {
     expect(within(screen.getByTestId('step-mcp-a')).getByRole('combobox')).toHaveTextContent('All');
   });
 
+  it('All except these on a step stays open with nothing listed, so a first name can be entered', async () => {
+    seed();
+    const { transport } = renderEditor(oneStepWorkflow({ id: 'a' }));
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+    pick('step-mcp-a', /all except these/i);
+    const picker = within(screen.getByTestId('step-mcp-a'));
+    expect(picker.getByRole('combobox')).toHaveTextContent('All except these');
+    fireEvent.change(picker.getByLabelText(/Add MCP servers name/), { target: { value: 'pw' } });
+    fireEvent.click(picker.getByRole('button', { name: /Add MCP servers entry/ }));
+    expect((await savedStep(transport, 'a')).mcp).toEqual({ deny: ['pw'] });
+  });
+
+  it('removing the last excluded name keeps the list open; choosing All closes it', () => {
+    seed();
+    renderEditor(oneStepWorkflow({ id: 'a', mcp: { deny: ['pw'] } }));
+    fireEvent.click(screen.getByTestId('step-collapse-a'));
+    const picker = within(screen.getByTestId('step-mcp-a'));
+    fireEvent.click(picker.getByLabelText('pw'));
+    expect(picker.getByRole('combobox')).toHaveTextContent('All except these');
+    expect(picker.getByLabelText(/Add MCP servers name/)).toBeInTheDocument();
+    pick('step-mcp-a', /^all$/i);
+    expect(picker.getByRole('combobox')).toHaveTextContent(/^All$/);
+    expect(picker.queryByLabelText(/Add MCP servers name/)).not.toBeInTheDocument();
+  });
+
   it('Only these with nothing checked writes mcp: { allow: [] }', async () => {
     seed();
     const { transport } = renderEditor(oneStepWorkflow({ id: 'a' }));

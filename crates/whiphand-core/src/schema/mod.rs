@@ -553,9 +553,9 @@ mod restriction_tests {
 
     #[test]
     fn root_and_misplaced_keys() {
-        let found = problems(&format!(
-            "name: w\nsteps:\n  - id: a\n    kind: command\n    run: x\n    mcp: {{ allow: [] }}\n"
-        ));
+        let found = problems(
+            "name: w\nsteps:\n  - id: a\n    kind: command\n    run: x\n    mcp: { allow: [] }\n",
+        );
         assert!(
             found
                 .iter()

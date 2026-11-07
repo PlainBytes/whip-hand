@@ -419,7 +419,9 @@ Whatever a runner can't enforce is reported, not hidden: the step still runs and
 `run:degraded` event with capability `agent-restrictions` ("Agent restriction not
 enforceable for this runner") names what was not applied. It is emitted for a `plugins:`
 restriction on copilot or opencode, and for an MCP `allow` on copilot or opencode when the
-runner's configured servers could not be read (so none could be switched off). On claude, an
+runner's configured servers could not all be read (one unreadable config file is enough), so
+none could be switched off. Claude has no such fallback: its restriction fails the step before
+it starts rather than run from a list that may be missing entries. On claude, an
 MCP restriction does not by itself stop a still-enabled plugin from bringing its own servers
 back; pair it with a `plugins:` restriction if that matters. whiphand's own await-state hooks
 are never restricted.

@@ -107,7 +107,7 @@ export function StepTile({
   const purpose = purposeOf(step);
   const model = isAgentStep(step) ? step.model : undefined;
   const mcpHint = isAgentStep(step) && step.mcp
-    ? (step.mcp.allow ? `MCP: ${step.mcp.allow.length}` : step.mcp.deny ? `MCP: -${step.mcp.deny.length}` : undefined)
+    ? (step.mcp.allow ? `MCP: ${step.mcp.allow.length}` : step.mcp.deny?.length ? `MCP: -${step.mcp.deny.length}` : undefined)
     : undefined;
   const writesFiles = isAgentStep(step) && step.writes;
   const isShell = actor === 'shell';

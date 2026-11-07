@@ -72,7 +72,7 @@ describe('WorkflowSettingsCard: the inputs table', () => {
 describe('WorkflowSettingsCard: MCP and plugin restrictions', () => {
   const WF: Workflow = {
     name: 'w',
-    steps: [{ id: 'a', kind: 'agent', runner: 'claude', mode: 'headless', writes: false, prompt: 'p' }],
+    steps: [{ id: 'a', kind: 'agent', runner: 'claude', mode: 'headless', writes: false, prompt: 'p', output: 'o.md' }],
   };
 
   afterEach(() => {
@@ -119,7 +119,8 @@ describe('WorkflowSettingsCard: MCP and plugin restrictions', () => {
     fireEvent.click(screen.getByRole('button', { name: /add server/i }));
     fireEvent.change(screen.getByLabelText(/^Server name/), { target: { value: 'x' } });
     fireEvent.change(screen.getByLabelText(/^Command/), { target: { value: 'npx' } });
-    fireEvent.change(screen.getByLabelText(/^Args/), { target: { value: 'x' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add arg' }));
+    fireEvent.change(screen.getByLabelText('Args 1'), { target: { value: 'x' } });
     expect(onUpdate).toHaveBeenLastCalledWith({
       mcp: { allow: ['x'], servers: { x: { command: 'npx', args: ['x'] } } },
     });
@@ -132,7 +133,9 @@ describe('WorkflowSettingsCard: MCP and plugin restrictions', () => {
     fireEvent.click(screen.getByRole('combobox', { name: /^Server type/ }));
     fireEvent.click(screen.getByRole('option', { name: 'http' }));
     fireEvent.change(screen.getByLabelText(/^URL/), { target: { value: 'https://e.x/mcp' } });
-    fireEvent.change(screen.getByLabelText(/^Headers/), { target: { value: 'Authorization: Bearer t' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add header' }));
+    fireEvent.change(screen.getByLabelText('Headers 1 name'), { target: { value: 'Authorization' } });
+    fireEvent.change(screen.getByLabelText('Headers 1 value'), { target: { value: 'Bearer t' } });
     expect(onUpdate).toHaveBeenLastCalledWith({
       mcp: { servers: { r: { type: 'http', url: 'https://e.x/mcp', headers: { Authorization: 'Bearer t' } } } },
     });
@@ -144,6 +147,60 @@ describe('WorkflowSettingsCard: MCP and plugin restrictions', () => {
     fireEvent.change(screen.getByLabelText(/^Server name/), { target: { value: 'x' } });
     expect(onProblem).toHaveBeenLastCalledWith(expect.stringContaining('a command is required'));
     expect(onUpdate).toHaveBeenLastCalledWith({ mcp: undefined });
+  });
+
+  describe('server definitions survive editing', () => {
+    const TRICKY = {
+      command: 'npx',
+      args: ['a,b', '', ' value '],
+      env: { TOKEN: ' spaced ', MULTI: 'line1\nline2', 'A=B': 'c=d' },
+    };
+
+    it('a restriction change leaves an untouched server exactly as loaded', () => {
+      const servers = { s: TRICKY, empty: { command: 'x', args: [] }, r: { type: 'http' as const, url: 'https://e.x', headers: { 'X: Y': ' z ' } } };
+      const { onUpdate } = renderCard({ ...WF, mcp: { servers } });
+      pickMode('workflow-mcp', /only these/i);
+      expect(onUpdate).toHaveBeenLastCalledWith({ mcp: { allow: [], servers } });
+    });
+
+    it('editing one field of a server keeps every other value as written', () => {
+      const { onUpdate } = renderCard({ ...WF, mcp: { servers: { s: TRICKY } } });
+      fireEvent.change(screen.getByLabelText(/^Command/), { target: { value: 'node' } });
+      expect(onUpdate).toHaveBeenLastCalledWith({ mcp: { servers: { s: { ...TRICKY, command: 'node' } } } });
+    });
+
+    it('an arg or value can hold what used to be a separator', () => {
+      const { onUpdate } = renderCard({ ...WF, mcp: { servers: { s: { command: 'npx' } } } });
+      fireEvent.click(screen.getByRole('button', { name: 'Add arg' }));
+      fireEvent.change(screen.getByLabelText('Args 1'), { target: { value: 'a,b' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Add env variable' }));
+      fireEvent.change(screen.getByLabelText('Env 1 name'), { target: { value: 'K' } });
+      fireEvent.change(screen.getByLabelText('Env 1 value'), { target: { value: ' x=y ' } });
+      expect(onUpdate).toHaveBeenLastCalledWith({
+        mcp: { servers: { s: { command: 'npx', args: ['a,b'], env: { K: ' x=y ' } } } },
+      });
+    });
+
+    it('a blank or repeated env name is a problem, not a silently dropped value', () => {
+      const { onProblem } = renderCard({ ...WF, mcp: { servers: { s: { command: 'npx', env: { A: '1' } } } } });
+      fireEvent.click(screen.getByRole('button', { name: 'Add env variable' }));
+      expect(onProblem).toHaveBeenLastCalledWith(expect.stringContaining('every env variable needs a name'));
+      fireEvent.change(screen.getByLabelText('Env 2 name'), { target: { value: 'A' } });
+      expect(onProblem).toHaveBeenLastCalledWith(expect.stringContaining("env variable 'A' is listed twice"));
+      fireEvent.click(screen.getByRole('button', { name: 'Remove Env 2' }));
+      expect(onProblem).toHaveBeenLastCalledWith(null);
+    });
+  });
+
+  it('a partly read catalog still offers its names but flags no other name as missing', () => {
+    useAppStore.setState({
+      mcpCatalog: { runners: { claude: { source: 'unavailable', servers: [{ name: 'github', origin: 'user' }], note: "couldn't parse x" } } },
+    });
+    renderCard({ ...WF, mcp: { allow: ['elsewhere'] } });
+    const picker = within(screen.getByTestId('workflow-mcp'));
+    expect(picker.getByLabelText('github')).toBeInTheDocument();
+    expect(picker.getByLabelText('elsewhere')).toBeInTheDocument();
+    expect(picker.queryByText('not found')).not.toBeInTheDocument();
   });
 
   it('plugins: Only these with nothing checked writes plugins: { allow: [] }', () => {

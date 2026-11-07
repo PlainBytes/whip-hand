@@ -51,6 +51,13 @@ pub fn file(path: &str, content: &str) -> JsValue {
     JsValue::Obj(obj! { "path" => path, "content" => content })
 }
 
+/// A `files` entry holding credentials (MCP server definitions carry `env` and `headers`):
+/// only the launcher sees its content. It is written private to the user, and the recorded
+/// and broadcast copy of the spec drops the content (`spec::redact_spawn_event`).
+pub fn secret_file(path: &str, content: &str) -> JsValue {
+    JsValue::Obj(obj! { "path" => path, "content" => content, "secret" => true })
+}
+
 /// The step's session id, or the error naming the step.
 pub fn require_session_id(step: &AgentStep, ctx: &RunCtx, missing: &str) -> Result<String, String> {
     match ctx.session_ids.get(&step.id) {

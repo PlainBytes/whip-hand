@@ -82,6 +82,12 @@ function baseEnv(ctx: Ctx): Record<string, string> {
     ...env,
     HOME: home,
     USERPROFILE: home,
+    // Empty counts as unset: the runners' config lookups stay under this temp
+    // home rather than following the developer's own settings.
+    XDG_CONFIG_HOME: '',
+    CLAUDE_CONFIG_DIR: '',
+    COPILOT_HOME: '',
+    OPENCODE_CONFIG: '',
     WHIPHAND_CONFIG_HOME: path.join(ctx.root, 'home'),
     WHIPHAND_APP_STATE_FILE: path.join(ctx.root, 'app-state.json'),
     WHIPHAND_REMOTE_CONFIG_FILE: path.join(ctx.root, 'remote-access.json'),

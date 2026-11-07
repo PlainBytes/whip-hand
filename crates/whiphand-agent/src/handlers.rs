@@ -932,9 +932,7 @@ fn list_recent_runs(agent: &Rc<Agent>, p: &Value) -> Value {
 mod catalog_tests {
     use super::*;
     use whiphand_core::adapters::Adapter;
-    use whiphand_core::adapters::harness_catalog::{
-        Ctx, list_mcp_servers_with, list_plugins_with,
-    };
+    use whiphand_core::adapters::harness_catalog::{Ctx, list_mcp_servers_with, list_plugins_with};
 
     fn fixture() -> (std::path::PathBuf, Ctx) {
         let root = std::env::temp_dir().join(format!("wh-catalog-{}", std::process::id()));
@@ -1025,7 +1023,10 @@ mod catalog_tests {
             for v in [&mcp, &plugins] {
                 let text = v.to_string();
                 for banned in ["SECRET", "env", "headers", "definition", "command", "url"] {
-                    assert!(!text.contains(banned), "{adapter:?}: {banned} leaked: {text}");
+                    assert!(
+                        !text.contains(banned),
+                        "{adapter:?}: {banned} leaked: {text}"
+                    );
                 }
             }
         }

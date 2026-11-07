@@ -35,60 +35,114 @@ interface InputRow {
 
 type ServerKind = 'stdio' | 'http' | 'sse';
 
+interface Pair {
+  name: string;
+  value: string;
+}
+
 interface ServerRow {
   key: number;
   name: string;
   kind: ServerKind;
   command: string;
-  /** Comma-separated, like a step's allowed paths. */
-  args: string;
-  /** One `KEY=value` per line (stdio env). */
-  env: string;
+  args: string[];
+  /** Stdio env, in file order. A list so a half-typed or duplicate name stays editable. */
+  env: Pair[];
   url: string;
-  /** One `Name: value` per line. */
-  headers: string;
+  headers: Pair[];
+  /** The definition as loaded, until the row is edited: an untouched server saves as it was. */
+  loaded?: McpServerDef;
 }
 
-function parsePairs(text: string, sep: '=' | ':'): Record<string, string> | undefined {
-  const out: Record<string, string> = {};
-  for (const line of text.split('\n')) {
-    const at = line.indexOf(sep);
-    if (at <= 0) continue;
-    const k = line.slice(0, at).trim();
-    if (k !== '') out[k] = line.slice(at + 1).trim();
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
+function pairsOf(rec: Record<string, string> | undefined): Pair[] {
+  return Object.entries(rec ?? {}).map(([name, value]) => ({ name, value }));
 }
 
-function formatPairs(rec: Record<string, string> | undefined, sep: '=' | ':'): string {
-  return Object.entries(rec ?? {}).map(([k, v]) => `${k}${sep === ':' ? ': ' : '='}${v}`).join('\n');
+function recordOf(pairs: Pair[]): Record<string, string> | undefined {
+  return pairs.length > 0 ? Object.fromEntries(pairs.map(p => [p.name, p.value])) : undefined;
 }
 
 function rowFromServer(key: number, name: string, def: McpServerDef): ServerRow {
-  const blank = { key, name, kind: 'stdio' as ServerKind, command: '', args: '', env: '', url: '', headers: '' };
+  const blank = { key, name, kind: 'stdio' as ServerKind, command: '', args: [], env: [], url: '', headers: [], loaded: def };
   if ('command' in def) {
-    return { ...blank, command: def.command, args: (def.args ?? []).join(', '), env: formatPairs(def.env, '=') };
+    return { ...blank, command: def.command, args: def.args ?? [], env: pairsOf(def.env) };
   }
-  return { ...blank, kind: def.type, url: def.url, headers: formatPairs(def.headers, ':') };
+  return { ...blank, kind: def.type, url: def.url, headers: pairsOf(def.headers) };
 }
 
 function serverFromRow(row: ServerRow): McpServerDef {
+  if (row.loaded !== undefined) return row.loaded;
   if (row.kind === 'stdio') {
-    const args = row.args.split(',').map(a => a.trim()).filter(Boolean);
-    const env = parsePairs(row.env, '=');
-    return { command: row.command, ...(args.length > 0 ? { args } : {}), ...(env ? { env } : {}) };
+    const env = recordOf(row.env);
+    return { command: row.command, ...(row.args.length > 0 ? { args: row.args } : {}), ...(env ? { env } : {}) };
   }
-  const headers = parsePairs(row.headers, ':');
+  const headers = recordOf(row.headers);
   return { type: row.kind, url: row.url, ...(headers ? { headers } : {}) };
+}
+
+function pairsProblem(pairs: Pair[], label: string): string | undefined {
+  if (pairs.some(p => p.name.trim() === '')) return `every ${label} needs a name`;
+  const repeated = pairs.find((p, i) => pairs.findIndex(q => q.name === p.name) !== i);
+  return repeated ? `${label} '${repeated.name}' is listed twice` : undefined;
 }
 
 function serverProblem(rows: ServerRow[], index: number): string | undefined {
   const row = rows[index];
   if (row.name.trim() === '') return 'a name is required';
   if (rows.some((r, i) => i !== index && r.name === row.name)) return `'${row.name}' is already used by another server`;
-  if (row.kind === 'stdio' && row.command.trim() === '') return 'a command is required';
-  if (row.kind !== 'stdio' && row.url.trim() === '') return 'a url is required';
-  return undefined;
+  if (row.kind === 'stdio') {
+    return row.command.trim() === '' ? 'a command is required' : pairsProblem(row.env, 'env variable');
+  }
+  return row.url.trim() === '' ? 'a url is required' : pairsProblem(row.headers, 'header');
+}
+
+const LIST_STYLE = { display: 'flex', flexDirection: 'column', gap: 4 } as const;
+const LIST_ROW_STYLE = { display: 'flex', gap: 4, alignItems: 'center' } as const;
+
+/**
+ * One editor per value, so any value survives as written: a comma in an
+ * argument, an empty argument, spaces around a value, a line break in one.
+ */
+function ArgsEditor({ values, onChange }: { values: string[]; onChange: (next: string[]) => void }) {
+  return (
+    <div role="group" aria-label="Args" style={LIST_STYLE}>
+      <Text size={200}>Args</Text>
+      {values.map((value, i) => (
+        <div key={i} style={LIST_ROW_STYLE}>
+          <Textarea
+            aria-label={`Args ${i + 1}`}
+            rows={1}
+            value={value}
+            onChange={(_e, data) => onChange(values.map((v, j) => (j === i ? data.value : v)))}
+          />
+          <Button size="small" appearance="subtle" aria-label={`Remove Args ${i + 1}`} onClick={() => onChange(values.filter((_v, j) => j !== i))}>×</Button>
+        </div>
+      ))}
+      <Button size="small" appearance="secondary" onClick={() => onChange([...values, ''])}>Add arg</Button>
+    </div>
+  );
+}
+
+function PairsEditor({ label, addLabel, pairs, onChange }: {
+  label: string;
+  addLabel: string;
+  pairs: Pair[];
+  onChange: (next: Pair[]) => void;
+}) {
+  const patch = (i: number, change: Partial<Pair>): void => onChange(pairs.map((p, j) => (j === i ? { ...p, ...change } : p)));
+  return (
+    <div role="group" aria-label={label} style={LIST_STYLE}>
+      <Text size={200}>{label}</Text>
+      {pairs.map((pair, i) => (
+        <div key={i} style={LIST_ROW_STYLE}>
+          <Input aria-label={`${label} ${i + 1} name`} value={pair.name} onChange={(_e, data) => patch(i, { name: data.value })} />
+          <Textarea aria-label={`${label} ${i + 1} value`} rows={1} value={pair.value} onChange={(_e, data) => patch(i, { value: data.value })} />
+          <Button size="small" appearance="subtle" aria-label={`Remove ${label} ${i + 1}`} onClick={() => onChange(pairs.filter((_p, j) => j !== i))}>×</Button>
+        </div>
+      ))}
+      <Button size="small" appearance="secondary" onClick={() => onChange([...pairs, { name: '', value: '' }])}>{addLabel}</Button>
+    </div>
+  );
 }
 
 function summaryLine(workflow: Workflow): string {
@@ -168,7 +222,7 @@ export function WorkflowSettingsCard({
   }
   function patchServer(index: number, patch: Partial<ServerRow>): void {
     const next = servers.slice();
-    next[index] = { ...next[index], ...patch };
+    next[index] = { ...next[index], ...patch, loaded: undefined };
     pushServers(next);
   }
 
@@ -281,21 +335,15 @@ export function WorkflowSettingsCard({
                       <Field label="Command">
                         <Input value={row.command} onChange={(_e, data) => patchServer(i, { command: data.value })} />
                       </Field>
-                      <Field label="Args" hint="Comma-separated.">
-                        <Input value={row.args} onChange={(_e, data) => patchServer(i, { args: data.value })} />
-                      </Field>
-                      <Field label="Env" hint="KEY=value per line.">
-                        <Textarea value={row.env} onChange={(_e, data) => patchServer(i, { env: data.value })} />
-                      </Field>
+                      <ArgsEditor values={row.args} onChange={args => patchServer(i, { args })} />
+                      <PairsEditor label="Env" addLabel="Add env variable" pairs={row.env} onChange={env => patchServer(i, { env })} />
                     </>
                   ) : (
                     <>
                       <Field label="URL">
                         <Input value={row.url} onChange={(_e, data) => patchServer(i, { url: data.value })} />
                       </Field>
-                      <Field label="Headers" hint="Name: value per line.">
-                        <Textarea value={row.headers} onChange={(_e, data) => patchServer(i, { headers: data.value })} />
-                      </Field>
+                      <PairsEditor label="Headers" addLabel="Add header" pairs={row.headers} onChange={headers => patchServer(i, { headers })} />
                     </>
                   )}
                   <Button appearance="subtle" onClick={() => pushServers(servers.filter((_r, j) => j !== i))}>
@@ -307,7 +355,7 @@ export function WorkflowSettingsCard({
             <Button
               appearance="secondary"
               onClick={() => {
-                pushServers([...servers, { key: nextServerKey, name: '', kind: 'stdio', command: '', args: '', env: '', url: '', headers: '' }]);
+                pushServers([...servers, { key: nextServerKey, name: '', kind: 'stdio', command: '', args: [], env: [], url: '', headers: [] }]);
                 setNextServerKey(k => k + 1);
               }}
             >

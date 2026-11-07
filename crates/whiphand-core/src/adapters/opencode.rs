@@ -54,12 +54,7 @@ fn prompt_of(step: &AgentStep, ctx: &RunCtx) -> Result<String, String> {
 }
 
 fn opencode_spec(ctx: &RunCtx, argv: &[String], interactive: bool, config: String) -> JsObject {
-    spawn_spec(
-        ctx,
-        argv,
-        interactive,
-        obj! { "OPENCODE_CONFIG_CONTENT" => config },
-    )
+    spawn_spec(ctx, argv, interactive, obj! { CONFIG_ENV => config })
 }
 
 /// The `edit` pattern for the run dir: relative to opencode's cwd when the run
@@ -154,6 +149,22 @@ fn config_content(opts: ConfigOpts) -> String {
     agents.set(opts.agent_name, agent_body);
     root.set("agents", agents);
     jsval::stringify_compact(&root.into())
+}
+
+/// The spec's env key the whole opencode config travels in.
+pub const CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";
+
+/// `config` with its `mcp` entries (which carry server credentials) replaced by `redacted`,
+/// or None when it has none: an unrestricted step's recorded config stays as it was.
+pub fn redact_config(config: &str, redacted: &str) -> Option<String> {
+    let JsValue::Obj(mut root) = jsval::parse(config).ok()? else {
+        return None;
+    };
+    if root.prop("mcp").is_undefined() {
+        return None;
+    }
+    root.set("mcp", redacted);
+    Some(jsval::stringify_compact(&root.into()))
 }
 
 fn json_string(s: &str) -> String {

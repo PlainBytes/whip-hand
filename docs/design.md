@@ -952,7 +952,16 @@ just the named ones. That needs the runner's server list, so when it can't be re
 allowlist is spawned as far as known and reported as a degradation. Neither copilot nor
 opencode has a per-session plugin switch, so a `plugins:` restriction there is a degradation
 only; whiphand's own await-state plugin is mounted regardless and is never listed. All of
-these gaps use one degradation id, `agent-restrictions`.
+these gaps use one degradation id, `agent-restrictions`, and a step's reasons travel in one
+event, since the journal keeps the first per (capability, step). A listing that could not be
+read in full counts as unavailable: enforcing from one that may lack entries would look exact
+without being so, while the editor still offers the names it did get.
+
+**Server definitions are credentials.** They carry `env` and `headers`, so the per-step config
+files are written owner-only and removed when the step ends, and `spec::redact_spawn_event`
+replaces their content (and opencode's `mcp` config) where core emits `step:spawn`. Every event
+passes through there on its way to `events.ndjson` and the clients; the launcher is handed the
+spec itself.
 
 **Discovery never starts a server.** The listing of configured servers and plugins is read
 from each runner's config (`adapters/harness_catalog.rs`), never taken from `claude mcp list`

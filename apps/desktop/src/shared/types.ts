@@ -238,8 +238,10 @@ export interface SpawnSpec {
    * touch the filesystem themselves). Absolute paths under runDir — the
    * opencode adapter's guidance and plugin files are delivered this way. A
    * dry run records `files` on the `step:spawn` event but writes none of them.
+   * A `secret` file holds credentials: on any `step:spawn` event its `content`
+   * is a placeholder, and only the launcher ever has the real one.
    */
-  files?: Array<{ path: string; content: string }>;
+  files?: Array<{ path: string; content: string; secret?: boolean }>;
   /**
    * A file (also in `files`) the frontend hands the child as its stdin — for a
    * headless runner verified to read a piped prompt. Stdio wiring, not a content

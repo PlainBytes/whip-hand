@@ -36,10 +36,11 @@ use crate::engine::manual::{ManualExtras, build_manual_request, note_artifact, r
 use crate::engine::progress::{ProgressParser, progress_error_message, stderr_error_message};
 use crate::engine::restrictions;
 use crate::engine::resume::{DoneExecution, ResumePlan, stage_budget_key};
-use crate::engine::spec::{self, write_spec_files};
+use crate::engine::spec::{self, redact_spawn_event, write_spec_files};
 use crate::engine::stages::{DEFAULT_STAGE_RETRIES, discover_stages, next_stage, odd_stage_names};
 use crate::engine::step_files::{
-    AWAIT_STATE, END_MARKER, SESSION_CAPTURE, clear_spawn_files, clear_step_file,
+    AWAIT_STATE, COPILOT_MCP_CONFIG, END_MARKER, MCP_CONFIG, SESSION_CAPTURE, clear_spawn_files,
+    clear_step_file,
 };
 use crate::engine::verdict::{
     VERDICT_INSTRUCTION, parse_verdict, verdict_from_choice, verdict_from_exit,
@@ -714,7 +715,7 @@ impl<F: Frontend> Run<'_, F> {
     }
 
     fn emit_now(&self, raw: JsObject) {
-        let e = event_paths_to_workspace(&raw, &self.workspace);
+        let e = event_paths_to_workspace(&redact_spawn_event(raw), &self.workspace);
         if e.str_prop("type") == Some("run:done") {
             self.run_ended.set(true);
         }
@@ -1551,10 +1552,10 @@ impl<F: Frontend> Run<'_, F> {
             let listing = list_plugins(adapter, &tree).await;
             applied.disabled_plugins = plugins_to_disable(&step.id, &policy.plugins, &listing)?;
         }
-        for reason in &applied.degradations {
+        if let Some(reason) = applied.degradation_reason() {
             self.emit(obj! {
                 "type" => "run:degraded", "capability" => "agent-restrictions",
-                "stepId" => step.id.as_str(), "reason" => reason.as_str(),
+                "stepId" => step.id.as_str(), "reason" => reason,
             });
         }
         let mut st = self.st.borrow_mut();
@@ -2012,7 +2013,13 @@ impl<F: Frontend> Run<'_, F> {
         start.assign(&execution_fields(&idn));
         self.emit(start);
         match step {
-            Step::Agent(a) => self.execute_agent(a, frame).await,
+            Step::Agent(a) => {
+                let outcome = self.execute_agent(a, frame).await;
+                // The server definitions outlive the spawn only as long as the step does.
+                clear_step_file(&self.run_dir, &a.id, MCP_CONFIG);
+                clear_step_file(&self.run_dir, &a.id, COPILOT_MCP_CONFIG);
+                outcome
+            }
             Step::Command(c) => self.execute_command(c, frame).await,
             Step::Manual(m) => self.execute_manual(m, "manual", frame).await,
             Step::Approval(m) => self.execute_manual(m, "approval", frame).await,

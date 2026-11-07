@@ -69,6 +69,9 @@ pub fn resolve(workflow: &Workflow, step: &AgentStep) -> StepRestrictions {
     );
     let mcp = match mcp_restriction {
         None => McpPolicy::Unrestricted,
+        // `deny: []` excludes nothing, but as the step's setting it still replaces the
+        // workflow's: that is how a step says "all" over a workflow restriction.
+        Some(Restriction::Deny(names)) if names.is_empty() => McpPolicy::Unrestricted,
         Some(Restriction::Deny(names)) => McpPolicy::Deny(names.clone()),
         Some(Restriction::Allow(names)) => McpPolicy::Allow(
             names
@@ -96,6 +99,7 @@ pub fn resolve(workflow: &Workflow, step: &AgentStep) -> StepRestrictions {
             .and_then(|p| p.restriction.as_ref()),
     ) {
         None => PluginPolicy::Unrestricted,
+        Some(Restriction::Deny(n)) if n.is_empty() => PluginPolicy::Unrestricted,
         Some(Restriction::Allow(n)) => PluginPolicy::Allow(n.clone()),
         Some(Restriction::Deny(n)) => PluginPolicy::Deny(n.clone()),
     };
@@ -220,6 +224,12 @@ impl AppliedRestrictions {
             && self.copilot_mcp.is_none()
             && self.opencode_mcp.is_none()
             && self.degradations.is_empty()
+    }
+
+    /// The step's one `agent-restrictions` reason. Journal and desktop keep the first event
+    /// per (capability, step), so separate events would lose every reason after the first.
+    pub fn degradation_reason(&self) -> Option<String> {
+        (!self.degradations.is_empty()).then(|| self.degradations.join("; "))
     }
 }
 
@@ -348,6 +358,9 @@ pub fn opencode_server(def: &McpServerDef) -> serde_json::Value {
     }
 }
 
+/// Server names and their definitions in a runner's own config shape.
+type ServerEntries = Vec<(String, serde_json::Value)>;
+
 /// An opencode step's `mcp` config entries, plus a degradation reason when an allowlist
 /// could not be made exact. Opencode merges the config over the user's, so servers are
 /// switched off by name: a deny needs no listing, an allowlist does.
@@ -355,7 +368,7 @@ pub fn opencode_mcp(
     step_id: &str,
     policy: &McpPolicy,
     listing: &McpList,
-) -> Result<Option<(Vec<(String, serde_json::Value)>, Option<String>)>, String> {
+) -> Result<Option<(ServerEntries, Option<String>)>, String> {
     use crate::adapters::harness_catalog::CatalogSource;
     let off = || serde_json::json!({ "enabled": false });
     match policy {
@@ -654,6 +667,31 @@ mod tests {
         s.mcp = Some(mcp(allow(&["docs"]), &[]));
         let r = resolve(&workflow(Some(mcp(deny(&["docs"]), &["docs"])), None), &s);
         assert_eq!(names(&r.mcp), ["docs"]);
+    }
+
+    #[test]
+    fn an_empty_deny_is_unrestricted_and_still_overrides_the_workflow() {
+        let mut s = step();
+        s.mcp = Some(mcp(deny(&[]), &[]));
+        s.plugins = deny(&[]).map(|restriction| PluginSettings {
+            restriction: Some(restriction),
+        });
+        let w = workflow(Some(mcp(allow(&["docs"]), &["docs"])), allow(&["p"]));
+        assert_eq!(resolve(&w, &s), StepRestrictions::default());
+        // The workflow's own empty deny is no restriction either.
+        let w = workflow(Some(mcp(deny(&[]), &[])), deny(&[]));
+        assert_eq!(resolve(&w, &step()), StepRestrictions::default());
+    }
+
+    #[test]
+    fn every_degradation_of_a_step_lands_in_its_one_reason() {
+        let mut a = AppliedRestrictions::default();
+        assert_eq!(a.degradation_reason(), None);
+        a.degradations = vec!["mcp not exact".into(), "plugins not applied".into()];
+        assert_eq!(
+            a.degradation_reason().as_deref(),
+            Some("mcp not exact; plugins not applied")
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 use crate::adapters::common::{
     add_dir_args, artifact_of, file, flag_args, harvest_prompt, lf, prompt_pointer,
-    require_session_id, spawn_spec,
+    require_session_id, secret_file, spawn_spec,
 };
 use crate::engine::guidance::interactive_guidance;
 use crate::engine::step_files::{
@@ -128,7 +128,7 @@ fn mcp_args(step: &AgentStep, ctx: &RunCtx) -> Result<(Vec<String>, Option<JsVal
                 .map_err(|e| e.to_string())?
         );
         flags.push(format!("--additional-mcp-config=@{}", to_fwd_abs(&path)));
-        entry = Some(file(&path, &text));
+        entry = Some(secret_file(&path, &text));
     }
     if mcp.disable_builtins {
         flags.push("--disable-builtin-mcps".to_string());

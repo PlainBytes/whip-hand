@@ -985,7 +985,10 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert!(acquired, "the lock was not released after the holder dropped");
+        assert!(
+            acquired,
+            "the lock was not released after the holder dropped"
+        );
         assert_eq!(
             std::fs::read_to_string(d.path().join(WORKTREES_DIR).join(".gitignore")).unwrap(),
             "*\n"

@@ -76,6 +76,8 @@ methods! {
     ValidateWorkflow = "validateWorkflow" (p::ValidateWorkflowParams) -> p::ValidateWorkflowResult;
     InitWorkspace = "initWorkspace" (p::InitWorkspaceParams) -> p::InitWorkspaceResult;
     ListModels = "listModels" (p::ListModelsParams) -> p::ListModelsResult;
+    ListMcpServers = "listMcpServers" (p::ListMcpServersParams) -> p::ListMcpServersResult;
+    ListPlugins = "listPlugins" (p::ListPluginsParams) -> p::ListPluginsResult;
     ConfigGet = "configGet" (p::ConfigGetParams) -> p::ConfigGetResult;
     ConfigSet = "configSet" (p::ConfigSetParams) -> p::ConfigSetResult;
     PruneRuns = "pruneRuns" (p::PruneRunsParams) -> p::PruneRunsResult;
@@ -100,6 +102,10 @@ pub const DESKTOP_ONLY: &[&str] = &[
     // The desktop's Workspaces page; the TUI has its own workspace picker.
     "describeWorkspaces",
     "forgetWorkspace",
+    // Managed from the desktop's workspace settings; runs read the store either way.
+    "listSecrets",
+    "setSecret",
+    "deleteSecret",
 ];
 
 /// A request as `update` describes it: no id yet, and what to do with the

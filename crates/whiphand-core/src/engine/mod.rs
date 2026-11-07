@@ -12,6 +12,7 @@ pub mod frontend;
 pub mod guidance;
 pub mod manual;
 pub mod progress;
+pub mod restrictions;
 pub mod resume;
 pub mod runner;
 pub mod spec;

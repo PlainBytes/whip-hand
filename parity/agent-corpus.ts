@@ -54,6 +54,8 @@ const BAD_PARAMS: Array<[string, unknown]> = [
   ['deleteWorkflow', { workdir: 'w', name: 'a/b' }], ['cloneWorkflow', { workdir: 'w', name: 'a', newName: '' }],
   ['validateWorkflow', {}], ['initWorkspace', { workdir: 3 }],
   ['doctor', { workdir: '' }], ['listModels', { refresh: 'yes' }],
+  ['listMcpServers', {}], ['listMcpServers', { workdir: 'w', refresh: 'yes' }],
+  ['listPlugins', {}], ['listPlugins', { workdir: 'w', extra: 1 }],
   ['configGet', { workdir: '' }],
   ['configSet', { config: { defaults: {}, on_findings: 'x', loop: { max_iterations: 0 }, artifacts_dir: '', runs: { max_retained: 0, auto_name: 1, max_attachment_mb: 0 } }, explicitKeys: ['nope'] }],
   ['startRun', { workdir: 'w', workflow: 'f', inputs: { a: 1 }, maxIterations: 1.5 }],
@@ -72,6 +74,7 @@ const BAD_PARAMS: Array<[string, unknown]> = [
   ['ptyInput', { jobId: 'j' }], ['ptyResize', { jobId: 'j', cols: 0, rows: 2.5 }],
   ['getAppState', []], ['touchRecentWorkspace', { path: '' }], ['setWorkspacePinned', { path: 'p' }],
   ['forgetWorkspace', {}], ['forgetWorkspace', { path: '' }], ['describeWorkspaces', []],
+  ['listSecrets', {}], ['setSecret', { workdir: 'w', name: '' }], ['deleteSecret', { workdir: 'w' }],
   ['setUiState', { window: { width: 0, height: 1, x: 0.5, y: 'a' }, theme: 'blue' }],
   ['saveRunDraft', { draft: { id: '', workdir: 'w', inputs: { a: 1 }, dryRun: 'no', attachments: [{ path: '' }] } }],
   ['saveRunDraft', {}], ['deleteRunDraft', { id: '' }],
@@ -359,6 +362,17 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    name: 'workspace secrets',
+    steps: [
+      { call: 'listSecrets', params: (c: Ctx) => ({ workdir: c.ws }), label: 'listSecrets empty' },
+      { call: 'setSecret', params: (c: Ctx) => ({ workdir: c.ws, name: 'API_TOKEN', value: 'parity-value' }) },
+      { call: 'setSecret', params: (c: Ctx) => ({ workdir: c.ws, name: 'not valid', value: 'parity-value' }), label: 'setSecret bad name' },
+      { call: 'listSecrets', params: (c: Ctx) => ({ workdir: c.ws }), label: 'listSecrets after set' },
+      { call: 'deleteSecret', params: (c: Ctx) => ({ workdir: c.ws, name: 'API_TOKEN' }) },
+      { call: 'deleteSecret', params: (c: Ctx) => ({ workdir: c.ws, name: 'API_TOKEN' }), label: 'deleteSecret again' },
+    ],
+  },
+  {
     name: 'app state',
     files: { 'other/.keep': '' },
     steps: [
@@ -429,6 +443,9 @@ export const SCENARIOS: Scenario[] = [
       { call: 'listModels' },
       { call: 'doctor' },
       { call: 'listModels', params: { refresh: true }, label: 'listModels refresh' },
+      { call: 'listMcpServers', params: (c: Ctx) => ({ workdir: c.ws }) },
+      { call: 'listPlugins', params: (c: Ctx) => ({ workdir: c.ws }) },
+      { call: 'listMcpServers', params: (c: Ctx) => ({ workdir: c.ws, refresh: true }), label: 'listMcpServers refresh' },
     ],
   },
   {

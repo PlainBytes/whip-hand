@@ -927,6 +927,79 @@ Their loops replay at exactly the budget and rounds the manifest recorded, whate
 `--max-iterations` or `--extra-iterations` say, so a resume never spawns an implementer inside
 work a human has already answered.
 
+## Agent restrictions
+
+`mcp:` and `plugins:` (workflow level, overridable per agent step) narrow what an agent step
+may use. The user-facing description is in the README; this is why it works the way it does.
+
+**Resolution.** `engine/restrictions.rs` holds one pure `resolve(workflow, step)`, so the
+precedence lives in a single place: the step's setting if present, else the workflow's, else
+unrestricted. A step *replaces* the workflow default and never merges with it — merging would
+make `allow: []` on a step impossible to express, and "this step has no tools" must be
+writable. Workflow-defined `mcp.servers` are on only when a resolved `allow` names them, so
+declaring a server is not the same as granting it. `apply` then checks the policy against the
+runner's listing; an allowlisted name found in neither place fails the step before spawn
+(`MissingServers`), because silently dropping it would run the step with less than the
+author intended. The result is carried on `RunCtx` per step id and adapters only read it.
+
+**Enforcement differs per runner.** Claude can take an exact server set (`--strict-mcp-config`
+with a per-step `--mcp-config=<file>`; the `=` form because the flag is variadic and would
+swallow the prompt) and per-plugin `enabledPlugins` in `--settings`. Strict mode drops every
+server not in the file, plugin servers and claude.ai connectors included, and connectors have
+no readable definition to copy, so a deny can't be built from it. A deny instead blocks the
+named servers' tools with `--disallowedTools=mcp__<name>`: the servers still start, nothing
+else changes, and no listing is needed. A headless allow also adds `mcp__<name>` to
+`--allowedTools`, since a tool nobody can approve is refused at call time. Copilot and opencode
+only add and switch off, so an allowlist is *simulated*: every configured server not in the
+allowlist is disabled (`--disable-mcp-server` and `--disable-builtin-mcps` on copilot;
+`{ enabled: false }` entries in `OPENCODE_CONFIG_CONTENT` on opencode), and a deny disables
+just the named ones. That needs the runner's server list, so when it can't be read an
+allowlist is spawned as far as known and reported as a degradation. Neither copilot nor
+opencode has a per-session plugin switch, so a `plugins:` restriction there is a degradation
+only; whiphand's own await-state plugin is mounted regardless and is never listed. All of
+these gaps use one degradation id, `agent-restrictions`, and a step's reasons travel in one
+event, since the journal keeps the first per (capability, step). A listing that could not be
+read in full counts as unavailable: enforcing from one that may lack entries would look exact
+without being so, while the editor still offers the names it did get.
+
+**References, not values, in workflows.** Workflow files get committed and each run snapshots its
+workflow, and resume re-parses that snapshot, so redacting it would leave a resumed run with
+`<redacted>` as a token. So credentials are `${NAME}` references, expanded by one function
+(`restrictions::expand_mcp_references`) on `apply_restrictions`' own copy of the policy, before any
+adapter sees it. `ctx.restrictions` and the snapshot keep the reference, and a resume resolves it
+again. Whiphand expands rather than leaving it to the runners because Claude passes a missing
+`${X}` through as literal text and starts the server anyway; the check has to happen here, and it
+then works the same on every runner. Definitions copied from a runner's own config aren't expanded.
+
+**The workspace secret store.** `secret_store.rs` keeps values in `secrets.yaml` under the per-user
+workspace folder for both storage modes, since a local workspace's data dir is inside its repository.
+Only the marker decides storage, so the file doesn't change a workspace's mode. It records its
+workspace because two can share a `<basename>-<hash6>` key, and one must never read or overwrite the
+other's values. The store's errors don't repeat the YAML parser's message, which can quote a line of
+the file. The RPCs answer with names only and are left out of `REMOTE_METHODS`. A private file was
+chosen over an OS keychain so desktop, CLI, TUI and headless Linux behave the same; it isn't
+encrypted, and agents run as the same user.
+
+**Server definitions are credentials.** They carry `env` and `headers`, so the per-step config
+files are written owner-only and removed when the step ends, and `spec::redact_spawn_event`
+replaces their content (and opencode's `mcp` config) where core emits `step:spawn`. Every event
+passes through there on its way to `events.ndjson` and the clients; the launcher is handed the
+spec itself.
+
+**Discovery never starts a server.** The listing of configured servers and plugins is read
+from each runner's config (`adapters/harness_catalog.rs`), never taken from `claude mcp list`
+or `opencode mcp list`: those connect to every server to report health, which would launch
+arbitrary processes (and spend network and credentials) just to answer a question about
+configuration. Copilot's `mcp list --json` is used because it reads config only, with a
+config-file fallback. A listing records its `source` (`live`, or `unavailable` with a note);
+a runner that can't be asked is `unavailable`, not an error. Only steps whose policy is
+restricted trigger a listing.
+
+**Definitions never cross the RPC.** `listMcpServers` / `listPlugins` return names, origin
+and enabled state only — never a server's `command`, `args`, `env`, `url` or `headers`, which
+hold tokens. The desktop editor needs names for its pickers and nothing more. Definitions are
+copied from config into the per-step file inside the engine process.
+
 ## Disabling a step
 
 `enabled: false` parks a step without deleting it or its prompt. Absent means enabled —

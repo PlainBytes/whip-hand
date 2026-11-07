@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Restrict a step's MCP servers and plugins
+
+- New `mcp:` and `plugins:` fields, on the workflow and on each agent step, with `allow` or
+  `deny` lists; the workflow can also define `mcp.servers`, which a step gets only if it
+  allows them. A step's setting replaces the workflow's. `allow: []` means none, and an
+  allowlisted server that doesn't exist fails the step before it starts.
+- Claude enforces both. An `allow` loads exactly the named servers, and headless steps may call
+  their tools without a prompt. A `deny` blocks the named servers' tools and leaves every other
+  server, connector and plugin server in place; the denied servers still start. Copilot and opencode enforce MCP servers by switching off the ones not
+  allowed, but cannot switch plugins off per session; what a runner can't enforce is reported
+  as an `agent-restrictions` degradation and the step still runs. The desktop workflow editor
+  has pickers for both.
+- Workflow-defined servers can use `${NAME}` references in `env`, `headers`, `url` and `args`,
+  filled in from the workspace's secrets, then the environment, then a `${NAME:-default}`. The
+  workflow file and run snapshot keep the reference, and a missing value fails the step before it
+  starts. Manage secrets in the desktop app under Settings → Secrets; they stay outside the
+  repository, are readable only by your user on POSIX, and are not encrypted. Literal credentials
+  still work but now get a warning, and run snapshots are owner-only on POSIX.
+
 ### A run started without a worktree resumes where it ran
 
 - Resuming a run that had skipped its workflow's worktree (`--no-worktree`) tried to create one.

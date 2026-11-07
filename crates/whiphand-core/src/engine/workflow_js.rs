@@ -6,8 +6,8 @@
 
 use crate::jsval::{JsObject, JsValue, ObjExt};
 use crate::types::{
-    AgentStep, Capture, CommandStep, ManualDefault, ManualStep, OnFindings, Step, Workflow,
-    WorktreeSetting,
+    AgentStep, Capture, CommandStep, ManualDefault, ManualStep, McpServerDef, McpSettings,
+    OnFindings, PluginSettings, Restriction, Step, Workflow, WorktreeSetting,
 };
 
 fn strings(v: &[String]) -> JsValue {
@@ -63,7 +63,69 @@ fn agent(s: &AgentStep) -> JsObject {
     opt(&mut o, "allow_commits", s.allow_commits);
     opt(&mut o, "effort", s.effort.map(|e| e.as_str()));
     opt(&mut o, "harvest_timeout_ms", s.harvest_timeout_ms);
+    if let Some(m) = &s.mcp {
+        o.set("mcp", mcp_to_js(m));
+    }
+    if let Some(p) = &s.plugins {
+        o.set("plugins", plugins_to_js(p));
+    }
     o
+}
+
+fn string_map(m: &crate::js::Record<String>) -> JsValue {
+    JsValue::Obj(JsObject::from_iter(
+        m.iter().map(|(k, v)| (k.to_string(), JsValue::from(v))),
+    ))
+}
+
+fn server_to_js(d: &McpServerDef) -> JsValue {
+    let mut o = JsObject::new();
+    match d {
+        McpServerDef::Stdio { command, args, env } => {
+            o.set("command", command.as_str());
+            if let Some(a) = args {
+                o.set("args", strings(a));
+            }
+            if let Some(e) = env {
+                o.set("env", string_map(e));
+            }
+        }
+        McpServerDef::Remote { kind, url, headers } => {
+            o.set("type", kind.as_str());
+            o.set("url", url.as_str());
+            if let Some(h) = headers {
+                o.set("headers", string_map(h));
+            }
+        }
+    }
+    JsValue::Obj(o)
+}
+
+fn restriction_to_js(o: &mut JsObject, r: &Option<Restriction>) {
+    match r {
+        Some(Restriction::Allow(names)) => o.set("allow", strings(names)),
+        Some(Restriction::Deny(names)) => o.set("deny", strings(names)),
+        None => {}
+    }
+}
+
+fn mcp_to_js(m: &McpSettings) -> JsValue {
+    let mut o = JsObject::new();
+    if let Some(servers) = &m.servers {
+        let mut rec = JsObject::new();
+        for (k, d) in servers.iter() {
+            rec.set(k, server_to_js(d));
+        }
+        o.set("servers", rec);
+    }
+    restriction_to_js(&mut o, &m.restriction);
+    JsValue::Obj(o)
+}
+
+fn plugins_to_js(p: &PluginSettings) -> JsValue {
+    let mut o = JsObject::new();
+    restriction_to_js(&mut o, &p.restriction);
+    JsValue::Obj(o)
 }
 
 fn command(s: &CommandStep) -> JsObject {
@@ -191,6 +253,12 @@ pub fn workflow_to_js(w: &Workflow) -> JsValue {
     opt(&mut o, "on_findings", w.on_findings.map(on_findings));
     if let Some(setting) = &w.worktree {
         o.set("worktree", worktree_to_js(setting));
+    }
+    if let Some(m) = &w.mcp {
+        o.set("mcp", mcp_to_js(m));
+    }
+    if let Some(p) = &w.plugins {
+        o.set("plugins", plugins_to_js(p));
     }
     o.set(
         "steps",

@@ -2,11 +2,12 @@
 
 use crate::adapters::common::{
     add_dir_args, artifact_of, file, flag_args, harvest_prompt, lf, prompt_pointer,
-    require_session_id, spawn_spec,
+    require_session_id, secret_file, spawn_spec,
 };
 use crate::engine::guidance::interactive_guidance;
 use crate::engine::step_files::{
-    AWAIT_STATE, END_MARKER, HARVEST_PROMPT, PROMPT, copilot_plugin_path, step_file_path,
+    AWAIT_STATE, COPILOT_MCP_CONFIG, END_MARKER, HARVEST_PROMPT, PROMPT, copilot_plugin_path,
+    step_file_path,
 };
 use crate::jsval::{self, JsObject, JsValue, ObjExt};
 use crate::node_path;
@@ -89,6 +90,57 @@ fn await_hooks(await_path: &str) -> Result<JsObject, String> {
     })
 }
 
+/// A workflow-defined server in copilot's `mcpServers` shape: `local` or `http`/`sse`,
+/// with every tool of the server on.
+fn copilot_server(def: &serde_json::Value) -> serde_json::Value {
+    let mut o = def.as_object().cloned().unwrap_or_default();
+    if o.contains_key("command") {
+        o.insert("type".into(), "local".into());
+        o.entry("args").or_insert_with(|| serde_json::json!([]));
+    }
+    o.insert("tools".into(), serde_json::json!(["*"]));
+    serde_json::Value::Object(o)
+}
+
+/// The MCP flags of a step with an MCP restriction, and the config file when the workflow
+/// defines servers it allows; nothing for an unrestricted step, so its argv is unchanged.
+/// The `=` forms keep the flags from swallowing the argument after them.
+fn mcp_args(step: &AgentStep, ctx: &RunCtx) -> Result<(Vec<String>, Option<JsValue>), String> {
+    let Some(mcp) = ctx
+        .applied
+        .get(&step.id)
+        .and_then(|a| a.copilot_mcp.as_ref())
+    else {
+        return Ok((Vec::new(), None));
+    };
+    let mut flags = Vec::new();
+    let mut entry = None;
+    if !mcp.servers.is_empty() {
+        let path = step_file_path(&ctx.run_dir, &step.id, COPILOT_MCP_CONFIG)?;
+        let map: serde_json::Map<String, serde_json::Value> = mcp
+            .servers
+            .iter()
+            .map(|(n, d)| (n.clone(), copilot_server(d)))
+            .collect();
+        let text = format!(
+            "{}\n",
+            serde_json::to_string_pretty(&serde_json::json!({ "mcpServers": map }))
+                .map_err(|e| e.to_string())?
+        );
+        flags.push(format!("--additional-mcp-config=@{}", to_fwd_abs(&path)));
+        entry = Some(secret_file(&path, &text));
+    }
+    if mcp.disable_builtins {
+        flags.push("--disable-builtin-mcps".to_string());
+    }
+    flags.extend(
+        mcp.disable
+            .iter()
+            .map(|n| format!("--disable-mcp-server={n}")),
+    );
+    Ok((flags, entry))
+}
+
 fn json_text(value: JsObject) -> String {
     format!(
         "{}\n",
@@ -120,6 +172,8 @@ pub fn interactive(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
     }
     argv.push("--allow-tool=shell(touch)".into());
     argv.push(format!("--plugin-dir={plugin}"));
+    let (mcp_flags, mcp_file) = mcp_args(step, ctx)?;
+    argv.extend(mcp_flags);
     let guidance = interactive_guidance(step, ctx)?;
     let content = lf(&format!("{guidance}\n\n---\n\n{}", prompt_of(step, ctx)?));
     let manifest = obj! {
@@ -128,20 +182,19 @@ pub fn interactive(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
         "version" => "1.0.0",
     };
     let mut spec = spawn_spec(ctx, &argv, true, JsObject::new());
-    spec.set(
-        "files",
-        vec![
-            file(&prompt, &content),
-            file(
-                &node_path::join(&[&plugin, ".plugin", "plugin.json"]),
-                &json_text(manifest),
-            ),
-            file(
-                &node_path::join(&[&plugin, "hooks", "hooks.json"]),
-                &json_text(await_hooks(&await_path)?),
-            ),
-        ],
-    );
+    let mut files = vec![
+        file(&prompt, &content),
+        file(
+            &node_path::join(&[&plugin, ".plugin", "plugin.json"]),
+            &json_text(manifest),
+        ),
+        file(
+            &node_path::join(&[&plugin, "hooks", "hooks.json"]),
+            &json_text(await_hooks(&await_path)?),
+        ),
+    ];
+    files.extend(mcp_file);
+    spec.set("files", files);
     spec.set(
         "endSession",
         obj! { "markerPath" => marker.as_str(), "quitSequence" => COPILOT_QUIT_SEQUENCE },
@@ -181,9 +234,13 @@ pub fn headless(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
         ]
         .map(String::from),
     );
+    let (mcp_flags, mcp_file) = mcp_args(step, ctx)?;
+    argv.extend(mcp_flags);
     let text = lf(&prompt_of(step, ctx)?);
     let mut spec = spawn_spec(ctx, &argv, false, JsObject::new());
-    spec.set("files", vec![file(&prompt, &text)]);
+    let mut files = vec![file(&prompt, &text)];
+    files.extend(mcp_file);
+    spec.set("files", files);
     spec.set("progress", obj! { "format" => "copilot-jsonl" });
     Ok(spec)
 }
@@ -239,8 +296,12 @@ pub fn harvest(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
         ]
         .map(String::from),
     );
+    let (mcp_flags, mcp_file) = mcp_args(step, ctx)?;
+    argv.extend(mcp_flags);
     let mut spec = spawn_spec(ctx, &argv, false, JsObject::new());
-    spec.set("files", vec![file(&path, &lf(&harvest_prompt(step, ctx)))]);
+    let mut files = vec![file(&path, &lf(&harvest_prompt(step, ctx)))];
+    files.extend(mcp_file);
+    spec.set("files", files);
     spec.set("progress", obj! { "format" => "copilot-jsonl" });
     Ok(spec)
 }
@@ -463,5 +524,106 @@ mod tests {
             r#"{"title":"Question","notification_type":"elicitation_dialog"}"#,
         );
         assert_eq!(state(), Some(AwaitReason::Turn));
+    }
+
+    // ---- restrictions ----
+
+    use crate::engine::restrictions::{AppliedRestrictions, CopilotMcp};
+    use serde_json::json;
+
+    fn restrict(ctx: &mut RunCtx, m: CopilotMcp) {
+        ctx.applied.insert(
+            "s".into(),
+            AppliedRestrictions {
+                copilot_mcp: Some(m),
+                ..Default::default()
+            },
+        );
+    }
+
+    #[test]
+    fn unrestricted_steps_carry_no_mcp_flags_or_files() {
+        let root = tempfile::tempdir().unwrap();
+        let c = ctx(root.path(), root.path());
+        for argv in builds(&c) {
+            assert!(!argv.iter().any(|a| a.contains("mcp")), "{argv:?}");
+        }
+        let h = headless(&step("copilot", StepMode::Headless), &c).unwrap();
+        assert_eq!(files_of(&h).len(), 1);
+    }
+
+    #[test]
+    fn allow_with_a_workflow_server_writes_the_config_and_disable_flags_on_every_spawn() {
+        let root = tempfile::tempdir().unwrap();
+        let mut c = ctx(root.path(), root.path());
+        restrict(
+            &mut c,
+            CopilotMcp {
+                servers: vec![("docs".into(), json!({ "command": "docs-mcp" }))],
+                disable: vec!["b".into()],
+                disable_builtins: true,
+            },
+        );
+        let path = to_fwd_abs(&step_file_path(&c.run_dir, "s", COPILOT_MCP_CONFIG).unwrap());
+        for (spec, last_is_prompt) in [
+            (
+                interactive(&step("copilot", StepMode::Interactive), &c).unwrap(),
+                false,
+            ),
+            (
+                headless(&step("copilot", StepMode::Headless), &c).unwrap(),
+                false,
+            ),
+            (
+                harvest(&step("copilot", StepMode::Headless), &c).unwrap(),
+                false,
+            ),
+        ] {
+            let _ = last_is_prompt;
+            let a = argv(&spec);
+            assert!(a.contains(&"--disable-mcp-server=b".to_string()), "{a:?}");
+            assert!(a.contains(&"--disable-builtin-mcps".to_string()), "{a:?}");
+            assert!(
+                a.contains(&format!("--additional-mcp-config=@{path}")),
+                "{a:?}"
+            );
+            assert!(!a.iter().any(|x| x == "--disable-mcp-server"), "{a:?}");
+            let (_, body) = files_of(&spec)
+                .into_iter()
+                .find(|(p, _)| p.ends_with("copilot-mcp.json"))
+                .expect("config in spec files");
+            let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+            let names: Vec<&String> = v["mcpServers"].as_object().unwrap().keys().collect();
+            assert_eq!(names, ["docs"]);
+            assert_eq!(v["mcpServers"]["docs"]["type"], "local");
+            assert_eq!(v["mcpServers"]["docs"]["tools"], json!(["*"]));
+        }
+    }
+
+    #[test]
+    fn deny_adds_only_the_disable_flag() {
+        let root = tempfile::tempdir().unwrap();
+        let mut c = ctx(root.path(), root.path());
+        restrict(
+            &mut c,
+            CopilotMcp {
+                disable: vec!["a".into()],
+                ..Default::default()
+            },
+        );
+        let base = builds(&ctx(root.path(), root.path()));
+        for (with, without) in builds(&c).iter().zip(&base) {
+            let extra: Vec<&String> = with.iter().filter(|x| !without.contains(x)).collect();
+            assert_eq!(extra, ["--disable-mcp-server=a"]);
+        }
+        let h = headless(&step("copilot", StepMode::Headless), &c).unwrap();
+        assert_eq!(files_of(&h).len(), 1);
+    }
+
+    #[test]
+    fn remote_workflow_servers_keep_their_type() {
+        let v = copilot_server(&json!({ "type": "http", "url": "https://x" }));
+        assert_eq!(v["type"], "http");
+        assert_eq!(v["tools"], json!(["*"]));
     }
 }

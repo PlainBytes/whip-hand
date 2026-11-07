@@ -126,6 +126,13 @@ pub struct AgentStep {
     pub effort: Option<EffortLevel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub harvest_timeout_ms: Option<u64>,
+    /// Which MCP servers this step may use; replaces the workflow default. `servers` is
+    /// never set here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<McpSettings>,
+    /// Which plugins this step may use; replaces the workflow default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<PluginSettings>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -305,6 +312,10 @@ pub struct Workflow {
     pub on_findings: Option<OnFindings>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorktreeSetting>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<McpSettings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<PluginSettings>,
     pub steps: Vec<Step>,
 }
 
@@ -319,5 +330,66 @@ pub enum WorktreeSetting {
         base: Option<String>,
         branch: Option<String>,
         sync: Option<bool>,
+    },
+}
+
+/// An `allow:` or `deny:` list. `Allow(vec![])` means "none" and stays distinct from an
+/// absent restriction; `Deny(vec![])` is valid and does nothing.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Restriction {
+    Allow(Vec<String>),
+    Deny(Vec<String>),
+}
+
+/// An `mcp:` block. `servers` only appears at workflow level.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct McpSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub servers: Option<Record<McpServerDef>>,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub restriction: Option<Restriction>,
+}
+
+/// A `plugins:` block.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PluginSettings {
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub restriction: Option<Restriction>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum McpRemoteKind {
+    Http,
+    Sse,
+}
+
+impl McpRemoteKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            McpRemoteKind::Http => "http",
+            McpRemoteKind::Sse => "sse",
+        }
+    }
+}
+
+/// A server a workflow brings: a local process, or a remote endpoint.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum McpServerDef {
+    Stdio {
+        command: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        args: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        env: Option<Record<String>>,
+    },
+    Remote {
+        #[serde(rename = "type")]
+        kind: McpRemoteKind,
+        url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        headers: Option<Record<String>>,
     },
 }

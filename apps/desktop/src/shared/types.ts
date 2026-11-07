@@ -84,7 +84,27 @@ export interface AgentStep extends StepCommon {
   allow_commits?: boolean;
   effort?: EffortLevel;
   harvest_timeout_ms?: number;
+  /** Which MCP servers this step may use; replaces the workflow default. */
+  mcp?: StepMcp;
+  /** Which plugins this step may use; replaces the workflow default. */
+  plugins?: PluginSettings;
 }
+
+/** At most one of `allow` / `deny`. `allow: []` means none; `deny: []` does nothing. */
+export type Restriction = { allow: string[]; deny?: never } | { deny: string[]; allow?: never } | { allow?: never; deny?: never };
+
+/** A server the workflow brings: a local process, or a remote endpoint. */
+export type McpServerDef =
+  | { command: string; args?: string[]; env?: Record<string, string> }
+  | { type: 'http' | 'sse'; url: string; headers?: Record<string, string> };
+
+/** A step's `mcp:` — it names servers but cannot define them. */
+export type StepMcp = Restriction;
+
+/** The workflow's `mcp:` — the servers it brings, plus the default for every agent step. */
+export type McpSettings = Restriction & { servers?: Record<string, McpServerDef> };
+
+export type PluginSettings = Restriction;
 
 /** A shell command. Deterministic, spends no tokens, needs no runner. */
 export interface CommandStep extends StepCommon {
@@ -162,6 +182,8 @@ export interface Workflow {
   inputs?: Record<string, WorkflowInput>;
   on_findings?: OnFindings;
   worktree?: boolean | { base?: string; branch?: string; sync?: boolean };
+  mcp?: McpSettings;
+  plugins?: PluginSettings;
   steps: Step[];
 }
 
@@ -216,8 +238,10 @@ export interface SpawnSpec {
    * touch the filesystem themselves). Absolute paths under runDir — the
    * opencode adapter's guidance and plugin files are delivered this way. A
    * dry run records `files` on the `step:spawn` event but writes none of them.
+   * A `secret` file holds credentials: on any `step:spawn` event its `content`
+   * is a placeholder, and only the launcher ever has the real one.
    */
-  files?: Array<{ path: string; content: string }>;
+  files?: Array<{ path: string; content: string; secret?: boolean }>;
   /**
    * A file (also in `files`) the frontend hands the child as its stdin — for a
    * headless runner verified to read a piped prompt. Stdio wiring, not a content

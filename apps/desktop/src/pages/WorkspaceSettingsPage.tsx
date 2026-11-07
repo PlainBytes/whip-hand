@@ -17,6 +17,7 @@ import { Save20Regular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { Page } from '../components/Page.tsx';
 import { DismissibleWarning } from '../components/DismissibleWarning.tsx';
+import { WorkspaceSecretsSection } from '../components/WorkspaceSecretsSection.tsx';
 import { useAppStore } from '../state/store.ts';
 import { spinInteger } from '../lib/spin-value.ts';
 import type { WorkspaceConfig, OnFindings } from '../shared/types.ts';
@@ -396,6 +397,7 @@ export function WorkspaceSettingsPage() {
         {saving ? 'Saving…' : 'Save'}
       </Button>
     </div>
+    {workspacePath && <WorkspaceSecretsSection workdir={workspacePath} />}
     </Page>
   );
 }

@@ -258,6 +258,78 @@
           }
         }
       }
+    },
+    {
+      "step": "listMcpServers",
+      "response": {
+        "result": {
+          "runners": {
+            "claude": {
+              "source": "unavailable",
+              "servers": [],
+              "note": "no configuration found"
+            },
+            "copilot": {
+              "source": "unavailable",
+              "servers": [],
+              "note": "couldn't run copilot: spawn copilot ENOENT"
+            },
+            "opencode": {
+              "source": "unavailable",
+              "servers": [],
+              "note": "no configuration found"
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": "listPlugins",
+      "response": {
+        "result": {
+          "runners": {
+            "claude": {
+              "source": "unavailable",
+              "plugins": [],
+              "note": "no configuration found"
+            },
+            "copilot": {
+              "source": "unavailable",
+              "plugins": [],
+              "note": "couldn't run copilot: spawn copilot ENOENT"
+            },
+            "opencode": {
+              "source": "unavailable",
+              "plugins": [],
+              "note": "no configuration found"
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": "listMcpServers refresh",
+      "response": {
+        "result": {
+          "runners": {
+            "claude": {
+              "source": "unavailable",
+              "servers": [],
+              "note": "no configuration found"
+            },
+            "copilot": {
+              "source": "unavailable",
+              "servers": [],
+              "note": "couldn't run copilot: spawn copilot ENOENT"
+            },
+            "opencode": {
+              "source": "unavailable",
+              "servers": [],
+              "note": "no configuration found"
+            }
+          }
+        }
+      }
     }
   ],
   "notifications": {},

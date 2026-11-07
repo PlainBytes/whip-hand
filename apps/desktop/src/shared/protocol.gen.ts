@@ -99,6 +99,24 @@ export type ModelListRow = { source: ModelSource, models: Array<ModelInfo>, note
 
 export type ListModelsResult = Record<string, ModelListRow>;
 
+export type ListCatalogParams = { workdir: string, refresh?: boolean, };
+
+export type CatalogOrigin = "user" | "project" | "plugin" | "builtin";
+
+export type CatalogSource = "live" | "unavailable";
+
+export type McpServerInfo = { name: string, origin: CatalogOrigin, plugin?: string, enabled?: boolean, };
+
+export type McpListRow = { source: CatalogSource, servers: Array<McpServerInfo>, note?: string, };
+
+export type PluginInfoRow = { name: string, origin: CatalogOrigin, version?: string, enabled: boolean, };
+
+export type PluginListRow = { source: CatalogSource, plugins: Array<PluginInfoRow>, note?: string, };
+
+export type ListMcpServersResult = { runners: Record<string, McpListRow>, };
+
+export type ListPluginsResult = { runners: Record<string, PluginListRow>, };
+
 export type ConfigLayerInfo = { config: PartialConfig, path: string, exists: boolean, };
 
 export type ConfigGetResult = { config: WorkspaceConfig, global: ConfigLayerInfo, project?: ConfigLayerInfo, };
@@ -300,6 +318,12 @@ export type SetWorkspacePinnedParams = { path: string, pinned: boolean, };
 
 export type ForgetWorkspaceParams = { path: string, };
 
+export type SetSecretParams = { workdir: string, name: string, value: string, };
+
+export type DeleteSecretParams = { workdir: string, name: string, };
+
+export type SecretsResult = { names: Array<string>, path: string, };
+
 export type WorkspaceGit = { "kind": "branch", name: string, } | { "kind": "detached", sha: string, } | { "kind": "unknown" };
 
 export type WorkspaceStorage = "local" | "user";
@@ -400,6 +424,8 @@ export type CreateWorkflowResult = PathResult;
 export type UpdateWorkflowResult = PathResult;
 export type DeleteWorkflowParams = WorkflowRefParams;
 export type CloneWorkflowResult = PathResult;
+export type ListMcpServersParams = ListCatalogParams;
+export type ListPluginsParams = ListCatalogParams;
 export type DoctorParams = OptionalWorkdirParams;
 export type DoctorResult = DoctorRow[];
 export type ConfigGetParams = OptionalWorkdirParams;
@@ -421,6 +447,10 @@ export type TouchRecentWorkspaceResult = RecentWorkspacesResult;
 export type SetWorkspacePinnedResult = RecentWorkspacesResult;
 export type DescribeWorkspacesParams = Empty;
 export type ForgetWorkspaceResult = RecentWorkspacesResult;
+export type ListSecretsParams = WorkdirParams;
+export type ListSecretsResult = SecretsResult;
+export type SetSecretResult = SecretsResult;
+export type DeleteSecretResult = SecretsResult;
 export type SetUiStateResult = OkTrue;
 export type SaveRunDraftResult = OkTrue;
 export type DeleteRunDraftResult = OkTrue;
@@ -448,6 +478,8 @@ export interface MethodMap {
   initWorkspace: { params: InitWorkspaceParams; result: InitWorkspaceResult };
   doctor: { params: DoctorParams; result: DoctorResult };
   listModels: { params: ListModelsParams; result: ListModelsResult };
+  listMcpServers: { params: ListMcpServersParams; result: ListMcpServersResult };
+  listPlugins: { params: ListPluginsParams; result: ListPluginsResult };
   configGet: { params: ConfigGetParams; result: ConfigGetResult };
   configSet: { params: ConfigSetParams; result: ConfigSetResult };
   startRun: { params: StartRunParams; result: StartRunResult };
@@ -472,6 +504,9 @@ export interface MethodMap {
   getAppState: { params: GetAppStateParams; result: GetAppStateResult };
   describeWorkspaces: { params: DescribeWorkspacesParams; result: DescribeWorkspacesResult };
   forgetWorkspace: { params: ForgetWorkspaceParams; result: ForgetWorkspaceResult };
+  listSecrets: { params: ListSecretsParams; result: ListSecretsResult };
+  setSecret: { params: SetSecretParams; result: SetSecretResult };
+  deleteSecret: { params: DeleteSecretParams; result: DeleteSecretResult };
   touchRecentWorkspace: { params: TouchRecentWorkspaceParams; result: TouchRecentWorkspaceResult };
   setWorkspacePinned: { params: SetWorkspacePinnedParams; result: SetWorkspacePinnedResult };
   setUiState: { params: SetUiStateParams; result: SetUiStateResult };

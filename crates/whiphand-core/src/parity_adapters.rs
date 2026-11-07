@@ -118,6 +118,8 @@ fn agent_step(raw: &Value) -> AgentStep {
         allow_commits: None,
         effort,
         harvest_timeout_ms: None,
+        mcp: None,
+        plugins: None,
     }
 }
 
@@ -151,6 +153,8 @@ fn run_ctx(raw: &Value) -> RunCtx {
             .collect(),
         attempts: Record::new(),
         verdicts: record(&raw["verdicts"]),
+        restrictions: Record::new(),
+        applied: Record::new(),
         inputs: record(&raw["inputs"]),
         loop_frame,
         frame,

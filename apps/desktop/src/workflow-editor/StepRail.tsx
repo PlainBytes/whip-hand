@@ -13,6 +13,8 @@ import { useAppStore } from '../state/store.ts';
 import { useStepLayoutStyles } from './step-layout.ts';
 import { numberOrUndefined } from './number-field.ts';
 import { refreshModelCatalog } from './use-harness-catalog.ts';
+import { RestrictionPicker, catalogNames } from './RestrictionPicker.tsx';
+import type { Restriction } from '../shared/types.ts';
 
 const SUBTLE = { color: 'var(--colorNeutralForeground3)' };
 
@@ -34,6 +36,8 @@ export interface StepRailProps {
   onUpdate: (next: Step) => void;
   /** Field key -> message, from a failed Save — same gating as the card's problem badge. */
   fieldErrors?: Record<string, string>;
+  /** Names of the servers the workflow itself defines; offered in the MCP picker alongside the runner's own. */
+  workflowServers?: string[];
 }
 
 /**
@@ -44,7 +48,7 @@ export interface StepRailProps {
  * any more. Each field is a direct child, so each is its own cell of the rail's
  * grid.
  */
-export function StepRail({ step, earlierStepIds, inStages, guardedByLoopId, onUpdate, fieldErrors }: StepRailProps) {
+export function StepRail({ step, earlierStepIds, inStages, guardedByLoopId, onUpdate, fieldErrors, workflowServers }: StepRailProps) {
   const styles = useStepLayoutStyles();
   const guardTooltip = guardedByLoopId
     ? `'${step.id}' ends loop '${guardedByLoopId}' — it must keep Verdict on`
@@ -86,6 +90,20 @@ export function StepRail({ step, earlierStepIds, inStages, guardedByLoopId, onUp
     && !doctorResult.some(r => r.runner && r.id === runnerId)
     ? `'${runnerId}' isn't a runner whiphand can drive`
     : undefined;
+
+  const mcpCatalog = useAppStore(state => state.mcpCatalog);
+  const pluginCatalog = useAppStore(state => state.pluginCatalog);
+  const runnerList = runnerId === undefined ? [] : [runnerId];
+  const mcpOffer = catalogNames(mcpCatalog?.runners, runnerList, 'servers');
+  const mcpNames = [...mcpOffer.names, ...(workflowServers ?? []).filter(n => !mcpOffer.names.includes(n))];
+  const pluginOffer = catalogNames(pluginCatalog?.runners, runnerList, 'plugins');
+
+  /** Sets or clears a step key: absent (inherit) is a missing key, never `undefined`. */
+  function patchRestriction(key: 'mcp' | 'plugins', next: Restriction | undefined): void {
+    const copy = { ...step } as Record<string, unknown>;
+    if (next === undefined) delete copy[key]; else copy[key] = next;
+    onUpdate(copy as unknown as Step);
+  }
 
   const modelList = runnerId === undefined ? undefined : modelCatalog?.[runnerId];
   const modelOptions = modelList?.models ?? [];
@@ -236,6 +254,24 @@ export function StepRail({ step, earlierStepIds, inStages, guardedByLoopId, onUp
           <Field label="Allowed paths" hint="Comma-separated.">
             <Input value={allowPathsText} onChange={(_e, data) => setAllowPaths(data.value)} />
           </Field>
+          <RestrictionPicker
+            label="MCP servers"
+            testId={`step-mcp-${step.id}`}
+            value={step.mcp}
+            inheritable
+            offered={mcpNames}
+            complete={mcpOffer.complete}
+            onChange={next => patchRestriction('mcp', next)}
+          />
+          <RestrictionPicker
+            label="Plugins"
+            testId={`step-plugins-${step.id}`}
+            value={step.plugins}
+            inheritable
+            offered={pluginOffer.names}
+            complete={pluginOffer.complete}
+            onChange={next => patchRestriction('plugins', next)}
+          />
         </>
       )}
 

@@ -74,7 +74,7 @@ export function WorkflowEditor({
   // Prefetches doctor + listModels so the Runner dropdown and Model combobox
   // are normally ready before a card is even expanded; StepRail reads both
   // straight from the store.
-  useHarnessCatalog();
+  useHarnessCatalog(workdir);
 
   const [saving, setSaving] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -333,6 +333,7 @@ export function WorkflowEditor({
               }}
             >
               <StepCard
+                workflowServers={Object.keys(draft.mcp?.servers ?? {})}
                 step={row.step}
                 ordinal={ordinalByStepId.get(row.step.id)!}
                 earlierStepIds={referenceableIds(draft.steps, row.path)}

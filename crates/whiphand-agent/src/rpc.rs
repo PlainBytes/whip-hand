@@ -27,6 +27,8 @@ pub const REMOTE_METHODS: &[&str] = &[
     "initWorkspace",
     "doctor",
     "listModels",
+    "listMcpServers",
+    "listPlugins",
     "configGet",
     "configSet",
     "startRun",
@@ -155,6 +157,14 @@ pub async fn handle_line(agent: &Rc<Agent>, ctx: RequestCtx, text: &str) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_browser_on_the_lan_cannot_touch_secrets() {
+        for method in ["listSecrets", "setSecret", "deleteSecret"] {
+            assert!(!REMOTE_METHODS.contains(&method), "{method}");
+            assert!(crate::schema::params(method).is_some(), "{method}");
+        }
+    }
 
     #[test]
     fn a_panicked_request_is_answered_with_its_own_id() {

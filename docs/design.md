@@ -944,7 +944,12 @@ author intended. The result is carried on `RunCtx` per step id and adapters only
 
 **Enforcement differs per runner.** Claude can take an exact server set (`--strict-mcp-config`
 with a per-step `--mcp-config=<file>`; the `=` form because the flag is variadic and would
-swallow the prompt) and per-plugin `enabledPlugins` in `--settings`. Copilot and opencode
+swallow the prompt) and per-plugin `enabledPlugins` in `--settings`. Strict mode drops every
+server not in the file, plugin servers and claude.ai connectors included, and connectors have
+no readable definition to copy, so a deny can't be built from it. A deny instead blocks the
+named servers' tools with `--disallowedTools=mcp__<name>`: the servers still start, nothing
+else changes, and no listing is needed. A headless allow also adds `mcp__<name>` to
+`--allowedTools`, since a tool nobody can approve is refused at call time. Copilot and opencode
 only add and switch off, so an allowlist is *simulated*: every configured server not in the
 allowlist is disabled (`--disable-mcp-server` and `--disable-builtin-mcps` on copilot;
 `{ enabled: false }` entries in `OPENCODE_CONFIG_CONTENT` on opencode), and a deny disables

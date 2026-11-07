@@ -399,6 +399,14 @@ steps:
 - **`allow` is exact, `deny` is subtractive.** `allow: [a, b]` leaves exactly `a` and `b`;
   `allow: []` leaves none. `deny: [a]` leaves everything the runner has except `a`
   (`deny: []` does nothing).
+- **Headless Claude steps may call what they allow.** Nobody is there to answer a permission
+  prompt, so an allowed server's tools are pre-approved, including any that change things
+  outside the repo. `writes: false` does not limit them. Interactive steps still prompt. Under
+  a `deny`, or with no restriction, a headless step can call only what your Claude settings
+  already permit.
+- **Server names are the runner's own.** On Claude, a plugin's server is
+  `plugin:<plugin>:<server>`, for example `plugin:playwright:playwright`, and a connector is
+  named as `claude mcp list` shows it, for example `claude.ai Gmail`.
 - **Workflow-defined servers are off unless allowed.** A server in `mcp.servers` reaches a
   step only when that step's resolved `allow` names it. Under `deny`, or with no `mcp`
   restriction on the step, no workflow-defined server is added.
@@ -411,7 +419,7 @@ What each runner enforces:
 
 | Runner | MCP `allow` / `deny` | Plugins `allow` / `deny` |
 | --- | --- | --- |
-| claude | Full. A per-step `--strict-mcp-config` file holds exactly the allowed servers. | Full. Plugins that must be off are set `false` in the step's `enabledPlugins`. An `allow` needs the plugin list to be readable, or the step fails. |
+| claude | Full. `allow`: a per-step `--strict-mcp-config` file holds exactly the allowed servers, so plugin servers and claude.ai connectors are off unless named, and a connector can't be named (whiphand can't see it, so the step fails). `deny`: the named servers' tools are blocked with `--disallowedTools`, but the servers still start. | Full. Plugins that must be off are set `false` in the step's `enabledPlugins`. An `allow` needs the plugin list to be readable, or the step fails. |
 | copilot | Servers switched off with `--disable-mcp-server` (`--disable-builtin-mcps` when no built-in is allowed); allowed workflow servers added with `--additional-mcp-config`. | Not enforceable: copilot has no per-session way to switch an installed plugin off. |
 | opencode | Per-step config: allowed workflow servers added, every other configured server set `enabled: false`. | Not enforceable: opencode has no per-session way to switch a configured plugin off. |
 
@@ -420,11 +428,11 @@ Whatever a runner can't enforce is reported, not hidden: the step still runs and
 enforceable for this runner") names what was not applied. It is emitted for a `plugins:`
 restriction on copilot or opencode, and for an MCP `allow` on copilot or opencode when the
 runner's configured servers could not all be read (one unreadable config file is enough), so
-none could be switched off. Claude has no such fallback: its restriction fails the step before
-it starts rather than run from a list that may be missing entries. On claude, an
-MCP restriction does not by itself stop a still-enabled plugin from bringing its own servers
-back; pair it with a `plugins:` restriction if that matters. whiphand's own await-state hooks
-are never restricted.
+none could be switched off. Claude has no such fallback: an `allow` naming a server from the
+runner's own config fails the step before it starts if that config can't be read in full. A
+`deny` needs no list, so it never fails this way. Claude's built-in plugins aren't in the list
+whiphand reads, so they stay on under `plugins: { allow: [] }`. whiphand's own await-state hooks are never
+restricted.
 
 **Attachments.** `--attach <path>` (repeatable — or the desktop's New Run dialog: pick,
 drop, or paste an image) copies a file into the run before step one; a step reads them by

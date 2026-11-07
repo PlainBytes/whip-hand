@@ -1544,6 +1544,8 @@ impl<F: Frontend> Run<'_, F> {
                         .to_string(),
                 );
             }
+        } else if let McpPolicy::Deny(names) = &policy.mcp {
+            applied.denied_mcp = names.clone();
         } else if policy.mcp != McpPolicy::Unrestricted {
             let listing = list_mcp_servers(adapter, &tree).await;
             applied.mcp = materialize_mcp(&step.id, &policy.mcp, &listing)?;

@@ -54,16 +54,60 @@ fn permission_path(native_abs: &str) -> String {
     }
 }
 
-/// The MCP flags and the config file a step with an MCP restriction needs; nothing for
-/// an unrestricted one, so its argv stays as it was.
+/// The permission rule covering every tool of an MCP server. Claude replaces whatever
+/// a tool name can't hold, so `plugin:a:b` is `mcp__plugin_a_b`.
+fn mcp_tool_rule(server: &str) -> String {
+    let name: String = server
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("mcp__{name}")
+}
+
+/// `--disallowedTools` with `tools` and the tools of the servers a `deny` names; nothing
+/// when both are empty.
+///
+/// A deny can't use the exact set of `mcp_args`: strict mode would also drop every server
+/// the file can't hold (claude.ai connectors, plugin servers). The cost is that a denied
+/// server still starts; only its tools are gone.
+fn disallowed_args(tools: &[&str], step: &AgentStep, ctx: &RunCtx) -> Vec<String> {
+    let denied = ctx.applied.get(&step.id).map(|a| a.denied_mcp.as_slice());
+    let rules: Vec<String> = tools
+        .iter()
+        .map(|t| t.to_string())
+        .chain(denied.unwrap_or_default().iter().map(|s| mcp_tool_rule(s)))
+        .collect();
+    if rules.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!("--disallowedTools={}", rules.join(","))]
+    }
+}
+
+/// `--allowedTools` for a headless step. No one is there to answer a permission prompt, so
+/// without a rule here an allowed server's tools load and every call is refused.
+fn headless_allowed_args(tools: &str, step: &AgentStep, ctx: &RunCtx) -> String {
+    let servers = ctx.applied.get(&step.id).and_then(|a| a.mcp.as_ref());
+    let mut rules = tools.to_string();
+    for (name, _) in servers.into_iter().flatten() {
+        rules.push(',');
+        rules.push_str(&mcp_tool_rule(name));
+    }
+    format!("--allowedTools={rules}")
+}
+
+/// The MCP flags and the config file a step with an MCP `allow` needs; nothing otherwise,
+/// so its argv stays as it was.
 ///
 /// `--mcp-config` is variadic and would swallow the prompt argument that follows, so it
 /// is passed in the `=` form. `--strict-mcp-config` makes claude ignore every other MCP
-/// source (user, project, local scope), so the file is the whole set.
-///
-/// Not verified: whether `--strict-mcp-config` also drops servers a still-enabled plugin
-/// bundles. Treat it as not: a plugin left enabled may bring its servers back, so an MCP
-/// restriction that must hold needs the matching `plugins:` restriction too.
+/// source, including plugin servers and claude.ai connectors, so the file is the whole set.
 fn mcp_args(step: &AgentStep, ctx: &RunCtx) -> Result<Option<(Vec<String>, JsValue)>, String> {
     let Some(servers) = ctx.applied.get(&step.id).and_then(|a| a.mcp.as_ref()) else {
         return Ok(None);
@@ -169,9 +213,12 @@ pub fn interactive(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
     argv.extend(model_args(step));
     argv.extend(effort_args(step));
     argv.extend(add_dir_args(ctx));
-    if !step.writes {
-        argv.push(format!("--disallowedTools={CLAUDE_WRITE_TOOLS}"));
-    }
+    let disallowed: &[&str] = if step.writes {
+        &[]
+    } else {
+        &[CLAUDE_WRITE_TOOLS]
+    };
+    argv.extend(disallowed_args(disallowed, step, ctx));
     let mcp = mcp_args(step, ctx)?;
     if let Some((flags, _)) = &mcp {
         argv.extend(flags.iter().cloned());
@@ -215,13 +262,10 @@ pub fn interactive(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
 }
 
 pub fn headless(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
-    let tools: Vec<String> = if step.writes {
-        vec![format!("--allowedTools={WRITES_ALLOWED}")]
+    let (allowed, disallowed): (&str, &[&str]) = if step.writes {
+        (WRITES_ALLOWED, &[])
     } else {
-        vec![
-            format!("--allowedTools={READONLY_ALLOWED}"),
-            format!("--disallowedTools={CLAUDE_NOTEBOOK_TOOL}"),
-        ]
+        (READONLY_ALLOWED, &[CLAUDE_NOTEBOOK_TOOL])
     };
     let mut argv: Vec<String> = [
         "claude",
@@ -235,7 +279,8 @@ pub fn headless(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
     .collect();
     argv.extend(model_args(step));
     argv.extend(effort_args(step));
-    argv.extend(tools);
+    argv.push(headless_allowed_args(allowed, step, ctx));
+    argv.extend(disallowed_args(disallowed, step, ctx));
     argv.extend(add_dir_args(ctx));
     let mcp = mcp_args(step, ctx)?;
     if let Some((flags, _)) = &mcp {
@@ -296,6 +341,7 @@ pub fn harvest(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
     ];
     argv.extend(model_args(step));
     argv.push("--allowedTools=Write".into());
+    argv.extend(disallowed_args(&[], step, ctx));
     argv.extend(add_dir_args(ctx));
     let path = step_file_path(&ctx.run_dir, &step.id, HARVEST_PROMPT)?;
     let mut files = vec![file(&path, &lf(&harvest_prompt(step, ctx)))];
@@ -476,6 +522,97 @@ mod tests {
             let names: Vec<&String> = v["mcpServers"].as_object().unwrap().keys().collect();
             assert_eq!(names, ["docs", "github"]);
             assert_eq!(v["mcpServers"]["docs"]["command"], "docs-mcp");
+        }
+    }
+
+    #[test]
+    fn a_headless_step_may_call_the_tools_of_its_allowed_servers() {
+        let root = tempfile::tempdir().unwrap();
+        let mut c = ctx(root.path(), root.path());
+        restrict(
+            &mut c,
+            Some(vec![
+                ("docs", json!({})),
+                ("plugin:pw:pw", json!({})),
+                ("claude.ai Gmail", json!({})),
+            ]),
+            &[],
+        );
+        let rules = "mcp__docs,mcp__plugin_pw_pw,mcp__claude_ai_Gmail";
+        let mut read_only = step("claude", StepMode::Headless);
+        read_only.writes = false;
+        for (s, base) in [
+            (read_only, READONLY_ALLOWED),
+            (step("claude", StepMode::Headless), WRITES_ALLOWED),
+        ] {
+            let a = argv(&headless(&s, &c).unwrap());
+            assert!(
+                a.contains(&format!("--allowedTools={base},{rules}")),
+                "{a:?}"
+            );
+        }
+        // Someone is there to answer the prompt, and a harvest only writes its artifact.
+        let i = argv(&interactive(&step("claude", StepMode::Interactive), &c).unwrap());
+        assert!(!i.iter().any(|x| x.contains("mcp__")), "{i:?}");
+        let h = argv(&harvest(&step("claude", StepMode::Headless), &c).unwrap());
+        assert!(!h.iter().any(|x| x.contains("mcp__")), "{h:?}");
+    }
+
+    #[test]
+    fn mcp_deny_blocks_the_named_tools_and_leaves_every_other_server_loaded() {
+        let root = tempfile::tempdir().unwrap();
+        let mut c = ctx(root.path(), root.path());
+        c.applied.insert(
+            "s".into(),
+            AppliedRestrictions {
+                denied_mcp: vec!["github".into(), "claude.ai Gmail".into()],
+                ..Default::default()
+            },
+        );
+        let rules = "mcp__github,mcp__claude_ai_Gmail";
+        let mut read_only = step("claude", StepMode::Headless);
+        read_only.writes = false;
+        let mut read_only_i = step("claude", StepMode::Interactive);
+        read_only_i.writes = false;
+        let cases = [
+            (
+                headless(&read_only, &c).unwrap(),
+                format!("--disallowedTools={CLAUDE_NOTEBOOK_TOOL},{rules}"),
+            ),
+            (
+                headless(&step("claude", StepMode::Headless), &c).unwrap(),
+                format!("--disallowedTools={rules}"),
+            ),
+            (
+                interactive(&read_only_i, &c).unwrap(),
+                format!("--disallowedTools={CLAUDE_WRITE_TOOLS},{rules}"),
+            ),
+            (
+                interactive(&step("claude", StepMode::Interactive), &c).unwrap(),
+                format!("--disallowedTools={rules}"),
+            ),
+            (
+                harvest(&step("claude", StepMode::Headless), &c).unwrap(),
+                format!("--disallowedTools={rules}"),
+            ),
+        ];
+        for (spec, want) in cases {
+            let a = argv(&spec);
+            assert_eq!(
+                a.iter()
+                    .filter(|x| x.starts_with("--disallowedTools"))
+                    .count(),
+                1,
+                "{a:?}"
+            );
+            assert!(a.contains(&want), "{a:?}");
+            assert!(!a.contains(&"--strict-mcp-config".to_string()), "{a:?}");
+            assert!(!a.iter().any(|x| x.starts_with("--mcp-config")), "{a:?}");
+            assert!(
+                !files_of(&spec)
+                    .iter()
+                    .any(|(p, _)| p.ends_with(".mcp.json"))
+            );
         }
     }
 

@@ -8,7 +8,9 @@
   `deny` lists; the workflow can also define `mcp.servers`, which a step gets only if it
   allows them. A step's setting replaces the workflow's. `allow: []` means none, and an
   allowlisted server that doesn't exist fails the step before it starts.
-- Claude enforces both. Copilot and opencode enforce MCP servers by switching off the ones not
+- Claude enforces both. An `allow` loads exactly the named servers, and headless steps may call
+  their tools without a prompt. A `deny` blocks the named servers' tools and leaves every other
+  server, connector and plugin server in place; the denied servers still start. Copilot and opencode enforce MCP servers by switching off the ones not
   allowed, but cannot switch plugins off per session; what a runner can't enforce is reported
   as an `agent-restrictions` degradation and the step still runs. The desktop workflow editor
   has pickers for both.

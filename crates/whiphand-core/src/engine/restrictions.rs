@@ -203,9 +203,11 @@ pub fn apply(
 /// What a restricted step's spawn carries, once the policy has met the harness listing.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AppliedRestrictions {
-    /// The complete server set for the step (`None` = MCP unrestricted): workflow servers
-    /// first, then harness definitions copied from the listing.
+    /// Claude under an `allow`: the complete server set for the step, workflow servers
+    /// first, then harness definitions copied from the listing. `None` = no exact set.
     pub mcp: Option<Vec<(String, serde_json::Value)>>,
+    /// Claude under a `deny`: the servers whose tools are blocked.
+    pub denied_mcp: Vec<String>,
     /// Runner ids of the plugins to switch off.
     pub disabled_plugins: Vec<String>,
     /// Copilot only: it takes servers to switch off, not a complete set.
@@ -220,6 +222,7 @@ pub struct AppliedRestrictions {
 impl AppliedRestrictions {
     pub fn is_empty(&self) -> bool {
         self.mcp.is_none()
+            && self.denied_mcp.is_empty()
             && self.disabled_plugins.is_empty()
             && self.copilot_mcp.is_none()
             && self.opencode_mcp.is_none()
@@ -428,18 +431,19 @@ pub fn opencode_mcp(
     }
 }
 
-/// The server set of a step whose MCP policy is not `Unrestricted`.
+/// The exact server set of a step under an `allow`; `None` under any other policy.
 pub fn materialize_mcp(
     step_id: &str,
     policy: &McpPolicy,
     listing: &McpList,
 ) -> Result<Option<Vec<(String, serde_json::Value)>>, String> {
-    use crate::adapters::harness_catalog::{CatalogSource, Origin};
-    let needs_harness = match policy {
-        McpPolicy::Unrestricted => return Ok(None),
-        McpPolicy::Deny(_) => true,
-        McpPolicy::Allow(a) => a.iter().any(|s| matches!(s, AllowedServer::Harness { .. })),
+    use crate::adapters::harness_catalog::CatalogSource;
+    let McpPolicy::Allow(allowed) = policy else {
+        return Ok(None);
     };
+    let needs_harness = allowed
+        .iter()
+        .any(|s| matches!(s, AllowedServer::Harness { .. }));
     if needs_harness && listing.source == CatalogSource::Unavailable {
         return Err(format!(
             "step '{step_id}' restricts MCP servers the harness provides, but the harness's servers could not be listed{}",
@@ -459,16 +463,10 @@ pub fn materialize_mcp(
         let value = serde_json::to_value(def).map_err(|e| e.to_string())?;
         out.push((name.clone(), value));
     }
-    let deny = matches!(policy, McpPolicy::Deny(_));
     for name in &eff.harness {
         let server = listing.servers.iter().find(|s| &s.name == name);
         match server.and_then(|s| s.definition.clone()) {
-            // Under a deny, only servers that can be copied and are on are kept: a
-            // plugin's bundled servers come from the plugin, not from this file.
-            Some(_) if deny && server.is_some_and(|s| s.origin == Origin::Plugin) => {}
-            Some(_) if deny && server.is_some_and(|s| s.enabled == Some(false)) => {}
             Some(def) => out.push((name.clone(), def)),
-            None if deny => {}
             None => {
                 return Err(format!(
                     "step '{step_id}' allows MCP server '{name}', but its definition could not be read from the harness"
@@ -902,17 +900,12 @@ mod tests {
     }
 
     #[test]
-    fn deny_keeps_every_other_copyable_harness_server() {
+    fn deny_builds_no_exact_set_and_needs_no_listing() {
         let r = resolve(&workflow(Some(mcp(deny(&["github"]), &[])), None), &step());
-        let l = listing(&[
-            ("github", Origin::User, true),
-            ("a", Origin::User, true),
-            ("nodef", Origin::User, false),
-            ("plugin:x:y", Origin::Plugin, true),
-            ("b", Origin::Project, true),
-        ]);
-        let out = materialize_mcp("s", &r.mcp, &l).unwrap().unwrap();
-        assert_eq!(keys(&out), ["a", "b"]);
+        let mut l = listing(&[("a", Origin::User, true)]);
+        assert_eq!(materialize_mcp("s", &r.mcp, &l).unwrap(), None);
+        l.source = CatalogSource::Unavailable;
+        assert_eq!(materialize_mcp("s", &r.mcp, &l).unwrap(), None);
     }
 
     #[test]
@@ -938,8 +931,8 @@ mod tests {
     }
 
     #[test]
-    fn harness_restrictions_fail_when_the_listing_is_unavailable() {
-        let r = resolve(&workflow(Some(mcp(deny(&["x"]), &[])), None), &step());
+    fn allowing_a_harness_server_fails_when_the_listing_is_unavailable() {
+        let r = resolve(&workflow(Some(mcp(allow(&["x"]), &[])), None), &step());
         let mut l = listing(&[]);
         l.source = CatalogSource::Unavailable;
         l.note = Some("no config".into());

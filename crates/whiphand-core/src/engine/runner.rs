@@ -473,6 +473,9 @@ pub async fn run_workflow<F: Frontend>(
                     )]));
                 }
                 tree = record.native_tree();
+            } else if plan.ran_in_place {
+                // The run opted out of its worktree and a step ran in the work directory:
+                // it resumes there.
             } else if let Some(request) = worktree::resolve_request(workflow, None) {
                 // A run that failed while creating its worktree: creation runs again.
                 requested = Some(preflight_worktree(request, &inputs, &repo).await?);

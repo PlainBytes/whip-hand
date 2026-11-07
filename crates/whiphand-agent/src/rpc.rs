@@ -53,6 +53,8 @@ pub const REMOTE_METHODS: &[&str] = &[
     "getAppState",
     "touchRecentWorkspace",
     "setWorkspacePinned",
+    "describeWorkspaces",
+    "forgetWorkspace",
     "setUiState",
     "saveRunDraft",
     "deleteRunDraft",

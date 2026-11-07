@@ -1212,6 +1212,58 @@ pub struct RecentWorkspacesResult {
 
 pub type TouchRecentWorkspaceResult = RecentWorkspacesResult;
 pub type SetWorkspacePinnedResult = RecentWorkspacesResult;
+pub type DescribeWorkspacesParams = Empty;
+pub type ForgetWorkspaceResult = RecentWorkspacesResult;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct ForgetWorkspaceParams {
+    pub path: String,
+}
+
+/// Where the repo enclosing a workspace has its `HEAD`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum WorkspaceGit {
+    Branch { name: String },
+    Detached { sha: String },
+    Unknown,
+}
+
+/// Where a workspace keeps its runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceStorage {
+    Local,
+    User,
+}
+
+/// A recent workspace with what is on disk for it right now.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceDetails {
+    pub path: String,
+    pub last_opened_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pinned: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub identity_key: Option<String>,
+    pub exists: bool,
+    pub initialized: bool,
+    pub git: Option<WorkspaceGit>,
+    pub storage: WorkspaceStorage,
+    pub run_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_run_at: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct DescribeWorkspacesResult {
+    pub workspaces: Vec<WorkspaceDetails>,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct SetWorkspacePinnedParams {
@@ -1612,6 +1664,16 @@ pub const METHODS: &[(&str, &str, &str)] = &[
     ("ptyInput", "PtyInputParams", "PtyInputResult"),
     ("ptyResize", "PtyResizeParams", "PtyResizeResult"),
     ("getAppState", "GetAppStateParams", "GetAppStateResult"),
+    (
+        "describeWorkspaces",
+        "DescribeWorkspacesParams",
+        "DescribeWorkspacesResult",
+    ),
+    (
+        "forgetWorkspace",
+        "ForgetWorkspaceParams",
+        "ForgetWorkspaceResult",
+    ),
     (
         "touchRecentWorkspace",
         "TouchRecentWorkspaceParams",

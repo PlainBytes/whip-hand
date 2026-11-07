@@ -99,6 +99,9 @@ pub const DESKTOP_ONLY: &[&str] = &[
     "deleteRunDraft",
     "setRunTabs",
     "stashDraftAttachment",
+    // The desktop's Workspaces page; the TUI has its own workspace picker.
+    "describeWorkspaces",
+    "forgetWorkspace",
 ];
 
 /// A request as `update` describes it: no id yet, and what to do with the

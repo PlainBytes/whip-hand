@@ -281,6 +281,31 @@ pub fn list_runs(workdir: &str, config: &WorkspaceConfig) -> Vec<RunSummary> {
     summaries
 }
 
+/// How many runs the workspace has, and when the newest one started. Unlike
+/// [`list_runs`] this only reads: an abandoned run stays as it is, and only as
+/// many manifests are parsed as it takes to find a readable newest one (run ids
+/// are timestamp-prefixed).
+pub fn run_history(workdir: &str, config: &WorkspaceConfig) -> (usize, Option<String>) {
+    let dir = runs_dir(workdir, config);
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return (0, None);
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter(|e| fs::metadata(e.path()).is_ok_and(|m| m.is_dir()))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort_by(|a, b| utf16_cmp(b, a));
+    let newest = names.iter().find_map(|name| {
+        let raw = fs::read(Path::new(&dir).join(name).join("run.json")).ok()?;
+        let json = jsval::parse(&String::from_utf8_lossy(&raw)).ok()?;
+        parse_manifest(&json)?
+            .str_prop("startedAt")
+            .map(str::to_string)
+    });
+    (names.len(), newest)
+}
+
 /// A run id is only ever one path segment under the runs dir: `path.basename(id) === id`.
 pub fn is_safe_run_id(run_id: &str) -> bool {
     if run_id.is_empty() || run_id == "." || run_id == ".." || run_id.contains('/') {

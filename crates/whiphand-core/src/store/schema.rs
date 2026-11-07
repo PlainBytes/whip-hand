@@ -180,7 +180,10 @@ fn manifest_schema() -> S {
             S::Enum(&["running", "succeeded", "failed", "cancelled", "interrupted"]),
         ),
         opt("ok", S::Bool),
-        opt("workflowSource", S::Enum(&["project", "global"])),
+        opt(
+            "workflowSource",
+            S::Enum(&["project", "workspace", "global"]),
+        ),
         req("inputs", S::Rec(Box::new(str0()))),
         opt(
             "attachments",
@@ -308,6 +311,38 @@ mod tests {
             stringify_compact(&m.into()),
             r#"{"version":1,"runId":"r","workflow":"wf","workdir":"/w","dryRun":false,"startedAt":"s","updatedAt":"u","status":"failed","inputs":{"b":"1","a":"2"},"sessionIds":{},"steps":[{"id":"a","kind":"agent","status":"done"}]}"#
         );
+    }
+
+    #[test]
+    fn accepts_every_workflow_source_scope() {
+        use crate::types::Scope;
+        let ok = r#"{"version":5,"runId":"r","workflow":"w","workdir":"/w","dryRun":true,"startedAt":"s","updatedAt":"u","status":"running","inputs":{},"sessionIds":{},"steps":[]}"#;
+        let with = |source: &str| {
+            ok.replace(
+                "\"dryRun\":true",
+                &format!("\"dryRun\":true,\"workflowSource\":\"{source}\""),
+            )
+        };
+        // Walks the variants through an exhaustive `match` with no wildcard arm: a new `Scope`
+        // variant stops compiling here until it is chained in, so it cannot dodge the check.
+        fn next(scope: Scope) -> Option<Scope> {
+            match scope {
+                Scope::Project => Some(Scope::Workspace),
+                Scope::Workspace => Some(Scope::Global),
+                Scope::Global => None,
+            }
+        }
+        let mut scope = Some(Scope::Project);
+        let mut seen = 0;
+        while let Some(s) = scope {
+            let json = with(s.as_str());
+            assert!(parse_manifest(&parse(&json).unwrap()).is_some(), "{json}");
+            seen += 1;
+            scope = next(s);
+        }
+        assert_eq!(seen, 3);
+        let bad = with("elsewhere");
+        assert!(parse_manifest(&parse(&bad).unwrap()).is_none(), "{bad}");
     }
 
     #[test]

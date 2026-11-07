@@ -483,9 +483,12 @@ pub fn remote_params(method: &str) -> Option<S> {
 /// Every method's params schema, by name.
 pub fn params(method: &str) -> Option<S> {
     Some(match method {
-        "hello" | "getAppState" | "listJobs" | "remoteAccessGet" | "remoteAccessRotateToken" => {
-            empty_default()
-        }
+        "hello"
+        | "getAppState"
+        | "describeWorkspaces"
+        | "listJobs"
+        | "remoteAccessGet"
+        | "remoteAccessRotateToken" => empty_default(),
         "listWorkflows" | "listRuns" | "listWorkDirs" => workdir(),
         "initWorkspace" => object! {
             "workdir" => StrMin1,
@@ -582,6 +585,7 @@ pub fn params(method: &str) -> Option<S> {
             "jobId" => StrMin1, "cols" => Num(Num::POSITIVE_INT), "rows" => Num(Num::POSITIVE_INT),
         },
         "touchRecentWorkspace" => object! { "path" => StrMin1 },
+        "forgetWorkspace" => object! { "path" => StrMin1 },
         "setWorkspacePinned" => object! { "path" => StrMin1, "pinned" => Bool },
         "setUiState" => object! {
             "window" => o(Nullable(b(window_state()))),

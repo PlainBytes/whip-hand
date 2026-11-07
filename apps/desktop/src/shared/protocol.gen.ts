@@ -316,6 +316,16 @@ export type RecentWorkspacesResult = { recentWorkspaces: Array<RecentWorkspace>,
 
 export type SetWorkspacePinnedParams = { path: string, pinned: boolean, };
 
+export type ForgetWorkspaceParams = { path: string, };
+
+export type WorkspaceGit = { "kind": "branch", name: string, } | { "kind": "detached", sha: string, } | { "kind": "unknown" };
+
+export type WorkspaceStorage = "local" | "user";
+
+export type WorkspaceDetails = { path: string, lastOpenedAt: string, pinned?: boolean, identityKey?: string, exists: boolean, initialized: boolean, git: WorkspaceGit | null, storage: WorkspaceStorage, runCount: number, lastRunAt?: string, };
+
+export type DescribeWorkspacesResult = { workspaces: Array<WorkspaceDetails>, };
+
 export type EditorPreference = { "kind": "vscode" } | { "kind": "vscode-insiders" } | { "kind": "cursor" } | { "kind": "windsurf" } | { "kind": "zed" } | { "kind": "custom", command: string, };
 
 export type TuiPreferences = { 
@@ -429,6 +439,8 @@ export type GetAppStateParams = Empty;
 export type GetAppStateResult = AppState;
 export type TouchRecentWorkspaceResult = RecentWorkspacesResult;
 export type SetWorkspacePinnedResult = RecentWorkspacesResult;
+export type DescribeWorkspacesParams = Empty;
+export type ForgetWorkspaceResult = RecentWorkspacesResult;
 export type SetUiStateResult = OkTrue;
 export type SaveRunDraftResult = OkTrue;
 export type DeleteRunDraftResult = OkTrue;
@@ -480,6 +492,8 @@ export interface MethodMap {
   ptyInput: { params: PtyInputParams; result: PtyInputResult };
   ptyResize: { params: PtyResizeParams; result: PtyResizeResult };
   getAppState: { params: GetAppStateParams; result: GetAppStateResult };
+  describeWorkspaces: { params: DescribeWorkspacesParams; result: DescribeWorkspacesResult };
+  forgetWorkspace: { params: ForgetWorkspaceParams; result: ForgetWorkspaceResult };
   touchRecentWorkspace: { params: TouchRecentWorkspaceParams; result: TouchRecentWorkspaceResult };
   setWorkspacePinned: { params: SetWorkspacePinnedParams; result: SetWorkspacePinnedResult };
   setUiState: { params: SetUiStateParams; result: SetUiStateResult };

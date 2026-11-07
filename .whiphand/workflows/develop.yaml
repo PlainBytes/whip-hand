@@ -14,7 +14,7 @@ inputs:
     prompt: Branch to start from
   test_command:
     required: false
-    default: npm test
+    default: npm ci && npm test
     remember: true
     multiline: false
     prompt: Test command (leave blank to skip tests)

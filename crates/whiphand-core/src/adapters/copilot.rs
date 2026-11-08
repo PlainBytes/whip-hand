@@ -222,6 +222,16 @@ pub fn headless(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
             "--allow-tool=url".into(),
             format!("--allow-tool=write({artifact})"),
         ]);
+        // `-p` refuses any tool no rule approves, which would leave an allowed server
+        // unusable; a write step's `--allow-all-tools` already covers them.
+        argv.extend(
+            ctx.applied
+                .get(&step.id)
+                .and_then(|a| a.copilot_mcp.as_ref())
+                .into_iter()
+                .flat_map(|m| &m.allow)
+                .map(|n| format!("--allow-tool={n}")),
+        );
     }
     argv.extend(
         [
@@ -562,6 +572,7 @@ mod tests {
                 servers: vec![("docs".into(), json!({ "command": "docs-mcp" }))],
                 disable: vec!["b".into()],
                 disable_builtins: true,
+                allow: vec!["docs".into()],
             },
         );
         let path = to_fwd_abs(&step_file_path(&c.run_dir, "s", COPILOT_MCP_CONFIG).unwrap());
@@ -598,6 +609,46 @@ mod tests {
             assert_eq!(v["mcpServers"]["docs"]["type"], "local");
             assert_eq!(v["mcpServers"]["docs"]["tools"], json!(["*"]));
         }
+    }
+
+    /// `-p` can't ask, so a read-only step refuses every tool no rule approves. Allowed
+    /// servers are approved there by name; elsewhere a person can approve, or a write
+    /// step's `--allow-all-tools` already covers them.
+    #[test]
+    fn a_read_only_headless_step_pre_approves_exactly_its_allowed_servers() {
+        let root = tempfile::tempdir().unwrap();
+        let mut c = ctx(root.path(), root.path());
+        restrict(
+            &mut c,
+            CopilotMcp {
+                servers: vec![("docs".into(), json!({ "command": "docs-mcp" }))],
+                disable: vec!["b".into()],
+                allow: vec!["docs".into(), "github-mcp-server".into()],
+                ..Default::default()
+            },
+        );
+        let approvals = |a: &[String]| -> Vec<String> {
+            a.iter()
+                .filter(|x| {
+                    ["docs", "github-mcp-server", "b"]
+                        .iter()
+                        .any(|n| x.as_str() == format!("--allow-tool={n}"))
+                })
+                .cloned()
+                .collect()
+        };
+        let mut read_only = step("copilot", StepMode::Headless);
+        read_only.writes = false;
+        assert_eq!(
+            approvals(&argv(&headless(&read_only, &c).unwrap())),
+            ["--allow-tool=docs", "--allow-tool=github-mcp-server"]
+        );
+        for a in builds(&c) {
+            assert!(approvals(&a).is_empty(), "{a:?}");
+        }
+        let mut i_step = step("copilot", StepMode::Interactive);
+        i_step.writes = false;
+        assert!(approvals(&argv(&interactive(&i_step, &c).unwrap())).is_empty());
     }
 
     #[test]

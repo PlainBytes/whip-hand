@@ -245,6 +245,10 @@ pub struct CopilotMcp {
     pub disable: Vec<String>,
     /// Switch every builtin server off (`--disable-builtin-mcps`).
     pub disable_builtins: bool,
+    /// Every server an `allow` names, workflow-defined or copilot's own. A read-only
+    /// headless step approves their tools (`--allow-tool=<name>`), since `-p` refuses any
+    /// tool no rule approves.
+    pub allow: Vec<String>,
 }
 
 /// Copilot's builtin MCP servers, whether or not a listing shows them.
@@ -277,6 +281,7 @@ pub fn copilot_mcp(
             let mut out = CopilotMcp::default();
             let mut missing = Vec::new();
             for a in allowed {
+                push(&mut out.allow, a.name());
                 match a {
                     AllowedServer::Workflow { name, def } => out.servers.push((
                         name.clone(),
@@ -1165,6 +1170,7 @@ mod tests {
         assert_eq!(m.disable, ["b"]);
         assert!(m.disable_builtins);
         assert_eq!(keys(&m.servers), ["docs"]);
+        assert_eq!(m.allow, ["a", "docs"]);
     }
 
     #[test]
@@ -1189,7 +1195,7 @@ mod tests {
         l.source = CatalogSource::Unavailable;
         let (m, d) = flags(&r.mcp, &l).unwrap().unwrap();
         assert_eq!((m.disable, d), (vec!["a".to_string()], None));
-        assert!(!m.disable_builtins && m.servers.is_empty());
+        assert!(!m.disable_builtins && m.servers.is_empty() && m.allow.is_empty());
     }
 
     #[test]

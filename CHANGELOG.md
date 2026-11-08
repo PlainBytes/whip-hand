@@ -11,7 +11,7 @@
 - Claude enforces both. An `allow` loads exactly the named servers, and headless steps may call
   their tools without a prompt. A `deny` blocks the named servers' tools and leaves every other
   server, connector and plugin server in place; the denied servers still start. Copilot and opencode enforce MCP servers by switching off the ones not
-  allowed, but cannot switch plugins off per session; what a runner can't enforce is reported
+  allowed (headless Copilot steps also pre-approve the allowed servers' tools), but cannot switch plugins off per session; what a runner can't enforce is reported
   as an `agent-restrictions` degradation and the step still runs. The desktop workflow editor
   has pickers for both.
 - Workflow-defined servers can use `${NAME}` references in `env`, `headers`, `url` and `args`,

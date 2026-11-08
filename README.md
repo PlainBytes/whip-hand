@@ -403,11 +403,11 @@ steps:
 - **`allow` is exact, `deny` is subtractive.** `allow: [a, b]` leaves exactly `a` and `b`;
   `allow: []` leaves none. `deny: [a]` leaves everything the runner has except `a`
   (`deny: []` does nothing).
-- **Headless Claude steps may call what they allow.** Nobody is there to answer a permission
-  prompt, so an allowed server's tools are pre-approved, including any that change things
-  outside the repo. `writes: false` does not limit them. Interactive steps still prompt. Under
-  a `deny`, or with no restriction, a headless step can call only what your Claude settings
-  already permit.
+- **Headless Claude and Copilot steps may call what they allow.** Nobody is there to answer a
+  permission prompt, so an allowed server's tools are pre-approved, including any that change
+  things outside the repo. `writes: false` does not limit them. Interactive steps still prompt.
+  Under a `deny`, or with no restriction, a headless step can call only what the runner's own
+  settings already permit (a Copilot step with `writes: true` already allows every tool).
 - **Server names are the runner's own.** On Claude, a plugin's server is
   `plugin:<plugin>:<server>`, for example `plugin:playwright:playwright`, and a connector is
   named as `claude mcp list` shows it, for example `claude.ai Gmail`.
@@ -446,7 +446,7 @@ What each runner enforces:
 | Runner | MCP `allow` / `deny` | Plugins `allow` / `deny` |
 | --- | --- | --- |
 | claude | Full. `allow`: a per-step `--strict-mcp-config` file holds exactly the allowed servers, so plugin servers and claude.ai connectors are off unless named, and a connector can't be named (whiphand can't see it, so the step fails). `deny`: the named servers' tools are blocked with `--disallowedTools`, but the servers still start. | Full. Plugins that must be off are set `false` in the step's `enabledPlugins`. An `allow` needs the plugin list to be readable, or the step fails. |
-| copilot | Servers switched off with `--disable-mcp-server` (`--disable-builtin-mcps` when no built-in is allowed); allowed workflow servers added with `--additional-mcp-config`. | Not enforceable: copilot has no per-session way to switch an installed plugin off. |
+| copilot | Servers switched off with `--disable-mcp-server` (`--disable-builtin-mcps` when no built-in is allowed); allowed workflow servers added with `--additional-mcp-config`; a read-only headless step approves the allowed servers' tools with `--allow-tool`. | Not enforceable: copilot has no per-session way to switch an installed plugin off. |
 | opencode | Per-step config: allowed workflow servers added, every other configured server set `enabled: false`. | Not enforceable: opencode has no per-session way to switch a configured plugin off. |
 
 Whatever a runner can't enforce is reported, not hidden: the step still runs and a

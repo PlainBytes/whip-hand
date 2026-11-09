@@ -2,8 +2,12 @@
 
 <img src="apps/desktop/src-tauri/icons/source.png" alt="" width="96" align="right" />
 
-Runs workflows that mix LLM CLI runners (`claude`, `copilot`, `opencode`) with shell commands and
-stops to ask a human. Every run keeps its log and the artifacts its steps wrote.
+`whiphand` runs **workflows** against a working folder: an ordered set of steps — an LLM CLI runner
+(`claude`, `copilot`, `opencode`) with its own model and tool policy, a shell command, or a stop to
+ask a human — which can be wrapped in a **cycle** that repeats until a check passes. The
+canonical workflow plans a feature interactively with one model, then implements, tests and
+reviews it in a loop until the review comes back clean. Every run keeps its log and the
+artifacts its steps wrote.
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/desktop-review-dark.png"><img src="docs/screenshots/desktop-review-light.png" alt="Reviewing a diff"></picture>
 
@@ -14,12 +18,6 @@ stops to ask a human. Every run keeps its log and the artifacts its steps wrote.
 <td width="33%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/tui-run-detail-dark.png"><img src="docs/screenshots/tui-run-detail-light.png" alt="Run view in the terminal"></picture><br><sub><a href="#terminal-ui">Terminal UI</a></sub></td>
 </tr>
 </table>
-
-`whiphand` runs **workflows** against a working folder: an ordered set of steps — an LLM CLI runner
-(`claude`, `copilot`, `opencode`) with its own model and tool policy, a shell command, or a stop to
-ask a human — which can be wrapped in a **cycle** that repeats until a check passes. The
-canonical workflow plans a feature interactively with one model, then implements, tests and
-reviews it in a loop until the review comes back clean.
 
 ## Install
 

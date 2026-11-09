@@ -172,14 +172,14 @@ export function createWorkspace(dir) {
   return { workspace: dir, largeRunId: LARGE_RUN_ID, largeRunDir: largeDir };
 }
 
-/** The app-state the agent reads at startup: this workspace as the most recent one, on the Runs page. */
-export function seedAppState(file, workspace) {
+/** The app-state the agent reads at startup: this workspace as the most recent one, on `lastPage`. */
+export function seedAppState(file, workspace, { theme = 'light', lastPage = 'runs' } = {}) {
   writeJson(file, {
     schemaVersion: 1,
     recentWorkspaces: [{ path: workspace, lastOpenedAt: '2026-01-01T00:00:00.000Z' }],
     window: null,
-    lastPage: 'runs',
-    theme: 'light',
+    lastPage,
+    theme,
     workspaces: {},
     runsRetention: { maxPerWorkspace: 0 },
     showOngoingRuns: true,

@@ -24,7 +24,8 @@
     "package:cli-deb": "node scripts/package/cli-deb.mjs",
     "package:desktop": "node scripts/package/desktop.mjs",
     "reinstall": "node scripts/package/reinstall.mjs",
-    "bump": "node scripts/version.mjs"
+    "bump": "node scripts/version.mjs",
+    "screenshots": "node scripts/screenshots.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

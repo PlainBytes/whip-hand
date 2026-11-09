@@ -1,0 +1,51 @@
+# The workflow the editor screenshot shows: plan with a human, implement until
+# the tests pass, review, then a sign-off on the diff.
+name: feature
+description: Plan with me, implement until the tests pass, review, then ask for my sign-off.
+inputs:
+  feature:
+    required: true
+    prompt: What are we building?
+steps:
+  - id: plan
+    kind: agent
+    runner: claude
+    mode: interactive
+    writes: false
+    output: plan.md
+    prompt: |
+      We are planning: {{ inputs.feature }}. Work with me on a plan; do not modify files.
+
+  - id: test-fix
+    kind: loop
+    until: tests
+    max_iterations: 3
+    steps:
+      - id: implement
+        kind: agent
+        runner: claude
+        mode: headless
+        writes: true
+        inputs: [plan, tests]
+        output: implement.md
+        prompt: Implement the attached plan. If a failing tests log is attached, fix it first.
+      - id: tests
+        kind: command
+        run: npm test
+        verdict: true
+        output: tests.log
+
+  - id: review
+    kind: agent
+    runner: claude
+    mode: headless
+    writes: false
+    inputs: [plan]
+    output: review.md
+    prompt: Review the working tree against the plan. List concrete findings only.
+
+  - id: sign-off
+    kind: approval
+    title: Sign off the change
+    instructions: Read the diff and the review. Approve to finish, or send it back with notes.
+    show_diff: true

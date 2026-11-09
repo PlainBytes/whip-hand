@@ -13,11 +13,11 @@
  * requests, so the bench can start runs the page then watches.
  */
 import fs from 'node:fs';
-import net from 'node:net';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { runSync } from '../lib/exec.mjs';
 import { discard } from '../lib/child.mjs';
+import { freePort, waitForHttp } from '../lib/http.mjs';
 import { repoRoot } from '../package/common.mjs';
 import { AgentSession, tempDir } from './agent-session.mjs';
 import { benchPath, seedAppState, LARGE_RUN_NAME } from './fixtures.mjs';
@@ -27,32 +27,6 @@ const WEB_ROOT = path.join(repoRoot, 'apps/desktop/dist-web');
 const REPEATS = Number(process.env.WHIPHAND_BENCH_UI_REPEATS ?? 3);
 const SCROLL_MS = 5_000;
 const LIVE_WINDOW_MS = 4_000;
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.unref();
-    server.on('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address();
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-async function waitForHttp(url, timeoutMs = 20_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) return;
-    } catch {
-      // not listening yet
-    }
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  throw new Error(`${url} did not answer within ${timeoutMs}ms`);
-}
 
 /**
  * Scrolls the element matching `selector` (or the nearest scrollable ancestor

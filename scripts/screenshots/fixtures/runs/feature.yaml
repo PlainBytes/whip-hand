@@ -1,0 +1,21 @@
+# Demo history (scripts/screenshots/demo-workspace.mjs): the same step ids as
+# ../workflows/feature.yaml, but command steps that replay canned output, so a
+# real `whiphand run` writes current-format runs without any agent installed.
+name: feature
+inputs:
+  story:
+    required: true
+steps:
+  - id: plan
+    kind: command
+    run: node .demo/emit.mjs plan {{ inputs.story }}
+  - id: implement
+    kind: command
+    run: node .demo/emit.mjs implement {{ inputs.story }}
+  - id: tests
+    kind: command
+    run: node .demo/emit.mjs tests {{ inputs.story }}
+    output: tests.log
+  - id: review
+    kind: command
+    run: node .demo/emit.mjs review {{ inputs.story }}

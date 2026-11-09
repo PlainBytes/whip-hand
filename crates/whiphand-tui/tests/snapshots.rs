@@ -27,6 +27,49 @@ fn snapshot(name: &str, model: &Model) {
         insta::assert_snapshot!(format!("{name}_{}x{}", size.0, size.1), render(model, size));
     }
     survives_any_size(name, model);
+    dump_cells(name, model);
+}
+
+/// README screenshots (scripts/screenshots/tui.mjs): with `WHIPHAND_TUI_SHOTS`
+/// set, every screen is also drawn at [`SHOT_SIZE`] and written there as
+/// `<name>.json`, styles included, for the script to render. Off otherwise.
+const SHOT_SIZE: (u16, u16) = (110, 26);
+
+fn dump_cells(name: &str, model: &Model) {
+    let Some(dir) = std::env::var_os("WHIPHAND_TUI_SHOTS") else {
+        return;
+    };
+    let (w, h) = SHOT_SIZE;
+    let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+    terminal.draw(|f| view(model, f)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let colour = |c: ratatui::style::Color| match c {
+        ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+        ratatui::style::Color::Indexed(i) => format!("idx:{i}"),
+        named => format!("{named:?}"),
+    };
+    let rows: Vec<Value> = (0..h)
+        .map(|y| {
+            (0..w)
+                .map(|x| {
+                    let cell = &buffer[(x, y)];
+                    let mods: Vec<String> = cell
+                        .modifier
+                        .iter_names()
+                        .map(|(n, _)| n.to_string())
+                        .collect();
+                    json!([cell.symbol(), colour(cell.fg), colour(cell.bg), mods])
+                })
+                .collect()
+        })
+        .collect();
+    let out = json!({ "width": w, "height": h, "rows": rows });
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        std::path::Path::new(&dir).join(format!("{name}.json")),
+        out.to_string(),
+    )
+    .unwrap();
 }
 
 /// A terminal can be made tiny, or very wide and short, mid-resize: every

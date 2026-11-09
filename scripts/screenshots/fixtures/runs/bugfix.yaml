@@ -1,0 +1,17 @@
+# Demo history: see feature.yaml.
+name: bugfix
+inputs:
+  story:
+    required: true
+steps:
+  - id: reproduce
+    kind: command
+    run: node .demo/emit.mjs reproduce {{ inputs.story }}
+    output: reproduce.log
+  - id: fix
+    kind: command
+    run: node .demo/emit.mjs implement {{ inputs.story }}
+  - id: tests
+    kind: command
+    run: node .demo/emit.mjs tests {{ inputs.story }}
+    output: tests.log

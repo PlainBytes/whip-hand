@@ -1,0 +1,13 @@
+# Demo history: see feature.yaml.
+name: docs
+inputs:
+  story:
+    required: true
+steps:
+  - id: draft
+    kind: command
+    run: node .demo/emit.mjs implement {{ inputs.story }}
+  - id: check-links
+    kind: command
+    run: node .demo/emit.mjs links {{ inputs.story }}
+    output: links.log

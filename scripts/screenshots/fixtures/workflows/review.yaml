@@ -1,0 +1,11 @@
+# The review screenshot: parks on a manual step showing the working-tree diff.
+name: review
+description: Show me the working tree's diff and wait for my sign-off.
+steps:
+  - id: sign-off
+    kind: approval
+    title: Sign off the change
+    instructions: |
+      The cart now keeps money in **cents** end to end and rounds once, at the edge.
+      Approve to finish, or reject with notes for another round.
+    show_diff: true

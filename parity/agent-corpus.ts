@@ -502,6 +502,15 @@ export const SCENARIOS: Scenario[] = [
       { call: 'remoteAccessRotateToken' },
       { call: 'remoteAccessGet', label: 'remoteAccessGet on' },
       { call: 'remoteAccessSet', params: { enabled: false }, label: 'disable' },
+      // Disabling publishes twice: once from the handler and once more when
+      // the listener's status change reaches the host loop, after the
+      // response. Ending at the response raced that second one against
+      // shutdown, so the transcript sometimes lost it.
+      {
+        until: (_m: Message, c: Ctx) => c.messages.filter(x =>
+          'method' in x && x.method === 'remoteAccessChanged' && x.params.enabled === false).length >= 2,
+        label: 'disable published twice',
+      },
     ],
   },
 ];

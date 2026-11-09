@@ -2,9 +2,8 @@
 
 <img src="apps/desktop/src-tauri/icons/source.png" alt="" width="96" align="right" />
 
-Mixes Claude Code, Copilot or opencode with deterministic shell commands in workflows you write.
-It stops where you want to check the work, and every run keeps an audit log and the artifacts each
-step produced.
+Runs workflows that mix LLM CLI runners (`claude`, `copilot`, `opencode`) with shell commands and
+stops to ask a human. Every run keeps its log and the artifacts its steps wrote.
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/desktop-review-dark.png"><img src="docs/screenshots/desktop-review-light.png" alt="Reviewing a diff"></picture>
 

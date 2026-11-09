@@ -34,11 +34,13 @@ use crate::engine::frontend::Frontend;
 use crate::engine::guidance::headless_prompt;
 use crate::engine::manual::{ManualExtras, build_manual_request, note_artifact, review_artifact};
 use crate::engine::progress::{ProgressParser, progress_error_message, stderr_error_message};
+use crate::engine::restrictions;
 use crate::engine::resume::{DoneExecution, ResumePlan, stage_budget_key};
-use crate::engine::spec::{self, write_spec_files};
+use crate::engine::spec::{self, redact_spawn_event, write_spec_files};
 use crate::engine::stages::{DEFAULT_STAGE_RETRIES, discover_stages, next_stage, odd_stage_names};
 use crate::engine::step_files::{
-    AWAIT_STATE, END_MARKER, SESSION_CAPTURE, clear_spawn_files, clear_step_file,
+    AWAIT_STATE, COPILOT_MCP_CONFIG, END_MARKER, MCP_CONFIG, SESSION_CAPTURE, clear_spawn_files,
+    clear_step_file,
 };
 use crate::engine::verdict::{
     VERDICT_INSTRUCTION, parse_verdict, verdict_from_choice, verdict_from_exit,
@@ -521,9 +523,11 @@ pub async fn run_workflow<F: Frontend>(
     }
     let run_name = read_run_name(Path::new(&run_dir));
     if opts.resume.is_none() {
-        std::fs::write(
-            node_path::join(&[&run_dir, WORKFLOW_SNAPSHOT_NAME]),
-            stringify_yaml(&workflow_to_js(workflow)),
+        // Owner-only: a credential written directly in the workflow is still in it. A
+        // redacted copy would leave a resumed run without the real definition.
+        crate::durable_fs::write_file_private_atomic(
+            Path::new(&node_path::join(&[&run_dir, WORKFLOW_SNAPSHOT_NAME])),
+            stringify_yaml(&workflow_to_js(workflow)).as_bytes(),
         )
         .map_err(|e| RunError::Failed(e.to_string()))?;
     }
@@ -554,6 +558,8 @@ pub async fn run_workflow<F: Frontend>(
             .map(|r| r.attempts.clone())
             .unwrap_or_default(),
         verdicts: Record::new(),
+        restrictions: restrictions::resolve_all(&effective),
+        applied: Record::new(),
         inputs: inputs.clone(),
         loop_frame: None,
         frame: None,
@@ -714,7 +720,7 @@ impl<F: Frontend> Run<'_, F> {
     }
 
     fn emit_now(&self, raw: JsObject) {
-        let e = event_paths_to_workspace(&raw, &self.workspace);
+        let e = event_paths_to_workspace(&redact_spawn_event(raw), &self.workspace);
         if e.str_prop("type") == Some("run:done") {
             self.run_ended.set(true);
         }
@@ -1494,12 +1500,97 @@ impl<F: Frontend> Run<'_, F> {
         })
     }
 
+    /// Meets a step's resolved MCP and plugin policy with the runner's listing and records
+    /// the result on the context for the adapter. Only steps whose policy restricts
+    /// something touch the listing; the others leave the context alone. Today only claude
+    /// enforces; the other runners follow in their own stages.
+    async fn apply_restrictions(&self, adapter: Adapter, step: &AgentStep) -> Result<(), String> {
+        use crate::adapters::harness_catalog::{list_mcp_servers, list_plugins};
+        use crate::config_home::host_config_home;
+        use crate::engine::restrictions::{
+            AppliedRestrictions, McpPolicy, PluginPolicy, copilot_mcp, expand_mcp_references,
+            materialize_mcp, opencode_mcp, plugins_to_disable,
+        };
+        use crate::secret_store::SecretStore;
+        if !matches!(
+            adapter,
+            Adapter::Claude | Adapter::Copilot | Adapter::Opencode
+        ) {
+            return Ok(());
+        }
+        let Some(mut policy) = self.st.borrow().ctx.restrictions.get(&step.id).cloned() else {
+            return Ok(());
+        };
+        policy.mcp = expand_mcp_references(
+            &step.id,
+            &policy.mcp,
+            || SecretStore::for_workspace(Path::new(&self.workspace), &host_config_home()).load(),
+            &|name| std::env::var(name).ok(),
+        )?;
+        let tree = self.tree();
+        let mut applied = AppliedRestrictions::default();
+        if adapter == Adapter::Copilot {
+            if policy.mcp != McpPolicy::Unrestricted {
+                let listing = list_mcp_servers(adapter, &tree).await;
+                if let Some((flags, degraded)) = copilot_mcp(&step.id, &policy.mcp, &listing)? {
+                    applied.copilot_mcp = Some(flags);
+                    applied.degradations.extend(degraded);
+                }
+            }
+            if policy.plugins != PluginPolicy::Unrestricted {
+                applied.degradations.push(
+                    "plugin policy not applied: copilot has no per-session way to switch an installed plugin off, so every installed plugin stays on"
+                        .to_string(),
+                );
+            }
+        } else if adapter == Adapter::Opencode {
+            if policy.mcp != McpPolicy::Unrestricted {
+                let listing = list_mcp_servers(adapter, &tree).await;
+                if let Some((entries, degraded)) = opencode_mcp(&step.id, &policy.mcp, &listing)? {
+                    applied.opencode_mcp = Some(entries);
+                    applied.degradations.extend(degraded);
+                }
+            }
+            if policy.plugins != PluginPolicy::Unrestricted {
+                applied.degradations.push(
+                    "plugin policy not applied: opencode has no per-session way to switch a configured plugin off, so every configured plugin stays on"
+                        .to_string(),
+                );
+            }
+        } else if let McpPolicy::Deny(names) = &policy.mcp {
+            applied.denied_mcp = names.clone();
+        } else if policy.mcp != McpPolicy::Unrestricted {
+            let listing = list_mcp_servers(adapter, &tree).await;
+            applied.mcp = materialize_mcp(&step.id, &policy.mcp, &listing)?;
+        }
+        if adapter == Adapter::Claude && policy.plugins != PluginPolicy::Unrestricted {
+            let listing = list_plugins(adapter, &tree).await;
+            applied.disabled_plugins = plugins_to_disable(&step.id, &policy.plugins, &listing)?;
+        }
+        if let Some(reason) = applied.degradation_reason() {
+            self.emit(obj! {
+                "type" => "run:degraded", "capability" => "agent-restrictions",
+                "stepId" => step.id.as_str(), "reason" => reason,
+            });
+        }
+        let mut st = self.st.borrow_mut();
+        if applied.is_empty() {
+            st.ctx.applied.remove(&step.id);
+        } else {
+            st.ctx.applied.insert(step.id.clone(), applied);
+        }
+        Ok(())
+    }
+
     async fn execute_agent(
         &self,
         step: &AgentStep,
         frame: Option<&Frame>,
     ) -> Result<Outcome, String> {
         let adapter = Adapter::get(&step.runner).expect("validated at start");
+        if let Err(msg) = self.apply_restrictions(adapter, step).await {
+            return Ok(self.fail(&msg, Some(&step.id)));
+        }
         let artifact = artifact_path(&self.run_dir, &step.output, frame);
         self.record_artifact(&step.id, &artifact);
         ensure_artifact_dir(&artifact).map_err(|e| e.to_string())?;
@@ -1937,7 +2028,13 @@ impl<F: Frontend> Run<'_, F> {
         start.assign(&execution_fields(&idn));
         self.emit(start);
         match step {
-            Step::Agent(a) => self.execute_agent(a, frame).await,
+            Step::Agent(a) => {
+                let outcome = self.execute_agent(a, frame).await;
+                // The server definitions outlive the spawn only as long as the step does.
+                clear_step_file(&self.run_dir, &a.id, MCP_CONFIG);
+                clear_step_file(&self.run_dir, &a.id, COPILOT_MCP_CONFIG);
+                outcome
+            }
             Step::Command(c) => self.execute_command(c, frame).await,
             Step::Manual(m) => self.execute_manual(m, "manual", frame).await,
             Step::Approval(m) => self.execute_manual(m, "approval", frame).await,

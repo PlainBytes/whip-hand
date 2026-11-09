@@ -55,6 +55,8 @@ export interface StepCardProps {
   problemCount?: number;
   /** Field key -> message, for the fields this card owns — same gating as `problemCount`. */
   fieldErrors?: Record<string, string>;
+  /** Names of the workflow's own MCP servers, offered in the step's MCP picker. */
+  workflowServers?: string[];
 }
 
 /**
@@ -68,7 +70,7 @@ export function StepCard({
   step, ordinal, earlierStepIds, idsInTree, endsLoop, dimmed, nested, inStages, collapsed, onToggleCollapsed,
   bodyFolded, onToggleBodyFolded, isFirst, isLast, onMove, onInsertBelow, guardedByLoopId,
   onToggleEnabled, onRemove, onUpdate, onRename, onIdError, readerNote, highlight, onReadsClick, onWritesClick,
-  problemCount, fieldErrors,
+  problemCount, fieldErrors, workflowServers,
 }: StepCardProps) {
   const styles = useStepLayoutStyles();
   const isEnabled = step.enabled !== false;
@@ -220,6 +222,7 @@ export function StepCard({
                 guardedByLoopId={guardedByLoopId}
                 onUpdate={onUpdate}
                 fieldErrors={fieldErrors}
+                workflowServers={workflowServers}
               />
             </div>
           )}

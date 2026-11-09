@@ -6,6 +6,7 @@ pub mod auth;
 pub mod claude;
 pub mod common;
 pub mod copilot;
+pub mod harness_catalog;
 pub mod models;
 pub mod opencode;
 
@@ -27,7 +28,7 @@ pub struct Capabilities {
     pub share_transcript: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Adapter {
     Claude,
     Copilot,

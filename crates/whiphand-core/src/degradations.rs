@@ -32,6 +32,10 @@ pub const DEGRADATIONS: &[(&str, &str)] = &[
         "worktree-sync",
         "Worktree started from the local base, not its upstream",
     ),
+    (
+        "agent-restrictions",
+        "Agent restriction not enforceable for this runner",
+    ),
 ];
 
 pub fn is_degradation_id(value: &str) -> bool {
@@ -46,4 +50,18 @@ pub fn degradation_line(capability: &str, reason: &str, step_id: Option<&str>) -
         .map_or(capability, |(_, label)| label);
     let step = step_id.map(|s| format!(" [{s}]")).unwrap_or_default();
     format!("{label}{step} — {reason}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_restrictions_is_a_degradation_that_renders_its_label() {
+        assert!(is_degradation_id("agent-restrictions"));
+        assert_eq!(
+            degradation_line("agent-restrictions", "no flag", Some("plan")),
+            "Agent restriction not enforceable for this runner [plan] — no flag"
+        );
+    }
 }

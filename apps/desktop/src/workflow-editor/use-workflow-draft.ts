@@ -53,7 +53,13 @@ export function useWorkflowDraft(initial: Workflow) {
   const idsInTree = useMemo(() => new Set(rows.map(r => r.step.id)), [rows]);
 
   function updateWorkflowSettings(patch: Partial<Workflow>): void {
-    setDraft(d => ({ ...d, ...patch }));
+    // An undefined value removes the key: the saved YAML carries a restriction
+    // only when one is set, never `mcp: undefined`.
+    setDraft(d => {
+      const next: Record<string, unknown> = { ...d, ...patch };
+      for (const key of Object.keys(patch)) if (next[key] === undefined) delete next[key];
+      return next as unknown as Workflow;
+    });
   }
 
   function updateStep(path: StepPath, next: Step): void {

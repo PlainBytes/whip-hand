@@ -54,12 +54,7 @@ fn prompt_of(step: &AgentStep, ctx: &RunCtx) -> Result<String, String> {
 }
 
 fn opencode_spec(ctx: &RunCtx, argv: &[String], interactive: bool, config: String) -> JsObject {
-    spawn_spec(
-        ctx,
-        argv,
-        interactive,
-        obj! { "OPENCODE_CONFIG_CONTENT" => config },
-    )
+    spawn_spec(ctx, argv, interactive, obj! { CONFIG_ENV => config })
 }
 
 /// The `edit` pattern for the run dir: relative to opencode's cwd when the run
@@ -118,6 +113,13 @@ struct ConfigOpts<'a> {
     model: Option<&'a str>,
     instructions_path: Option<&'a str>,
     plugin_path: Option<&'a str>,
+    /// The step's `mcp` entries; `None` leaves the key out.
+    mcp: Option<Vec<(String, serde_json::Value)>>,
+}
+
+/// The `mcp` entries a restricted step carries, shared by every spawn of the step.
+fn mcp_entries(step: &AgentStep, ctx: &RunCtx) -> Option<Vec<(String, serde_json::Value)>> {
+    ctx.applied.get(&step.id)?.opencode_mcp.clone()
 }
 
 fn config_content(opts: ConfigOpts) -> String {
@@ -133,11 +135,36 @@ fn config_content(opts: ConfigOpts) -> String {
     if let Some(p) = opts.plugin_path {
         root.set("plugins", vec![JsValue::from(p)]);
     }
+    if let Some(entries) = &opts.mcp {
+        let mut mcp = JsObject::new();
+        for (name, def) in entries {
+            if let Ok(v) = jsval::parse(&def.to_string()) {
+                mcp.set(name, v);
+            }
+        }
+        root.set("mcp", mcp);
+    }
     root.set("default_agent", opts.agent_name);
     let mut agents = JsObject::new();
     agents.set(opts.agent_name, agent_body);
     root.set("agents", agents);
     jsval::stringify_compact(&root.into())
+}
+
+/// The spec's env key the whole opencode config travels in.
+pub const CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";
+
+/// `config` with its `mcp` entries (which carry server credentials) replaced by `redacted`,
+/// or None when it has none: an unrestricted step's recorded config stays as it was.
+pub fn redact_config(config: &str, redacted: &str) -> Option<String> {
+    let JsValue::Obj(mut root) = jsval::parse(config).ok()? else {
+        return None;
+    };
+    if root.prop("mcp").is_undefined() {
+        return None;
+    }
+    root.set("mcp", redacted);
+    Some(jsval::stringify_compact(&root.into()))
 }
 
 fn json_string(s: &str) -> String {
@@ -244,6 +271,7 @@ pub fn interactive(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
         model: step.model.as_deref(),
         instructions_path: Some(&guidance),
         plugin_path: Some(&plugin_dir),
+        mcp: mcp_entries(step, ctx),
     });
     let argv: Vec<String> = if resumed {
         vec![
@@ -297,6 +325,7 @@ pub fn headless(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
         model: step.model.as_deref(),
         instructions_path: None,
         plugin_path: None,
+        mcp: mcp_entries(step, ctx),
     });
     let prompt = step_file_path(&ctx.run_dir, &step.id, PROMPT)?;
     let mut argv: Vec<String> = [
@@ -326,6 +355,7 @@ pub fn harvest(step: &AgentStep, ctx: &RunCtx) -> Result<JsObject, String> {
         model: step.model.as_deref(),
         instructions_path: None,
         plugin_path: None,
+        mcp: mcp_entries(step, ctx),
     });
     let path = step_file_path(&ctx.run_dir, &step.id, HARVEST_PROMPT)?;
     let mut argv: Vec<String> = ["opencode", "run", STANDALONE, "--format", "json", "-s"]
@@ -502,5 +532,85 @@ mod tests {
         assert_eq!(allow.get("effect").as_str(), Some("allow"));
         let want = format!("{}/*", to_fwd(&c.run_dir));
         assert_eq!(allow.get("resource").as_str(), Some(want.as_str()));
+    }
+}
+
+#[cfg(test)]
+mod restriction_tests {
+    use super::*;
+    use crate::adapters::common::test_support::{ctx, step};
+    use crate::engine::restrictions::AppliedRestrictions;
+    use crate::types::StepMode;
+    use serde_json::json;
+
+    fn config_of(spec: &JsObject) -> JsValue {
+        jsval::parse(
+            &spec
+                .prop("env")
+                .get("OPENCODE_CONFIG_CONTENT")
+                .to_js_string(),
+        )
+        .unwrap()
+    }
+
+    fn restrict(c: &mut RunCtx, entries: Vec<(String, serde_json::Value)>) {
+        c.applied.insert(
+            "s".into(),
+            AppliedRestrictions {
+                opencode_mcp: Some(entries),
+                ..Default::default()
+            },
+        );
+    }
+
+    fn all_specs(c: &RunCtx) -> Vec<JsObject> {
+        let mut c2 = c.clone();
+        c2.session_ids.insert("s".into(), "ses_1".into());
+        vec![
+            interactive(&step("opencode", StepMode::Interactive), c).unwrap(),
+            headless(&step("opencode", StepMode::Headless), c).unwrap(),
+            harvest(&step("opencode", StepMode::Headless), &c2).unwrap(),
+        ]
+    }
+
+    #[test]
+    fn unrestricted_config_has_no_mcp_key() {
+        let root = tempfile::tempdir().unwrap();
+        let c = ctx(root.path(), root.path());
+        for spec in all_specs(&c) {
+            assert!(!config_of(&spec).get("mcp").as_obj().is_some());
+        }
+    }
+
+    #[test]
+    fn mcp_entries_reach_interactive_headless_and_harvest_configs() {
+        let root = tempfile::tempdir().unwrap();
+        let mut c = ctx(root.path(), root.path());
+        restrict(
+            &mut c,
+            vec![
+                (
+                    "docs".into(),
+                    json!({ "type": "local", "command": ["docs-mcp", "-x"] }),
+                ),
+                ("other".into(), json!({ "enabled": false })),
+            ],
+        );
+        for spec in all_specs(&c) {
+            let cfg = config_of(&spec);
+            let mcp = cfg.get("mcp");
+            assert_eq!(mcp.get("docs").get("type").as_str(), Some("local"));
+            assert_eq!(mcp.get("docs").get("command").as_arr().unwrap().len(), 2);
+            assert_eq!(mcp.get("other").get("enabled").as_bool(), Some(false));
+        }
+    }
+
+    #[test]
+    fn the_await_plugin_stays_under_a_restriction() {
+        let root = tempfile::tempdir().unwrap();
+        let mut c = ctx(root.path(), root.path());
+        restrict(&mut c, vec![("x".into(), json!({ "enabled": false }))]);
+        let cfg = config_of(&interactive(&step("opencode", StepMode::Interactive), &c).unwrap());
+        assert_eq!(cfg.get("plugins").as_arr().unwrap().len(), 1);
     }
 }

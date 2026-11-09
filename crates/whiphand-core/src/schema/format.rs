@@ -66,6 +66,34 @@ fn field_label(key: Option<&PathSeg>) -> String {
     label.to_string()
 }
 
+/// The dotted address inside an `mcp:` or `plugins:` block, and the phrase for the issue.
+/// A bad server name is addressed to `servers` and says what was wrong with the name.
+fn restriction_address(issue: &Issue, rest: &[PathSeg], raw: &Raw) -> (String, String) {
+    if let Code::InvalidKey { nested } = &issue.code {
+        let parent = &rest[..rest.len().saturating_sub(1)];
+        let label = parent
+            .iter()
+            .map(PathSeg::display)
+            .collect::<Vec<_>>()
+            .join(".");
+        let phrase = nested
+            .first()
+            .cloned()
+            .unwrap_or_else(|| issue.message.clone());
+        return (label, format!(": {phrase}"));
+    }
+    let label = rest
+        .iter()
+        .map(PathSeg::display)
+        .collect::<Vec<_>>()
+        .join(".");
+    (label, phrase_for(issue, raw))
+}
+
+fn is_restriction_key(seg: Option<&PathSeg>) -> bool {
+    matches!(seg.and_then(PathSeg::as_key), Some("mcp" | "plugins"))
+}
+
 /// 1-based, depth-first ordinal per step path — the editor's card numbering.
 fn ordinal_map(raw: &Raw) -> HashMap<Vec<usize>, usize> {
     fn walk(
@@ -219,6 +247,16 @@ fn classify_issue(
 
     if let Some(loc) = locate_step(raw, path) {
         let field = loc.field_path.first();
+        if is_restriction_key(field) {
+            let (label, phrase) = restriction_address(issue, loc.field_path, raw);
+            let sep = if phrase.starts_with(':') { "" } else { " " };
+            return WorkflowFieldProblem {
+                step_id: named_id(loc.obj),
+                field: field.and_then(PathSeg::as_key).map(str::to_string),
+                message: format!("{}: {label}{sep}{phrase}", step_label(&loc, ordinals)),
+                phrase,
+            };
+        }
         let phrase = phrase_for(issue, raw);
         return WorkflowFieldProblem {
             step_id: named_id(loc.obj),
@@ -243,6 +281,18 @@ fn classify_issue(
             step_id: None,
             field: Some("worktree".into()),
             message: format!("workflow: worktree: {sub}{phrase}"),
+            phrase,
+        };
+    }
+
+    // The workflow's `mcp:` or `plugins:` block, or something inside it.
+    if is_restriction_key(path.first()) {
+        let (label, phrase) = restriction_address(issue, path, raw);
+        let sep = if phrase.starts_with(':') { "" } else { " " };
+        return WorkflowFieldProblem {
+            step_id: None,
+            field: path.first().and_then(PathSeg::as_key).map(str::to_string),
+            message: format!("workflow: {label}{sep}{phrase}"),
             phrase,
         };
     }

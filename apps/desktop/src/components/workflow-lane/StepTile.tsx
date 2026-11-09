@@ -106,6 +106,9 @@ export function StepTile({
   const color = ACTOR_COLOR[actor];
   const purpose = purposeOf(step);
   const model = isAgentStep(step) ? step.model : undefined;
+  const mcpHint = isAgentStep(step) && step.mcp
+    ? (step.mcp.allow ? `MCP: ${step.mcp.allow.length}` : step.mcp.deny?.length ? `MCP: -${step.mcp.deny.length}` : undefined)
+    : undefined;
   const writesFiles = isAgentStep(step) && step.writes;
   const isShell = actor === 'shell';
   const width = isShell && !step.output ? 140 : 180;
@@ -168,6 +171,9 @@ export function StepTile({
           <span style={{ padding: '2px 6px 4px', textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 2 }}>
             {model && (
               <Text size={100} style={{ color: 'var(--colorNeutralForeground3)' }}>{model}</Text>
+            )}
+            {mcpHint && (
+              <Text size={100} style={{ color: 'var(--colorNeutralForeground3)' }}>{mcpHint}</Text>
             )}
             <Text
               size={200}

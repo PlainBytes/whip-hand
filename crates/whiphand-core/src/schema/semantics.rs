@@ -545,6 +545,14 @@ fn collect_manual_warnings(steps: &[Step], retry_offered: bool, warnings: &mut V
 pub fn validate_workflow_warnings(workflow: &Workflow) -> Vec<String> {
     let mut warnings = Vec::new();
     collect_manual_warnings(&workflow.steps, false, &mut warnings);
+    let servers = workflow.mcp.as_ref().and_then(|m| m.servers.as_ref());
+    for (name, def) in servers.iter().flat_map(|s| s.iter()) {
+        for field in crate::secrets::literal_credentials(def) {
+            warnings.push(format!(
+                "mcp.servers.{name}.{field} looks like a credential written directly in the workflow, so it stays in this file and in every run's snapshot; use a reference such as ${{NAME}} and keep the value in the workspace's secrets or the environment"
+            ));
+        }
+    }
     warnings
 }
 

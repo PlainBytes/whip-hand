@@ -56,14 +56,14 @@ pub fn project_dir(workspace: &str) -> String {
 
 /// The workspace path as the marker records it: absolute, `/`-separated, resolved
 /// through links when the folder exists.
-fn normalized_path(workspace: &Path) -> String {
+pub fn normalized_path(workspace: &Path) -> String {
     let abs = std::fs::canonicalize(workspace)
         .unwrap_or_else(|_| PathBuf::from(node_path::resolve(&workspace.to_string_lossy())));
     let text = abs.to_string_lossy().replace('\\', "/");
     text.strip_prefix("//?/").unwrap_or(&text).to_string()
 }
 
-fn same_path(a: &str, b: &str) -> bool {
+pub fn same_path(a: &str, b: &str) -> bool {
     let (a, b) = (a.trim_end_matches('/'), b.trim_end_matches('/'));
     if cfg!(windows) {
         a.eq_ignore_ascii_case(b)

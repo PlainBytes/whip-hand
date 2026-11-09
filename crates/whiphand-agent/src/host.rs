@@ -15,6 +15,7 @@ use std::thread::JoinHandle;
 
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
+use whiphand_core::adapters::harness_catalog::HarnessCatalog;
 use whiphand_core::adapters::models::ModelCatalog;
 use whiphand_core::jsval;
 
@@ -183,6 +184,7 @@ pub struct Agent {
     clients: RefCell<BTreeMap<u64, ClientEntry>>,
     pub app_state: AppStateStore,
     pub models: ModelCatalog,
+    pub harness: HarnessCatalog,
     pub jobs: crate::jobs::Jobs,
     pub scrollback: RefCell<crate::scrollback::Scrollback>,
     pub pty_sizes: RefCell<crate::pty_sizes::PtySizes>,
@@ -238,6 +240,7 @@ impl Agent {
                     }),
                 ),
                 models: ModelCatalog::default(),
+                harness: HarnessCatalog::default(),
                 jobs: crate::jobs::Jobs::default(),
                 scrollback: RefCell::new(crate::scrollback::Scrollback::default()),
                 pty_sizes: RefCell::new(crate::pty_sizes::PtySizes::default()),

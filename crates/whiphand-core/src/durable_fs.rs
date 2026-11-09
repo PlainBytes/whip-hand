@@ -107,6 +107,26 @@ pub fn write_file_atomic(target: &Path, data: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
+/// [`write_file_atomic`], readable by its owner only where the OS can enforce it. On
+/// Windows the file inherits its directory's ACL. Creates the parent folder.
+pub fn write_file_private_atomic(target: &Path, data: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    if let Some(dir) = target.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let tmp = temp_name_for(target);
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    let written = opts.open(&tmp).and_then(|mut f| f.write_all(data));
+    if let Err(e) = written.and_then(|()| rename_replacing(&tmp, target)) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
 fn remove_once(path: &Path) -> io::Result<()> {
     let meta = match fs::symlink_metadata(path) {
         Ok(m) => m,

@@ -36,6 +36,8 @@ export const DEGRADATION_IDS = [
   'long-path',
   /** run: the worktree could not start from the base's synced upstream. */
   'worktree-sync',
+  /** An MCP or plugin restriction the step's runner cannot enforce. */
+  'agent-restrictions',
 ] as const;
 
 export type DegradationId = (typeof DEGRADATION_IDS)[number];
@@ -55,6 +57,7 @@ export const DEGRADATION_LABELS: Record<DegradationId, string> = {
   'token-file-mode': 'Remote token file mode is not enforceable',
   'long-path': 'Workspace path leaves little headroom under 260 characters',
   'worktree-sync': 'Worktree started from the local base, not its upstream',
+  'agent-restrictions': 'Agent restriction not enforceable for this runner',
 };
 
 export function isDegradationId(value: string): value is DegradationId {

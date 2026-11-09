@@ -31,6 +31,8 @@ pub mod run_ctx;
 pub mod run_tree;
 pub mod scaffold;
 pub mod schema;
+pub mod secret_store;
+pub mod secrets;
 pub mod segment;
 pub mod steps;
 pub mod storage;

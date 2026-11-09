@@ -53,7 +53,11 @@ fn dump_cells(name: &str, model: &Model) {
             (0..w)
                 .map(|x| {
                     let cell = &buffer[(x, y)];
-                    let mods: Vec<String> = cell.modifier.iter_names().map(|(n, _)| n.to_string()).collect();
+                    let mods: Vec<String> = cell
+                        .modifier
+                        .iter_names()
+                        .map(|(n, _)| n.to_string())
+                        .collect();
                     json!([cell.symbol(), colour(cell.fg), colour(cell.bg), mods])
                 })
                 .collect()
@@ -61,7 +65,11 @@ fn dump_cells(name: &str, model: &Model) {
         .collect();
     let out = json!({ "width": w, "height": h, "rows": rows });
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(std::path::Path::new(&dir).join(format!("{name}.json")), out.to_string()).unwrap();
+    std::fs::write(
+        std::path::Path::new(&dir).join(format!("{name}.json")),
+        out.to_string(),
+    )
+    .unwrap();
 }
 
 /// A terminal can be made tiny, or very wide and short, mid-resize: every

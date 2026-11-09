@@ -5,8 +5,9 @@
  * The runs are made by the real `whiphand` CLI (fixtures/runs/*.yaml: command
  * steps replaying canned output through fixtures/emit.mjs), not written by
  * hand, so their files always match the current run format. Afterwards
- * `retimeRun` moves each one to a fixed point in time and a fixed id, so
- * every regeneration shows the same dates and ids.
+ * `retimeRun` puts each one on a fixed timeline (start time and every step's
+ * duration) under a fixed id, so every regeneration shows the same dates,
+ * durations and ids.
  */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -34,48 +35,82 @@ export const DEMO_RUNS = [
 export const DETAIL_RUN_NAME = 'one-page checkout';
 
 const ISO = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g;
-const RUN_ID = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-([0-9a-z]+)$/;
+const RUN_ID = /^\d{8}-\d{6}-[0-9a-z]+$/;
 
-/** A run id's clock part read as if it were UTC (ids use the machine's local time). */
-function idClock(runId) {
-  const m = RUN_ID.exec(runId);
-  if (!m) throw new Error(`not a run id: '${runId}'`);
-  return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
-}
+/**
+ * How long each step takes on the fixture timeline, in seconds. The CLI's
+ * real durations vary run to run, and the Runs grid and the run view show
+ * them, so every step is stretched to one of these instead.
+ */
+export const STEP_SECONDS = {
+  plan: 252, implement: 655, tests: 41, review: 128,
+  reproduce: 196, fix: 512, draft: 340, 'check-links': 17,
+};
 
-function formatIdClock(ms, suffix) {
-  const d = new Date(ms);
+/** The run id for a run started at `startedAt` (UTC, as the CLI makes them under TZ=UTC). */
+export function runIdAt(startedAt, suffix) {
+  const d = new Date(startedAt);
   const p = n => String(n).padStart(2, '0');
   return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}-${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}-${suffix}`;
 }
 
 /**
- * The id a run started at `startedAt` gets once moved to `newStart`: the same
- * local-time offset, the clock part moved, and `suffix` in place of the random one.
+ * Anchor points `[recorded ms, fixture ms]`: the run's start at `newStart`,
+ * then each step's start and end laid end to end, each step lasting its
+ * STEP_SECONDS.
  */
-export function retimedId(runId, startedAt, newStart, suffix = RUN_ID.exec(runId)[7]) {
-  const offset = idClock(runId) - Math.floor(Date.parse(startedAt) / 1000) * 1000;
-  return formatIdClock(Date.parse(newStart) + offset, suffix);
+export function timeline(manifest, newStart) {
+  let cursor = Date.parse(newStart);
+  const anchors = [[Date.parse(manifest.startedAt), cursor]];
+  for (const step of manifest.steps ?? []) {
+    if (!step.startedAt || !step.endedAt) continue;
+    const seconds = STEP_SECONDS[step.id];
+    if (seconds === undefined) throw new Error(`STEP_SECONDS has no duration for step '${step.id}'`);
+    anchors.push([Date.parse(step.startedAt), cursor]);
+    cursor += seconds * 1000;
+    anchors.push([Date.parse(step.endedAt), cursor]);
+  }
+  anchors.sort((a, b) => a[0] - b[0]);
+  // A step that ends in the millisecond the next starts gives two anchors at one time: keep the first.
+  return anchors.filter((anchor, i) => i === 0 || anchor[0] !== anchors[i - 1][0]);
 }
 
-/** Every ISO timestamp in `text` moved by `deltaMs`, and every `oldId` replaced by `newId`. */
-export function retimeText(text, deltaMs, oldId, newId) {
+/**
+ * `ms` on the fixture timeline: linear between the anchors around it, so log
+ * lines keep their order and place within a step; shifted by the nearest
+ * anchor outside them.
+ */
+export function mapTime(ms, anchors) {
+  if (ms <= anchors[0][0]) return anchors[0][1] + (ms - anchors[0][0]);
+  for (let i = 1; i < anchors.length; i += 1) {
+    const [t1, n1] = anchors[i];
+    if (ms <= t1) {
+      const [t0, n0] = anchors[i - 1];
+      return Math.round(n0 + ((ms - t0) / (t1 - t0)) * (n1 - n0));
+    }
+  }
+  const [tn, nn] = anchors.at(-1);
+  return nn + (ms - tn);
+}
+
+/** Every ISO timestamp in `text` mapped through `map` (ms → ms), and every `oldId` replaced by `newId`. */
+export function retimeText(text, map, oldId, newId) {
   return text
-    .replace(ISO, ts => new Date(Date.parse(ts) + deltaMs).toISOString())
+    .replace(ISO, ts => new Date(map(Date.parse(ts))).toISOString())
     .replaceAll(oldId, newId);
 }
 
-/** Moves the run in `runDir` to start at `newStart` (and onto `suffix`, if given); returns its new directory. */
+/** Moves the run in `runDir` onto the fixture timeline from `newStart`, as id `<newStart>-<suffix>`; returns its new directory. */
 export function retimeRun(runDir, newStart, suffix) {
   const oldId = path.basename(runDir);
   const manifest = JSON.parse(fs.readFileSync(path.join(runDir, 'run.json'), 'utf8'));
-  const delta = Date.parse(newStart) - Date.parse(manifest.startedAt);
-  const newId = retimedId(oldId, manifest.startedAt, newStart, suffix);
+  const anchors = timeline(manifest, newStart);
+  const newId = runIdAt(newStart, suffix);
   for (const entry of fs.readdirSync(runDir, { recursive: true, withFileTypes: true })) {
     if (!entry.isFile()) continue;
     const file = path.join(entry.parentPath, entry.name);
     const text = fs.readFileSync(file, 'utf8');
-    const next = retimeText(text, delta, oldId, newId);
+    const next = retimeText(text, ms => mapTime(ms, anchors), oldId, newId);
     if (next !== text) fs.writeFileSync(file, next);
   }
   const target = path.join(path.dirname(runDir), newId);

@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PALETTES, cellStyle, cssColour, rowHtml, terminalHtml } from './screenshots/terminal-html.mjs';
-import { retimeText, retimedId } from './screenshots/demo-workspace.mjs';
+import { STEP_SECONDS, mapTime, retimeText, runIdAt, timeline } from './screenshots/demo-workspace.mjs';
 
 const light = PALETTES.light;
 const cell = (symbol, fg = 'Reset', bg = 'Reset', mods = []) => [symbol, fg, bg, mods];
@@ -53,14 +53,45 @@ test('a page per theme, with every row', () => {
   assert.throws(() => terminalHtml(frame, 'sepia'), /unknown theme/);
 });
 
-test('retiming moves every timestamp by the same delta and renames the id', () => {
-  const text = '{"runId":"20261108-161620-e218","startedAt":"2026-11-08T14:16:20.207Z","endedAt":"2026-11-08T14:16:25Z"}';
-  const out = retimeText(text, -60_000, '20261108-161620-e218', '20261108-161520-0000');
-  assert.equal(out, '{"runId":"20261108-161520-0000","startedAt":"2026-11-08T14:15:20.207Z","endedAt":"2026-11-08T14:15:25.000Z"}');
+const manifest = {
+  startedAt: '2026-11-08T14:16:20.200Z',
+  steps: [
+    { id: 'plan', startedAt: '2026-11-08T14:16:20.200Z', endedAt: '2026-11-08T14:16:20.900Z' },
+    { id: 'tests', startedAt: '2026-11-08T14:16:20.900Z', endedAt: '2026-11-08T14:16:22.300Z' },
+    { id: 'review', status: 'pending' },
+  ],
+};
+const at = iso => Date.parse(iso);
+const iso = ms => new Date(ms).toISOString();
+
+test('steps land end to end at their fixed durations, whatever they really took', () => {
+  const anchors = timeline(manifest, '2026-03-12T13:00:00.000Z');
+  const plan = STEP_SECONDS.plan * 1000;
+  const tests = STEP_SECONDS.tests * 1000;
+  assert.equal(iso(mapTime(at('2026-11-08T14:16:20.200Z'), anchors)), '2026-03-12T13:00:00.000Z');
+  assert.equal(mapTime(at('2026-11-08T14:16:20.900Z'), anchors), at('2026-03-12T13:00:00.000Z') + plan);
+  assert.equal(mapTime(at('2026-11-08T14:16:22.300Z'), anchors), at('2026-03-12T13:00:00.000Z') + plan + tests);
 });
 
-test('a retimed id keeps the local-time offset the original was made with', () => {
-  // Made at 14:16:20Z on a UTC+2 machine.
-  assert.equal(retimedId('20261108-161620-e218', '2026-11-08T14:16:20.207Z', '2026-03-12T13:00:00.000Z'), '20260312-150000-e218');
-  assert.equal(retimedId('20261108-141620-e218', '2026-11-08T14:16:20.207Z', '2026-03-12T13:00:00.000Z', 'abcd'), '20260312-130000-abcd');
+test('times inside a step keep their place in it; times past the last step shift with it', () => {
+  const anchors = timeline(manifest, '2026-03-12T13:00:00.000Z');
+  const start = at('2026-03-12T13:00:00.000Z');
+  assert.equal(mapTime(at('2026-11-08T14:16:20.550Z'), anchors), start + (STEP_SECONDS.plan * 1000) / 2);
+  const end = start + (STEP_SECONDS.plan + STEP_SECONDS.tests) * 1000;
+  assert.equal(mapTime(at('2026-11-08T14:16:22.305Z'), anchors), end + 5);
+});
+
+test('a step with no fixture duration is an error, not a silent real one', () => {
+  const unknown = { startedAt: manifest.startedAt, steps: [{ id: 'deploy', startedAt: manifest.startedAt, endedAt: manifest.startedAt }] };
+  assert.throws(() => timeline(unknown, '2026-03-12T13:00:00.000Z'), /no duration for step 'deploy'/);
+});
+
+test('retimeText maps every timestamp and renames the id', () => {
+  const text = '{"runId":"20261108-161620-e218","startedAt":"2026-11-08T14:16:20.207Z"}';
+  const out = retimeText(text, ms => ms - 60_000, '20261108-161620-e218', '20260312-130000-abcd');
+  assert.equal(out, '{"runId":"20260312-130000-abcd","startedAt":"2026-11-08T14:15:20.207Z"}');
+});
+
+test('a run id comes from the fixed start time alone', () => {
+  assert.equal(runIdAt('2026-03-12T13:00:00.000Z', 'abcd'), '20260312-130000-abcd');
 });

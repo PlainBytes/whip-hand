@@ -80,6 +80,35 @@ export const SCENES = [
   },
 ];
 
+/**
+ * DEMO_ROOT is one fixed path for every checkout, so a second capture would
+ * delete the first one's workspace under its agent. `<DEMO_ROOT>.lock` (made
+ * atomically, holding the owner's pid) keeps it to one capture at a time; a
+ * lock whose process is gone is stale and taken over.
+ */
+function lockDemoRoot() {
+  const lock = `${DEMO_ROOT}.lock`;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      fs.mkdirSync(lock);
+      fs.writeFileSync(path.join(lock, 'pid'), String(process.pid));
+      return () => fs.rmSync(lock, { recursive: true, force: true });
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const pid = Number(fs.readFileSync(path.join(lock, 'pid'), { encoding: 'utf8', flag: 'a+' }));
+      let alive = false;
+      try {
+        alive = pid > 0 && process.kill(pid, 0);
+      } catch (probe) {
+        alive = probe.code === 'EPERM';
+      }
+      if (alive) throw new Error(`another screenshot capture (pid ${pid}) is using ${DEMO_ROOT}; wait for it to finish`);
+      fs.rmSync(lock, { recursive: true, force: true });
+    }
+  }
+  throw new Error(`could not lock ${DEMO_ROOT}`);
+}
+
 /** Waits for fonts and two frames, so the shot is of a settled page. */
 async function settled(page) {
   // Off anything hoverable: a click leaves the pointer on its target, tooltip and all.
@@ -142,6 +171,7 @@ export async function captureDesktop({ browser, outDir, themes, log }) {
   runSync(['npm', 'run', 'build:web', '-w', 'desktop'], { cwd: repoRoot, stdio: ['ignore', 'ignore', 'inherit'], check: true });
 
   const root = DEMO_ROOT;
+  const release = lockDemoRoot();
   fs.rmSync(root, { recursive: true, force: true });
   fs.mkdirSync(root, { recursive: true });
   try {
@@ -156,5 +186,6 @@ export async function captureDesktop({ browser, outDir, themes, log }) {
     for (const theme of themes) await captureTheme({ browser, outDir, theme, workspace, pristine, log });
   } finally {
     discard(root);
+    release();
   }
 }

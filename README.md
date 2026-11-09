@@ -727,7 +727,3 @@ certificate is in place.
 ## Docs
 
 - `docs/design.md` — why this exists, the architecture, and every workflow-format detail
-  this README only summarizes.
-- `docs/superpowers/specs/2026-09-08-staged-plans-design.md` — design for the not-yet-built
-  staged/multi-commit plan feature.
-- `docs/review-backlog.md` — known issues and larger refactors, not yet scheduled.

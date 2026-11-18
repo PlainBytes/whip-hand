@@ -9,24 +9,13 @@
  *
  * To add a screen, add an entry to SCENES.
  */
-import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
-import { runSync } from '../lib/exec.mjs';
-import { discard } from '../lib/child.mjs';
-import { freePort, waitForHttp } from '../lib/http.mjs';
 import { repoRoot } from '../package/common.mjs';
-import { AgentSession, isolatedEnv, tempDir } from '../bench/agent-session.mjs';
-import { seedAppState } from '../bench/fixtures.mjs';
-import { createDemoWorkspace, DEMO_NOW, DETAIL_RUN_NAME } from './demo-workspace.mjs';
+import { DEMO_NOW, DETAIL_RUN_NAME } from './demo-workspace.mjs';
+import { settled, startWebSession, withDemoWorkspace } from './web-session.mjs';
 
-const WEB_ROOT = path.join(repoRoot, 'apps/desktop/dist-web');
-const exe = name => path.join(repoRoot, 'target/release', `${name}${process.platform === 'win32' ? '.exe' : ''}`);
 const VIEWPORT = { width: 1440, height: 900 };
 const REVIEW_RUN_NAME = 'money in cents';
-/** Fixed, so the workspace path the sidebar shows is the same on every regeneration. */
-const DEMO_ROOT = path.join(os.tmpdir(), 'whiphand-demo');
 
 async function openRun(page, text) {
   await page.getByText(text, { exact: true }).first().click();
@@ -80,70 +69,16 @@ export const SCENES = [
   },
 ];
 
-/**
- * DEMO_ROOT is one fixed path for every checkout, so a second capture would
- * delete the first one's workspace under its agent. `<DEMO_ROOT>.lock` (made
- * atomically, holding the owner's pid) keeps it to one capture at a time; a
- * lock whose process is gone is stale and taken over.
- */
-function lockDemoRoot() {
-  const lock = `${DEMO_ROOT}.lock`;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      fs.mkdirSync(lock);
-      fs.writeFileSync(path.join(lock, 'pid'), String(process.pid));
-      return () => fs.rmSync(lock, { recursive: true, force: true });
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      const pid = Number(fs.readFileSync(path.join(lock, 'pid'), { encoding: 'utf8', flag: 'a+' }));
-      let alive = false;
-      try {
-        alive = pid > 0 && process.kill(pid, 0);
-      } catch (probe) {
-        alive = probe.code === 'EPERM';
-      }
-      if (alive) throw new Error(`another screenshot capture (pid ${pid}) is using ${DEMO_ROOT}; wait for it to finish`);
-      fs.rmSync(lock, { recursive: true, force: true });
-    }
-  }
-  throw new Error(`could not lock ${DEMO_ROOT}`);
-}
-
-/** Waits for fonts and two frames, so the shot is of a settled page. */
-async function settled(page) {
-  // Off anything hoverable: a click leaves the pointer on its target, tooltip and all.
-  await page.mouse.move(VIEWPORT.width - 2, VIEWPORT.height / 2);
-  await page.evaluate(async () => {
-    await document.fonts.ready;
-    await new Promise(requestAnimationFrame);
-    await new Promise(requestAnimationFrame);
-  });
-  await page.waitForTimeout(300);
-}
-
 async function captureTheme({ browser, outDir, theme, workspace, pristine, log }) {
-  const stateDir = tempDir(`shots-${theme}`);
-  // Restored at the path its runs were made at, so their workdir still matches.
-  fs.rmSync(workspace, { recursive: true, force: true });
-  fs.cpSync(pristine, workspace, { recursive: true });
-
-  const port = await freePort();
-  const token = randomBytes(24).toString('hex');
-  fs.writeFileSync(path.join(stateDir, 'remote-access.json'), JSON.stringify({ schemaVersion: 1, enabled: true, port, token }));
-  seedAppState(path.join(stateDir, 'app-state.json'), workspace, { theme });
-
-  const session = new AgentSession([exe('whiphand-agent')], isolatedEnv(stateDir, { WHIPHAND_WEB_ROOT: WEB_ROOT, TZ: 'UTC' }));
+  const { session, url, stop } = await startWebSession({ name: `shots-${theme}`, workspace, pristine, theme });
   let context;
   try {
-    await session.request('hello', { protocolVersion: 1 });
-    const origin = `http://127.0.0.1:${port}`;
-    await waitForHttp(`${origin}/`);
     context = await browser.newContext({
       viewport: VIEWPORT, deviceScaleFactor: 2, colorScheme: theme, timezoneId: 'UTC', locale: 'en-US',
     });
     await context.clock.setFixedTime(DEMO_NOW);
     const page = await context.newPage();
-    await page.goto(`${origin}/#t=${token}`);
+    await page.goto(url);
     for (const scene of SCENES) {
       try {
         await scene.prepare(page, { session, workspace });
@@ -158,34 +93,12 @@ async function captureTheme({ browser, outDir, theme, workspace, pristine, log }
     }
   } finally {
     await context?.close();
-    await session.stop();
-    discard(stateDir);
+    await stop();
   }
 }
 
 export async function captureDesktop({ browser, outDir, themes, log }) {
-  for (const binary of ['whiphand', 'whiphand-agent']) {
-    if (!fs.existsSync(exe(binary))) throw new Error(`${path.relative(repoRoot, exe(binary))} is missing — run \`npm run build:parity\` first`);
-  }
-  log('desktop: building the web bundle');
-  runSync(['npm', 'run', 'build:web', '-w', 'desktop'], { cwd: repoRoot, stdio: ['ignore', 'ignore', 'inherit'], check: true });
-
-  const root = DEMO_ROOT;
-  const release = lockDemoRoot();
-  fs.rmSync(root, { recursive: true, force: true });
-  fs.mkdirSync(root, { recursive: true });
-  try {
-    log('desktop: making the demo workspace');
-    const stateDir = path.join(root, 'cli-state');
-    const workspace = createDemoWorkspace(path.join(root, 'shop'), {
-      cli: exe('whiphand'),
-      env: isolatedEnv(stateDir, { TZ: 'UTC' }),
-    });
-    const pristine = path.join(root, 'pristine');
-    fs.cpSync(workspace, pristine, { recursive: true });
+  await withDemoWorkspace({ log, label: 'desktop' }, async ({ workspace, pristine }) => {
     for (const theme of themes) await captureTheme({ browser, outDir, theme, workspace, pristine, log });
-  } finally {
-    discard(root);
-    release();
-  }
+  });
 }

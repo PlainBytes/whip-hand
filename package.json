@@ -25,7 +25,8 @@
     "package:desktop": "node scripts/package/desktop.mjs",
     "reinstall": "node scripts/package/reinstall.mjs",
     "bump": "node scripts/version.mjs",
-    "screenshots": "node scripts/screenshots.mjs"
+    "screenshots": "node scripts/screenshots.mjs",
+    "mobile-check": "node scripts/mobile-check.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

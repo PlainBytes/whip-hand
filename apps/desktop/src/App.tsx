@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FluentProvider, webDarkTheme, webLightTheme } from '@fluentui/react-components';
+import { FluentProvider, OverlayDrawer, webDarkTheme, webLightTheme } from '@fluentui/react-components';
 import { jobInWorkspace, useAppStore, type JobState } from './state/store.ts';
 import { useAgentClient } from './agent/agent-context.tsx';
 import { useDarkTheme } from './lib/use-dark-theme.ts';
+import { useNarrowLayout } from './lib/use-narrow-layout.ts';
 import { useStartupRestore } from './lib/use-startup-restore.ts';
 import { useJobAttach } from './lib/use-job-attach.ts';
 import { isModalOpen } from './lib/tab-shortcuts.ts';
@@ -17,7 +18,8 @@ import { useCapabilities } from './capabilities.tsx';
 import { NotificationBridge } from './components/NotificationBridge.tsx';
 import { UpdateBanner } from './components/UpdateBanner.tsx';
 import { AgentDownBanner } from './components/AgentDownBanner.tsx';
-import { Sidebar } from './components/Sidebar.tsx';
+import { Sidebar, SIDEBAR_WIDTH_EXPANDED } from './components/Sidebar.tsx';
+import { MobileTopBar } from './components/MobileTopBar.tsx';
 import { PageContent } from './components/PageContent.tsx';
 import { UnsavedChangesDialog } from './components/UnsavedChangesDialog.tsx';
 import { WorkspaceQuickSwitch } from './components/WorkspaceQuickSwitch.tsx';
@@ -77,14 +79,41 @@ export function App({
   // Replays runs that started before this client connected — see use-job-attach.ts.
   useJobAttach(client);
 
-  useShortcut('workspace.quickSwitch', useCallback(() => setQuickSwitchOpen(true), []));
   const toggleSidebar = useCallback(() => {
     // Read live, not from the render closure, so back-to-back toggles don't repeat a stale value.
     const next = !(useAppStore.getState().appState?.sidebarCollapsed ?? false);
     patchAppState({ sidebarCollapsed: next });
     void client.request('setUiState', { sidebarCollapsed: next }).catch(() => {});
   }, [client, patchAppState]);
-  useShortcut('view.toggleSidebar', toggleSidebar);
+  // Narrow layout: the sidebar is an overlay drawer. Its open state is local and
+  // never touches `sidebarCollapsed`, so a phone visit leaves the desktop's choice alone.
+  const narrow = useNarrowLayout();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // What to do once the drawer has really unmounted. The drawer is a Modalizer,
+  // and an unsaved-changes dialog or quick-switch opening in the same commit
+  // would be the tabster race described below.
+  const afterDrawerRef = useRef<(() => void) | null>(null);
+  const closeDrawerThen = useCallback((action?: () => void) => {
+    // Only replace a queued action when given one: a bare dismissal mid-exit must not drop it.
+    if (action) afterDrawerRef.current = action;
+    setDrawerOpen(false);
+  }, []);
+  // Runs once the drawer's exit has finished and its Modalizer is torn down.
+  const onDrawerClosed = useCallback(() => {
+    const action = afterDrawerRef.current;
+    afterDrawerRef.current = null;
+    action?.();
+  }, []);
+  // Widening the window with the drawer open must not leave it armed for the next narrow visit.
+  // Any queued choice is flushed, since the drawer unmounting never fires its exit callback.
+  useEffect(() => { if (!narrow) { setDrawerOpen(false); onDrawerClosed(); } }, [narrow, onDrawerClosed]);
+  // The quick-switch is a Modalizer too: with the drawer open, close it first.
+  useShortcut('workspace.quickSwitch', useCallback(() => {
+    if (narrow && drawerOpen) closeDrawerThen(() => setQuickSwitchOpen(true));
+    else setQuickSwitchOpen(true);
+  }, [narrow, drawerOpen, closeDrawerThen]));
+  const toggleDrawer = useCallback(() => setDrawerOpen(open => !open), []);
+  useShortcut('view.toggleSidebar', narrow ? toggleDrawer : toggleSidebar);
   useWindowTitle();
 
   const recentWorkspaces = useAppStore(state => state.appState?.recentWorkspaces);
@@ -185,21 +214,45 @@ export function App({
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         <UpdateBanner />
         <AgentDownBanner />
+        {narrow && <MobileTopBar page={page} onOpenNavigation={() => setDrawerOpen(true)} />}
         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-          <Sidebar
-            page={page}
-            onSelectPage={requestPage}
-            onOpenRun={job => void openRun(job)}
-            collapsed={sidebarCollapsed}
-            onToggleCollapsed={toggleSidebar}
-          />
+          {!narrow && (
+            <Sidebar
+              page={page}
+              onSelectPage={requestPage}
+              onOpenRun={job => void openRun(job)}
+              collapsed={sidebarCollapsed}
+              onToggleCollapsed={toggleSidebar}
+            />
+          )}
           <main
-            style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
+            style={{
+              flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column',
+              ...(narrow ? { paddingBottom: 'env(safe-area-inset-bottom)' } : null),
+            }}
           >
             <PageContent page={page} onNavigate={next => goToPage(next)} />
           </main>
         </div>
       </div>
+
+      {narrow && (
+        <OverlayDrawer
+          open={drawerOpen}
+          position="start"
+          onOpenChange={(_, data) => { if (!data.open) closeDrawerThen(); }}
+          surfaceMotion={{ onMotionFinish: (_, data) => { if (data.direction === 'exit') onDrawerClosed(); } }}
+          style={{ width: SIDEBAR_WIDTH_EXPANDED, maxWidth: '85vw' }}
+        >
+          <Sidebar
+            page={page}
+            onSelectPage={requestPage}
+            onOpenRun={job => void openRun(job)}
+            // Resolves once the drawer is unmounted; the choice proceeds after that.
+            onNavigate={() => new Promise<void>(resolve => closeDrawerThen(resolve))}
+          />
+        </OverlayDrawer>
+      )}
 
       {/*
         * Yields to the guard: choosing a workspace here with unsaved edits

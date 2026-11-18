@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { Page } from './Page.tsx';
 
@@ -39,5 +39,22 @@ describe('Page', () => {
     const body = screen.getByTestId('page-body');
     expect(body).toHaveStyle({ flex: '1', display: 'flex', flexDirection: 'column', padding: '16px' });
     expect(body).not.toHaveStyle({ overflow: 'auto' });
+  });
+});
+
+describe('Page at narrow widths', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('tightens padding and lets the header wrap', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    render(<Page header="Title">x</Page>);
+    expect(screen.getByTestId('page-header')).toHaveStyle({ padding: '8px 12px', flexWrap: 'wrap' });
+    expect(screen.getByTestId('page-body')).toHaveStyle({ padding: '12px' });
+  });
+
+  it('keeps the wide padding otherwise', () => {
+    render(<Page header="Title">x</Page>);
+    expect(screen.getByTestId('page-header')).toHaveStyle({ padding: '12px 16px' });
+    expect(screen.getByTestId('page-body')).toHaveStyle({ padding: '16px' });
   });
 });

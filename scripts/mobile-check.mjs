@@ -53,10 +53,17 @@ async function tap(locator) {
  */
 export async function goTo(page, label) {
   const open = page.getByRole('button', { name: NAV_BUTTON });
-  if (await open.first().isVisible()) await open.first().tap();
+  const drawer = await open.first().isVisible();
+  if (drawer) await open.first().tap();
   const item = page.getByRole('button', { name: label, exact: true })
     .or(page.getByRole('link', { name: label, exact: true })).first();
   await tap(item);
+  // The drawer hides the page from role queries until its exit finishes and
+  // the focus manager has lifted aria-hidden off the app root.
+  if (drawer) {
+    await page.getByRole('navigation').waitFor({ state: 'detached' });
+    await page.locator('#root:not([aria-hidden])').waitFor({ state: 'attached' });
+  }
 }
 
 /** The Runs list: the nav item, then the strip's Runs tab, since a run or New run tab may be showing. */
@@ -124,7 +131,7 @@ export const SCENES = [
   },
   {
     name: 'activity',
-    status: 'known-broken',
+    status: 'clean',
     async prepare(page) {
       await goTo(page, 'Activity');
       await page.getByTestId('page-header').filter({ hasText: 'Activity' }).first().waitFor();
@@ -140,7 +147,7 @@ export const SCENES = [
   },
   {
     name: 'doctor',
-    status: 'known-broken',
+    status: 'clean',
     async prepare(page) {
       await goTo(page, 'Doctor');
       await page.getByTestId('page-header').filter({ hasText: 'Doctor' }).first().waitFor();
@@ -148,7 +155,7 @@ export const SCENES = [
   },
   {
     name: 'preferences',
-    status: 'known-broken',
+    status: 'clean',
     async prepare(page) {
       await goTo(page, 'Preferences');
       await page.getByTestId('page-header').filter({ hasText: 'Preferences' }).first().waitFor();
@@ -156,7 +163,7 @@ export const SCENES = [
   },
   {
     name: 'workspace-settings',
-    status: 'known-broken',
+    status: 'clean',
     async prepare(page) {
       await goTo(page, 'Settings');
       await page.getByTestId('page-header').filter({ hasText: 'Settings' }).first().waitFor();
@@ -181,7 +188,7 @@ export const SCENES = [
   },
   {
     name: 'new-run',
-    status: 'known-broken',
+    status: 'clean',
     async prepare(page) {
       await goToRuns(page);
       await tap(page.getByRole('button', { name: 'New run' }).first());
@@ -367,7 +374,8 @@ async function main() {
         const page = await context.newPage();
         // Signed in up front, so `--only` can start at any scene.
         await page.goto(web.url);
-        await page.getByRole('navigation').first().waitFor();
+        // The phone layout has no nav until its menu button is tapped.
+        await page.getByRole('navigation').or(page.getByRole('button', { name: NAV_BUTTON })).first().waitFor();
         for (const scene of scenes) {
           const result = { error: null, overflow: null };
           try {

@@ -12,7 +12,7 @@
  * asks first.
  */
 import type { ReactNode } from 'react';
-import { Button } from '@fluentui/react-components';
+import { Button, Text } from '@fluentui/react-components';
 import { ArrowLeft20Regular } from '@fluentui/react-icons';
 import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
 import { RECESSED_SURFACE } from './recessed-surface.ts';
@@ -24,11 +24,13 @@ export interface TreePreviewSplitProps {
   /** True when a file (not a directory, not nothing) is open in the preview. */
   hasSelection: boolean;
   onBack: () => void;
+  /** Narrow only: the open entry's name, shown beside Back to files. */
+  detailTitle?: string;
   /** localStorage key of the wide layout's tree width. */
   storageKey: string;
 }
 
-export function TreePreviewSplit({ tree, preview, hasSelection, onBack, storageKey }: TreePreviewSplitProps) {
+export function TreePreviewSplit({ tree, preview, hasSelection, onBack, detailTitle, storageKey }: TreePreviewSplitProps) {
   const narrow = useNarrowLayout();
 
   if (!narrow) {
@@ -65,10 +67,19 @@ export function TreePreviewSplit({ tree, preview, hasSelection, onBack, storageK
       data-testid="tree-preview-detail"
       style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, width: '100%', minWidth: 0, minHeight: 0 }}
     >
-      <div style={{ flexShrink: 0 }}>
-        <Button appearance="subtle" icon={<ArrowLeft20Regular />} onClick={onBack}>
+      <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        <Button appearance="subtle" icon={<ArrowLeft20Regular />} onClick={onBack} style={{ flexShrink: 0 }}>
           Back to files
         </Button>
+        {detailTitle !== undefined && (
+          <Text
+            weight="semibold"
+            data-testid="tree-preview-title"
+            style={{ minWidth: 0, flex: 1, overflowWrap: 'anywhere', fontFamily: 'var(--fontFamilyMonospace)' }}
+          >
+            {detailTitle}
+          </Text>
+        )}
       </div>
       <div
         style={{

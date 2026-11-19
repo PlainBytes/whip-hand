@@ -245,7 +245,7 @@ export const SCENES = [
   },
   {
     name: 'review-files',
-    status: 'known-broken',
+    status: 'clean',
     async prepare(page, ctx) {
       await openReview(page, ctx);
       await page.getByRole('listbox', { name: 'Changed files' }).waitFor({ timeout: 30_000 });
@@ -253,7 +253,7 @@ export const SCENES = [
   },
   {
     name: 'review-diff',
-    status: 'known-broken',
+    status: 'clean',
     async prepare(page, ctx) {
       await openReview(page, ctx);
       await page.getByRole('listbox', { name: 'Changed files' }).waitFor({ timeout: 30_000 });

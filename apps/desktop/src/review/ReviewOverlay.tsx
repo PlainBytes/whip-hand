@@ -43,6 +43,8 @@ import { DiffFileView } from '../diff/DiffFileView.tsx';
 import type { WorkingDiff } from '../diff/types.ts';
 import { DIFF_SOURCE_ID, type ReviewRequest } from './model.ts';
 import { RECESSED_SURFACE } from '../components/recessed-surface.ts';
+import { TreePreviewSplit } from '../components/TreePreviewSplit.tsx';
+import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
 import type { FileComment, ManualChoice } from '../shared/types.ts';
 import { errorMessage } from '../lib/error-message.ts';
 
@@ -68,6 +70,9 @@ export function ReviewOverlay({
   request, diff, diffLoading, diffError, onRefreshDiff, onClose, onResolve, fs, docContext,
 }: ReviewOverlayProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const narrow = useNarrowLayout();
+  /** Narrow only: whether the detail (a diff or an artifact) is showing instead of the list. */
+  const [detailOpen, setDetailOpen] = useState(false);
 
   const [sourceId, setSourceId] = useState<string>(() => request.sources[0]?.id ?? '');
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -82,6 +87,7 @@ export function ReviewOverlay({
   useEffect(() => {
     setSourceId(request.sources[0]?.id ?? '');
     setSelectedFile(null);
+    setDetailOpen(false);
     setComments({});
   }, [request.key]);
 
@@ -107,6 +113,135 @@ export function ReviewOverlay({
   const commentedPaths = useMemo(
     () => new Set(fileComments.map(c => c.path)),
     [fileComments],
+  );
+
+  function chooseSource(entry: ReviewRequest['sources'][number]): void {
+    setSourceId(entry.id);
+    // On a phone an artifact opens full width; the diff's own list is the list.
+    if (entry.kind === 'artifact') setDetailOpen(true);
+  }
+  function chooseFile(path: string): void {
+    setSelectedFile(path);
+    setDetailOpen(true);
+  }
+  const detailTitle = source?.kind === 'diff' ? activeFile?.path : source?.label;
+
+  const railContent = (
+    <>
+    <Text
+      size={200}
+      weight="semibold"
+      style={{ display: 'block', padding: '8px 8px 4px', color: 'var(--colorNeutralForeground3)' }}
+    >
+      TO REVIEW
+    </Text>
+    {request.sources.map(entry => (
+      <div
+        key={entry.id}
+        role="button"
+        tabIndex={0}
+        data-testid={`review-source-${entry.id}`}
+        aria-pressed={entry.id === sourceId}
+        onClick={() => chooseSource(entry)}
+        onKeyDown={event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            chooseSource(entry);
+          }
+        }}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
+          padding: '4px 8px',
+          background: entry.id === sourceId ? 'var(--colorNeutralBackground1Selected)' : undefined,
+        }}
+      >
+        <Text size={200}>{entry.label}</Text>
+        {entry.kind === 'diff' && diff !== null && (
+          <Text size={100} style={{ marginLeft: 'auto', color: 'var(--colorNeutralForeground3)' }}>
+            {diff.files.length}
+          </Text>
+        )}
+      </div>
+    ))}
+
+    {source?.kind === 'diff' && diff !== null && (
+      <div>
+        <Text
+          size={200}
+          weight="semibold"
+          style={{ display: 'block', padding: '8px 8px 4px', color: 'var(--colorNeutralForeground3)' }}
+        >
+          FILES
+        </Text>
+        <DiffFileList
+          files={files}
+          selectedPath={activeFile?.path ?? null}
+          onSelect={chooseFile}
+          filesTruncated={diff.filesTruncated}
+          commentedPaths={commentedPaths}
+        />
+      </div>
+    )}
+    </>
+  );
+  const mainContent = (
+    <>
+    {source === undefined ? (
+      <EmptyState>Nothing was attached to this decision — read the instructions above.</EmptyState>
+    ) : source.kind === 'artifact' ? (
+      <FileSystemProvider fs={fs}>
+        <FilePreview path={source.path} onDirtyChange={() => {}} docContext={docContext} />
+      </FileSystemProvider>
+    ) : (
+      /*
+        Refresh sits outside the branch below, not inside the
+        happy path: a failed read, a tree that changed under you, and an
+        empty result are exactly the states where re-reading is the thing
+        you want, and burying the button in the success case put it
+        everywhere except where it was needed.
+      */
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, gap: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>
+          <Button
+            appearance="subtle"
+            size="small"
+            icon={<ArrowClockwise20Regular />}
+            data-testid="review-diff-refresh"
+            disabled={diffLoading}
+            title="Re-read the working tree"
+            onClick={onRefreshDiff}
+          >
+            Refresh
+          </Button>
+        </div>
+        {diffLoading ? (
+          <EmptyState><Spinner size="tiny" /> Reading the working tree…</EmptyState>
+        ) : diffError !== null ? (
+          <MessageBar intent="error" data-testid="review-diff-error">
+            <MessageBarBody>Could not read the changes: {diffError}</MessageBarBody>
+          </MessageBar>
+        ) : diff === null ? (
+          // null means "not a git repo" — and only that. An empty list is
+          // a different sentence, below.
+          <EmptyState>This workspace isn&apos;t a git repository, so there is no diff to show.</EmptyState>
+        ) : activeFile === undefined ? (
+          <EmptyState>No changes in the working tree.</EmptyState>
+        ) : (
+          <>
+            <DiffFileView file={activeFile} />
+            {request.capture?.perFile && (
+              <FileCommentBox
+                key={activeFile.path}
+                path={activeFile.path}
+                value={comments[activeFile.path] ?? ''}
+                onChange={body => setComments(current => ({ ...current, [activeFile.path]: body }))}
+              />
+            )}
+          </>
+        )}
+      </div>
+    )}
+    </>
   );
 
   return (
@@ -156,133 +291,32 @@ export function ReviewOverlay({
         )}
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 8 }}>
-        <div
-          style={{
-            width: RAIL_WIDTH, flexShrink: 0, minHeight: 0, overflow: 'auto',
-          }}
-        >
-          <Text
-            size={200}
-            weight="semibold"
-            style={{ display: 'block', padding: '8px 8px 4px', color: 'var(--colorNeutralForeground3)' }}
+      {narrow ? (
+        <TreePreviewSplit
+          tree={railContent}
+          preview={mainContent}
+          hasSelection={detailOpen}
+          onBack={() => setDetailOpen(false)}
+          detailTitle={detailTitle}
+          storageKey="review-overlay-rail"
+        />
+      ) : (
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 8 }}>
+          <div style={{ width: RAIL_WIDTH, flexShrink: 0, minHeight: 0, overflow: 'auto' }}>
+            {railContent}
+          </div>
+          <div
+            style={{
+              ...RECESSED_SURFACE,
+              flex: 1, minWidth: 0, minHeight: 0, display: 'flex', overflow: 'hidden',
+            }}
           >
-            TO REVIEW
-          </Text>
-          {request.sources.map(entry => (
-            <div
-              key={entry.id}
-              role="button"
-              tabIndex={0}
-              data-testid={`review-source-${entry.id}`}
-              aria-pressed={entry.id === sourceId}
-              onClick={() => setSourceId(entry.id)}
-              onKeyDown={event => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault();
-                  setSourceId(entry.id);
-                }
-              }}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
-                padding: '4px 8px',
-                background: entry.id === sourceId ? 'var(--colorNeutralBackground1Selected)' : undefined,
-              }}
-            >
-              <Text size={200}>{entry.label}</Text>
-              {entry.kind === 'diff' && diff !== null && (
-                <Text size={100} style={{ marginLeft: 'auto', color: 'var(--colorNeutralForeground3)' }}>
-                  {diff.files.length}
-                </Text>
-              )}
-            </div>
-          ))}
-
-          {source?.kind === 'diff' && diff !== null && (
-            <div>
-              <Text
-                size={200}
-                weight="semibold"
-                style={{ display: 'block', padding: '8px 8px 4px', color: 'var(--colorNeutralForeground3)' }}
-              >
-                FILES
-              </Text>
-              <DiffFileList
-                files={files}
-                selectedPath={activeFile?.path ?? null}
-                onSelect={setSelectedFile}
-                filesTruncated={diff.filesTruncated}
-                commentedPaths={commentedPaths}
-              />
-            </div>
-          )}
+            {mainContent}
+          </div>
         </div>
+      )}
 
-        <div
-          style={{
-            ...RECESSED_SURFACE,
-            flex: 1, minWidth: 0, minHeight: 0, display: 'flex', overflow: 'hidden',
-          }}
-        >
-          {source === undefined ? (
-            <EmptyState>Nothing was attached to this decision — read the instructions above.</EmptyState>
-          ) : source.kind === 'artifact' ? (
-            <FileSystemProvider fs={fs}>
-              <FilePreview path={source.path} onDirtyChange={() => {}} docContext={docContext} />
-            </FileSystemProvider>
-          ) : (
-            /*
-              Refresh sits outside the branch below, not inside the
-              happy path: a failed read, a tree that changed under you, and an
-              empty result are exactly the states where re-reading is the thing
-              you want, and burying the button in the success case put it
-              everywhere except where it was needed.
-            */
-            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, gap: 8 }}>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>
-                <Button
-                  appearance="subtle"
-                  size="small"
-                  icon={<ArrowClockwise20Regular />}
-                  data-testid="review-diff-refresh"
-                  disabled={diffLoading}
-                  title="Re-read the working tree"
-                  onClick={onRefreshDiff}
-                >
-                  Refresh
-                </Button>
-              </div>
-              {diffLoading ? (
-                <EmptyState><Spinner size="tiny" /> Reading the working tree…</EmptyState>
-              ) : diffError !== null ? (
-                <MessageBar intent="error" data-testid="review-diff-error">
-                  <MessageBarBody>Could not read the changes: {diffError}</MessageBarBody>
-                </MessageBar>
-              ) : diff === null ? (
-                // null means "not a git repo" — and only that. An empty list is
-                // a different sentence, below.
-                <EmptyState>This workspace isn&apos;t a git repository, so there is no diff to show.</EmptyState>
-              ) : activeFile === undefined ? (
-                <EmptyState>No changes in the working tree.</EmptyState>
-              ) : (
-                <>
-                  <DiffFileView file={activeFile} />
-                  {request.capture?.perFile && (
-                    <FileCommentBox
-                      key={activeFile.path}
-                      path={activeFile.path}
-                      value={comments[activeFile.path] ?? ''}
-                      onChange={body => setComments(current => ({ ...current, [activeFile.path]: body }))}
-                    />
-                  )}
-                </>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-
-      <DecisionBar request={request} fileComments={fileComments} onResolve={onResolve} />
+      <DecisionBar request={request} fileComments={fileComments} onResolve={onResolve} narrow={narrow} />
     </div>
   );
 }
@@ -293,8 +327,9 @@ export function ReviewOverlay({
  * keystroke.
  */
 function DecisionBar({
-  request, fileComments, onResolve,
+  request, fileComments, onResolve, narrow,
 }: {
+  narrow: boolean;
   request: ReviewRequest;
   fileComments: FileComment[];
   onResolve: (choice: ManualChoice, note?: string, comments?: FileComment[]) => Promise<void>;
@@ -334,6 +369,9 @@ function DecisionBar({
       style={{
         flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8,
         paddingTop: 8,
+        // On a phone the bar is the overlay's last flex row, so it stays
+        // pinned under the scrolling list/diff; keep it above the home bar.
+        ...(narrow ? { paddingBottom: 'env(safe-area-inset-bottom)', borderTop: '1px solid var(--colorNeutralStroke2)' } : null),
       }}
     >
       {error && (
@@ -341,13 +379,13 @@ function DecisionBar({
           <MessageBarBody>{error}</MessageBarBody>
         </MessageBar>
       )}
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
+      <div style={narrow ? { display: 'flex', flexDirection: 'column', gap: 8 } : { display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
         {capture && (
           <Field
             label={capture.label}
             required={capture.requiredFor.length > 0}
             hint={capture.requiredFor.length > 0 ? 'Saved as this step’s artifact.' : undefined}
-            style={{ flex: 1, minWidth: 240 }}
+            style={narrow ? { width: '100%' } : { flex: 1, minWidth: 240 }}
           >
             <Textarea
               value={note}
@@ -357,7 +395,7 @@ function DecisionBar({
             />
           </Field>
         )}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginLeft: 'auto' }}>
+        <div style={narrow ? { display: 'flex', flexDirection: 'column', gap: 8 } : { display: 'flex', alignItems: 'center', gap: 12, marginLeft: 'auto' }}>
           {/*
             Requesting changes is the consequential click, and the per-file
             comments are off-screen at that moment — so their count rides
@@ -375,6 +413,7 @@ function DecisionBar({
                 appearance={choice.primary ? 'primary' : 'secondary'}
                 data-testid={`review-choice-${choice.value}`}
                 title={choice.hint}
+                style={narrow ? { flex: 1, minWidth: 0 } : undefined}
                 disabled={busy !== null || missingFor(choice.value)}
                 onClick={() => void resolve(choice.value)}
               >
@@ -397,15 +436,19 @@ function FileCommentBox({
   path, value, onChange,
 }: { path: string; value: string; onChange: (body: string) => void }) {
   const [expanded, setExpanded] = useState(() => value.trim().length > 0);
+  const narrow = useNarrowLayout();
 
   return (
     <div style={{ flexShrink: 0 }}>
       <Button
         appearance="subtle"
-        size="small"
+        size={narrow ? 'large' : 'small'}
         data-testid="review-comment-toggle"
         onClick={() => setExpanded(current => !current)}
-        style={{ width: '100%', justifyContent: 'flex-start', fontFamily: 'var(--fontFamilyMonospace)' }}
+        style={{
+          width: '100%', justifyContent: 'flex-start', fontFamily: 'var(--fontFamilyMonospace)',
+          ...(narrow ? { minHeight: 44, overflowWrap: 'anywhere' } : null),
+        }}
       >
         {expanded ? '▾' : '▸'} Comment on <code>{path}</code>
       </Button>

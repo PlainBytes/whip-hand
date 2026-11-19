@@ -1744,6 +1744,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
               jobId={effectiveJobId}
               cols={job?.ptyCols}
               rows={job?.ptyRows}
+              sizing={narrow ? 'follow' : 'fit'}
               onResize={(cols, rows) => void client.request('ptyResize', { jobId: effectiveJobId, cols, rows })}
             />
           ) : hasHeadlessStep || activityTail.length > 0 ? (

@@ -213,7 +213,7 @@ export const SCENES = [
   },
   {
     name: 'run-terminal',
-    status: 'known-broken',
+    status: 'clean',
     async prepare(page) {
       await openRun(page, DETAIL_RUN_NAME);
     },

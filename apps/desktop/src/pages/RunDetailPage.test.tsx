@@ -24,7 +24,7 @@ const terminalFocus = vi.fn();
 vi.mock('../components/TerminalPanel.tsx', async () => {
   const { forwardRef, useImperativeHandle } = await import('react');
   return {
-  TerminalPanel: forwardRef(function TerminalPanelMock(props: { jobId: string; cols?: number; rows?: number; onResize: (cols: number, rows: number) => void }, ref) {
+  TerminalPanel: forwardRef(function TerminalPanelMock(props: { jobId: string; cols?: number; rows?: number; sizing?: string; onResize: (cols: number, rows: number) => void }, ref) {
     useImperativeHandle(ref, () => ({ focus: terminalFocus }), []);
     // useState initializer runs once per mount — a fresh instance number per
     // React mount (not per render) lets tests detect remounts (e.g. RunDetailPage
@@ -32,7 +32,7 @@ vi.mock('../components/TerminalPanel.tsx', async () => {
     // fresh terminal instead of reusing one with stale internal bookkeeping).
     const [instance] = useState(() => ++terminalPanelMountCount);
     return (
-      <div data-testid="terminal-panel-mock" data-job-id={props.jobId} data-cols={props.cols} data-rows={props.rows} data-instance={instance}>
+      <div data-testid="terminal-panel-mock" data-job-id={props.jobId} data-cols={props.cols} data-rows={props.rows} data-sizing={props.sizing} data-instance={instance}>
         <button onClick={() => props.onResize(120, 40)}>trigger resize</button>
       </div>
     );
@@ -898,6 +898,14 @@ describe('RunDetailPage', () => {
       return parsed;
     });
     expect(req.params).toEqual({ jobId: 'job-6', cols: 120, rows: 40 });
+  });
+
+  it('sizes the terminal by fit on a wide screen', async () => {
+    const { transport } = renderRunDetail('job-sz');
+    emitWhiphandEvent(transport, 'job-sz', 'run-sz', { type: 'step:start', stepId: 'triage', kind: 'agent', runner: 'claude', mode: 'interactive' }, 't1');
+    await respondGetRun(transport, { runId: 'run-sz', runDir: '/ws/.whiphand/runs/run-sz', status: 'running', artifacts: [] });
+    transport.emitLine({ method: 'ptyStarted', params: { jobId: 'job-sz', stepId: 'triage', cols: 80, rows: 24 } });
+    expect(await screen.findByTestId('terminal-panel-mock')).toHaveAttribute('data-sizing', 'fit');
   });
 
   it('Mod+Alt+T focuses the live terminal, and leaves the key alone without one', async () => {
@@ -3087,6 +3095,14 @@ describe('RunDetailPage on a narrow screen', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     useAppStore.setState({ workspacePath: null });
+  });
+
+  it('has the terminal follow the pty size', async () => {
+    const { transport } = renderRunDetail('job-nz', vi.fn(), vi.fn(), 'run-nz');
+    emitWhiphandEvent(transport, 'job-nz', 'run-nz', { type: 'step:start', stepId: 'triage', kind: 'agent', runner: 'claude', mode: 'interactive' }, 't1');
+    await respondGetRun(transport, { runId: 'run-nz', runDir: '/ws/.whiphand/runs/run-nz', status: 'running', artifacts: [] });
+    transport.emitLine({ method: 'ptyStarted', params: { jobId: 'job-nz', stepId: 'triage', cols: 80, rows: 24 } });
+    expect(await screen.findByTestId('terminal-panel-mock')).toHaveAttribute('data-sizing', 'follow');
   });
 
   async function openMore() {

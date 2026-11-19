@@ -1,8 +1,8 @@
 import { useEffect, useRef, type MouseEvent } from 'react';
 import {
-  Button, Menu, MenuItem, MenuList, MenuPopover, MenuTrigger, Tab, TabList, Text, Tooltip,
+  Badge, Button, Menu, MenuDivider, MenuItem, MenuList, MenuPopover, MenuTrigger, Tab, TabList, Text, Tooltip,
 } from '@fluentui/react-components';
-import { Dismiss12Regular, Edit12Regular, MoreHorizontal20Regular } from '@fluentui/react-icons';
+import { ChevronDown16Regular, Dismiss12Regular, Edit12Regular, MoreHorizontal20Regular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { isWaitingJob, useAppStore, type AppState, type JobState } from '../state/store.ts';
 import { sameWorkspace } from '../shared/path-form.ts';
@@ -14,6 +14,7 @@ import { isModalOpen } from '../lib/tab-shortcuts.ts';
 import type { ActionId } from '../lib/keymap/actions.ts';
 import { actionLabel, chordFor } from '../lib/keymap/keymap.ts';
 import { useKeymap } from '../lib/keymap/use-keymap.ts';
+import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
 import { RunStatusIcon, stateLabel, type RunStatus } from './OngoingRuns.tsx';
 import { WorkspaceDot } from './WorkspaceDot.tsx';
 import { isTabHere, tabWorkspace, useDiscardDraft } from './use-discard-draft.tsx';
@@ -186,6 +187,57 @@ function OverflowItem({ tab, onPick }: { tab: AnyTab; onPick: () => void }) {
   );
 }
 
+/** A tab's title, state text and workspace — what the narrow menu shows for it. */
+function useTabSummary(tab: AnyTab): { title: string; state: string | undefined; workspace: string } {
+  const title = useAppStore(state => {
+    if (tab.kind === 'draft') return draftTitle(state, tab.key);
+    const job = jobForTab(state.jobs, tab);
+    const runId = tab.runId ?? job?.runId;
+    return job?.runName ?? state.runs.find(run => run.runId === runId)?.name ?? runId ?? '(starting…)';
+  });
+  const state = useAppStore(s => (tab.kind === 'draft' ? 'draft' : stateOf(jobForTab(s.jobs, tab))));
+  const workspace = useAppStore(s => {
+    if (tab.kind === 'run') return `${tab.workdir}\u0000${tab.identityKey ?? ''}`;
+    const draft = s.drafts[tab.key];
+    return draft === undefined ? '' : `${draft.workdir}\u0000${draft.identityKey ?? ''}`;
+  });
+  return { title, state, workspace };
+}
+
+/** One open tab in the narrow menu: pick it, and (a second item) close it. */
+function NarrowTabItems({ tab, active, onPick, onClose }: {
+  tab: AnyTab; active: boolean; onPick: () => void; onClose: () => void;
+}) {
+  const { title, state, workspace } = useTabSummary(tab);
+  const [workdir = '', identityKey = ''] = workspace.split('\u0000');
+  return (
+    <>
+      <MenuItem
+        icon={<WorkspaceDot path={workdir} identityKey={identityKey || undefined} size={12} />}
+        secondaryContent={state}
+        aria-current={active ? 'true' : undefined}
+        onClick={onPick}
+      >
+        <span style={{ fontWeight: active ? 600 : undefined }}>{title}</span>
+      </MenuItem>
+      <MenuItem icon={<Dismiss12Regular />} aria-label={`Close ${title}`} onClick={onClose}>
+        Close
+      </MenuItem>
+    </>
+  );
+}
+
+/** The narrow strip's trigger text: the active tab's name and state, or "Runs" for the list. */
+function ActiveTabLabel({ tab }: { tab: AnyTab | undefined }) {
+  if (tab === undefined) return <>Runs</>;
+  return <ActiveTabSummary tab={tab} />;
+}
+
+function ActiveTabSummary({ tab }: { tab: AnyTab }) {
+  const { title, state } = useTabSummary(tab);
+  return <>{state === undefined ? title : `${title} · ${state}`}</>;
+}
+
 const GO_TO_TABS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 
 /** Binds `tabs.goTo<n>`; renders nothing. */
@@ -203,6 +255,7 @@ function GoToShortcut({ n, enabled, onGo }: { n: (typeof GO_TO_TABS)[number]; en
 export function RunTabStrip() {
   const client = useAgentClient();
   const keymap = useKeymap();
+  const narrow = useNarrowLayout();
   const tabs = useAppStore(state => state.tabs);
   const activeTabKey = useAppStore(state => state.activeTabKey);
   const activateTab = useAppStore(state => state.activateTab);
@@ -355,6 +408,53 @@ export function RunTabStrip() {
       if (!opened) return;
     }
     activateTab(tab.key);
+  }
+
+  if (narrow) {
+    const activeTab = tabs.find(candidate => candidate.key === activeTabKey);
+    return (
+      <>
+        <div
+          data-testid="run-tab-strip-narrow"
+          style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid var(--colorNeutralStroke2)', flexShrink: 0, padding: '4px 8px' }}
+        >
+          <Menu>
+            <MenuTrigger disableButtonEnhancement>
+              <Button
+                appearance="subtle"
+                iconPosition="after"
+                icon={<ChevronDown16Regular />}
+                style={{ flex: 1, minWidth: 0, minHeight: 44, justifyContent: 'space-between' }}
+              >
+                <Text truncate wrap={false} style={{ minWidth: 0 }}><ActiveTabLabel tab={activeTab} /></Text>
+              </Button>
+            </MenuTrigger>
+            <MenuPopover>
+              <MenuList>
+                <MenuItem aria-current={activeTabKey === null ? 'true' : undefined} onClick={() => void select(RUNS_TAB_VALUE)}>
+                  All runs
+                </MenuItem>
+                {tabs.length > 0 && <MenuDivider />}
+                {tabs.map(tab => (
+                  <NarrowTabItems
+                    key={tab.key}
+                    tab={tab}
+                    active={tab.key === activeTabKey}
+                    onPick={() => void select(tab.key)}
+                    onClose={() => close(tab)}
+                  />
+                ))}
+              </MenuList>
+            </MenuPopover>
+          </Menu>
+          <Badge appearance="tint" color="informative" aria-label={`${tabs.length} open tabs`} style={{ marginInline: 8, flexShrink: 0 }}>
+            {tabs.length}
+          </Badge>
+        </div>
+        {goToShortcuts}
+        {discard.dialog}
+      </>
+    );
   }
 
   return (

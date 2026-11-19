@@ -8,6 +8,11 @@ import {
   DataGridHeader,
   DataGridHeaderCell,
   DataGridRow,
+  Menu,
+  MenuItem,
+  MenuList,
+  MenuPopover,
+  MenuTrigger,
   MessageBar,
   MessageBarBody,
   Spinner,
@@ -16,7 +21,9 @@ import {
   Tooltip,
   type TableColumnDefinition,
 } from '@fluentui/react-components';
-import { Add20Regular, Delete16Regular, LockClosed16Regular, LockOpen16Regular } from '@fluentui/react-icons';
+import {
+  Add20Regular, Delete16Regular, LockClosed16Regular, LockOpen16Regular, MoreHorizontal20Regular,
+} from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { liveStageProgress, useAppStore, waitingRunIds } from '../state/store.ts';
 import { sameSet, sameStageProgress, useAppStoreStable } from '../state/use-stable-selector.ts';
@@ -28,6 +35,8 @@ import { DangerButton } from '../components/DangerButton.tsx';
 import { OpenInEditorButton } from '../components/OpenInEditorButton.tsx';
 import { useClickOrDoubleClick } from '../lib/use-click-or-double-click.ts';
 import { Page } from '../components/Page.tsx';
+import { RunCard } from '../components/RunCard.tsx';
+import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
 import { actionLabel } from '../lib/keymap/keymap.ts';
 import { useKeymap } from '../lib/keymap/use-keymap.ts';
 
@@ -42,6 +51,7 @@ export interface RunsPageProps {
 export function RunsPage({ onSelectRun, onNewRun }: RunsPageProps) {
   const client = useAgentClient();
   const keymap = useKeymap();
+  const narrow = useNarrowLayout();
   const workspacePath = useAppStore(state => state.workspacePath);
   const runs = useAppStore(state => state.runs);
   const setRuns = useAppStore(state => state.setRuns);
@@ -161,9 +171,9 @@ export function RunsPage({ onSelectRun, onNewRun }: RunsPageProps) {
   const filtered = runs.filter(matchesFilters);
 
   const header = (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: narrow ? 8 : 16, flexWrap: narrow ? 'wrap' : 'nowrap' }}>
       {title}
-      <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexShrink: 0 }}>
+      <div style={{ display: 'flex', gap: narrow ? 8 : 16, alignItems: 'center', flexWrap: narrow ? 'wrap' : 'nowrap', flexShrink: narrow ? 1 : 0 }}>
         <Switch
           label="Show dry runs"
           checked={showDryRuns}
@@ -194,6 +204,42 @@ export function RunsPage({ onSelectRun, onNewRun }: RunsPageProps) {
       )}
       {filtered.length === 0 ? (
         <Text>No runs match the current filters.</Text>
+      ) : narrow ? (
+        <div role="list" aria-label="Runs" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {filtered.map(run => (
+            <div role="listitem" key={run.runId}>
+              <RunCard
+                run={run}
+                waiting={waiting.has(run.runId)}
+                stages={stages}
+                onOpen={() => onSelectRun(run.runId, false)}
+                actions={(
+                  <Menu>
+                    <MenuTrigger disableButtonEnhancement>
+                      <Button
+                        appearance="subtle"
+                        icon={<MoreHorizontal20Regular />}
+                        aria-label={`Actions for ${runLabel(run)}`}
+                      />
+                    </MenuTrigger>
+                    <MenuPopover>
+                      <MenuList>
+                        <MenuItem
+                          icon={run.locked ? <LockOpen16Regular /> : <LockClosed16Regular />}
+                          disabled={lockingId === run.runId}
+                          onClick={() => void handleToggleLock(run)}
+                        >
+                          {run.locked ? 'Unlock' : 'Lock'}
+                        </MenuItem>
+                        <MenuItem icon={<Delete16Regular />} onClick={() => setDeleting(run)}>Delete</MenuItem>
+                      </MenuList>
+                    </MenuPopover>
+                  </Menu>
+                )}
+              />
+            </div>
+          ))}
+        </div>
       ) : (
         <DataGrid items={filtered} columns={columns} getRowId={run => run.runId} sortable={false}>
           <DataGridHeader>

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { WorkspacesPage } from './WorkspacesPage.tsx';
 import { AgentClient } from '../agent/client.ts';
@@ -263,5 +263,36 @@ describe('WorkspacesPage', () => {
       expect(await screen.findByText(/nope/)).toBeInTheDocument();
       expect(screen.getByText('plain')).toBeInTheDocument();
     });
+  });
+});
+
+describe('WorkspacesPage on a narrow screen', () => {
+  beforeEach(() => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    useAppStore.setState({
+      workspacePath: '/dev/recent', workspaceIdentityKey: null, appState: { ...EMPTY_APP_STATE, recentWorkspaces: [] },
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useAppStore.setState({ workspacePath: null, appState: null });
+  });
+
+  it('renders cards whose pin, unpin and forget still call the agent', async () => {
+    const transport = renderPage();
+    await respond(transport, 'describeWorkspaces', { workspaces: WORKSPACES });
+    await screen.findByText('recent');
+    expect(screen.queryByRole('grid')).toBeNull();
+    expect(screen.getAllByRole('listitem')).toHaveLength(3);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pin recent' }));
+    expect((await nextRequest(transport, 'setWorkspacePinned')).params).toEqual({ path: '/dev/recent', pinned: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin plain' }));
+    expect((await nextRequest(transport, 'setWorkspacePinned', 1)).params).toEqual({ path: '/dev/plain', pinned: false });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove gone from list' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    expect((await nextRequest(transport, 'forgetWorkspace')).params).toEqual({ path: '/dev/gone' });
   });
 });

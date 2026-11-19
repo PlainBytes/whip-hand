@@ -66,17 +66,33 @@ export async function goTo(page, label) {
   }
 }
 
-/** The Runs list: the nav item, then the strip's Runs tab, since a run or New run tab may be showing. */
+/**
+ * The Runs list: the nav item, then back to the list from a run or New run
+ * tab. Wide: the strip's Runs tab. Narrow: the strip is one Menu button
+ * (named for the active tab) whose "All runs" entry is the list.
+ */
 async function goToRuns(page) {
   await goTo(page, 'Runs');
+  const strip = page.getByTestId('run-tab-strip-narrow');
+  if (await strip.count()) {
+    await tap(strip.getByRole('button').first());
+    await tap(page.getByRole('menuitem', { name: 'All runs', exact: true }));
+    return;
+  }
   const tab = page.getByRole('tab', { name: 'Runs', exact: true });
   if (await tab.count()) await tap(tab.first());
 }
 
+/** A run in the list: a grid row on wide screens, a card (one button named for the run) on narrow ones. */
+export function runEntry(page, text) {
+  return page.getByRole('row').filter({ hasText: text })
+    .or(page.getByTestId('page-body').getByRole('button', { name: text }))
+    .first();
+}
+
 async function openRun(page, text) {
   await goToRuns(page);
-  // The grid squeezes the name cell to nothing at this width, so tap the row.
-  await tap(page.getByRole('row').filter({ hasText: text }).first());
+  await tap(runEntry(page, text));
   await page.getByTestId('run-panel-terminal').waitFor({ state: 'attached' });
 }
 
@@ -121,12 +137,12 @@ export const SCENES = [
   },
   {
     name: 'runs',
-    status: 'known-broken',
+    status: 'clean',
     async prepare(page, { url }) {
       // The token gate cleared the stored token; sign in again.
       await page.goto(url);
       await page.reload();
-      await page.getByRole('row').filter({ hasText: DETAIL_RUN_NAME }).first().waitFor();
+      await runEntry(page, DETAIL_RUN_NAME).waitFor();
     },
   },
   {
@@ -139,7 +155,7 @@ export const SCENES = [
   },
   {
     name: 'workspaces',
-    status: 'known-broken',
+    status: 'clean',
     async prepare(page) {
       await goTo(page, 'Workspaces');
       await page.getByTestId('page-header').filter({ hasText: 'Workspaces' }).first().waitFor();

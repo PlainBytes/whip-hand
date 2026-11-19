@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { FakeFileSystem } from '../files/fake-fs.ts';
 import { FileSystemProvider } from '../files/fs-context.tsx';
@@ -405,5 +405,43 @@ describe('FilesPage actions that do not touch the draft', () => {
 
     expect(screen.queryByText(/unsaved changes/i)).not.toBeInTheDocument();
     expect(await screen.findByRole('textbox', { name: /name/i })).toBeInTheDocument();
+  });
+});
+
+describe('FilesPage on a narrow screen', () => {
+  beforeEach(() => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useAppStore.setState({ workspacePath: null, filesDirty: false });
+  });
+
+  it('shows the tree alone, then only the preview with Back to files', async () => {
+    renderFilesPage(workspace());
+    fireEvent.click(await screen.findByText('README.md'));
+    expect(await screen.findByRole('heading', { name: 'Readme' })).toBeInTheDocument();
+    expect(screen.queryByText('notes.md')).not.toBeInTheDocument();
+    expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to files' }));
+    expect(await screen.findByText('notes.md')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Readme' })).not.toBeInTheDocument();
+  });
+
+  it('raises the unsaved-edits guard on Back, and stays on the file when told to', async () => {
+    renderFilesPage(workspace());
+    fireEvent.click(await screen.findByText('README.md'));
+    fireEvent.click(await screen.findByRole('button', { name: /edit/i }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'unsaved' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to files' }));
+    expect(await screen.findByText(/unsaved changes/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /keep editing/i }));
+    expect(screen.getByRole('textbox')).toHaveValue('unsaved');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to files' }));
+    fireEvent.click(await screen.findByRole('button', { name: /discard/i }));
+    expect(await screen.findByText('notes.md')).toBeInTheDocument();
   });
 });

@@ -220,7 +220,7 @@ export const SCENES = [
   },
   {
     name: 'run-artifacts',
-    status: 'known-broken',
+    status: 'clean',
     async prepare(page) {
       await openDetailTab(page, /Artifacts/, 'run-panel-artifacts');
       await page.getByRole('treeitem', { name: /plan\.md/ }).waitFor();
@@ -228,7 +228,7 @@ export const SCENES = [
   },
   {
     name: 'run-artifact-open',
-    status: 'known-broken',
+    status: 'clean',
     async prepare(page) {
       await openDetailTab(page, /Artifacts/, 'run-panel-artifacts');
       await tap(page.getByRole('treeitem', { name: /plan\.md/ }));
@@ -238,7 +238,7 @@ export const SCENES = [
   },
   {
     name: 'run-logs',
-    status: 'known-broken',
+    status: 'clean',
     async prepare(page) {
       await openDetailTab(page, /Logs/, 'run-panel-logs');
     },

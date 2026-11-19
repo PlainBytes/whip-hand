@@ -3078,3 +3078,125 @@ describe('RunDetailPage: a burst of command output', () => {
     });
   });
 });
+
+describe('RunDetailPage on a narrow screen', () => {
+  beforeEach(() => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    useAppStore.setState({ workspacePath: '/ws' });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useAppStore.setState({ workspacePath: null });
+  });
+
+  async function openMore() {
+    fireEvent.click(await screen.findByRole('button', { name: 'More actions' }));
+  }
+
+  it('keeps Cancel visible and moves the other actions into More actions', async () => {
+    const { transport } = renderRunDetail('job-n1', vi.fn(), vi.fn(), 'run-n1');
+    emitWhiphandEvent(transport, 'job-n1', 'run-n1', { type: 'step:start', stepId: 'plan', kind: 'agent', runner: 'claude', mode: 'headless' }, 't1');
+    await respondGetRun(transport, { runId: 'run-n1', runDir: '/ws/.whiphand/runs/run-n1', status: 'running', artifacts: [] });
+
+    expect(await screen.findByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Rename' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm cancel' }));
+    const req = await waitFor(() => {
+      const parsed = transport.sentRequest(transport.sent.length - 1);
+      if (parsed.method !== 'cancelRun') throw new Error('cancelRun not sent yet');
+      return parsed;
+    });
+    expect(req.params).toEqual({ jobId: 'job-n1' });
+  });
+
+  it('truncates a long run name instead of overflowing', async () => {
+    const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-n2');
+    await respondGetRun(transport, {
+      runId: 'run-n2', runDir: '/ws/.whiphand/runs/run-n2', status: 'succeeded', artifacts: [],
+      name: 'A very long run name '.repeat(10),
+    });
+    const name = await screen.findByTestId('run-detail-name');
+    expect(name.style.textOverflow).toBe('ellipsis');
+    expect(name.style.overflow).toBe('hidden');
+  });
+
+  it('Rename from More actions opens the same dialog and sends renameRun', async () => {
+    const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-n3');
+    await respondGetRun(transport, { runId: 'run-n3', runDir: '/ws/.whiphand/runs/run-n3', status: 'succeeded', artifacts: [] });
+
+    await openMore();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename' }));
+    fireEvent.change(await screen.findByTestId('run-rename-input'), { target: { value: 'Phone name' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
+    const req = await waitFor(() => {
+      const index = transport.sent.findIndex(line => (JSON.parse(line) as { method?: string }).method === 'renameRun');
+      if (index === -1) throw new Error('renameRun not sent yet');
+      return transport.sentRequest(index);
+    });
+    expect(req.params).toMatchObject({ workdir: '/ws', runId: 'run-n3', name: 'Phone name' });
+  });
+
+  it('Delete from More actions opens the delete dialog and deletes the run', async () => {
+    const onBack = vi.fn();
+    const { transport } = renderRunDetail(undefined, onBack, vi.fn(), 'run-n4');
+    await respondGetRun(transport, { runId: 'run-n4', runDir: '/ws/.whiphand/runs/run-n4', status: 'succeeded', artifacts: [] });
+
+    await openMore();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Delete' }));
+    const req = await waitFor(() => {
+      const parsed = transport.sentRequest(transport.sent.length - 1);
+      if (parsed.method !== 'deleteRun') throw new Error('deleteRun not sent yet');
+      return parsed;
+    });
+    expect(req.params).toEqual({ workdir: '/ws', runId: 'run-n4' });
+    transport.emitLine({ id: req.id, result: { deleted: true } });
+    await waitFor(() => expect(onBack).toHaveBeenCalled());
+  });
+
+  it('offers Run again and the run id from More actions', async () => {
+    const onRunAgain = vi.fn();
+    const { transport } = renderRunDetail(undefined, vi.fn(), onRunAgain, 'run-n5');
+    await respondGetRun(transport, {
+      runId: 'run-n5', runDir: '/ws/.whiphand/runs/run-n5', status: 'succeeded', artifacts: [], workflow: 'demo', inputs: {},
+    });
+    await openMore();
+    expect(await screen.findByRole('menuitem', { name: /Copy run id/ })).toHaveTextContent('run-n5');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Run again' }));
+    expect(onRunAgain).toHaveBeenCalledWith('demo', {}, undefined);
+  });
+
+  it('starts with the steps collapsed and no resize separator', async () => {
+    const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-n6');
+    await respondGetRun(transport, { runId: 'run-n6', runDir: '/ws/.whiphand/runs/run-n6', status: 'succeeded', artifacts: [] });
+    await screen.findByTestId('run-stepper-strip');
+    expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+  });
+
+  it('shows the artifact tree alone, then only the preview with Back to files', async () => {
+    const { transport } = renderRunDetail(undefined, vi.fn(), vi.fn(), 'run-n7');
+    await respondGetRun(transport, {
+      runId: 'run-n7', runDir: '/ws/.whiphand/runs/run-n7', status: 'succeeded', steps: [],
+      artifacts: [{ name: 'plan.md', path: '/ws/.whiphand/runs/run-n7/plan.md' }],
+    });
+    fireEvent.click(await screen.findByRole('tab', { name: /artifacts/i }));
+    const panel = within(await screen.findByTestId('run-panel-artifacts'));
+    expect(await panel.findByRole('treeitem', { name: /plan\.md/ })).toBeInTheDocument();
+    expect(panel.queryByRole('separator')).not.toBeInTheDocument();
+    expect(panel.queryByRole('button', { name: 'Back to files' })).not.toBeInTheDocument();
+
+    fireEvent.click(panel.getByText('plan.md'));
+    const answered = new Set<number>();
+    await answerReadArtifact(transport, answered, '# Plan');
+    await answerReadArtifact(transport, answered, '# Plan');
+    expect(await panel.findByRole('heading', { name: 'Plan' })).toBeInTheDocument();
+    expect(panel.queryByRole('treeitem')).not.toBeInTheDocument();
+
+    fireEvent.click(panel.getByRole('button', { name: 'Back to files' }));
+    expect(await panel.findByRole('treeitem', { name: /plan\.md/ })).toBeInTheDocument();
+    expect(panel.queryByRole('heading', { name: 'Plan' })).not.toBeInTheDocument();
+  });
+});

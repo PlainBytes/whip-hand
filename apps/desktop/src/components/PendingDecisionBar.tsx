@@ -21,15 +21,15 @@ export function PendingDecisionBar({ badge, title, onOpen }: PendingDecisionBarP
   return (
     <Card
       data-testid="pending-decision-bar"
-      style={{ borderColor: 'var(--colorPaletteDarkOrangeBorderActive)' }}
+      style={{ borderColor: 'var(--colorPaletteDarkOrangeBorderActive)', width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <AttentionBadge label={badge} />
-        <Text weight="semibold">{title}</Text>
+        <Text weight="semibold" style={{ flex: '1 1 12ch', minWidth: 0, overflowWrap: 'anywhere' }}>{title}</Text>
         <Button
           appearance="primary"
           data-testid="pending-decision-open"
-          style={{ marginLeft: 'auto' }}
+          style={{ marginLeft: 'auto', flexShrink: 0 }}
           onClick={onOpen}
         >
           Review &amp; decide

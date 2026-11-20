@@ -530,3 +530,104 @@ describe('App unsaved-edits guard on tab switch', () => {
     });
   });
 });
+
+describe('App at narrow widths', () => {
+  const originalMatchMedia = window.matchMedia;
+  afterEach(() => {
+    vi.stubGlobal('matchMedia', originalMatchMedia);
+    useAppStore.setState({
+      appState: null, restoreDone: false, page: 'runs', workspacePath: null, filesDirty: false,
+      pendingWorkspaceSwitch: null, jobs: {},
+    });
+  });
+
+  function narrowApp(fs?: FakeFileSystem) {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    return renderApp(fs);
+  }
+
+  function sidebarRequests(transport: MockTransport) {
+    return transport.sent
+      .map(line => JSON.parse(line) as { method: string; params?: Record<string, unknown> })
+      .filter(r => r.method === 'setUiState' && 'sidebarCollapsed' in (r.params ?? {}));
+  }
+
+  it('has no nav until Open navigation is pressed, then shows the expanded sidebar', async () => {
+    narrowApp();
+    useAppStore.setState({ workspacePath: '/ws' });
+    expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
+    expect(screen.getByTestId('mobile-top-bar')).toHaveTextContent('Runs');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+    const nav = await screen.findByRole('navigation', { name: 'Main' });
+    expect(within(nav).getByRole('button', { name: 'Doctor' })).toBeInTheDocument();
+    expect(within(nav).queryByRole('button', { name: /sidebar/i })).not.toBeInTheDocument();
+  });
+
+  it('navigates and closes the drawer when a page is chosen', async () => {
+    narrowApp();
+    useAppStore.setState({ workspacePath: '/ws' });
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+    fireEvent.click(await within(await screen.findByRole('navigation')).findByRole('button', { name: 'Doctor' }));
+    await waitFor(() => expect(useAppStore.getState().page).toBe('doctor'));
+    await waitFor(() => expect(screen.queryByRole('navigation')).not.toBeInTheDocument());
+    expect(screen.getByTestId('mobile-top-bar')).toHaveTextContent('Doctor');
+  });
+
+  it('opens and closes on Ctrl+B without touching sidebarCollapsed', async () => {
+    const { transport } = narrowApp();
+    fireEvent.keyDown(window, { key: 'b', code: 'KeyB', ctrlKey: true });
+    await screen.findByRole('navigation', { name: 'Main' });
+    fireEvent.keyDown(window, { key: 'b', code: 'KeyB', ctrlKey: true });
+    await waitFor(() => expect(screen.queryByRole('navigation')).not.toBeInTheDocument());
+    expect(sidebarRequests(transport)).toEqual([]);
+    expect(useAppStore.getState().appState?.sidebarCollapsed).toBeUndefined();
+  });
+
+  it('closes the drawer before the unsaved-changes dialog opens, never both', async () => {
+    const fs = new FakeFileSystem();
+    fs.setFile('/ws/README.md', '# Readme');
+    const { transport } = narrowApp(fs);
+    await respond(transport, 'hello', { version: '0.0.0', protocolVersion: 1 });
+    await respond(transport, 'getAppState', EMPTY_APP_STATE);
+    useAppStore.setState({ workspacePath: '/ws', page: 'files' });
+    fireEvent.click(await screen.findByText('README.md'));
+    fireEvent.click(await screen.findByRole('button', { name: /^edit$/i }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'unsaved work' } });
+    await waitFor(() => expect(useAppStore.getState().filesDirty).toBe(true));
+
+    // Record every commit in which both Modalizers are present.
+    let both = false;
+    const watcher = new MutationObserver(() => {
+      if (screen.queryByRole('navigation') && document.body.textContent?.match(/unsaved changes/i)) both = true;
+    });
+    watcher.observe(document.body, { childList: true, subtree: true, characterData: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+    fireEvent.click(await within(await screen.findByRole('navigation')).findByRole('button', { name: 'Runs' }));
+
+    expect(await screen.findByText(/unsaved changes/i)).toBeInTheDocument();
+    expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
+    watcher.disconnect();
+    expect(both).toBe(false);
+    expect(useAppStore.getState().page).toBe('files');
+  });
+  it('closes the drawer before the workspace quick-switch opens, never both', async () => {
+    narrowApp();
+    useAppStore.setState({ workspacePath: '/ws' });
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+    await screen.findByRole('navigation', { name: 'Main' });
+
+    let both = false;
+    const watcher = new MutationObserver(() => {
+      if (screen.queryByRole('navigation') && screen.queryByLabelText('Filter workspaces')) both = true;
+    });
+    watcher.observe(document.body, { childList: true, subtree: true, characterData: true });
+
+    fireEvent.keyDown(window, { key: 'k', code: 'KeyK', ctrlKey: true });
+    expect(await screen.findByLabelText('Filter workspaces')).toBeInTheDocument();
+    expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
+    watcher.disconnect();
+    expect(both).toBe(false);
+  });
+});

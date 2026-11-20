@@ -615,3 +615,57 @@ describe('RunTabStrip', () => {
     });
   });
 });
+
+describe('RunTabStrip on a narrow screen', () => {
+  beforeEach(() => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    seed([], null);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    settlePendingWorkspaceSwitch(false);
+    useAppStore.setState({ tabs: [], activeTabKey: null, drafts: {}, jobs: {}, filesDirty: false, workspacePath: null });
+  });
+
+  it('is one row with a menu button for the active tab and an open-tab count, not a tab list', () => {
+    seed([tab('r1'), tab('r2')], 'r2');
+    useAppStore.setState({ jobs: { j: job('j', { runId: 'r2' }) } });
+    renderStrip();
+    expect(screen.queryByRole('tablist')).toBeNull();
+    const strip = screen.getByTestId('run-tab-strip-narrow');
+    expect(within(strip).getByRole('button', { name: /r2/ })).toBeInTheDocument();
+    expect(within(strip).getByLabelText('2 open tabs')).toBeInTheDocument();
+  });
+
+  it('reads Runs when the list is showing', () => {
+    renderStrip();
+    expect(within(screen.getByTestId('run-tab-strip-narrow')).getByRole('button', { name: 'Runs' })).toBeInTheDocument();
+  });
+
+  it('lists every open tab, drafts included, and picking one activates it', async () => {
+    seed([tab('r1'), { kind: 'draft', key: 'd1' } as never], null);
+    renderStrip();
+    fireEvent.click(screen.getByRole('button', { name: 'Runs' }));
+    expect(await screen.findByRole('menuitem', { name: 'All runs' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /^r1/ })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /^New run/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('menuitem', { name: /^r1/ }));
+    await waitFor(() => expect(useAppStore.getState().activeTabKey).toBe('r1'));
+  });
+
+  it('closes a tab from the menu', async () => {
+    seed([tab('r1'), tab('r2')], 'r1');
+    renderStrip();
+    fireEvent.click(screen.getByRole('button', { name: /r1/ }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Close r1' }));
+    expect(useAppStore.getState().tabs.map(t => t.key)).toEqual(['r2']);
+  });
+
+  it('shows the runs list from the "All runs" entry', async () => {
+    seed([tab('r1')], 'r1');
+    renderStrip();
+    fireEvent.click(screen.getByRole('button', { name: /r1/ }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'All runs' }));
+    expect(useAppStore.getState().activeTabKey).toBeNull();
+  });
+});

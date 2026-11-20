@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ReviewOverlay, type ReviewOverlayProps } from './ReviewOverlay.tsx';
 import { DIFF_SOURCE_ID, type ReviewRequest } from './model.ts';
@@ -348,5 +348,76 @@ describe('ReviewOverlay', () => {
 
     rerender(<ReviewOverlay {...props} diff={DIFF} />);
     expect(screen.getByTestId('review-file-comment')).toHaveValue('still true');
+  });
+});
+
+describe('ReviewOverlay on a phone', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const narrow = () => vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+  const reviewProps = (): Partial<ReviewOverlayProps> => ({
+    request: request({ sources: REVIEW_SOURCES, capture: REVIEW_CAPTURE, choices: REVIEW_CHOICES }),
+    diff: TWO_FILE_DIFF,
+  });
+
+  it('shows the file list first, then one file under Back to files, and Back returns', () => {
+    narrow();
+    renderOverlay(reviewProps());
+    expect(screen.getByRole('listbox', { name: 'Changed files' })).toBeInTheDocument();
+    expect(screen.queryByTestId('diff-grid')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('diff-file-src/y.ts'));
+    expect(screen.queryByRole('listbox', { name: 'Changed files' })).toBeNull();
+    expect(screen.getAllByTestId('diff-file-path')).toHaveLength(1);
+    expect(screen.getByTestId('diff-file-path')).toHaveTextContent('src/y.ts');
+    expect(screen.getByTestId('tree-preview-title')).toHaveTextContent('src/y.ts');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to files' }));
+    expect(screen.getByRole('listbox', { name: 'Changed files' })).toBeInTheDocument();
+    expect(screen.queryByTestId('diff-grid')).toBeNull();
+  });
+
+  it('opens an artifact full width and goes back to the list', () => {
+    narrow();
+    renderOverlay({
+      request: request({ sources: [{ kind: 'artifact', id: 'a', label: 'review.md', path: 'review.md' }, ...REVIEW_SOURCES] }),
+      diff: DIFF,
+    });
+    fireEvent.click(screen.getByTestId('review-source-a'));
+    expect(screen.getByTestId('tree-preview-title')).toHaveTextContent('review.md');
+    expect(screen.queryByRole('listbox', { name: 'Changed files' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to files' }));
+    expect(screen.getByTestId('review-source-a')).toBeInTheDocument();
+  });
+
+  it.each(['continue', 'retry', 'abort'] as const)('resolves %s with the note and a file comment', async choice => {
+    narrow();
+    const { onResolve } = renderOverlay(reviewProps());
+    fireEvent.change(screen.getByTestId('review-note'), { target: { value: ' tighten x ' } });
+    fireEvent.click(screen.getByTestId('diff-file-src/x.ts'));
+    fireEvent.click(screen.getByTestId('review-comment-toggle'));
+    fireEvent.change(screen.getByTestId('review-file-comment'), { target: { value: 'rename this' } });
+
+    fireEvent.click(screen.getByTestId(`review-choice-${choice}`));
+    await waitFor(() => expect(onResolve).toHaveBeenCalledWith(
+      choice, 'tighten x', [{ path: 'src/x.ts', body: 'rename this' }],
+    ));
+  });
+
+  it('keeps a typed note and comment across Back and across a rerender', () => {
+    narrow();
+    const { rerender, props } = renderOverlay(reviewProps());
+    fireEvent.change(screen.getByTestId('review-note'), { target: { value: 'my note' } });
+    fireEvent.click(screen.getByTestId('diff-file-src/x.ts'));
+    fireEvent.click(screen.getByTestId('review-comment-toggle'));
+    fireEvent.change(screen.getByTestId('review-file-comment'), { target: { value: 'c1' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to files' }));
+    expect(screen.getByTestId('review-note')).toHaveValue('my note');
+    expect(screen.getByTestId('diff-file-commented-src/x.ts')).toBeInTheDocument();
+
+    rerender(<ReviewOverlay {...props} />);
+    expect(screen.getByTestId('review-note')).toHaveValue('my note');
+    fireEvent.click(screen.getByTestId('diff-file-src/x.ts'));
+    expect(screen.getByTestId('review-file-comment')).toHaveValue('c1');
   });
 });

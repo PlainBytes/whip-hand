@@ -9,6 +9,7 @@ import type { RemoteAccessGetResult } from '../shared/protocol.gen.ts';
 import { errorMessage } from '../lib/error-message.ts';
 import { remoteUrl } from '../shared/wire.ts';
 import { DismissibleWarning } from './DismissibleWarning.tsx';
+import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
 
 // Only pulled in once the user actually turns remote access on, so the QR
 // renderer stays out of the initial bundle for everyone who never does.
@@ -27,6 +28,7 @@ const QRCodeSVG = lazy(async () => ({ default: (await import('qrcode.react')).QR
  * when this card acts.
  */
 export function RemoteAccessCard() {
+  const narrow = useNarrowLayout();
   const client = useAgentClient();
   const live = useAppStore(state => state.remoteAccess);
   const [state, setState] = useState<RemoteAccessGetResult | null>(null);
@@ -110,10 +112,10 @@ export function RemoteAccessCard() {
                   <QRCodeSVG value={url} size={180} />
                 </div>
               </Suspense>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 220 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, ...(narrow ? { minWidth: 0, width: '100%' } : { minWidth: 220 }) }}>
                 {view.addresses.map(address => (
-                  <div key={address} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <Text font="monospace">{`${address}:${view.port}`}</Text>
+                  <div key={address} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <Text font="monospace" style={{ overflowWrap: 'anywhere', minWidth: 0 }}>{`${address}:${view.port}`}</Text>
                     <Button
                       size="small"
                       appearance="subtle"

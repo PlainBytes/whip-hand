@@ -569,3 +569,40 @@ describe('RunsPage', () => {
     });
   });
 });
+
+describe('RunsPage on a narrow screen', () => {
+  beforeEach(() => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    useAppStore.setState({ workspacePath: '/ws', runs: [], jobs: {} });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useAppStore.setState({ workspacePath: null, runs: [] });
+  });
+
+  it('renders cards instead of a grid, and a tap opens the run like a single click', async () => {
+    const transport = new MockTransport();
+    const onSelectRun = vi.fn();
+    render(
+      <AgentClientProvider client={new AgentClient(transport)}>
+        <RunsPage onSelectRun={onSelectRun} onNewRun={vi.fn()} />
+      </AgentClientProvider>,
+    );
+    const req = await waitFor(() => {
+      const parsed = transport.sentRequest(transport.sent.length - 1);
+      if (parsed.method !== 'listRuns') throw new Error('listRuns not sent yet');
+      return parsed;
+    });
+    transport.emitLine({ id: req.id, result: [
+      { runId: 'r1', runDir: '/ws/.whiphand/runs/r1', status: 'running', workflow: 'demo', startedAt: '2026-01-01T00:00:00Z', name: 'First' },
+      { runId: 'r2', runDir: '/ws/.whiphand/runs/r2', status: 'failed', workflow: 'other-flow', startedAt: '2026-01-01T00:00:00Z' },
+    ] });
+
+    const card = await screen.findByRole('button', { name: 'First, running' });
+    expect(screen.queryByRole('grid')).toBeNull();
+    expect(card).toHaveTextContent('demo');
+    expect(screen.getByRole('button', { name: 'r2, failed' })).toHaveTextContent('other-flow');
+    fireEvent.click(card);
+    expect(onSelectRun).toHaveBeenCalledWith('r1', false);
+  });
+});

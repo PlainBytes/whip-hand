@@ -1156,3 +1156,21 @@ describe('WorkflowEditor: step MCP and plugin pickers', () => {
     expect((await savedStep(transport, 'a')).mcp).toEqual({ allow: ['github'] });
   });
 });
+
+describe('WorkflowEditor on a narrow screen', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('edits a step field and saves through the same updateWorkflow RPC', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    const { transport } = renderEditor(NESTED_WORKFLOW);
+    fireEvent.click(screen.getByTestId('step-collapse-plan'));
+    const toggle = within(screen.getByTestId('step-rail-plan')).getByLabelText('Allow commits');
+    fireEvent.click(toggle);
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    const req = await lastRequest(transport, 'updateWorkflow');
+    const plan = (req.params as { workflow: Workflow }).workflow.steps.find(s => s.id === 'plan') as AgentStep;
+    expect(plan.allow_commits).toBe(true);
+    expect((req.params as { name: string }).name).toBe('feature-development');
+  });
+});

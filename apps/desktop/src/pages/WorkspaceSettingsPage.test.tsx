@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { WorkspaceSettingsPage } from './WorkspaceSettingsPage.tsx';
 import { AgentClient } from '../agent/client.ts';
@@ -383,5 +383,43 @@ describe('WorkspaceSettingsPage', () => {
 
     expect(await screen.findByText(/artifacts directory is required/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+});
+
+describe('WorkspaceSettingsPage on a narrow screen', () => {
+  beforeEach(() => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    useAppStore.setState({ workspacePath: '/ws', doctorResult: null, config: null });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useAppStore.setState({ workspacePath: null, doctorResult: null, config: null, appState: null, restoreDone: false });
+    localStorage.clear();
+  });
+
+  it('saves a field with the same configSet as at wide width', async () => {
+    const { transport } = renderWorkspaceSettingsPage();
+    await respond(transport, 'configGet', SCRIPTED_CONFIG);
+    await respond(transport, 'doctor', [runnerRow('claude')]);
+
+    fireEvent.change(await screen.findByDisplayValue('.whiphand/runs'), { target: { value: '.whiphand/artifacts' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    const req = await waitFor(() => {
+      const parsed = transport.sentRequest(transport.sent.length - 1);
+      if (parsed.method !== 'configSet') throw new Error('configSet not sent yet');
+      return parsed;
+    });
+    expect(req.params).toEqual({
+      workdir: '/ws',
+      config: {
+        defaults: { runner: 'claude' },
+        on_findings: 'report',
+        loop: { max_iterations: 3 },
+        artifacts_dir: '.whiphand/artifacts',
+        runs: { max_retained: null, auto_name: false, max_attachment_mb: 25 },
+      },
+      explicitKeys: [],
+    });
   });
 });

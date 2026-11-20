@@ -6,6 +6,7 @@ import { IS_MAC, chordFromEvent, chordLabel, formatChord, parseChord, sameChord 
 import type { KeymapOverrides } from '../lib/keymap/keymap.ts';
 import { setKeybindings, useKeymap } from '../lib/keymap/use-keymap.ts';
 import { useAppStore } from '../state/store.ts';
+import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
 
 const GROUP_LABELS: Record<ActionGroup, string> = {
   tabs: 'Tabs',
@@ -40,6 +41,7 @@ function labelOf(chordText: string | null): string {
  * the bubble phase and skips defaultPrevented events — can fire.
  */
 export function KeyboardShortcutsSection() {
+  const narrow = useNarrowLayout();
   const client = useAgentClient();
   const keymap = useKeymap();
   const overrides = useAppStore(state => state.appState?.keybindings);
@@ -132,11 +134,11 @@ export function KeyboardShortcutsSection() {
               <div
                 key={action.id}
                 data-testid={`shortcut-${action.id}`}
-                style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
               >
-                <span style={{ flex: 1 }}>{action.label}</span>
-                <span style={{ minWidth: 120 }}>{recording ? 'Press keys…' : labelOf(current)}</span>
-                <span style={{ width: 64 }}>{changed && <Text size={200} italic>changed</Text>}</span>
+                <span style={{ flex: 1, minWidth: narrow ? 0 : undefined }}>{action.label}</span>
+                <span style={{ minWidth: narrow ? 0 : 120 }}>{recording ? 'Press keys…' : labelOf(current)}</span>
+                <span style={{ width: narrow ? undefined : 64 }}>{changed && <Text size={200} italic>changed</Text>}</span>
                 <Button
                   size="small"
                   aria-label={`Record shortcut for ${action.label}`}

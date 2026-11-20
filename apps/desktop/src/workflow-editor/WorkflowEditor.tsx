@@ -4,6 +4,7 @@ import {
   MessageBar, MessageBarBody, Spinner, Text,
 } from '@fluentui/react-components';
 import { Add20Regular, Delete20Regular, Dismiss20Regular, Save20Regular } from '@fluentui/react-icons';
+import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { DeleteWorkflowDialog } from '../components/DeleteWorkflowDialog.tsx';
 import { Page } from '../components/Page.tsx';
@@ -68,6 +69,7 @@ const REVALIDATE_MS = 250;
 export function WorkflowEditor({
   workflow, name, source, workdir, uncovers, onSaved, onCancel, onDeleted,
 }: WorkflowEditorProps) {
+  const narrow = useNarrowLayout();
   const client = useAgentClient();
   const draftApi = useWorkflowDraft(workflow);
   const { draft, rows } = draftApi;
@@ -255,13 +257,13 @@ export function WorkflowEditor({
 
   return (
     <Page header={<>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <Text weight="semibold" size={500}>
             Edit workflow: {name}
             {source === 'workspace' && <Badge appearance="tint" color="informative" style={{ marginLeft: 8 }}>Workspace</Badge>}
             {source === 'global' && <Badge appearance="tint" color="brand" style={{ marginLeft: 8 }}>Global</Badge>}
           </Text>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <DangerButton
               variant="filled"
               icon={<Delete20Regular />}
@@ -327,9 +329,10 @@ export function WorkflowEditor({
               key={row.step.id}
               ref={el => { cardRefs.current[row.step.id] = el; }}
               style={{
-                marginLeft: row.depth * 20,
+                marginLeft: row.depth * (narrow ? 8 : 20),
                 borderLeft: row.depth > 0 ? '2px solid var(--colorBrandStroke2)' : undefined,
-                paddingLeft: row.depth > 0 ? 10 : 0,
+                paddingLeft: row.depth > 0 ? (narrow ? 6 : 10) : 0,
+                minWidth: 0,
               }}
             >
               <StepCard

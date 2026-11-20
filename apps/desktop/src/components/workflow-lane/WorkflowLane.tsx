@@ -12,6 +12,7 @@ import { disabledRoots } from '../../shared/enabled.ts';
 import { dataFlow, ordinals as ordinalsOf, type DataFlowEntry } from '../../lib/step-describe.ts';
 import { StepTrack } from './StepTrack.tsx';
 import { DangerButton } from '../DangerButton.tsx';
+import { useNarrowLayout } from '../../lib/use-narrow-layout.ts';
 
 /** One entry of the listWorkflows result: a parsed workflow, or the error that stopped it parsing. */
 export type WorkflowEntry = ListWorkflowsResult[number];
@@ -78,6 +79,7 @@ export function WorkflowLane({
 }: WorkflowLaneProps) {
   const workflow = entry.workflow;
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const narrow = useNarrowLayout();
 
   const ordinals = useMemo(
     () => (workflow ? ordinalsOf(workflow.steps) : new Map<string, string>()),
@@ -95,6 +97,8 @@ export function WorkflowLane({
     <div
       data-testid={`workflow-lane-${entry.source}-${entry.name}`}
       style={{
+        minWidth: 0,
+        maxWidth: '100%',
         display: 'flex',
         flexDirection: 'column',
         border: '1px solid var(--colorNeutralStroke2)',
@@ -123,7 +127,12 @@ export function WorkflowLane({
         {workflow && inputsLine(workflow) && (
           <Text size={200} style={{ color: 'var(--colorNeutralForeground3)' }}>{inputsLine(workflow)}</Text>
         )}
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div
+          style={{
+            marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center',
+            ...(narrow ? { flexWrap: 'wrap', width: '100%', marginLeft: 0 } : {}),
+          }}
+        >
           {workflow && (
             <>
               <Button appearance="primary" icon={<Play20Regular />} onClick={onRun}>Run</Button>

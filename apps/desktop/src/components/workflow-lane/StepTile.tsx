@@ -64,7 +64,7 @@ function StepPopoverContent({ step, dataFlowEntry }: { step: LeafStep; dataFlowE
   if (step.verdict) rows.push({ label: 'Verdict', value: 'yes' });
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 240, maxWidth: 360 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 'min(240px, 100%)', maxWidth: 'min(360px, calc(100vw - 48px))' }}>
       <Text weight="semibold">{step.id}</Text>
       {rows.map(row => (
         <div key={row.label}>

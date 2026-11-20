@@ -158,14 +158,14 @@ export function DiffFileView({ file }: DiffFileViewProps) {
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, gap: 8 }}>
       <div
         style={{
-          display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0,
+          display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, flexWrap: 'wrap',
           padding: '4px 0',
         }}
       >
         <Text
           weight="semibold"
           data-testid="diff-file-path"
-          style={{ fontFamily: 'var(--fontFamilyMonospace)', wordBreak: 'break-all' }}
+          style={{ minWidth: 0, fontFamily: 'var(--fontFamilyMonospace)', wordBreak: 'break-all' }}
         >
           {file.oldPath === undefined ? file.path : `${file.oldPath} → ${file.path}`}
         </Text>
@@ -193,7 +193,7 @@ export function DiffFileView({ file }: DiffFileViewProps) {
         </Text>
       )}
 
-      <div ref={scrollRef} {...VIRTUAL_SCROLLER_PROPS} style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+      <div ref={scrollRef} {...VIRTUAL_SCROLLER_PROPS} style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: 'auto' }}>
         {file.binary ? (
           <EmptyState>Binary file — {file.status}. Nothing to show line by line.</EmptyState>
         ) : file.truncated ? (

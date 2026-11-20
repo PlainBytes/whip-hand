@@ -198,7 +198,7 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
   return (
     <Page
       header={
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <Text weight="semibold" size={500}>
             Workflows{workflows.length > 0 && ` — ${workflows.length} workflow${workflows.length === 1 ? '' : 's'}`}
           </Text>

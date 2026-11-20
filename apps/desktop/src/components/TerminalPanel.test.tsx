@@ -53,6 +53,10 @@ function makeFakeHandle() {
     attachCustomKeyEventHandler: vi.fn((cb: (event: KeyboardEvent) => boolean) => {
       keyCb = cb;
     }),
+    resize: vi.fn((c: number, r: number) => {
+      cols = c;
+      rows = r;
+    }),
     write: vi.fn(),
     focus: vi.fn(),
     dispose: vi.fn(),
@@ -100,6 +104,21 @@ function renderPanel(jobId: string, onResize = vi.fn()) {
   Object.defineProperty(container, 'clientWidth', { value: 800, configurable: true });
   Object.defineProperty(container, 'clientHeight', { value: 600, configurable: true });
   return { transport, client, onResize, unmount: result.unmount, container };
+}
+
+function renderSized(jobId: string, props: { sizing: 'fit' | 'follow'; cols?: number; rows?: number }, onResize = vi.fn()) {
+  const transport = new MockTransport();
+  const client = new AgentClient(transport);
+  const tree = (p: typeof props) => (
+    <AgentClientProvider client={client}>
+      <TerminalPanel jobId={jobId} onResize={onResize} {...p} />
+    </AgentClientProvider>
+  );
+  const result = render(tree(props));
+  const container = result.getByTestId('terminal-container');
+  Object.defineProperty(container, 'clientWidth', { value: 800, configurable: true });
+  Object.defineProperty(container, 'clientHeight', { value: 600, configurable: true });
+  return { transport, onResize, rerender: (p: typeof props) => result.rerender(tree(p)), container };
 }
 
 describe('TerminalPanel', () => {
@@ -644,5 +663,65 @@ describe('TerminalPanel', () => {
     // The panel's marker is driven by baseIndex, and the merge lowered it to 0,
     // so no further truncation notice is added on top of the one already shown.
     expect(decoded.match(/earlier output truncated/g)?.length ?? 0).toBeLessThanOrEqual(1);
+  });
+  describe('follow sizing (narrow screens)', () => {
+    it('sizes xterm to the pty and never fits or reports, across mount, resizes and prop changes', () => {
+      vi.useFakeTimers();
+      const { onResize, rerender, transport } = renderSized('job-f1', { sizing: 'follow', cols: 120, rows: 40 });
+      expect(handle.term.resize).toHaveBeenCalledWith(120, 40);
+
+      act(() => {
+        FakeResizeObserver.instances[0].callback([], FakeResizeObserver.instances[0] as unknown as ResizeObserver);
+        vi.advanceTimersByTime(500);
+      });
+      rerender({ sizing: 'follow', cols: 132, rows: 50 });
+      expect(handle.term.resize).toHaveBeenLastCalledWith(132, 50);
+      act(() => {
+        FakeResizeObserver.instances[0].callback([], FakeResizeObserver.instances[0] as unknown as ResizeObserver);
+        vi.advanceTimersByTime(500);
+      });
+
+      expect(handle.fitAddon.fit).not.toHaveBeenCalled();
+      expect(onResize).not.toHaveBeenCalled();
+      expect(transport.sent.some(l => JSON.parse(l).method === 'ptyResize')).toBe(false);
+    });
+
+    it('keeps the default size, unreported, when the pty size is unknown', () => {
+      const { onResize } = renderSized('job-f2', { sizing: 'follow' });
+      expect(handle.term.resize).not.toHaveBeenCalled();
+      expect(handle.fitAddon.fit).not.toHaveBeenCalled();
+      expect(onResize).not.toHaveBeenCalled();
+    });
+
+    it('fit -> follow -> fit reports once, on the way back, on the same terminal', () => {
+      const created = vi.mocked(createTerminal).mock.calls.length;
+      const { onResize, rerender } = renderSized('job-f3', { sizing: 'fit', cols: 90, rows: 30 });
+      expect(onResize).toHaveBeenCalledTimes(1);
+      onResize.mockClear();
+
+      rerender({ sizing: 'follow', cols: 90, rows: 30 });
+      expect(handle.term.resize).toHaveBeenCalledWith(90, 30);
+      expect(onResize).not.toHaveBeenCalled();
+
+      handle.fitAddon.fit.mockClear();
+      rerender({ sizing: 'fit', cols: 90, rows: 30 });
+      expect(handle.fitAddon.fit).toHaveBeenCalledTimes(1);
+      expect(onResize).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(createTerminal).mock.calls.length - created).toBe(1);
+      expect(handle.term.dispose).not.toHaveBeenCalled();
+    });
+
+    it('still sends typed input and Shift+Enter', () => {
+      const { transport } = renderSized('job-f4', { sizing: 'follow', cols: 80, rows: 24 });
+      act(() => handle.emitData('ls'));
+      act(() => { handle.emitKey('keydown', { shiftKey: true }); });
+      const inputs = transport.sent.map(l => JSON.parse(l) as { method: string; params: { data: string } }).filter(r => r.method === 'ptyInput');
+      expect(inputs.map(r => r.params.data)).toEqual([encodeToBase64('ls'), encodeToBase64('\x1b\r')]);
+    });
+
+    it('scrolls sideways inside the panel', () => {
+      const { container } = renderSized('job-f5', { sizing: 'follow', cols: 80, rows: 24 });
+      expect(container.parentElement).toHaveStyle({ overflowX: 'auto' });
+    });
   });
 });

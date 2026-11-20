@@ -22,6 +22,7 @@ import { useAppStore } from '../state/store.ts';
 import { spinInteger } from '../lib/spin-value.ts';
 import type { WorkspaceConfig, OnFindings } from '../shared/types.ts';
 import { errorMessage } from '../lib/error-message.ts';
+import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
 
 /** Seeded when the override checkbox is first turned on from "inherit". */
 const DEFAULT_OVERRIDE_MAX_RETAINED = 10;
@@ -55,6 +56,7 @@ const ON_FINDINGS_OPTIONS: { value: OnFindings; label: string; description: stri
  * cap, artifacts dir. App-level preferences live in PreferencesPage.
  */
 export function WorkspaceSettingsPage() {
+  const narrow = useNarrowLayout();
   const client = useAgentClient();
   const workspacePath = useAppStore(state => state.workspacePath);
   const doctorResult = useAppStore(state => state.doctorResult);
@@ -189,7 +191,7 @@ export function WorkspaceSettingsPage() {
   if (!form) {
     return (
       <Page header={header}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 480 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: narrow ? undefined : 480 }}>
           <Text>Loading configuration…</Text>
         </div>
       </Page>
@@ -221,7 +223,7 @@ export function WorkspaceSettingsPage() {
 
   return (
     <Page header={header}>
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 480 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: narrow ? undefined : 480 }}>
       <DismissibleWarning dismissKey="workspace-settings-rewrite" persist>
         Saving rewrites the config file — comments in a hand-edited config file are not preserved.
       </DismissibleWarning>

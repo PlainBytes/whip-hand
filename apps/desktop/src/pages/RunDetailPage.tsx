@@ -32,7 +32,7 @@ import {
   ArrowDown20Regular, BranchFork20Regular, Copy20Regular, Delete20Regular, DocumentFolder48Regular,
   LockClosed20Regular, LockOpen20Regular,
   PlayCircle20Regular, PlugDisconnected20Regular, PlugDisconnected48Regular, Prompt48Regular,
-  Rename20Regular, Stop20Regular, Replay20Regular, TextBulletListSquare48Regular,
+  MoreHorizontal20Regular, Open20Regular, Rename20Regular, Stop20Regular, Replay20Regular, TextBulletListSquare48Regular,
 } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore, executionKey, type JobState, type StepState } from '../state/store.ts';
@@ -58,6 +58,10 @@ import { ArtifactFileSystem } from '../files/artifact-fs.ts';
 import { joinPath, makeRootNode, type TreeNodes } from '../files/tree-model.ts';
 import { FileTree } from '../components/FileTree.tsx';
 import { ResizablePane } from '../components/ResizablePane.tsx';
+import { TreePreviewSplit } from '../components/TreePreviewSplit.tsx';
+import { UnsavedChangesDialog } from '../components/UnsavedChangesDialog.tsx';
+import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
+import { useNarrowDialogStyles } from '../lib/use-narrow-dialog-styles.ts';
 import { FilePreview } from '../components/FilePreview.tsx';
 import { RECESSED_SURFACE } from '../components/recessed-surface.ts';
 import { resolveInArtifacts } from '../markdown/resolve.ts';
@@ -69,7 +73,7 @@ import { useOpenExternal } from '../lib/open-external.tsx';
 import type { FileComment, ManualChoice, Scope } from '../shared/types.ts';
 import { errorMessage } from '../lib/error-message.ts';
 import { useCapabilities } from '../capabilities.tsx';
-import { DEFAULT_EDITOR, openRunInEditor } from '../lib/editor.ts';
+import { DEFAULT_EDITOR, editorLabel, openRunInEditor } from '../lib/editor.ts';
 import { useShortcut } from '../lib/use-global-shortcut.ts';
 import { isModalOpen } from '../lib/tab-shortcuts.ts';
 import { spacerHeights, useVirtualRows, VIRTUAL_SCROLLER_PROPS } from '../lib/use-virtual-rows.ts';
@@ -320,7 +324,11 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
    * Per-sitting reaction to one workflow's length, not a preference — so it
    * lives here and is deliberately not persisted.
    */
-  const [stepsCollapsed, setStepsCollapsed] = useState(false);
+  const narrow = useNarrowLayout();
+  const narrowDialog = useNarrowDialogStyles();
+  // A phone has no room for the stepper above the tabs, so it starts folded
+  // to its one-line summary; expanding is the person's choice.
+  const [stepsCollapsed, setStepsCollapsed] = useState(narrow);
   /**
    * null means "the user hasn't chosen" — which is what lets a starting
    * session pull the view to the terminal without ever overriding a
@@ -352,6 +360,9 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
   const [diffError, setDiffError] = useState<string | null>(null);
   const [diffToken, setDiffToken] = useState(0);
   const [selectedArtifactPath, setSelectedArtifactPath] = useState<string | null>(null);
+  /** The open artifact has unsaved edits; only Back (narrow) has to consult it. */
+  const [artifactDirty, setArtifactDirty] = useState(false);
+  const [artifactBackPending, setArtifactBackPending] = useState(false);
   const [artifactsExpanded, setArtifactsExpanded] = useState<string[]>([]);
   const logRef = useRef<HTMLDivElement | null>(null);
   const activityRef = useRef<HTMLDivElement | null>(null);
@@ -1134,7 +1145,11 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
           tab already shows its status and a back button has nothing to go back
           to, so the left side carries only what the tab does not.
         */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div
+          style={narrow
+            ? { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 12px' }
+            : { display: 'flex', alignItems: 'center', gap: 12 }}
+        >
           {/*
             The name is what a human recognizes. The id is what `--resume` and
             `whiphand rename-run` take, but it is secondary, so it sits in a
@@ -1162,6 +1177,8 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
               {runElapsed}
             </Text>
           )}
+          {/* Narrow: the info and the actions take a second line. */}
+          {narrow && <div aria-hidden style={{ flexBasis: '100%', height: 0 }} />}
           {manifest?.worktree && <WorktreeInfoButton worktree={manifest.worktree} />}
           {manifest?.subdir && (
             <Tooltip content="Work directory" relationship="description">
@@ -1170,7 +1187,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
               </Text>
             </Tooltip>
           )}
-          <div style={{ display: 'flex', gap: 8, marginLeft: 'auto', flexShrink: 0 }}>
+          <div style={{ display: 'flex', gap: 8, marginLeft: 'auto', flexShrink: 0, ...(narrow ? { flexWrap: 'wrap', justifyContent: 'flex-end' } : {}) }}>
             {job?.ptyActive && effectiveJobId && (
               <Tooltip
                 content={
@@ -1200,11 +1217,11 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
                     />
                   </Tooltip>
                 </DialogTrigger>
-                <DialogSurface>
+                <DialogSurface style={narrowDialog.surface}>
                   <DialogBody>
                     <DialogTitle>Cancel this run?</DialogTitle>
                     <DialogContent>This stops the run in progress. It cannot be resumed.</DialogContent>
-                    <DialogActions>
+                    <DialogActions style={narrowDialog.actions}>
                       <Button appearance="secondary" onClick={() => setConfirmOpen(false)}>
                         Keep running
                       </Button>
@@ -1258,7 +1275,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
                 open={extraIterationsOpen}
                 onOpenChange={(_e, data) => { if (!resuming) setExtraIterationsOpen(data.open); }}
               >
-                <DialogSurface>
+                <DialogSurface style={narrowDialog.surface}>
                   <DialogBody>
                     <DialogTitle>Resume with more iterations</DialogTitle>
                     <DialogContent>
@@ -1280,7 +1297,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
                         />
                       </Field>
                     </DialogContent>
-                    <DialogActions>
+                    <DialogActions style={narrowDialog.actions}>
                       <Button disabled={resuming} onClick={() => setExtraIterationsOpen(false)}>Cancel</Button>
                       <Button
                         appearance="primary"
@@ -1294,7 +1311,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
                 </DialogSurface>
               </Dialog>
             )}
-            {!isRunning && typeof manifest?.workflow === 'string' && (
+            {!narrow && !isRunning && typeof manifest?.workflow === 'string' && (
               <Tooltip content="Run again" relationship="label">
                 <Button
                   appearance="secondary"
@@ -1307,7 +1324,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
                 />
               </Tooltip>
             )}
-            {!isRunning && manifest?.worktree && effectiveRunId && (
+            {!narrow && !isRunning && manifest?.worktree && effectiveRunId && (
               <Tooltip content="Continue in worktree" relationship="label">
                 <Button
                   appearance="secondary"
@@ -1321,7 +1338,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
                 />
               </Tooltip>
             )}
-            {manifest?.worktree && workspacePath && (
+            {!narrow && manifest?.worktree && workspacePath && (
               <OpenInEditorButton
                 workdir={workspacePath}
                 worktree={manifest.worktree}
@@ -1341,12 +1358,16 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
                   if (!renaming) setRenameOpen(data.open);
                 }}
               >
-                <DialogTrigger disableButtonEnhancement>
-                  <Tooltip content="Rename" relationship="label">
-                    <Button appearance="secondary" icon={<Rename20Regular />} />
-                  </Tooltip>
-                </DialogTrigger>
-                <DialogSurface>
+                {/* Narrow: the "More actions" menu opens this dialog instead. Dialog's
+                    typing wants an element here; React drops the `false` at runtime. */}
+                {(!narrow && (
+                  <DialogTrigger disableButtonEnhancement>
+                    <Tooltip content="Rename" relationship="label">
+                      <Button appearance="secondary" icon={<Rename20Regular />} />
+                    </Tooltip>
+                  </DialogTrigger>
+                )) as unknown as JSX.Element}
+                <DialogSurface style={narrowDialog.surface}>
                   <DialogBody>
                     <DialogTitle>Name this run</DialogTitle>
                     <DialogContent>
@@ -1364,7 +1385,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
                         />
                       </Field>
                     </DialogContent>
-                    <DialogActions>
+                    <DialogActions style={narrowDialog.actions}>
                       <Button disabled={renaming} onClick={() => setRenameOpen(false)}>Cancel</Button>
                       <Button
                         appearance="primary"
@@ -1378,7 +1399,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
                 </DialogSurface>
               </Dialog>
             )}
-            {effectiveRunId && (
+            {!narrow && effectiveRunId && (
               <Tooltip content={manifest?.locked ? 'Locked' : 'Lock'} relationship="label">
                 <ToggleButton
                   appearance="secondary"
@@ -1389,10 +1410,88 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
                 />
               </Tooltip>
             )}
-            {effectiveRunId && (
+            {!narrow && effectiveRunId && (
               <Tooltip content="Delete" relationship="label">
                 <DangerButton variant="subtle" icon={<Delete20Regular />} onClick={() => setDeleteOpen(true)} />
               </Tooltip>
+            )}
+            {narrow && effectiveRunId && (
+              <Menu positioning="below-end">
+                <MenuTrigger disableButtonEnhancement>
+                  <Button appearance="secondary" aria-label="More actions" icon={<MoreHorizontal20Regular />} />
+                </MenuTrigger>
+                <MenuPopover>
+                  <MenuList>
+                    <MenuItem
+                      data-testid="more-copy-run-id"
+                      secondaryContent={effectiveRunId}
+                      onClick={() => { void navigator.clipboard?.writeText(effectiveRunId)?.catch(() => {}); }}
+                    >
+                      Copy run id
+                    </MenuItem>
+                    {!isRunning && typeof manifest?.workflow === 'string' && (
+                      <MenuItem
+                        icon={<Replay20Regular />}
+                        onClick={() => onRunAgain(
+                          manifest.workflow as string,
+                          (manifest.inputs ?? {}) as Record<string, string>,
+                          manifest.workflowSource as Scope | undefined,
+                        )}
+                      >
+                        Run again
+                      </MenuItem>
+                    )}
+                    {!isRunning && manifest?.worktree && (
+                      <MenuItem
+                        icon={<BranchFork20Regular />}
+                        onClick={() => onContinueInWorktree(
+                          effectiveRunId,
+                          typeof manifest.workflow === 'string' ? manifest.workflow : undefined,
+                          manifest.workflowSource as Scope | undefined,
+                        )}
+                      >
+                        Continue in worktree
+                      </MenuItem>
+                    )}
+                    {manifest?.worktree && workspacePath && (
+                      <MenuItem
+                        icon={<Open20Regular />}
+                        disabled={openInEditor === undefined}
+                        title={openInEditor === undefined ? 'Opening in an editor is only available in the desktop app' : undefined}
+                        onClick={() => {
+                          if (openInEditor === undefined) return;
+                          setOpenError(null);
+                          const editor = useAppStore.getState().appState?.editor ?? DEFAULT_EDITOR;
+                          openRunInEditor(openInEditor, editor, { workdir: workspacePath, worktree: manifest.worktree, subdir: manifest.subdir })
+                            .catch(err => setOpenError(errorMessage(err)));
+                        }}
+                      >
+                        Open worktree in {editorLabel(useAppStore.getState().appState?.editor ?? DEFAULT_EDITOR)}
+                      </MenuItem>
+                    )}
+                    <MenuItem
+                      icon={<Rename20Regular />}
+                      onClick={() => {
+                        setRenameDraft(runName ?? '');
+                        setRenameError(null);
+                        setRenameOpen(true);
+                      }}
+                    >
+                      Rename
+                    </MenuItem>
+                    <MenuItem
+                      icon={manifest?.locked ? <LockClosed20Regular /> : <LockOpen20Regular />}
+                      disabled={locking}
+                      onClick={() => void handleToggleLock()}
+                    >
+                      {manifest?.locked ? 'Unlock' : 'Lock'}
+                    </MenuItem>
+                    <MenuItem icon={<Delete20Regular />} onClick={() => setDeleteOpen(true)}>
+                      Delete
+                    </MenuItem>
+                  </MenuList>
+                </MenuPopover>
+              </Menu>
             )}
             {deleteOpen && workspacePath && effectiveRunId && (
               <DeleteRunDialog
@@ -1474,6 +1573,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
               // Inside the pane it shrinks to the pane's cap; alone it is one line.
               flexShrink: stepsCollapsed ? 0 : 1,
               minHeight: 0,
+              minWidth: 0,
               display: 'flex',
               flexDirection: 'column',
               overflow: 'hidden',
@@ -1498,6 +1598,15 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
             />
           </div>
         );
+        if (narrow && !stepsCollapsed) {
+          // No resize handle on a phone: a box capped at about 45% of the
+          // body, scrolling inside itself, so the tabs below stay reachable.
+          return (
+            <div style={{ flexShrink: 0, maxHeight: '45%', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'auto' }}>
+              {stepper}
+            </div>
+          );
+        }
         return stepsCollapsed ? stepper : (
           <ResizablePane
             axis="height"
@@ -1637,6 +1746,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
               jobId={effectiveJobId}
               cols={job?.ptyCols}
               rows={job?.ptyRows}
+              sizing={narrow ? 'follow' : 'fit'}
               onResize={(cols, rows) => void client.request('ptyResize', { jobId: effectiveJobId, cols, rows })}
             />
           ) : hasHeadlessStep || activityTail.length > 0 ? (
@@ -1709,11 +1819,14 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
             </div>
           ) : (
             <FileSystemProvider fs={artifactFs}>
-              {/* Laid out like FilesPage's browser: both use ResizablePane,
-                  each with its own saved width. The preview's own surface is
-                  the only boundary. */}
-              <div style={{ display: 'flex', width: '100%', minHeight: 0 }}>
-                <ResizablePane storageKey="whiphand.run.artifactsTreeWidth">
+              <TreePreviewSplit
+                storageKey="whiphand.run.artifactsTreeWidth"
+                hasSelection={selectedArtifactPath !== null && selectedArtifactNode?.kind !== 'dir'}
+                onBack={() => {
+                  if (artifactDirty) setArtifactBackPending(true);
+                  else setSelectedArtifactPath(null);
+                }}
+                tree={(
                   <FileTree
                     root={runDir}
                     nodes={artifactNodes}
@@ -1724,26 +1837,29 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
                     ))}
                     onSelect={setSelectedArtifactPath}
                   />
-                </ResizablePane>
-                <div
-                  style={{
-                    // The same recessed surface the log tail and the activity
-                    // feed sit on: all of it is this run's output.
-                    ...RECESSED_SURFACE,
-                    flex: 1, minWidth: 0, minHeight: 0, display: 'flex', overflow: 'hidden',
-                  }}
-                >
+                )}
+                preview={(
                   <FilePreview
                     path={selectedArtifactNode?.kind === 'dir' ? null : selectedArtifactPath}
-                    onDirtyChange={() => {}}
+                    onDirtyChange={setArtifactDirty}
                     docContext={artifactDocContext}
                     // Only while the run can still write: a finished run's
                     // artifacts are settled, and watching them would cost a
                     // handle (or a poll) for a file that will never change.
                     live={isRunning}
                   />
-                </div>
-              </div>
+                )}
+              />
+              {artifactBackPending && (
+                <UnsavedChangesDialog
+                  onDiscard={() => {
+                    setArtifactBackPending(false);
+                    setArtifactDirty(false);
+                    setSelectedArtifactPath(null);
+                  }}
+                  onKeepEditing={() => setArtifactBackPending(false)}
+                />
+              )}
             </FileSystemProvider>
           )}
         </div>
@@ -1916,7 +2032,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
                         <span style={{ color: 'var(--colorNeutralForeground3)', fontWeight: 400, flexShrink: 0, width: 90 }}>
                           {row.stepId ?? ''}
                         </span>
-                        <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{row.text}</span>
+                        <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', minWidth: 0 }}>{row.text}</span>
                       </div>
                     );
                   })}

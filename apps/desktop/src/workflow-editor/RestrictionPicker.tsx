@@ -91,7 +91,7 @@ export function RestrictionPicker({
   }
 
   return (
-    <div data-testid={testId} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div data-testid={testId} style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
       <Field label={label}>
         <Dropdown
           aria-label={`${label} mode`}
@@ -110,7 +110,7 @@ export function RestrictionPicker({
             </Text>
           )}
           {choices.map(name => (
-            <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', minWidth: 0 }}>
               <Checkbox
                 label={name}
                 checked={selected.includes(name)}
@@ -121,11 +121,12 @@ export function RestrictionPicker({
               )}
             </div>
           ))}
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 0 }}>
             <Input
               aria-label={`Add ${label} name`}
               placeholder="name"
               size="small"
+              style={{ flex: '1 1 0', minWidth: 0 }}
               value={draftName}
               onChange={(_e, data) => setDraftName(data.value)}
               onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTyped(); } }}

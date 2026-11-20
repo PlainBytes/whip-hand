@@ -26,6 +26,13 @@ export const useStepLayoutStyles = makeStyles({
     rowGap: '8px',
     alignItems: 'start',
     flex: '0 0 auto',
+    // A body too narrow for a 260px column beside any prose (a phone, or a
+    // deeply nested loop body): one column that is never wider than the body.
+    '@container step-body (max-width: 599px)': {
+      gridTemplateColumns: 'minmax(0, 1fr)',
+      flex: '1 1 100%',
+      minWidth: 0,
+    },
     // A ~480px prompt, the 16px gap, and two columns with theirs.
     '@container step-body (min-width: 1040px)': {
       gridTemplateColumns: `repeat(2, ${RAIL_COLUMN})`,

@@ -193,7 +193,7 @@ export const SCENES = [
   },
   {
     name: 'workflows',
-    status: 'known-broken',
+    status: 'clean',
     async prepare(page) {
       await goTo(page, 'Workflows');
       await page.getByRole('button', { name: 'Edit' }).first().waitFor();
@@ -201,7 +201,7 @@ export const SCENES = [
   },
   {
     name: 'workflow-editor',
-    status: 'known-broken',
+    status: 'clean',
     async prepare(page) {
       await goTo(page, 'Workflows');
       await tap(page.getByRole('button', { name: 'Edit' }).first());

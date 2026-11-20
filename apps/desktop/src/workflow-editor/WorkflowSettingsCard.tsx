@@ -3,6 +3,7 @@ import {
   Button, Dropdown, Field, Input, Option, Switch, Text, Textarea,
 } from '@fluentui/react-components';
 import { ChevronDown20Regular, ChevronRight20Regular } from '@fluentui/react-icons';
+import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
 import type { McpServerDef, McpSettings, OnFindings, Restriction, Workflow, WorkflowInput } from '../shared/types.ts';
 import { flattenSteps } from '../shared/steps.ts';
 import { useAppStore } from '../state/store.ts';
@@ -98,12 +99,21 @@ function serverProblem(rows: ServerRow[], index: number): string | undefined {
 
 const LIST_STYLE = { display: 'flex', flexDirection: 'column', gap: 4 } as const;
 const LIST_ROW_STYLE = { display: 'flex', gap: 4, alignItems: 'center' } as const;
+/** An editor that takes the row's spare width instead of its own intrinsic one. */
+const FILL_STYLE = { flex: '1 1 0', minWidth: 0 } as const;
+/** A server or input row: wrapped beside each other, or stacked on a phone. */
+function rowStyle(narrow: boolean) {
+  return narrow
+    ? { display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'stretch' } as const
+    : { display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' } as const;
+}
 
 /**
  * One editor per value, so any value survives as written: a comma in an
  * argument, an empty argument, spaces around a value, a line break in one.
  */
 function ArgsEditor({ values, onChange }: { values: string[]; onChange: (next: string[]) => void }) {
+  const narrow = useNarrowLayout();
   return (
     <div role="group" aria-label="Args" style={LIST_STYLE}>
       <Text size={200}>Args</Text>
@@ -112,6 +122,7 @@ function ArgsEditor({ values, onChange }: { values: string[]; onChange: (next: s
           <Textarea
             aria-label={`Args ${i + 1}`}
             rows={1}
+            style={narrow ? FILL_STYLE : undefined}
             value={value}
             onChange={(_e, data) => onChange(values.map((v, j) => (j === i ? data.value : v)))}
           />
@@ -139,15 +150,19 @@ function PairsEditor({ label, addLabel, pairs, onChange }: {
   pairs: Pair[];
   onChange: (next: Pair[]) => void;
 }) {
+  const narrow = useNarrowLayout();
   const patch = (i: number, change: Partial<Pair>): void => onChange(pairs.map((p, j) => (j === i ? { ...p, ...change } : p)));
   return (
     <div role="group" aria-label={label} style={LIST_STYLE}>
       <Text size={200}>{label}</Text>
       {pairs.map((pair, i) => (
         <div key={i} style={LIST_STYLE}>
-          <div style={LIST_ROW_STYLE}>
+          <div style={{ ...LIST_ROW_STYLE, ...(narrow ? { alignItems: 'flex-start' } : {}) }}>
+          {/* On a phone the name and value stack in one column; the remove button stays beside them. */}
+          <div style={narrow ? { ...FILL_STYLE, display: 'flex', flexDirection: 'column', gap: 4 } : { display: 'contents' }}>
           <Input aria-label={`${label} ${i + 1} name`} value={pair.name} onChange={(_e, data) => patch(i, { name: data.value })} />
           <Textarea aria-label={`${label} ${i + 1} value`} rows={1} placeholder="${NAME}" value={pair.value} onChange={(_e, data) => patch(i, { value: data.value })} />
+          </div>
           <Button size="small" appearance="subtle" aria-label={`Remove ${label} ${i + 1}`} onClick={() => onChange(pairs.filter((_p, j) => j !== i))}>×</Button>
           </div>
           {isLiteralCredential(pair) && (
@@ -188,6 +203,7 @@ function rowProblem(rows: InputRow[], index: number): string | undefined {
 export function WorkflowSettingsCard({
   workflow, collapsed, onToggleCollapsed, onUpdate, onProblem,
 }: WorkflowSettingsCardProps) {
+  const narrow = useNarrowLayout();
   // Seeded once, like `useWorkflowDraft`'s own draft state: this component
   // lives for exactly one workflow (a switch remounts the whole editor), so
   // there is no "resync from outside" case to handle here, only pushing this
@@ -283,7 +299,7 @@ export function WorkflowSettingsCard({
       data-testid="workflow-settings-card"
       style={{ border: '1px solid var(--colorNeutralStroke2)', borderRadius: 4 }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', flexWrap: 'wrap' }}>
         <Button
           appearance="subtle"
           size="small"
@@ -334,7 +350,7 @@ export function WorkflowSettingsCard({
             {servers.map((row, i) => {
               const problem = serverProblem(servers, i);
               return (
-                <div key={row.key} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                <div key={row.key} style={rowStyle(narrow)}>
                   <Field label="Server name" validationState={problem ? 'error' : 'none'} validationMessage={problem}>
                     <Input value={row.name} onChange={(_e, data) => patchServer(i, { name: data.value })} />
                   </Field>
@@ -398,7 +414,7 @@ export function WorkflowSettingsCard({
             {rows.map((row, i) => {
               const problem = rowProblem(rows, i);
               return (
-                <div key={row.key} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                <div key={row.key} style={rowStyle(narrow)}>
                   <Field label="Name" validationState={problem ? 'error' : 'none'} validationMessage={problem}>
                     <Input value={row.name} onChange={(_e, data) => renameInputRow(i, data.value)} />
                   </Field>

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { WorkflowLane } from './WorkflowLane.tsx';
 import type { WorkflowEntry } from './WorkflowLane.tsx';
@@ -331,5 +331,18 @@ describe('WorkflowLane: a stages step', () => {
     renderLane(disabled);
     expect(screen.getByTestId('stages-disabled-build')).toHaveTextContent('stages disabled — 2 steps');
     expect(screen.queryByTestId('step-tile-impl')).not.toBeInTheDocument();
+  });
+});
+
+describe('WorkflowLane on a narrow screen', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('scrolls the top-level track inside its own box with a snap point per node', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    renderLane(FEATURE);
+    const track = screen.getByTestId('step-track-root');
+    expect(track).toHaveStyle({ flexWrap: 'nowrap', overflowX: 'auto', maxWidth: '100%' });
+    expect(track.style.scrollSnapType).toContain('x');
+    expect(track.firstElementChild).toHaveStyle({ scrollSnapAlign: 'start' });
   });
 });

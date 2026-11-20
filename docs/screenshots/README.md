@@ -37,3 +37,17 @@ Each screen comes in `-light` and `-dark`; the README picks one with `<picture>`
 
 Re-running on the same machine reproduces the PNGs byte for byte. Another machine's fonts can
 shift pixels, so regenerate when the UI changed, not as a matter of course.
+
+## Phone check
+
+`npm run mobile-check` opens every screen of the web build at phone size (390×844, touch) in
+the light and dark themes and fails if one scrolls or overflows sideways. It is not part of
+`npm test` and not run in CI. It needs `npm run build:parity` (the release agent),
+`npm run build:web -w desktop` and Chromium (`npx playwright install chromium`, once).
+
+```sh
+npm run mobile-check                          # every scene, both themes
+npm run mobile-check -- --theme dark          # or light; --only runs,doctor; --headed
+```
+
+Its screenshots go to `target/mobile-check/<scene>-<theme>.png`; they are not committed.

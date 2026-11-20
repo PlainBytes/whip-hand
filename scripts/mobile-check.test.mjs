@@ -5,7 +5,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MAX_OFFENDERS, SCENES, STATUSES, judge, selectScenes } from './mobile-check.mjs';
+import { MAX_OFFENDERS, SCENES, STATUSES, THEMES, judge, parseThemes, selectScenes } from './mobile-check.mjs';
 
 test('scene names are unique', () => {
   const names = SCENES.map(scene => scene.name);
@@ -59,4 +59,12 @@ test('at most five offenders are listed', () => {
   const { line } = judge({ name: 'runs', status: 'clean' }, { error: null, overflow: overflow(many) });
   assert.equal(line.split('\n').filter(l => /ends at/.test(l)).length, MAX_OFFENDERS);
   assert.match(line, /and 3 more/);
+});
+
+test('--theme takes dark, light or both, and defaults to both', () => {
+  assert.deepEqual(parseThemes(undefined), THEMES);
+  assert.deepEqual(parseThemes('both'), ['light', 'dark']);
+  assert.deepEqual(parseThemes('dark'), ['dark']);
+  assert.deepEqual(parseThemes('light'), ['light']);
+  assert.throws(() => parseThemes('sepia'), /--theme takes dark, light or both; got 'sepia'/);
 });

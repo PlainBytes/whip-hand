@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Phone check: opens every screen of the web build at 390×844 (touch, 3×,
- * light) and reports what overflows the viewport. The web build is the
+ * light and dark) and reports what overflows the viewport. The web build is the
  * remote-access page a phone opens; this reuses the README screenshots'
  * setup (scripts/screenshots/web-session.mjs): a real agent over the demo
  * workspace, driven by Playwright.
@@ -9,12 +9,13 @@
  *   npm run mobile-check                          # every scene
  *   npm run mobile-check -- --only runs,doctor    # some scenes
  *   npm run mobile-check -- --headed              # watch it
+ *   npm run mobile-check -- --theme dark          # dark|light|both (default both)
  *
  * Each scene is `clean` (must not overflow: a failure here is a regression) or
  * `known-broken` (offenders are printed; flip it to `clean` once its layout is
  * fixed — the run says so when a known-broken scene passes). A scene whose
  * `prepare` throws fails the run either way. Screenshots go to
- * target/mobile-check/<scene>.png, never into docs/screenshots.
+ * target/mobile-check/<scene>-<theme>.png, never into docs/screenshots.
  *
  * Needs the release agent (`npm run build:parity`) and Chromium
  * (`npx playwright install chromium`), so it is not part of `npm test`.
@@ -30,9 +31,10 @@ import { settled, startWebSession, withDemoWorkspace } from './screenshots/web-s
 export const OUT_DIR = path.join(repoRoot, 'target/mobile-check');
 export const STATUSES = ['clean', 'known-broken'];
 export const MAX_OFFENDERS = 5;
+export const THEMES = ['light', 'dark'];
 const CONTEXT = {
   viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3,
-  colorScheme: 'light', timezoneId: 'UTC', locale: 'en-US',
+  timezoneId: 'UTC', locale: 'en-US',
 };
 const REVIEW_RUN_NAME = 'money in cents';
 const NAV_BUTTON = 'Open navigation';
@@ -282,6 +284,13 @@ export const SCENES = [
   },
 ];
 
+/** The themes `--theme` names: one, or `both` (the default). */
+export function parseThemes(value = 'both') {
+  if (value === 'both') return THEMES;
+  if (THEMES.includes(value)) return [value];
+  throw new Error(`--theme takes dark, light or both; got '${value}'`);
+}
+
 /** The scenes `--only` names, in SCENES order; an unknown name is an error. */
 export function selectScenes(scenes, only) {
   if (only === undefined) return scenes;
@@ -376,10 +385,12 @@ async function main() {
   const { values } = parseArgs({
     options: {
       only: { type: 'string' },
+      theme: { type: 'string' },
       headed: { type: 'boolean', default: false },
     },
   });
   const scenes = selectScenes(SCENES, values.only);
+  const themes = parseThemes(values.theme);
   const log = message => console.error(message);
 
   let chromium;
@@ -400,40 +411,47 @@ async function main() {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   let failed = false;
   try {
-    await withDemoWorkspace({ log, label: 'mobile-check' }, async ({ workspace, pristine }) => {
-      const web = await startWebSession({ name: 'mobile-check', workspace, pristine, theme: 'light' });
-      let context;
-      try {
-        context = await browser.newContext(CONTEXT);
-        await context.clock.setFixedTime(DEMO_NOW);
-        const page = await context.newPage();
-        // Signed in up front, so `--only` can start at any scene.
-        await page.goto(web.url);
-        // The phone layout has no nav until its menu button is tapped.
-        await page.getByRole('navigation').or(page.getByRole('button', { name: NAV_BUTTON })).first().waitFor();
-        for (const scene of scenes) {
-          const result = { error: null, overflow: null };
-          try {
-            await scene.prepare(page, { session: web.session, workspace, origin: web.origin, url: web.url });
-            await settled(page);
-            result.overflow = await page.evaluate(measureOverflow);
-          } catch (error) {
-            result.error = error.message.split('\n')[0];
+    for (const theme of themes) {
+      console.log(`== ${theme} theme`);
+      // The review scene starts a run once per session; each theme has its own.
+      openReview.started = false;
+      await withDemoWorkspace({ log, label: `mobile-check-${theme}` }, async ({ workspace, pristine }) => {
+        const web = await startWebSession({ name: `mobile-check-${theme}`, workspace, pristine, theme });
+        let context;
+        try {
+          context = await browser.newContext({ ...CONTEXT, colorScheme: theme });
+          await context.clock.setFixedTime(DEMO_NOW);
+          const page = await context.newPage();
+          // Signed in up front, so `--only` can start at any scene.
+          await page.goto(web.url);
+          // The phone layout has no nav until its menu button is tapped.
+          await page.getByRole('navigation').or(page.getByRole('button', { name: NAV_BUTTON })).first().waitFor();
+          for (const scene of scenes) {
+            const result = { error: null, overflow: null };
+            try {
+              await scene.prepare(page, { session: web.session, workspace, origin: web.origin, url: web.url });
+              await settled(page);
+              result.overflow = await page.evaluate(measureOverflow);
+            } catch (error) {
+              result.error = error.message.split('\n')[0];
+            }
+            await page.screenshot({ path: path.join(OUT_DIR, `${scene.name}-${theme}.png`), animations: 'disabled' })
+              .catch(() => {});
+            const verdict = judge(scene, result);
+            if (!verdict.ok) failed = true;
+            console.log(verdict.line);
           }
-          await page.screenshot({ path: path.join(OUT_DIR, `${scene.name}.png`), animations: 'disabled' })
-            .catch(() => {});
-          const verdict = judge(scene, result);
-          if (!verdict.ok) failed = true;
-          console.log(verdict.line);
+        } finally {
+          await context?.close();
+          await web.stop();
         }
-      } finally {
-        await context?.close();
-        await web.stop();
-      }
-    });
+      });
+    }
   } finally {
     await browser.close();
   }
+  const known = scenes.filter(scene => scene.status === 'known-broken').length;
+  if (!failed && known === 0) console.log(`all scenes are clean (${themes.join(', ')})`);
   console.log(`screenshots: ${path.relative(repoRoot, OUT_DIR)}/`);
   return failed ? 1 : 0;
 }

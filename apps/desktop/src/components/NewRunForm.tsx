@@ -40,10 +40,13 @@ import type { Workflow } from '../shared/types.ts';
 import type { ListWorkDirsResult, ListWorkflowsResult } from '../shared/protocol.gen.ts';
 import type { RunSummary } from '../shared/core-types.ts';
 import { errorMessage } from '../lib/error-message.ts';
+import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
 
 type WorkflowEntry = ListWorkflowsResult[number];
 
-const NARROW = { maxWidth: 480 };
+/** Desktop gutter for fields; a phone's fields take the full width. */
+const GUTTER = { maxWidth: 480 };
+const FULL_WIDTH = {};
 
 /** The work directory dropdown's value for the workspace itself. */
 const ROOT_OPTION = '';
@@ -167,10 +170,11 @@ const NOT_READ_HINT: ReactElement = (
  * there, and Start stays disabled until they are gone.
  */
 function AttachmentsField({ items, names, accepting, dropActive, error, onAdd, onRemove }: AttachmentsFieldProps) {
+  const fit = useNarrowLayout() ? FULL_WIDTH : GUTTER;
   return (
     <Field
       label="Attachments"
-      style={NARROW}
+      style={fit}
       hint={accepting ? 'Drop files here, or paste an image.' : NOT_READ_HINT}
       validationState={error ? 'error' : 'none'}
       validationMessage={error ?? undefined}
@@ -241,6 +245,8 @@ export interface NewRunFormProps {
  * the draft's tab into the run's tab.
  */
 export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
+  const narrow = useNarrowLayout();
+  const fit = narrow ? FULL_WIDTH : GUTTER;
   const client = useAgentClient();
   const draft = useAppStore(selectDraft(draftId));
   const workflows = useAppStore(state => state.workflows);
@@ -577,10 +583,10 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
       <Page header={<Text weight="semibold" size={500}>New run</Text>}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         {loadError && (
-          <MessageBar intent="error" style={NARROW}><MessageBarBody>{loadError}</MessageBarBody></MessageBar>
+          <MessageBar intent="error" style={fit}><MessageBarBody>{loadError}</MessageBarBody></MessageBar>
         )}
         {anotherRunActive && (
-          <DismissibleWarning dismissKey="another-run-active" style={NARROW}>
+          <DismissibleWarning dismissKey="another-run-active" style={fit}>
             Another run is already in progress in this workspace.
           </DismissibleWarning>
         )}
@@ -588,7 +594,7 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
         {sourceRun?.status === 'running' && (
           <DismissibleWarning
             dismissKey={`continue-in-running:${sourceRun.runId}`}
-            style={NARROW}
+            style={fit}
             data-testid="continue-in-running-warning"
           >
             Run {sourceRun.name ?? sourceRun.runId} is still running in that worktree. Core will refuse to
@@ -599,7 +605,7 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
         {workDirShown && (
           <Field
             label="Work directory"
-            style={NARROW}
+            style={fit}
             hint="The repository steps run in. Runs and workflows stay in the workspace."
           >
             <Dropdown
@@ -619,7 +625,7 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
           </Field>
         )}
 
-        <Field label="Workflow" style={NARROW}>
+        <Field label="Workflow" style={fit}>
           <Dropdown
             placeholder="Choose a workflow…"
             value={selectedEntry ? `${selectedEntry.name}${selectedEntry.source === 'global' ? ' (Global)' : ''}` : ''}
@@ -649,7 +655,7 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
 
         {selectedWorkflow && (
           <>
-            {selectedWorkflow.description && <Text style={NARROW}>{selectedWorkflow.description}</Text>}
+            {selectedWorkflow.description && <Text style={fit}>{selectedWorkflow.description}</Text>}
 
             {(() => {
               const disabled = disabledSummary(selectedWorkflow);
@@ -657,7 +663,7 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
               return (
                 <DismissibleWarning
                   dismissKey={`disabled-steps:${selectedKey}:${disabled.names.join(',')}`}
-                  style={NARROW}
+                  style={fit}
                   data-testid="disabled-steps-warning"
                 >
                   <Text>Disabled: {disabled.names.join(', ')}.</Text>
@@ -671,7 +677,7 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
             {/* The CLI's `--name`. Optional: an unnamed run reads as its
                 id, exactly as every run did before names existed. */}
             <Field
-              style={NARROW}
+              style={fit}
               label="Name (optional)"
               hint="Shown instead of the run id. Steps see it as {{ run.name }} / $WHIPHAND_RUN_SLUG."
             >
@@ -690,7 +696,7 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
               >
                 {input.multiline === false ? (
                   <Input
-                    style={NARROW}
+                    style={fit}
                     value={values[key] ?? ''}
                     onChange={(_e, data) => updateDraft(draftId, current => ({ values: { ...current.values, [key]: data.value } }))}
                   />
@@ -716,7 +722,7 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
             )}
 
             <Switch
-              style={NARROW}
+              style={fit}
               label="Dry run (no side effects)"
               checked={dryRun}
               onChange={(_e, data) => updateDraft(draftId, { dryRun: data.checked })}
@@ -724,7 +730,7 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
 
             {continueIn === undefined ? (
               <Field
-                style={NARROW}
+                style={fit}
                 hint={worktreeUnavailable
                   ? 'The workspace root is not a git repository. Choose a work directory to use a worktree.'
                   : <>Changes land on a new branch in a separate worktree. Other runs keep the workspace.</>}
@@ -739,7 +745,7 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
               </Field>
             ) : (
               <Field
-                style={NARROW}
+                style={fit}
                 data-testid="continue-in-field"
                 hint={sourceRun?.worktree ? <code>{sourceRun.worktree.path}</code> : undefined}
               >
@@ -762,7 +768,7 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
                 that contains a loop, so it is only offered for one. */}
             {hasLoop && (
               <Field
-                style={NARROW}
+                style={fit}
                 label="Max loop iterations"
                 hint="Overrides every loop's own budget for this run. Blank = as written."
                 validationState={maxIterationsRaw !== '' && maxIterations === undefined ? 'error' : 'none'}
@@ -781,15 +787,15 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
             )}
 
             {startError && (
-              <MessageBar intent="error" style={NARROW}><MessageBarBody>{startError}</MessageBarBody></MessageBar>
+              <MessageBar intent="error" style={fit}><MessageBarBody>{startError}</MessageBarBody></MessageBar>
             )}
           </>
         )}
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button appearance="primary" disabled={!canStart} onClick={() => void handleStart()}>
+          <Button appearance="primary" style={narrow ? { flex: 1, minHeight: 40 } : undefined} disabled={!canStart} onClick={() => void handleStart()}>
             {starting ? 'Starting…' : 'Start'}
           </Button>
-          <Button appearance="secondary" disabled={starting} onClick={() => discard.request(draftId)}>
+          <Button appearance="secondary" style={narrow ? { flex: 1, minHeight: 40 } : undefined} disabled={starting} onClick={() => discard.request(draftId)}>
             Discard
           </Button>
         </div>

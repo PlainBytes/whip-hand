@@ -61,6 +61,7 @@ import { ResizablePane } from '../components/ResizablePane.tsx';
 import { TreePreviewSplit } from '../components/TreePreviewSplit.tsx';
 import { UnsavedChangesDialog } from '../components/UnsavedChangesDialog.tsx';
 import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
+import { useNarrowDialogStyles } from '../lib/use-narrow-dialog-styles.ts';
 import { FilePreview } from '../components/FilePreview.tsx';
 import { RECESSED_SURFACE } from '../components/recessed-surface.ts';
 import { resolveInArtifacts } from '../markdown/resolve.ts';
@@ -324,6 +325,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
    * lives here and is deliberately not persisted.
    */
   const narrow = useNarrowLayout();
+  const narrowDialog = useNarrowDialogStyles();
   // A phone has no room for the stepper above the tabs, so it starts folded
   // to its one-line summary; expanding is the person's choice.
   const [stepsCollapsed, setStepsCollapsed] = useState(narrow);
@@ -1215,11 +1217,11 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
                     />
                   </Tooltip>
                 </DialogTrigger>
-                <DialogSurface>
+                <DialogSurface style={narrowDialog.surface}>
                   <DialogBody>
                     <DialogTitle>Cancel this run?</DialogTitle>
                     <DialogContent>This stops the run in progress. It cannot be resumed.</DialogContent>
-                    <DialogActions>
+                    <DialogActions style={narrowDialog.actions}>
                       <Button appearance="secondary" onClick={() => setConfirmOpen(false)}>
                         Keep running
                       </Button>
@@ -1273,7 +1275,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
                 open={extraIterationsOpen}
                 onOpenChange={(_e, data) => { if (!resuming) setExtraIterationsOpen(data.open); }}
               >
-                <DialogSurface>
+                <DialogSurface style={narrowDialog.surface}>
                   <DialogBody>
                     <DialogTitle>Resume with more iterations</DialogTitle>
                     <DialogContent>
@@ -1295,7 +1297,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
                         />
                       </Field>
                     </DialogContent>
-                    <DialogActions>
+                    <DialogActions style={narrowDialog.actions}>
                       <Button disabled={resuming} onClick={() => setExtraIterationsOpen(false)}>Cancel</Button>
                       <Button
                         appearance="primary"
@@ -1365,7 +1367,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
                     </Tooltip>
                   </DialogTrigger>
                 )) as unknown as JSX.Element}
-                <DialogSurface>
+                <DialogSurface style={narrowDialog.surface}>
                   <DialogBody>
                     <DialogTitle>Name this run</DialogTitle>
                     <DialogContent>
@@ -1383,7 +1385,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
                         />
                       </Field>
                     </DialogContent>
-                    <DialogActions>
+                    <DialogActions style={narrowDialog.actions}>
                       <Button disabled={renaming} onClick={() => setRenameOpen(false)}>Cancel</Button>
                       <Button
                         appearance="primary"

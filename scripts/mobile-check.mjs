@@ -72,6 +72,12 @@ export async function goTo(page, label) {
  * (named for the active tab) whose "All runs" entry is the list.
  */
 async function goToRuns(page) {
+  // A scene may leave a dialog open (it is what that scene measures); it would block every tap behind it.
+  if (await page.getByRole('dialog').count()) {
+    await page.keyboard.press('Escape');
+    await page.getByRole('dialog').waitFor({ state: 'detached' });
+    await page.locator('#root:not([aria-hidden])').waitFor({ state: 'attached' });
+  }
   await goTo(page, 'Runs');
   const strip = page.getByTestId('run-tab-strip-narrow');
   if (await strip.count()) {
@@ -241,6 +247,19 @@ export const SCENES = [
     status: 'clean',
     async prepare(page) {
       await openDetailTab(page, /Logs/, 'run-panel-logs');
+    },
+  },
+  {
+    // Opened, never confirmed: nothing is deleted.
+    name: 'delete-run-dialog',
+    status: 'clean',
+    async prepare(page) {
+      await goToRuns(page);
+      await tap(page.getByRole('button', { name: `Actions for ${DETAIL_RUN_NAME}` }));
+      await tap(page.getByRole('menuitem', { name: 'Delete', exact: true }));
+      const dialog = page.getByRole('dialog');
+      await dialog.waitFor();
+      await dialog.getByRole('button', { name: 'Cancel' }).waitFor();
     },
   },
   {

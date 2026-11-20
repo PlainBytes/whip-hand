@@ -3,6 +3,7 @@ import {
   Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle,
   Field, Input, MessageBar, MessageBarBody, Spinner, Text,
 } from '@fluentui/react-components';
+import { useNarrowDialogStyles } from '../lib/use-narrow-dialog-styles.ts';
 import { Copy20Regular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import type { Scope } from '../shared/types.ts';
@@ -47,6 +48,7 @@ const CLONE_TARGET: Record<Scope, string> = {
 export function CloneWorkflowDialog({
   name, source, workdir, existing, onCloned, onDismiss,
 }: CloneWorkflowDialogProps) {
+  const narrowDialog = useNarrowDialogStyles();
   const client = useAgentClient();
   const [newName, setNewName] = useState(() => suggestName(existing, name, source));
   const [busy, setBusy] = useState(false);
@@ -79,7 +81,7 @@ export function CloneWorkflowDialog({
         if (!data.open && !busy) onDismiss();
       }}
     >
-      <DialogSurface>
+      <DialogSurface style={narrowDialog.surface}>
         <DialogBody>
           <DialogTitle>Clone workflow</DialogTitle>
           <DialogContent>
@@ -98,7 +100,7 @@ export function CloneWorkflowDialog({
               {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
             </div>
           </DialogContent>
-          <DialogActions>
+          <DialogActions style={narrowDialog.actions}>
             <Button
               appearance="primary"
               disabled={busy || problem?.blocking === true}

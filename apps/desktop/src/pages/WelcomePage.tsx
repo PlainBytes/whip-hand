@@ -7,6 +7,7 @@ import { OpenPathField } from '../components/OpenPathField.tsx';
 import { useAppStore } from '../state/store.ts';
 import { openWorkspace } from '../lib/workspace-switch.ts';
 import { basename } from '../lib/workspace-identity.ts';
+import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
 import type { RecentWorkspace } from '../shared/protocol.gen.ts';
 
 // Stable reference so the zustand selector below doesn't produce a fresh
@@ -21,6 +22,7 @@ const EMPTY_RECENTS: RecentWorkspace[] = [];
  * placeholders.
  */
 export function WelcomePage() {
+  const narrow = useNarrowLayout();
   const client = useAgentClient();
   const { pickDirectory } = useCapabilities();
   const recents = useAppStore(state => state.appState?.recentWorkspaces ?? EMPTY_RECENTS);
@@ -49,17 +51,17 @@ export function WelcomePage() {
         <Text weight="semibold" size={500}>Welcome to Whiphand</Text>
       </div>
     }>
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 560, margin: '32px auto' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24, ...(narrow ? {} : { maxWidth: 560, margin: '32px auto' }) }}>
       <Text>Open a workspace to run workflows against it.</Text>
 
       {recents.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <Text weight="semibold">Recent workspaces</Text>
           {recents.map(r => (
-            <Card key={r.path} onClick={() => void openWorkspace(client, r.path).catch(() => {})}>
+            <Card key={r.path} style={narrow ? { minHeight: 40 } : undefined} onClick={() => void openWorkspace(client, r.path).catch(() => {})}>
               <CardHeader
                 header={<Button appearance="transparent">{basename(r.path)}</Button>}
-                description={<Text size={200}>{r.path}</Text>}
+                description={<Text size={200} style={{ overflowWrap: 'anywhere' }}>{r.path}</Text>}
               />
             </Card>
           ))}

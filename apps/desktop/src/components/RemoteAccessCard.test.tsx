@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { RemoteAccessCard } from './RemoteAccessCard.tsx';
 import { AgentClient } from '../agent/client.ts';
@@ -129,5 +129,23 @@ describe('RemoteAccessCard', () => {
 
     expect(await screen.findByText(/3 devices connected/)).toBeInTheDocument();
     expect(screen.getByText(ON.token!)).toBeInTheDocument();
+  });
+});
+
+describe('RemoteAccessCard on a narrow screen', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('lets the address wrap, and Copy link still copies the full link', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    const writeText = vi.fn(() => Promise.resolve());
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    const { transport } = renderCard();
+    await settle(transport, ON);
+
+    const address = await screen.findByText('192.168.1.20:61338');
+    expect(address).toHaveStyle({ overflowWrap: 'anywhere' });
+    expect(address.parentElement?.parentElement).toHaveStyle({ minWidth: '0px' });
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link' }));
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('192.168.1.20:61338'));
   });
 });

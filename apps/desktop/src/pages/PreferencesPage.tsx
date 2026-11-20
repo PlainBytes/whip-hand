@@ -10,6 +10,7 @@ import { useAppStore } from '../state/store.ts';
 import { spinInteger } from '../lib/spin-value.ts';
 import type { ConfigGetResult, EditorPreference } from '../shared/protocol.gen.ts';
 import { errorMessage } from '../lib/error-message.ts';
+import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
 import { CUSTOM_EDITOR, DEFAULT_EDITOR, EDITOR_OPTIONS } from '../lib/editor.ts';
 
 const THEME_OPTIONS = [
@@ -34,6 +35,7 @@ const DEFAULT_OVERRIDE_MAX_RETAINED = 10;
  * with no workspace open.
  */
 export function PreferencesPage() {
+  const narrow = useNarrowLayout();
   const client = useAgentClient();
   const themePref = useAppStore(state => state.appState?.theme ?? 'system');
   const showOngoingRuns = useAppStore(state => state.appState?.showOngoingRuns ?? true);
@@ -117,7 +119,7 @@ export function PreferencesPage() {
 
   return (
     <Page header={<Text weight="semibold" size={500}>Preferences</Text>}>
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 640 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: narrow ? undefined : 640 }}>
       <Checkbox
         label="Show ongoing runs in the sidebar"
         checked={showOngoingRuns}

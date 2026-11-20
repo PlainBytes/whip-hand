@@ -10,6 +10,8 @@ import { basename, filterWorkspaces, sortWorkspaces } from '../lib/workspace-ide
 import { WorkspaceDot } from './WorkspaceDot.tsx';
 import type { RecentWorkspace } from '../shared/protocol.gen.ts';
 import { errorMessage } from '../lib/error-message.ts';
+import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
+import { useNarrowDialogStyles } from '../lib/use-narrow-dialog-styles.ts';
 
 const EMPTY_RECENTS: RecentWorkspace[] = [];
 
@@ -19,6 +21,8 @@ export interface WorkspaceQuickSwitchProps {
 
 /** Type-to-filter workspace switcher, raised by Ctrl/Cmd+K. */
 export function WorkspaceQuickSwitch({ onClose }: WorkspaceQuickSwitchProps) {
+  const narrow = useNarrowLayout();
+  const narrowDialog = useNarrowDialogStyles();
   const client = useAgentClient();
   const recents = useAppStore(state => state.appState?.recentWorkspaces ?? EMPTY_RECENTS);
   const patchAppState = useAppStore(state => state.patchAppState);
@@ -56,7 +60,7 @@ export function WorkspaceQuickSwitch({ onClose }: WorkspaceQuickSwitchProps) {
 
   return (
     <Dialog open onOpenChange={(_event, data) => { if (!data.open) onClose(); }}>
-      <DialogSurface>
+      <DialogSurface style={narrowDialog.surface}>
         <DialogBody>
           <DialogTitle>Switch workspace</DialogTitle>
           <DialogContent>
@@ -103,7 +107,7 @@ export function WorkspaceQuickSwitch({ onClose }: WorkspaceQuickSwitchProps) {
                         role="option"
                         aria-selected={index === activeIndex}
                         onClick={() => void openAt(index)}
-                        style={{ flex: 1, justifyContent: 'flex-start', minWidth: 0 }}
+                        style={{ flex: 1, justifyContent: 'flex-start', minWidth: 0, minHeight: narrow ? 40 : undefined }}
                       >
                         <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                           <WorkspaceDot path={entry.path} identityKey={entry.identityKey} />

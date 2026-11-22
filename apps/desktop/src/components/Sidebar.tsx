@@ -74,6 +74,12 @@ export interface SidebarProps {
   collapsed?: boolean;
   /** When given, a toggle row ends the nav; App owns persisting the choice. */
   onToggleCollapsed?: () => void;
+  /**
+   * Called first on any choice (page, run, workspace). The choice proceeds only
+   * once the returned promise settles, so a hosting drawer is gone before any
+   * dialog the choice raises.
+   */
+  onNavigate?: () => Promise<void>;
 }
 
 function CollapseToggle({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
@@ -187,7 +193,7 @@ function NavItem({ def, selected, disabled, collapsed, badge, badgeUrgent, onSel
   );
 }
 
-export function Sidebar({ page, onSelectPage, onOpenRun, collapsed = false, onToggleCollapsed }: SidebarProps) {
+export function Sidebar({ page, onSelectPage, onOpenRun, collapsed = false, onToggleCollapsed, onNavigate }: SidebarProps) {
   const capabilities = useCapabilities();
   const workspacePath = useAppStore(state => state.workspacePath);
   const showOngoingRuns = useAppStore(state => state.appState?.showOngoingRuns ?? true);
@@ -200,6 +206,12 @@ export function Sidebar({ page, onSelectPage, onOpenRun, collapsed = false, onTo
   const remoteListening = useAppStore(state => state.remoteAccess?.listening ?? false);
   // The rail has no room for the list; the Activity badge covers live runs.
   const hasOngoingRuns = !collapsed && showOngoingRuns && ongoing.length > 0;
+
+  /** Runs `action` now, or after `onNavigate` settles when one is given. */
+  function after(action: () => void): void {
+    if (onNavigate === undefined) action();
+    else void onNavigate().then(action);
+  }
 
   function group(name: NavGroup) {
     return (
@@ -218,7 +230,7 @@ export function Sidebar({ page, onSelectPage, onOpenRun, collapsed = false, onTo
               collapsed={collapsed}
               badge={def.id === 'activity' ? running : 0}
               badgeUrgent={urgent}
-              onSelect={() => onSelectPage(def.id)}
+              onSelect={() => after(() => onSelectPage(def.id))}
             />
           );
         })}
@@ -246,7 +258,7 @@ export function Sidebar({ page, onSelectPage, onOpenRun, collapsed = false, onTo
         boxSizing: 'border-box',
       }}
     >
-      <WorkspaceSwitcher compact={collapsed} />
+      <WorkspaceSwitcher compact={collapsed} onNavigate={onNavigate} />
       <div style={{ height: SIDEBAR_GROUP_GAP }} />
       <div
         data-testid="sidebar-scroll-region"
@@ -268,7 +280,11 @@ export function Sidebar({ page, onSelectPage, onOpenRun, collapsed = false, onTo
         <div style={{ flex: 1, minHeight: SIDEBAR_GROUP_GAP }} />
         {hasOngoingRuns && (
           <>
-            <OngoingRuns jobs={ongoing} onOpenRun={onOpenRun} onShowMore={() => onSelectPage('activity')} />
+            <OngoingRuns
+              jobs={ongoing}
+              onOpenRun={job => after(() => onOpenRun(job))}
+              onShowMore={() => after(() => onSelectPage('activity'))}
+            />
             <div style={{ height: SIDEBAR_GROUP_GAP }} />
           </>
         )}

@@ -3,6 +3,7 @@ import {
   Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle,
   MessageBar, MessageBarBody, Spinner, Text,
 } from '@fluentui/react-components';
+import { useNarrowDialogStyles } from '../lib/use-narrow-dialog-styles.ts';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
 import type { DeleteRunResult } from '../shared/protocol.gen.ts';
@@ -45,6 +46,7 @@ function refusalMessage(reason: DeleteRunResult['reason']): string {
  * closed-but-mounted Fluent Dialog is still a live Modalizer.
  */
 export function DeleteRunDialog({ workdir, runId, name, worktreePath, onDeleted, onDismiss }: DeleteRunDialogProps) {
+  const narrowDialog = useNarrowDialogStyles();
   const client = useAgentClient();
   const sharer = useAppStore(state => worktreePath === undefined
     ? undefined
@@ -80,7 +82,7 @@ export function DeleteRunDialog({ workdir, runId, name, worktreePath, onDeleted,
         if (!data.open && !busy) onDismiss();
       }}
     >
-      <DialogSurface>
+      <DialogSurface style={narrowDialog.surface}>
         <DialogBody>
           <DialogTitle>Delete {name ?? `run ${runId}`}?</DialogTitle>
           <DialogContent>
@@ -99,7 +101,7 @@ export function DeleteRunDialog({ workdir, runId, name, worktreePath, onDeleted,
               {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
             </div>
           </DialogContent>
-          <DialogActions>
+          <DialogActions style={narrowDialog.actions}>
             <DangerButton disabled={busy} onClick={() => void confirm()}>
               {busy ? <Spinner size="tiny" /> : confirmDiscard ? 'Discard changes and delete' : 'Delete'}
             </DangerButton>

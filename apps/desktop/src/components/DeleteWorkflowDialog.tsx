@@ -3,6 +3,7 @@ import {
   Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle,
   MessageBar, MessageBarBody, Spinner, Text,
 } from '@fluentui/react-components';
+import { useNarrowDialogStyles } from '../lib/use-narrow-dialog-styles.ts';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import type { Scope } from '../shared/types.ts';
 import { errorMessage } from '../lib/error-message.ts';
@@ -28,6 +29,7 @@ export interface DeleteWorkflowDialogProps {
 export function DeleteWorkflowDialog({
   name, source, workdir, uncovers, onDeleted, onDismiss,
 }: DeleteWorkflowDialogProps) {
+  const narrowDialog = useNarrowDialogStyles();
   const client = useAgentClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +60,7 @@ export function DeleteWorkflowDialog({
         if (!data.open && !busy) onDismiss();
       }}
     >
-      <DialogSurface>
+      <DialogSurface style={narrowDialog.surface}>
         <DialogBody>
           <DialogTitle>Delete workflow '{name}'?</DialogTitle>
           <DialogContent>
@@ -77,7 +79,7 @@ export function DeleteWorkflowDialog({
               {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
             </div>
           </DialogContent>
-          <DialogActions>
+          <DialogActions style={narrowDialog.actions}>
             <DangerButton disabled={busy} onClick={() => void confirm()}>
               {busy ? <Spinner size="tiny" /> : 'Delete'}
             </DangerButton>

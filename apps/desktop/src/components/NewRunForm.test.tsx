@@ -1517,3 +1517,38 @@ describe('NewRunForm work directory', () => {
     expect((await startRunRequest(transport)).params).not.toHaveProperty('subdir');
   });
 });
+
+describe('NewRunForm on a narrow screen', () => {
+  beforeEach(() => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    useAppStore.setState({ workspacePath: '/ws', workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useAppStore.setState({ workspacePath: null, workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null });
+  });
+
+  it('sends the same startRun request as at wide width', async () => {
+    const { transport } = renderNewRunForm();
+    await respond(transport, 'listWorkflows', [SCRIPTED_WORKFLOW]);
+    await respond(transport, 'listRuns', []);
+    await selectWorkflow(transport, 'ship-feature');
+
+    fireEvent.change(await screen.findByLabelText('Ticket ID', { exact: false }), { target: { value: 'TICK-1' } });
+    fireEvent.click(screen.getByRole('switch', { name: /dry run/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+
+    const req = await waitFor(() => {
+      const parsed = transport.sentRequest(transport.sent.length - 1);
+      if (parsed.method !== 'startRun') throw new Error('startRun not sent yet');
+      return parsed;
+    });
+    expect(req.params).toEqual({
+      workdir: '/ws',
+      workflow: 'ship-feature',
+      inputs: { ticket: 'TICK-1', branch: 'main', notes: '' },
+      dryRun: true,
+      worktree: false,
+    });
+  });
+});

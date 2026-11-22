@@ -120,3 +120,29 @@ describe('ActivityPage', () => {
     expect(await screen.findByText('waiting')).toBeInTheDocument();
   });
 });
+
+describe('ActivityPage on a narrow screen', () => {
+  beforeEach(() => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    useAppStore.setState({ workspacePath: '/ws', jobs: {} });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useAppStore.setState({ workspacePath: null, jobs: {} });
+  });
+
+  it('renders cards with the workspace, and a tap opens the run', async () => {
+    const { transport, onSelectRun } = renderActivity();
+    await respond(transport, 'listRecentRuns', [
+      { runId: 'r-a', runDir: '/ws/.whiphand/runs/r-a', status: 'succeeded', workflow: 'demo', startedAt: '2026-01-02T00:00:00Z', workspace: '/ws' },
+      { runId: 'r-b', runDir: '/o/.whiphand/runs/r-b', status: 'running', workflow: 'flow-b', startedAt: '2026-01-01T00:00:00Z', workspace: '/dev/other' },
+    ]);
+    const card = await screen.findByRole('button', { name: 'r-a, succeeded' });
+    expect(screen.queryByRole('grid')).toBeNull();
+    expect(card).toHaveTextContent('demo');
+    expect(card).toHaveTextContent('ws');
+    expect(screen.getByRole('button', { name: 'r-b, running' })).toHaveTextContent('other');
+    fireEvent.click(card);
+    await waitFor(() => expect(onSelectRun).toHaveBeenCalledWith('r-a'));
+  });
+});

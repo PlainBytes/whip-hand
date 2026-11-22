@@ -1,6 +1,7 @@
 import {
   Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle,
 } from '@fluentui/react-components';
+import { useNarrowDialogStyles } from '../lib/use-narrow-dialog-styles.ts';
 import { DangerButton } from './DangerButton.tsx';
 
 /**
@@ -21,13 +22,14 @@ export interface UnsavedChangesDialogProps {
 }
 
 export function UnsavedChangesDialog({ onDiscard, onKeepEditing }: UnsavedChangesDialogProps) {
+  const narrowDialog = useNarrowDialogStyles();
   return (
     <Dialog open onOpenChange={(_event, data) => { if (!data.open) onKeepEditing(); }}>
-      <DialogSurface>
+      <DialogSurface style={narrowDialog.surface}>
         <DialogBody>
           <DialogTitle>You have unsaved changes</DialogTitle>
           <DialogContent>Continuing will discard the edits you haven't saved.</DialogContent>
-          <DialogActions>
+          <DialogActions style={narrowDialog.actions}>
             <DangerButton onClick={onDiscard}>Discard changes</DangerButton>
             <Button onClick={onKeepEditing}>Keep editing</Button>
           </DialogActions>

@@ -167,7 +167,7 @@ export function StepCard({
             <StagesFields step={step} onUpdate={onUpdate} fieldErrors={fieldErrors} />
           ) : (
             <div className={styles.body} style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-              <div style={{ flex: '1 1 320px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ flex: '1 1 min(320px, 100%)', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                   <StepIdField id={step.id} idsInTree={idsInTree} onRename={onRename} onErrorChange={onIdError} />
                   <Field label="Kind">
@@ -175,7 +175,7 @@ export function StepCard({
                       aria-label="Kind"
                       value={step.kind}
                       selectedOptions={[step.kind]}
-                      style={{ minWidth: 120 }}
+                      style={{ minWidth: 'min(120px, 100%)' }}
                       onOptionSelect={(_e, data) => data.optionValue && onUpdate(convertStep(step, data.optionValue as StepKind))}
                     >
                       {kindOptions.map(v => <Option key={v} value={v}>{v}</Option>)}
@@ -251,7 +251,7 @@ function StagesFields({
         hint="A glob relative to the workspace, one stage per file, in path order. Supports {{ inputs.* }}."
         validationState={fieldErrors?.items ? 'error' : 'none'}
         validationMessage={fieldErrors?.items}
-        style={{ flex: '1 1 320px' }}
+        style={{ flex: '1 1 min(320px, 100%)' }}
       >
         <Input value={step.items} onChange={(_e, data) => patch({ items: data.value })} />
       </Field>

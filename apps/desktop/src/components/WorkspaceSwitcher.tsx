@@ -28,7 +28,9 @@ const EMPTY_RECENTS: RecentWorkspace[] = [];
  * pinned workspace survives the agent's prune while its drive is unmounted,
  * so "I clicked it and nothing happened" is a reachable state.
  */
-export function WorkspaceSwitcher({ compact = false }: {
+export function WorkspaceSwitcher({ compact = false, onNavigate }: {
+  /** Called before a switch starts, so a hosting drawer is gone before any unsaved-changes dialog opens. */
+  onNavigate?: () => Promise<void>;
   /** Icon-only trigger for the collapsed rail; the menu and actions are unchanged. */
   compact?: boolean;
 }) {
@@ -48,6 +50,7 @@ export function WorkspaceSwitcher({ compact = false }: {
     : recents.find(r => sameWorkspace(r, { path: workspacePath, identityKey: identityKey ?? undefined }));
 
   async function switchTo(path: string): Promise<void> {
+    await onNavigate?.();
     setError(null);
     try {
       await openWorkspace(client, path);

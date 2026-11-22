@@ -1,3 +1,8 @@
+# Its own workspace root (see the root Cargo.toml). Without this, Cargo walks
+# past the excluding root manifest and, in a worktree nested inside another
+# checkout, lands on that checkout's workspace and refuses to build.
+[workspace]
+
 [package]
 name = "whiphand-desktop"
 version = "0.11.0"

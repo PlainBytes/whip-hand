@@ -15,6 +15,13 @@ export interface TerminalPanelProps {
   rows?: number;
   /** Called with the new terminal size (in cells) whenever the user resizes it — wired to ptyResize. */
   onResize: (cols: number, rows: number) => void;
+  /**
+   * `fit` (default): xterm fills its box and the size is reported as ptyResize.
+   * `follow`: a guest — xterm takes the PTY's own cols/rows, never reports a
+   * size, and the panel scrolls sideways. For narrow screens, where fitting
+   * would shrink the PTY the desktop is also showing.
+   */
+  sizing?: 'fit' | 'follow';
 }
 
 const RESIZE_DEBOUNCE_MS = 100;
@@ -53,13 +60,20 @@ export function isShiftEnter(event: KeyboardEvent): boolean {
  * The store buffers ptyData/ptyExit unconditionally, whether or not this panel is
  * mounted, so mounting always replays everything the job has produced so far.
  */
+/** Follow mode: size xterm to the PTY. Unknown size keeps xterm's defaults, and nothing is reported. */
+function adoptPtySize(handle: TerminalHandle, cols: number | undefined, rows: number | undefined): void {
+  if (cols === undefined || rows === undefined || cols < 1 || rows < 1) return;
+  if (handle.term.cols === cols && handle.term.rows === rows) return;
+  handle.term.resize(cols, rows);
+}
+
 export interface TerminalPanelHandle {
   /** Puts the keyboard cursor in the terminal (xterm's helper textarea). */
   focus(): void;
 }
 
 export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>(function TerminalPanel(
-  { jobId, cols, rows, onResize },
+  { jobId, cols, rows, onResize, sizing = 'fit' },
   ref,
 ) {
   const client = useAgentClient();
@@ -82,6 +96,12 @@ export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>
   /** True while a backlog slice is in xterm's queue and the next one waits on its callback. */
   const pumpingRef = useRef(false);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  // Read by the long-lived observer/mount closures, which must see a live mode switch.
+  const sizingRef = useRef(sizing);
+  sizingRef.current = sizing;
+  const sizeProps = useRef({ cols, rows });
+  sizeProps.current = { cols, rows };
 
   useImperativeHandle(ref, () => ({ focus: () => handleRef.current?.term.focus() }), []);
 
@@ -106,7 +126,8 @@ export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>
 
     const handle = createTerminal({ cols, rows });
     handle.term.open(container);
-    handle.fitAddon.fit();
+    if (sizingRef.current === 'fit') handle.fitAddon.fit();
+    else adoptPtySize(handle, sizeProps.current.cols, sizeProps.current.rows);
     handleRef.current = handle;
     writtenAbsoluteRef.current = 0;
     pumpingRef.current = false;
@@ -137,10 +158,12 @@ export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>
       // Fitting to that would report a nonsense size to the PTY — and the
       // observer fires again with the real box when the tab comes back, so
       // skipping is not a missed refit.
+      if (sizingRef.current !== 'fit') return;
       if (container.clientWidth === 0 || container.clientHeight === 0) return;
       if (resizeTimerRef.current !== undefined) clearTimeout(resizeTimerRef.current);
       resizeTimerRef.current = setTimeout(() => {
         resizeTimerRef.current = undefined;
+        if (sizingRef.current !== 'fit') return;
         handle.fitAddon.fit();
         onResize(handle.term.cols, handle.term.rows);
       }, RESIZE_DEBOUNCE_MS);
@@ -148,7 +171,7 @@ export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>
     resizeObserver.observe(container);
 
     // Report the size established by the first fit immediately, not debounced.
-    onResize(handle.term.cols, handle.term.rows);
+    if (sizingRef.current === 'fit') onResize(handle.term.cols, handle.term.rows);
 
     return () => {
       dataSub.dispose();
@@ -165,6 +188,65 @@ export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>
     // across a panel's lifetime in practice.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId]);
+
+  // A live mode switch (rotation, a window dragged across the breakpoint)
+  // keeps the terminal. Entering `fit` fits and reports once, as a mount does;
+  // entering `follow` stops reporting and takes the PTY's size.
+  const appliedSizingRef = useRef(sizing);
+  useEffect(() => {
+    if (appliedSizingRef.current === sizing) return;
+    appliedSizingRef.current = sizing;
+    const handle = handleRef.current;
+    if (!handle) return;
+    if (resizeTimerRef.current !== undefined) {
+      clearTimeout(resizeTimerRef.current);
+      resizeTimerRef.current = undefined;
+    }
+    if (sizing === 'fit') {
+      handle.fitAddon.fit();
+      onResize(handle.term.cols, handle.term.rows);
+    } else {
+      adoptPtySize(handle, sizeProps.current.cols, sizeProps.current.rows);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sizing]);
+
+  // In follow mode the PTY's size (ptyStarted, attach snapshot) drives xterm.
+  useEffect(() => {
+    const handle = handleRef.current;
+    if (handle && sizing === 'follow') adoptPtySize(handle, cols, rows);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cols, rows]);
+
+  // Soft keyboard: tapping focuses xterm's helper textarea (xterm does this on
+  // click); once it is focused, keep the cursor row above the keyboard.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || sizing !== 'follow') return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const reveal = () => {
+      const textarea = container.querySelector('textarea');
+      if (!textarea) return;
+      textarea.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+      const vv = window.visualViewport;
+      if (!vv) return;
+      const overlap = textarea.getBoundingClientRect().bottom - (vv.offsetTop + vv.height);
+      if (overlap > 0) window.scrollBy(0, overlap + 8);
+    };
+    const onFocusIn = () => {
+      reveal();
+      // The keyboard animates in after focus; the viewport reports its final height later.
+      clearTimeout(timer);
+      timer = setTimeout(reveal, 300);
+    };
+    container.addEventListener('focusin', onFocusIn);
+    window.visualViewport?.addEventListener('resize', reveal);
+    return () => {
+      container.removeEventListener('focusin', onFocusIn);
+      window.visualViewport?.removeEventListener('resize', reveal);
+      clearTimeout(timer);
+    };
+  }, [sizing, jobId]);
 
   // Tells xterm the pty is ConPTY so it handles its repaints and reflow. Live
   // option, so a hello that lands after mount still takes effect; jobId is a
@@ -239,18 +321,32 @@ export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>
     handle.term.write(`\r\n\x1b[2m[session ended${suffix}]\x1b[0m\r\n`);
   }, [ptyExited, ptyExitCode, endedDeliberately]);
 
+  const follow = sizing === 'follow';
   return (
     <div
-      ref={containerRef}
-      data-testid="terminal-container"
+      data-testid="terminal-scroller"
       style={{
-        borderRadius: 4,
-        padding: 8,
-        background: TERMINAL_BACKGROUND,
         flex: 1,
         minHeight: 0,
         height: '100%',
+        minWidth: 0,
+        overflowX: follow ? 'auto' : 'hidden',
+        background: TERMINAL_BACKGROUND,
+        borderRadius: 4,
       }}
-    />
+    >
+      <div
+        ref={containerRef}
+        data-testid="terminal-container"
+        style={{
+          borderRadius: 4,
+          padding: 8,
+          background: TERMINAL_BACKGROUND,
+          height: '100%',
+          boxSizing: 'border-box',
+          ...(follow ? { width: 'max-content', minWidth: '100%' } : {}),
+        }}
+      />
+    </div>
   );
 });

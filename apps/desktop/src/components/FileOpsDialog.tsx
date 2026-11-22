@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import {
   Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle, Field, Input,
 } from '@fluentui/react-components';
+import { useNarrowDialogStyles } from '../lib/use-narrow-dialog-styles.ts';
 
 export type FileOpsMode = 'newFile' | 'newFolder' | 'rename';
 
@@ -37,6 +38,7 @@ export interface FileOpsDialogProps {
 }
 
 export function FileOpsDialog(props: FileOpsDialogProps) {
+  const narrowDialog = useNarrowDialogStyles();
   const { open, mode, initialName, targetDir, error, busy, onSubmit, onCancel } = props;
   const [name, setName] = useState(initialName);
 
@@ -54,7 +56,7 @@ export function FileOpsDialog(props: FileOpsDialogProps) {
         if (!data.open && !busy) onCancel();
       }}
     >
-      <DialogSurface>
+      <DialogSurface style={narrowDialog.surface}>
         <DialogBody>
           <DialogTitle>{TITLES[mode]}</DialogTitle>
           <DialogContent>
@@ -69,7 +71,7 @@ export function FileOpsDialog(props: FileOpsDialogProps) {
               />
             </Field>
           </DialogContent>
-          <DialogActions>
+          <DialogActions style={narrowDialog.actions}>
             <Button appearance="primary" disabled={busy} onClick={() => onSubmit(name)}>
               {SUBMIT_LABELS[mode]}
             </Button>

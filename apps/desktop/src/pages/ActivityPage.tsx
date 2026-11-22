@@ -13,6 +13,8 @@ import { WorkspaceDot } from '../components/WorkspaceDot.tsx';
 import { POLL_INTERVAL_MS, runColumns, runColumnStyle, type RecentRun, type StageProgress } from './run-columns.tsx';
 import { errorMessage } from '../lib/error-message.ts';
 import { Page } from '../components/Page.tsx';
+import { RunCard } from '../components/RunCard.tsx';
+import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
 
 export interface ActivityPageProps {
   onSelectRun: (runId: string) => void;
@@ -45,6 +47,7 @@ const makeColumns = (
  */
 export function ActivityPage({ onSelectRun }: ActivityPageProps) {
   const client = useAgentClient();
+  const narrow = useNarrowLayout();
   const workspacePath = useAppStore(state => state.workspacePath);
   const identityKey = useAppStore(state => state.workspaceIdentityKey);
   const [runs, setRuns] = useState<RecentRun[]>([]);
@@ -103,6 +106,20 @@ export function ActivityPage({ onSelectRun }: ActivityPageProps) {
       {error && <Text>Failed to load activity: {error}</Text>}
       {runs.length === 0 ? (
         <Text>No runs yet in any recent workspace.</Text>
+      ) : narrow ? (
+        <div role="list" aria-label="Activity" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {runs.map(run => (
+            <div role="listitem" key={`${run.workspace}:${run.runId}`}>
+              <RunCard
+                run={run}
+                waiting={waiting.has(run.runId)}
+                stages={stages}
+                workspace={{ path: run.workspace, identityKey: run.identityKey }}
+                onOpen={() => void openRun(run)}
+              />
+            </div>
+          ))}
+        </div>
       ) : (
         <DataGrid items={runs} columns={columns} getRowId={run => `${run.workspace}:${run.runId}`} sortable={false}>
           <DataGridHeader>

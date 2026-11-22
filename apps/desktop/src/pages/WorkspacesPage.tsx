@@ -15,6 +15,7 @@ import { errorMessage } from '../lib/error-message.ts';
 import { WorkspaceDot } from '../components/WorkspaceDot.tsx';
 import { OpenPathField } from '../components/OpenPathField.tsx';
 import { Page } from '../components/Page.tsx';
+import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
 import type { RecentWorkspace, WorkspaceDetails, WorkspaceGit } from '../shared/protocol.gen.ts';
 import { formatStarted } from './run-columns.tsx';
 
@@ -41,7 +42,71 @@ interface ColumnActions {
   remove: (w: WorkspaceDetails) => void;
 }
 
-const makeColumns = ({ isCurrent, open, togglePin, remove }: ColumnActions): TableColumnDefinition<WorkspaceDetails>[] => [
+/** Open, pin/unpin and remove for one workspace: a grid cell's content, or a card's footer. */
+function WorkspaceActions({ w, actions: { isCurrent, open, togglePin, remove }, wrap = false }: {
+  w: WorkspaceDetails; actions: ColumnActions; wrap?: boolean;
+}) {
+  return (
+    <span style={{ display: 'flex', gap: 4, flexWrap: wrap ? 'wrap' : 'nowrap' }}>
+      <Button
+        size="small" icon={<FolderOpenRegular />}
+        aria-label={`Open ${basename(w.path)}`}
+        disabled={!w.exists || isCurrent(w)}
+        onClick={() => open(w)}
+      >
+        Open
+      </Button>
+      <Button
+        size="small" icon={w.pinned ? <PinOffRegular /> : <PinRegular />}
+        aria-label={`${w.pinned ? 'Unpin' : 'Pin'} ${basename(w.path)}`}
+        onClick={() => togglePin(w)}
+      >
+        {w.pinned ? 'Unpin' : 'Pin'}
+      </Button>
+      <Tooltip
+        content={isCurrent(w) ? 'Switch to another workspace first' : 'Remove from list'}
+        relationship="description"
+      >
+        <Button
+          size="small" icon={<DeleteRegular />}
+          aria-label={`Remove ${basename(w.path)} from list`}
+          disabledFocusable={isCurrent(w)}
+          onClick={() => remove(w)}
+        />
+      </Tooltip>
+    </span>
+  );
+}
+
+function WorkspaceCard({ w, actions }: { w: WorkspaceDetails; actions: ColumnActions }) {
+  const dim = { color: 'var(--colorNeutralForeground3)' } as const;
+  return (
+    <div
+      data-testid={`workspace-card-${w.path}`}
+      style={{
+        display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 12px', borderRadius: 6,
+        border: '1px solid var(--colorNeutralStroke2)', background: 'var(--colorNeutralBackground1)',
+      }}
+    >
+      <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        <WorkspaceDot path={w.path} identityKey={w.identityKey} />
+        <Text weight="semibold" truncate wrap={false} style={{ flex: 1, minWidth: 0 }}>{basename(w.path)}</Text>
+        {actions.isCurrent(w) && <Badge appearance="tint" color="brand" size="small">Current</Badge>}
+        {w.pinned && <PinRegular aria-label="Pinned" />}
+      </span>
+      <Text size={100} truncate wrap={false} style={dim}>{w.path}</Text>
+      <Text size={200}>
+        {[gitLabel(w.git), statusLabel(w), w.storage === 'local' ? 'Project' : 'User folder', `${w.runCount} runs`].join(' · ')}
+      </Text>
+      <Text size={200} style={dim}>Last opened {formatStarted(w.lastOpenedAt)}</Text>
+      <WorkspaceActions w={w} actions={actions} wrap />
+    </div>
+  );
+}
+
+const makeColumns = (actions: ColumnActions): TableColumnDefinition<WorkspaceDetails>[] => {
+  const { isCurrent } = actions;
+  return [
   createTableColumn<WorkspaceDetails>({
     columnId: 'workspace',
     renderHeaderCell: () => 'Workspace',
@@ -103,37 +168,11 @@ const makeColumns = ({ isCurrent, open, togglePin, remove }: ColumnActions): Tab
     columnId: 'actions',
     renderHeaderCell: () => 'Actions',
     renderCell: w => (
-      <span style={{ display: 'flex', gap: 4 }}>
-        <Button
-          size="small" icon={<FolderOpenRegular />}
-          aria-label={`Open ${basename(w.path)}`}
-          disabled={!w.exists || isCurrent(w)}
-          onClick={() => open(w)}
-        >
-          Open
-        </Button>
-        <Button
-          size="small" icon={w.pinned ? <PinOffRegular /> : <PinRegular />}
-          aria-label={`${w.pinned ? 'Unpin' : 'Pin'} ${basename(w.path)}`}
-          onClick={() => togglePin(w)}
-        >
-          {w.pinned ? 'Unpin' : 'Pin'}
-        </Button>
-        <Tooltip
-          content={isCurrent(w) ? 'Switch to another workspace first' : 'Remove from list'}
-          relationship="description"
-        >
-          <Button
-            size="small" icon={<DeleteRegular />}
-            aria-label={`Remove ${basename(w.path)} from list`}
-            disabledFocusable={isCurrent(w)}
-            onClick={() => remove(w)}
-          />
-        </Tooltip>
-      </span>
+      <WorkspaceActions w={w} actions={actions} />
     ),
   }),
-];
+  ];
+};
 
 /**
  * Every workspace the app knows, with what the switcher's menu has no room
@@ -143,6 +182,7 @@ const makeColumns = ({ isCurrent, open, togglePin, remove }: ColumnActions): Tab
  */
 export function WorkspacesPage() {
   const client = useAgentClient();
+  const narrow = useNarrowLayout();
   const { pickDirectory } = useCapabilities();
   const workspacePath = useAppStore(state => state.workspacePath);
   const identityKey = useAppStore(state => state.workspaceIdentityKey);
@@ -202,7 +242,7 @@ export function WorkspacesPage() {
     }
   }
 
-  const columns = useMemo(() => makeColumns({
+  const rowActions = useMemo<ColumnActions>(() => ({
     isCurrent,
     open: w => void open(w.path),
     remove: w => { if (!isCurrent(w)) setRemoving(w); },
@@ -213,6 +253,7 @@ export function WorkspacesPage() {
         .catch((err: unknown) => setActionError(errorMessage(err)));
     },
   }), [isCurrent, open, client, patchAppState]);
+  const columns = useMemo(() => makeColumns(rowActions), [rowActions]);
 
   async function browse(): Promise<void> {
     if (!pickDirectory) return;
@@ -221,7 +262,7 @@ export function WorkspacesPage() {
   }
 
   const header = (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, width: '100%' }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, width: '100%', flexWrap: narrow ? 'wrap' : 'nowrap' }}>
       <Text weight="semibold" size={500}>Workspaces</Text>
       {pickDirectory ? (
         <Button icon={<FolderOpenRegular />} onClick={() => void browse()}>Browse…</Button>
@@ -242,6 +283,12 @@ export function WorkspacesPage() {
               No workspaces yet. {pickDirectory ? 'Use Browse… to open a folder.' : 'Use Open path… to open a folder.'}
             </Text>
           )
+        ) : narrow ? (
+          <div role="list" aria-label="Workspaces" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {sorted.map(w => (
+              <div role="listitem" key={w.path}><WorkspaceCard w={w} actions={rowActions} /></div>
+            ))}
+          </div>
         ) : (
           <DataGrid items={sorted} columns={columns} getRowId={w => w.path} sortable={false}>
             <DataGridHeader>

@@ -696,8 +696,9 @@ export function FilePreview({
       }}
       style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, width: '100%', height: '100%', minHeight: 0 }}
     >
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <Text weight="semibold">{loaded.path}</Text>
+      {/* Wraps rather than overflowing when the pane is phone-narrow. */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+        <Text weight="semibold" style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{loaded.path}</Text>
         <div style={{ flex: 1 }} />
         {showToggle && (
           <TabList

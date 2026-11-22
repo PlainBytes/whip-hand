@@ -6,6 +6,8 @@ html,
 body,
 #root {
   height: 100%;
+  /* The dynamic viewport excludes a phone browser's collapsing toolbar. */
+  height: 100dvh;
 }
 
 /* A guard, not a fix: the shell never scrolls at the document level, since

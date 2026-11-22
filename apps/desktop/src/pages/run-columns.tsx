@@ -33,7 +33,7 @@ export function formatStarted(startedAt: unknown): string {
 }
 
 /** The run's active time — waits for the human, gates, stop-to-resume gaps and host suspend are not counted. */
-function formatDuration(run: RunSummary): string {
+export function formatDuration(run: RunSummary): string {
   // A run that never wrote endedAt (one still going, or one abandoned before
   // core could repair it) must not keep growing on every poll — fall back to
   // the last sign of life we have.
@@ -66,11 +66,47 @@ export function manifestStageProgress(run: RunSummary): StageProgress | undefine
   return undefined;
 }
 
+/** Live stage progress for a run if this app is watching it, else what its manifest records. */
+export function runStageProgress(
+  run: RunSummary, stages: ReadonlyMap<string, StageProgress>,
+): StageProgress | undefined {
+  return stages.get(run.runId) ?? manifestStageProgress(run);
+}
+
 /** An icon-column header: the glyph, named by a tooltip and an aria-label. */
 function iconHeader(label: string, icon: JSX.Element) {
   return (
     <Tooltip relationship="label" content={label}>
       <span style={{ display: 'inline-flex' }}>{icon}</span>
+    </Tooltip>
+  );
+}
+
+/** The worktree glyph (with its branch/path tooltip) for a run that has one; nothing otherwise. */
+export function WorktreeMarker({ run }: { run: RunSummary }) {
+  if (!run.worktree) return null;
+  return (
+    <Tooltip
+      relationship="description"
+      content={(
+        <>
+          <div>Worktree on branch {run.worktree.branch}</div>
+          <div>{run.worktree.path}</div>
+          {run.worktree.continuedFrom && <div>Continued from run {run.worktree.continuedFrom}</div>}
+        </>
+      )}
+    >
+      <span style={{ display: 'inline-flex' }}><BranchFork16Regular aria-label="worktree" /></span>
+    </Tooltip>
+  );
+}
+
+/** The lock glyph for a locked run; nothing otherwise. */
+export function LockedMarker({ run }: { run: RunSummary }) {
+  if (!run.locked) return null;
+  return (
+    <Tooltip relationship="description" content="Locked">
+      <span style={{ display: 'inline-flex' }}><LockClosed16Regular aria-label="locked" /></span>
     </Tooltip>
   );
 }
@@ -157,29 +193,12 @@ export function runColumns<T extends RunSummary>(
     createTableColumn<T>({
       columnId: 'worktree',
       renderHeaderCell: () => iconHeader('Worktree', <BranchFork16Regular />),
-      renderCell: run => run.worktree && (
-        <Tooltip
-          relationship="description"
-          content={(
-            <>
-              <div>Worktree on branch {run.worktree.branch}</div>
-              <div>{run.worktree.path}</div>
-              {run.worktree.continuedFrom && <div>Continued from run {run.worktree.continuedFrom}</div>}
-            </>
-          )}
-        >
-          <span style={{ display: 'inline-flex' }}><BranchFork16Regular aria-label="worktree" /></span>
-        </Tooltip>
-      ),
+      renderCell: run => <WorktreeMarker run={run} />,
     }),
     createTableColumn<T>({
       columnId: 'locked',
       renderHeaderCell: () => iconHeader('Locked', <LockClosed16Regular />),
-      renderCell: run => run.locked && (
-        <Tooltip relationship="description" content="Locked">
-          <span style={{ display: 'inline-flex' }}><LockClosed16Regular aria-label="locked" /></span>
-        </Tooltip>
-      ),
+      renderCell: run => <LockedMarker run={run} />,
     }),
     createTableColumn<T>({
       columnId: 'status',
@@ -191,7 +210,7 @@ export function runColumns<T extends RunSummary>(
       // `running · stage 3/7` — rather than leaving a long staged run a bare
       // 'running' for an hour.
       renderCell: run => {
-        const progress = stages.get(run.runId) ?? manifestStageProgress(run);
+        const progress = runStageProgress(run, stages);
         return (
           <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <StatusBadge status={waiting.has(run.runId) ? 'waiting' : run.status} />

@@ -15,10 +15,9 @@ import { useFileSystem } from '../files/fs-context.tsx';
 import { joinPath, parentPath, validateName } from '../files/tree-model.ts';
 import { DocumentAdd16Regular, FolderAdd16Regular } from '@fluentui/react-icons';
 import { FileTree } from '../components/FileTree.tsx';
-import { ResizablePane } from '../components/ResizablePane.tsx';
+import { TreePreviewSplit } from '../components/TreePreviewSplit.tsx';
 import { FilePreview } from '../components/FilePreview.tsx';
 import { Page } from '../components/Page.tsx';
-import { RECESSED_SURFACE } from '../components/recessed-surface.ts';
 import { basename } from '../lib/workspace-identity.ts';
 import { FileOpsDialog, type FileOpsMode } from '../components/FileOpsDialog.tsx';
 import { UnsavedChangesDialog } from '../components/UnsavedChangesDialog.tsx';
@@ -35,6 +34,8 @@ import { DangerButton } from '../components/DangerButton.tsx';
  */
 type PendingAction =
   | { kind: 'select'; path: string }
+  /** Narrow layout: leave the preview for the tree. */
+  | { kind: 'back' }
   /** `target` is the containing directory for a create, the node for a rename. */
   | { kind: 'ops'; mode: FileOpsMode; target: string }
   | { kind: 'delete'; path: string };
@@ -153,6 +154,10 @@ export function FilesPage() {
         setOpenInEditMode(false);
         setSelectedPath(action.path);
         break;
+      case 'back':
+        setOpenInEditMode(false);
+        setSelectedPath(null);
+        break;
       case 'ops':
         setOps({ mode: action.mode, target: action.target });
         setOpsError(null);
@@ -182,6 +187,7 @@ export function FilesPage() {
    */
   function guarded(action: PendingAction): void {
     const touchesDraft = action.kind === 'select'
+      || action.kind === 'back'
       || (action.kind === 'ops' && action.mode === 'newFile')
       || (action.kind === 'ops' && action.mode === 'rename' && affectsOpenFile(action.target))
       || (action.kind === 'delete' && affectsOpenFile(action.path));
@@ -294,8 +300,11 @@ export function FilesPage() {
           </div>
         </div>
     </>}>
-      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-        <ResizablePane storageKey="whiphand.files.treeWidth">
+      <TreePreviewSplit
+        storageKey="whiphand.files.treeWidth"
+        hasSelection={selectedPath !== null && selectedNode?.kind !== 'dir'}
+        onBack={() => guarded({ kind: 'back' })}
+        tree={(
           <FileTree
             root={workspacePath}
             nodes={tree.nodes}
@@ -308,16 +317,8 @@ export function FilesPage() {
             onRename={path => guarded({ kind: 'ops', mode: 'rename', target: path })}
             onDelete={path => guarded({ kind: 'delete', path })}
           />
-        </ResizablePane>
-        <div
-          style={{
-            // The recessed surface the run page reads its output on — the
-            // only boundary; the tree sits on the page background with a
-            // resize handle before it.
-            ...RECESSED_SURFACE,
-            flex: 1, minWidth: 0, minHeight: 0, display: 'flex', overflow: 'hidden',
-          }}
-        >
+        )}
+        preview={(
           <FilePreview
             path={selectedNode?.kind === 'dir' ? null : selectedPath}
             onDirtyChange={noteDirty}
@@ -327,8 +328,8 @@ export function FilesPage() {
             // a run, an external editor — without needing a re-select.
             live
           />
-        </div>
-      </div>
+        )}
+      />
 
       {pending !== null && (
         // Mounted only while there's a pending action to confirm, not
@@ -349,7 +350,7 @@ export function FilesPage() {
             // editor keeps its text until the operation actually retargets
             // the preview — so the guard has to stay armed until then rather
             // than declaring the page clean up front.
-            if (action.kind === 'select') noteDirty(false);
+            if (action.kind === 'select' || action.kind === 'back') noteDirty(false);
             runAction(action);
           }}
           onKeepEditing={() => setPending(null)}

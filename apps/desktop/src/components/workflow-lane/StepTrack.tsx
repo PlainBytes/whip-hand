@@ -5,6 +5,7 @@ import { endsLoop, type DataFlowEntry } from '../../lib/step-describe.ts';
 import { StepTile } from './StepTile.tsx';
 import { LoopGroup } from './LoopGroup.tsx';
 import { StagesGroup } from './StagesGroup.tsx';
+import { useNarrowLayout } from '../../lib/use-narrow-layout.ts';
 
 export interface StepTrackProps {
   steps: Step[];
@@ -34,16 +35,24 @@ export interface StepTrackProps {
 export function StepTrack({
   steps, workflowSteps, ordinals, dataFlow, enclosingLoop, trackId, wrap, sourceSet, dependentSet, onHoverStep, nestLevel,
 }: StepTrackProps) {
+  // On a phone the top-level line scrolls inside its own box instead of
+  // wrapping, one snap point per node; it never widens the page.
+  const narrow = useNarrowLayout();
+  const scrollLine = narrow && wrap;
+  const wrapLine = wrap && !narrow;
   return (
     <div
       data-testid={(trackId ?? enclosingLoop?.id) ? `step-track-${trackId ?? enclosingLoop?.id}` : 'step-track-root'}
       style={{
         display: 'flex',
-        flexWrap: wrap ? 'wrap' : 'nowrap',
+        flexWrap: wrapLine ? 'wrap' : 'nowrap',
         alignItems: 'flex-start',
         gap: 8,
-        overflowX: wrap ? undefined : 'auto',
-        paddingBottom: wrap ? undefined : 4,
+        overflowX: wrapLine ? undefined : 'auto',
+        paddingBottom: wrapLine ? undefined : 4,
+        ...(scrollLine
+          ? { minWidth: 0, maxWidth: '100%', scrollSnapType: 'x proximity', overscrollBehaviorX: 'contain' }
+          : {}),
       }}
     >
       {steps.map((step, i) => (
@@ -53,9 +62,10 @@ export function StepTrack({
             display: 'flex',
             alignItems: 'center',
             gap: 8,
-            flex: wrap ? '0 1 auto' : 'none',
-            minWidth: wrap ? 0 : undefined,
-            maxWidth: wrap ? '100%' : undefined,
+            flex: wrapLine ? '0 1 auto' : 'none',
+            minWidth: wrapLine ? 0 : undefined,
+            maxWidth: wrapLine ? '100%' : undefined,
+            scrollSnapAlign: scrollLine ? 'start' : undefined,
           }}
         >
           {i > 0 && (

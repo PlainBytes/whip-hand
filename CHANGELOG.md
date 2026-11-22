@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Phone-sized screens in the browser UI
+
+- The remote-access browser UI now fits a phone. Navigation moves into a menu, the run tabs
+  collapse into one, and artifacts and review show a list first, then the file you pick. Forms,
+  settings, dialogs and the workflow editor fit the width too.
+- A phone viewing an interactive session does not resize the host's terminal: it shows the
+  session at its own size and scrolls sideways.
+- `npm run mobile-check` checks every screen at phone size in both themes.
+
 ### Restrict a step's MCP servers and plugins
 
 - New `mcp:` and `plugins:` fields, on the workflow and on each agent step, with `allow` or

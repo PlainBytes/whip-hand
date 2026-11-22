@@ -131,3 +131,16 @@ describe('DeleteRunDialog', () => {
     expect(calls).toEqual([{ workdir: '/ws', runId: 'r1' }]);
   });
 });
+
+describe('DeleteRunDialog on a narrow screen', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('fits the viewport with Delete and Cancel present and enabled', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    renderDialog();
+    // jsdom drops calc() from computed styles, so read the inline declaration.
+    expect(screen.getByRole('dialog').getAttribute('style')).toContain('calc(100vw - 24px)');
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+  });
+});

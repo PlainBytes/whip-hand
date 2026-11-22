@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
 
 /**
  * Icon convention for buttons placed in a Page header (or in a header-shaped
@@ -51,6 +52,8 @@ export function Page({
   body?: 'scroll' | 'fill';
   children: ReactNode;
 }) {
+  const narrow = useNarrowLayout();
+  const bodyPadding = narrow ? 12 : 16;
   return (
     <div
       data-testid="page"
@@ -61,13 +64,14 @@ export function Page({
         style={{
           flexShrink: 0,
           boxSizing: 'border-box',
-          padding: '12px 16px',
+          padding: narrow ? '8px 12px' : '12px 16px',
           background: 'var(--colorNeutralBackground2)',
           borderBottom: '1px solid var(--colorNeutralStroke2)',
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'flex-end',
           gap: 4,
+          ...(narrow ? { flexWrap: 'wrap' as const } : null),
         }}
       >
         {header}
@@ -77,8 +81,8 @@ export function Page({
         data-body={body}
         style={
           body === 'scroll'
-            ? { flex: 1, minHeight: 0, overflow: 'auto', padding: 16 }
-            : { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: 16 }
+            ? { flex: 1, minHeight: 0, overflow: 'auto', padding: bodyPadding }
+            : { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: bodyPadding }
         }
       >
         {children}

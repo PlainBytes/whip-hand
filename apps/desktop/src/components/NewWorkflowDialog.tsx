@@ -3,6 +3,7 @@ import {
   Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle,
   Field, Input, MessageBar, MessageBarBody, Radio, RadioGroup, Spinner,
 } from '@fluentui/react-components';
+import { useNarrowDialogStyles } from '../lib/use-narrow-dialog-styles.ts';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import type { Scope } from '../shared/types.ts';
 import type { WorkflowEntry } from './workflow-lane/WorkflowLane.tsx';
@@ -25,6 +26,7 @@ export interface NewWorkflowDialogProps {
  * name and scope for the next open, so there is no reset code to forget.
  */
 export function NewWorkflowDialog({ workdir, existing, onCreated, onDismiss }: NewWorkflowDialogProps) {
+  const narrowDialog = useNarrowDialogStyles();
   const client = useAgentClient();
   const [name, setName] = useState('');
   const [scope, setScope] = useState<Scope>('project');
@@ -62,7 +64,7 @@ export function NewWorkflowDialog({ workdir, existing, onCreated, onDismiss }: N
         if (!data.open && !busy) onDismiss();
       }}
     >
-      <DialogSurface>
+      <DialogSurface style={narrowDialog.surface}>
         <DialogBody>
           <DialogTitle>New workflow</DialogTitle>
           <DialogContent>
@@ -89,7 +91,7 @@ export function NewWorkflowDialog({ workdir, existing, onCreated, onDismiss }: N
               {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
             </div>
           </DialogContent>
-          <DialogActions>
+          <DialogActions style={narrowDialog.actions}>
             <Button
               appearance="primary"
               disabled={busy || name === '' || problem?.blocking === true}

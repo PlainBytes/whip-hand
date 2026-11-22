@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Button, FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { Sidebar, SIDEBAR_WIDTH_COLLAPSED } from './Sidebar.tsx';
 import { RunStatusIcon } from './OngoingRuns.tsx';
@@ -552,5 +552,26 @@ describe('Sidebar', () => {
       expect(hasInjectedStyle(failed, 'background-color', 'var(--colorPaletteRedBackground3)')).toBe(true);
       expect(hasInjectedStyle(failed, 'height', '24px')).toBe(true);
     });
+  });
+});
+
+describe('Sidebar onNavigate', () => {
+  it('waits for onNavigate to settle before selecting a page', async () => {
+    let release!: () => void;
+    const onNavigate = vi.fn(() => new Promise<void>(resolve => { release = resolve; }));
+    const onSelectPage = vi.fn();
+    useAppStore.setState({ workspacePath: '/ws' });
+    render(
+      <FluentProvider theme={webLightTheme}>
+        <AgentClientProvider client={new AgentClient(new MockTransport())}>
+          <Sidebar page="runs" onSelectPage={onSelectPage} onOpenRun={() => {}} onNavigate={onNavigate} />
+        </AgentClientProvider>
+      </FluentProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Doctor' }));
+    expect(onNavigate).toHaveBeenCalledOnce();
+    expect(onSelectPage).not.toHaveBeenCalled();
+    release();
+    await waitFor(() => expect(onSelectPage).toHaveBeenCalledWith('doctor'));
   });
 });

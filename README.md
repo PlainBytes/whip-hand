@@ -571,6 +571,11 @@ agent additionally validates the `Host` and `Origin` headers on every request, w
 is what stops a DNS-rebinding attack from a page you visit elsewhere. Rotating the
 token disconnects every device using the old link.
 
+The browser UI adapts to phone-sized screens: navigation moves into a menu, and
+artifacts and review show a list first, then the item you tap. A phone viewing an
+interactive session does not resize the host's terminal: it shows the session at
+its own size and scrolls sideways.
+
 Two differences from the desktop app:
 
 - **No Files tab.** Browsing the workspace reads the local disk directly, which a

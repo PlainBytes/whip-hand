@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { PreferencesPage } from './PreferencesPage.tsx';
 import { AgentClient } from '../agent/client.ts';
@@ -342,5 +342,26 @@ describe('PreferencesPage keyboard shortcuts', () => {
     renderPreferences();
     expect(screen.getByRole('region', { name: 'Keyboard shortcuts' })).toBeTruthy();
     expect(screen.getByText('Close tab')).toBeTruthy();
+  });
+});
+
+describe('PreferencesPage on a narrow screen', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('saves the theme via the same setUiState as at wide width', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    useAppStore.setState({ workspacePath: null, appState: EMPTY_APP_STATE, restoreDone: true });
+    const { transport } = renderPreferences();
+    await respondToGlobalConfigGet(transport);
+
+    fireEvent.click(await screen.findByRole('combobox', { name: /theme/i }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Dark' }));
+
+    const req = await waitFor(() => {
+      const parsed = transport.sentRequest(transport.sent.length - 1);
+      if (parsed.method !== 'setUiState') throw new Error('setUiState not sent yet');
+      return parsed;
+    });
+    expect(req.params).toEqual({ theme: 'dark' });
   });
 });

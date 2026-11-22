@@ -596,18 +596,25 @@ describe('App at narrow widths', () => {
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'unsaved work' } });
     await waitFor(() => expect(useAppStore.getState().filesDirty).toBe(true));
 
-    // Record every commit in which both Modalizers are present.
+    // Record every commit in which both Modalizers are present. `hidden: true`
+    // throughout: in jsdom tabster never activates the drawer's Modalizer (it
+    // keys off focus machinery jsdom doesn't drive), so its 250ms aria-hidden
+    // sweep stamps the open drawer itself. With a file open that sweep is
+    // already armed, and on slow CI it lands before the click below — the
+    // same artifact RunDetailPage.test.tsx documents for a dialog from a Menu.
+    // A presence check that ignored a hidden nav would also pass vacuously.
     let both = false;
     const watcher = new MutationObserver(() => {
-      if (screen.queryByRole('navigation') && document.body.textContent?.match(/unsaved changes/i)) both = true;
+      if (document.querySelector('nav') && document.body.textContent?.match(/unsaved changes/i)) both = true;
     });
     watcher.observe(document.body, { childList: true, subtree: true, characterData: true });
 
     fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
-    fireEvent.click(await within(await screen.findByRole('navigation')).findByRole('button', { name: 'Runs' }));
+    const nav = await screen.findByRole('navigation', { hidden: true });
+    fireEvent.click(within(nav).getByRole('button', { name: 'Runs', hidden: true }));
 
     expect(await screen.findByText(/unsaved changes/i)).toBeInTheDocument();
-    expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { hidden: true })).not.toBeInTheDocument();
     watcher.disconnect();
     expect(both).toBe(false);
     expect(useAppStore.getState().page).toBe('files');
@@ -620,13 +627,14 @@ describe('App at narrow widths', () => {
 
     let both = false;
     const watcher = new MutationObserver(() => {
-      if (screen.queryByRole('navigation') && screen.queryByLabelText('Filter workspaces')) both = true;
+      // DOM presence, not role: tabster may aria-hide the drawer (see above).
+      if (document.querySelector('nav') && screen.queryByLabelText('Filter workspaces')) both = true;
     });
     watcher.observe(document.body, { childList: true, subtree: true, characterData: true });
 
     fireEvent.keyDown(window, { key: 'k', code: 'KeyK', ctrlKey: true });
     expect(await screen.findByLabelText('Filter workspaces')).toBeInTheDocument();
-    expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { hidden: true })).not.toBeInTheDocument();
     watcher.disconnect();
     expect(both).toBe(false);
   });

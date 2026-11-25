@@ -978,7 +978,26 @@ fn delete_run_draft(agent: &Rc<Agent>, p: &Value) -> R {
         .app_state
         .mutate(|state| crate::app_state::delete_draft(state, id))?;
     // Best effort: a leftover directory is swept on the next start.
-    let _ = std::fs::remove_dir_all(agent.app_state.drafts_dir().join(id));
+    let stash = agent.app_state.drafts_dir().join(id);
+    let waiting = agent.jobs.using_stash(&stash);
+    if waiting.is_empty() {
+        let _ = std::fs::remove_dir_all(&stash);
+    } else {
+        // A run started from this draft copies its files only once it has
+        // started: the stash goes when every job reading it has ended.
+        let agent = agent.clone();
+        tokio::task::spawn_local(async move {
+            let mut waiting = waiting;
+            while !waiting.is_empty() {
+                for done in &waiting {
+                    done.cancelled().await;
+                }
+                // A job started from the stash meanwhile.
+                waiting = agent.jobs.using_stash(&stash);
+            }
+            let _ = std::fs::remove_dir_all(&stash);
+        });
+    }
     Ok(json!({ "ok": true }))
 }
 

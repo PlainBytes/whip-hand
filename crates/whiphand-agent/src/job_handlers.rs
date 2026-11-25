@@ -238,6 +238,9 @@ fn start_run(agent: &Rc<Agent>, p: &Value) -> R {
     let job = agent
         .jobs
         .create(workdir.clone(), Some(opened.identity_key.clone()));
+    // Recorded before the reply: the form deletes its draft as soon as this
+    // answers, and the run copies the files only once it has started.
+    *job.draft_stashes.borrow_mut() = draft_stashes(agent, &attachments);
     let params = StartParams {
         workflow: s(p, "workflow").to_string(),
         inputs: inputs.clone(),
@@ -268,6 +271,21 @@ fn start_run(agent: &Rc<Agent>, p: &Value) -> R {
         );
     });
     Ok(json!({ "jobId": job.job_id }))
+}
+
+/// The draft stash directories the path attachments lie in, each once.
+fn draft_stashes(agent: &Agent, attachments: &[AttachmentSource]) -> Vec<std::path::PathBuf> {
+    let drafts = agent.app_state.drafts_dir();
+    let mut out = Vec::new();
+    for a in attachments {
+        if let AttachmentSource::Path(path) = a
+            && let Some(stash) = crate::app_state::stash_of(&drafts, Path::new(path))
+            && !out.contains(&stash)
+        {
+            out.push(stash);
+        }
+    }
+    out
 }
 
 async fn resume_run(agent: &Rc<Agent>, p: &Value) -> R {

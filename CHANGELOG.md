@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Pasted images survive the start of a worktree run
+
+- Starting a run from the New Run form with a pasted image could fail with a bare "path not
+  found" error (`No such file or directory` on Linux, "The system cannot find the path
+  specified" on Windows), most often in a worktree run: the form deleted the draft, and the
+  image with it, before the run had copied the file. The image is now kept until the run
+  ends; the draft still disappears at once.
+
 ### Phone-sized screens in the browser UI
 
 - The remote-access browser UI now fits a phone. Navigation moves into a menu, the run tabs

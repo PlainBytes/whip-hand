@@ -2,6 +2,7 @@
 //! question a job may be parked on.
 
 use std::cell::{Cell, RefCell};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use serde_json::{Map, Value, json};
@@ -61,6 +62,9 @@ pub struct Job {
     pub pty_rows: Cell<u16>,
     /// Set once the background run has settled.
     pub done: CancellationToken,
+    /// The draft stash directories its attachments are read from: kept until
+    /// `done`, since the run copies them only once it has started.
+    pub draft_stashes: RefCell<Vec<PathBuf>>,
 }
 
 impl Job {
@@ -110,6 +114,7 @@ impl Jobs {
             pty_cols: Cell::new(DEFAULT_PTY_COLS),
             pty_rows: Cell::new(DEFAULT_PTY_ROWS),
             done: CancellationToken::new(),
+            draft_stashes: RefCell::new(Vec::new()),
         });
         self.jobs.borrow_mut().push(job.clone());
         job
@@ -125,6 +130,18 @@ impl Jobs {
 
     pub fn list(&self) -> Vec<Rc<Job>> {
         self.jobs.borrow().clone()
+    }
+
+    /// The `done` tokens of every unsettled job that reads from `stash`.
+    pub fn using_stash(&self, stash: &Path) -> Vec<CancellationToken> {
+        self.jobs
+            .borrow()
+            .iter()
+            .filter(|j| {
+                !j.done.is_cancelled() && j.draft_stashes.borrow().iter().any(|s| s == stash)
+            })
+            .map(|j| j.done.clone())
+            .collect()
     }
 }
 

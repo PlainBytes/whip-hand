@@ -61,6 +61,7 @@ import { ResizablePane } from '../components/ResizablePane.tsx';
 import { TreePreviewSplit } from '../components/TreePreviewSplit.tsx';
 import { UnsavedChangesDialog } from '../components/UnsavedChangesDialog.tsx';
 import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
+import { useTerminalGuest } from '../lib/use-terminal-guest.ts';
 import { useNarrowDialogStyles } from '../lib/use-narrow-dialog-styles.ts';
 import { FilePreview } from '../components/FilePreview.tsx';
 import { RECESSED_SURFACE } from '../components/recessed-surface.ts';
@@ -325,6 +326,9 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
    * lives here and is deliberately not persisted.
    */
   const narrow = useNarrowLayout();
+  // Not `narrow`: a phone on its side is wider than the narrow layout but
+  // must stay a terminal guest, or rotating it resizes the shared PTY.
+  const terminalGuest = useTerminalGuest();
   const narrowDialog = useNarrowDialogStyles();
   // A phone has no room for the stepper above the tabs, so it starts folded
   // to its one-line summary; expanding is the person's choice.
@@ -1746,7 +1750,7 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
               jobId={effectiveJobId}
               cols={job?.ptyCols}
               rows={job?.ptyRows}
-              sizing={narrow ? 'follow' : 'fit'}
+              sizing={terminalGuest ? 'follow' : 'fit'}
               onResize={(cols, rows) => void client.request('ptyResize', { jobId: effectiveJobId, cols, rows })}
             />
           ) : hasHeadlessStep || activityTail.length > 0 ? (

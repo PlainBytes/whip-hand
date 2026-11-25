@@ -13,6 +13,7 @@ import type { WhiphandEvent } from '../shared/types.ts';
 import { fromPosix } from '../../../../packages/test-support/src/paths.ts';
 import { CapabilitiesProvider, type AppCapabilities } from '../capabilities.tsx';
 import { hasInjectedStyle } from '../test/badge-style.ts';
+import { PHONE_LANDSCAPE, PHONE_PORTRAIT, stubScreen } from '../test/match-media.ts';
 
 // RunDetailPage only needs to exercise its own show/hide/collapse logic here —
 // the real xterm wiring (encoding, buffering, resize debounce) is covered in
@@ -3084,6 +3085,52 @@ describe('RunDetailPage: a burst of command output', () => {
       const text = screen.getAllByTestId('log-row').map(r => r.textContent ?? '').join('\n');
       for (let i = 0; i < LINES; i++) expect(text).toContain(`output line ${i}`);
     });
+  });
+});
+
+describe('RunDetailPage on a phone, in either orientation', () => {
+  beforeEach(() => useAppStore.setState({ workspacePath: '/ws' }));
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useAppStore.setState({ workspacePath: null });
+  });
+
+  function sentPtyResize(transport: MockTransport): boolean {
+    return transport.sent.some(line => (JSON.parse(line) as { method?: string }).method === 'ptyResize');
+  }
+
+  async function startTerminal(jobId: string, runId: string) {
+    const { transport } = renderRunDetail(jobId, vi.fn(), vi.fn(), runId);
+    emitWhiphandEvent(transport, jobId, runId, { type: 'step:start', stepId: 'triage', kind: 'agent', runner: 'claude', mode: 'interactive' }, 't1');
+    await respondGetRun(transport, { runId, runDir: `/ws/.whiphand/runs/${runId}`, status: 'running', artifacts: [] });
+    transport.emitLine({ method: 'ptyStarted', params: { jobId, stepId: 'triage', cols: 80, rows: 24 } });
+    const panel = await screen.findByTestId('terminal-panel-mock');
+    return { transport, panel };
+  }
+
+  it('keeps the terminal a guest through portrait -> landscape -> portrait, never resizing the pty', async () => {
+    const media = stubScreen(PHONE_PORTRAIT);
+    const { transport, panel } = await startTerminal('job-rot', 'run-rot');
+    const instance = panel.getAttribute('data-instance');
+    expect(panel).toHaveAttribute('data-sizing', 'follow');
+
+    act(() => media.change(PHONE_LANDSCAPE));
+    expect(screen.getByTestId('terminal-panel-mock')).toHaveAttribute('data-sizing', 'follow');
+    act(() => media.change(PHONE_PORTRAIT));
+    expect(screen.getByTestId('terminal-panel-mock')).toHaveAttribute('data-sizing', 'follow');
+
+    expect(screen.getByTestId('terminal-panel-mock')).toHaveAttribute('data-instance', instance);
+    expect(sentPtyResize(transport)).toBe(false);
+  });
+
+  it('loads in landscape as a guest, with the wide layout', async () => {
+    stubScreen(PHONE_LANDSCAPE);
+    const { transport, panel } = await startTerminal('job-land', 'run-land');
+    expect(panel).toHaveAttribute('data-sizing', 'follow');
+    expect(sentPtyResize(transport)).toBe(false);
+    // Wide layout: the header actions are inline, not folded into More actions.
+    expect(screen.getByRole('button', { name: 'Rename' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'More actions' })).not.toBeInTheDocument();
   });
 });
 

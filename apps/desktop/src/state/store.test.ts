@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   findWorkspaceMemory, jobInWorkspace, liveStageProgress, ongoingJobs, draftHasContent, selectDraft, useAppStore, waitingRunIds, type JobState,
 } from './store.ts';
@@ -1358,6 +1358,21 @@ describe('draft tabs', () => {
     expect(tabs.map(tab => tab.kind)).toEqual(['draft', 'draft', 'draft']);
     expect(new Set(tabs.map(tab => tab.key)).size).toBe(3);
     expect(activeTabKey).toBe(ids[2]);
+  });
+
+  it('creates a draft and activates its tab without crypto.randomUUID (remote access over plain HTTP)', () => {
+    const real = globalThis.crypto;
+    vi.stubGlobal('crypto', { getRandomValues: real.getRandomValues.bind(real), randomUUID: undefined });
+    try {
+      const { createDraft, openDraftTab } = useAppStore.getState();
+      const id = createDraft({ workdir: '/ws' });
+      openDraftTab(id);
+      const state = useAppStore.getState();
+      expect(state.drafts[id]).toBeDefined();
+      expect(state.activeTabKey).toBe(id);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('converting a draft swaps its tab for a pinned run tab in place and deletes the draft', () => {

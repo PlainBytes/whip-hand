@@ -34,6 +34,7 @@ import type { LogRow } from '../shared/log-rows.ts';
 import { mergeUsage, progressActionText, summarizeEvent } from '../shared/log-rows.ts';
 import { preselect, type PendingAttachment, type RunAgain } from '../lib/new-run-draft.ts';
 import { releaseThumbnail } from '../lib/draft-thumbnails.ts';
+import { randomId } from '../lib/random-id.ts';
 import {
   activateTab, adoptRunIds, closeTab, convertDraftTab, openDraftTab, openTab, pinTab, retargetTab, runTabTarget, withClosed, type AnyTab, type RunTabTarget,
 } from '../lib/run-tabs.ts';
@@ -1535,7 +1536,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const memory = findWorkspaceMemory(appState, { path: init.workdir, identityKey: init.identityKey });
     const chosen = preselect(workflows, memory, init.runAgain);
     const now = Date.now();
-    const id = crypto.randomUUID();
+    const id = randomId();
     const draft: RunDraft = {
       id,
       workdir: init.workdir,

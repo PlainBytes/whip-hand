@@ -205,12 +205,54 @@ pub fn validate_workflow_draft(raw: &Raw) -> DraftValidation {
     }
 }
 
-/// Parses and validates a workflow file's text.
-pub fn parse_workflow(yaml_text: &str) -> Result<Workflow, WorkflowError> {
-    let raw = parse_yaml(yaml_text).map_err(|e| WorkflowError {
+fn yaml_error(e: impl std::fmt::Display) -> WorkflowError {
+    WorkflowError {
         problems: vec![format!("YAML parse error: {e}")],
         yaml: true,
-    })?;
+    }
+}
+
+/// What `whiphand validate` reports for a workflow file's text: the problems
+/// `validate_workflow_draft` finds (the same strings the agent's
+/// `validateWorkflow` answers with), or the YAML parse error; and, for a
+/// workflow whose shape parsed, its warnings. Machine-dependent checks
+/// (runners, shell, frontend) are not here: they belong to a run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WorkflowCheck {
+    /// The workflow's `name:`, when its shape parsed.
+    pub name: Option<String>,
+    pub problems: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+/// Checks a workflow file's text without running it.
+pub fn check_workflow_text(yaml_text: &str) -> WorkflowCheck {
+    let raw = match parse_yaml(yaml_text) {
+        Ok(raw) => raw,
+        Err(e) => {
+            return WorkflowCheck {
+                name: None,
+                problems: yaml_error(e).problems,
+                warnings: Vec::new(),
+            };
+        }
+    };
+    let result = validate_workflow_draft(&raw);
+    let warnings = result
+        .workflow
+        .as_ref()
+        .map(validate_workflow_warnings)
+        .unwrap_or_default();
+    WorkflowCheck {
+        name: result.workflow.map(|w| w.name),
+        problems: result.problems,
+        warnings,
+    }
+}
+
+/// Parses and validates a workflow file's text.
+pub fn parse_workflow(yaml_text: &str) -> Result<Workflow, WorkflowError> {
+    let raw = parse_yaml(yaml_text).map_err(yaml_error)?;
     let result = validate_workflow_draft(&raw);
     if !result.problems.is_empty() {
         return Err(WorkflowError::new(result.problems));
@@ -561,6 +603,49 @@ mod restriction_tests {
                 .iter()
                 .any(|p| p.contains("kind 'command' has no 'mcp'")),
             "{found:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod check_tests {
+    use super::*;
+
+    #[test]
+    fn a_valid_workflow_names_itself_and_has_no_problems() {
+        let check =
+            check_workflow_text("name: x\nsteps:\n  - id: a\n    kind: command\n    run: echo a\n");
+        assert_eq!(check.name.as_deref(), Some("x"));
+        assert!(check.problems.is_empty(), "{:?}", check.problems);
+    }
+
+    #[test]
+    fn a_yaml_syntax_error_is_a_problem_not_a_panic() {
+        let check = check_workflow_text("name: [unclosed\n");
+        assert_eq!(check.name, None);
+        assert_eq!(check.problems.len(), 1);
+        assert!(check.problems[0].starts_with("YAML parse error: "));
+    }
+
+    #[test]
+    fn problems_are_the_draft_validations_own_strings() {
+        let text = "name: x\nsteps:\n  - id: a\n    kind: command\n    run: echo a\n  - id: a\n    kind: command\n    run: echo b\n";
+        let check = check_workflow_text(text);
+        let draft = validate_workflow_draft(&parse_yaml(text).unwrap());
+        assert_eq!(check.problems, draft.problems);
+        assert!(!check.problems.is_empty());
+    }
+
+    #[test]
+    fn warnings_come_with_a_workflow_that_parsed() {
+        let check = check_workflow_text(
+            "name: x\nsteps:\n  - id: sign\n    kind: approval\n    title: \"Ship it?\"\n    instructions: \"Look.\"\n    capture: review\n    output: feedback.md\n",
+        );
+        assert!(check.problems.is_empty(), "{:?}", check.problems);
+        assert!(
+            check.warnings.iter().any(|w| w.contains("outside a loop")),
+            "{:?}",
+            check.warnings
         );
     }
 }

@@ -56,6 +56,14 @@ export const uiActions: Record<string, Record<string, string>> = {
     // whose Input drives resumeRun's `extraIterations`.
     '--extra-iterations': 'run-detail:resumeExtraIterationsInput',
   },
+  // `whiphand validate` checks a file from a script or an authoring agent.
+  // The workflow editor runs the same checks live (validateWorkflow) as the
+  // draft changes, so there is no button for it.
+  validate: {
+    _command: 'exempt:cli-only-the-editor-validates-as-you-type',
+    '<workflow>': 'exempt:cli-only',
+    '-C': 'sidebar:workspaceSwitcher',
+  },
   'rename-run': {
     // RunDetailPage's "Rename" button beside Lock/Delete, opening the rename
     // dialog that drives the renameRun RPC.

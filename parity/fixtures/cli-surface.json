@@ -114,6 +114,23 @@
       ]
     },
     {
+      "name": "validate",
+      "args": [
+        {
+          "name": "workflow",
+          "required": true
+        }
+      ],
+      "options": [
+        {
+          "flags": "-C <dir>",
+          "required": true,
+          "hasDefault": true,
+          "short": "-C"
+        }
+      ]
+    },
+    {
       "name": "rename-run",
       "args": [
         {

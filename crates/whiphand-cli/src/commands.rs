@@ -27,7 +27,8 @@ use whiphand_core::scaffold::{
     InitOptions, InitWorkflows, create_workflow, existing_storage, init_workspace,
 };
 use whiphand_core::schema::{
-    WorkflowError, parse_workflow, unattended_problems, validate_workflow_warnings,
+    WorkflowError, check_workflow_text, parse_workflow, unattended_problems,
+    validate_workflow_warnings,
 };
 use whiphand_core::storage::Storage;
 use whiphand_core::storage::{data_dir, resolve_layout};
@@ -449,6 +450,59 @@ pub fn config_set(key: &str, value: &str, global: bool, dir: &str) -> CmdResult 
         if global { "global" } else { "project" }
     ));
     Ok(0)
+}
+
+// ---------------------------------------------------------------- validate
+
+/// The text `validate` checks: stdin for `-`, otherwise the workflow `run`
+/// would resolve. A reference that resolves to nothing, or a file that
+/// cannot be read, is a usage error.
+fn validate_source(reference: &str, dir: &str) -> Result<String, String> {
+    if reference == "-" {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        std::io::stdin()
+            .read_to_end(&mut bytes)
+            .map_err(|e| format!("cannot read stdin: {e}"))?;
+        return Ok(String::from_utf8_lossy(&bytes).into_owned());
+    }
+    let workdir = node_path::resolve(dir);
+    let resolved = resolve_workflow_path(reference, Path::new(&workdir), &host_config_home())?;
+    std::fs::read(&resolved.path)
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .map_err(|e| {
+            whiphand_core::process::launch::node_error_message(&e, &resolved.path.to_string_lossy())
+        })
+}
+
+/// `whiphand validate`: the checks the editor's `validateWorkflow` runs,
+/// plus the workflow warnings, one line each on stdout, then a summary.
+/// Exit 0 with no problems (warnings alone pass), 1 with problems, 2 when
+/// the workflow could not be found or read.
+pub fn validate(reference: &str, dir: &str) -> CmdResult {
+    let text = match validate_source(reference, dir) {
+        Ok(text) => text,
+        Err(message) => {
+            err_line(&format!("✘ {message}"));
+            return Ok(USAGE_ERROR);
+        }
+    };
+    let check = check_workflow_text(&text);
+    let mut lines: Vec<String> = check
+        .problems
+        .iter()
+        .map(|p| format!("error: {p}"))
+        .chain(check.warnings.iter().map(|w| format!("warning: {w}")))
+        .collect();
+    let n = check.problems.len();
+    lines.push(match (n, &check.name) {
+        (0, Some(name)) => format!("ok: {name}"),
+        (0, None) => "ok".to_string(),
+        (1, _) => "1 problem".to_string(),
+        _ => format!("{n} problems"),
+    });
+    out_line(&lines.join("\n"));
+    Ok(if n == 0 { 0 } else { 1 })
 }
 
 // ---------------------------------------------------------------- run

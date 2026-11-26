@@ -181,6 +181,19 @@ pub fn build_cli() -> Command {
                 .arg(extra()),
         )
         .subcommand(
+            sub(
+                "validate",
+                "check a workflow without running it: one 'error:' or 'warning:' line each, then a summary; \
+                 exits 0 when there are no errors, 1 when there are, 2 when the workflow cannot be found or read",
+            )
+            .arg(Arg::new("workflow").required(true).help(
+                "workflow name, path or 'project:' / 'workspace:' / 'global:' selector, resolved as `run` resolves it; \
+                 '-' reads the YAML from stdin",
+            ))
+            .arg(dir_option("working folder"))
+            .arg(extra()),
+        )
+        .subcommand(
             sub("rename-run", "set or clear a run's display label")
                 .arg(
                     Arg::new("runId")

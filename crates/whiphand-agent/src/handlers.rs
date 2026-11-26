@@ -1157,6 +1157,45 @@ mod catalog_tests {
 }
 
 #[cfg(test)]
+mod validate_tests {
+    use super::*;
+    use whiphand_core::schema::check_workflow_text;
+
+    /// `validateWorkflow` and `whiphand validate` answer the same broken
+    /// draft with the same problem strings. JSON is YAML, so the CLI's text
+    /// path reads the very draft the handler gets.
+    #[test]
+    fn the_handler_and_the_cli_report_the_same_problems() {
+        let drafts = [
+            json!({
+                "name": "broken",
+                "steps": [
+                    { "id": "a", "kind": "command", "run": "echo a" },
+                    { "id": "a", "kind": "command", "run": "echo b" },
+                    { "id": "l", "kind": "loop", "until": "nowhere",
+                      "steps": [{ "id": "b", "kind": "command", "run": "echo b" }] },
+                ],
+            }),
+            json!({
+                "name": "shape",
+                "steps": [{ "id": "a", "kind": "command", "run": "echo a", "timeout_ms": "soon" }],
+            }),
+            json!({
+                "name": "misplaced",
+                "steps": [{ "id": "a", "kind": "command", "run": "echo a", "prompt": "hi" }],
+            }),
+            json!({ "name": "empty", "steps": [] }),
+        ];
+        for draft in drafts {
+            let handler = validate_workflow(&draft);
+            let cli = check_workflow_text(&draft.to_string());
+            assert!(!cli.problems.is_empty(), "{draft}");
+            assert_eq!(handler["problems"], json!(cli.problems), "{draft}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod hello_tests {
     use super::*;
 

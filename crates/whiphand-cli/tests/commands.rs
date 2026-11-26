@@ -1574,3 +1574,179 @@ fn in_worktree_refusal_is_a_cross_line_and_creates_no_run() {
     );
     assert_eq!(run_dirs(&e).len(), 1);
 }
+
+// ------------------------------------------------------------------ validate
+
+impl Env {
+    /// `whiphand validate - -C <workspace>` with `text` on stdin.
+    fn validate_stdin(&self, text: &str) -> Out {
+        use std::io::Write;
+        let ws = self.ws().to_string_lossy().into_owned();
+        let mut child = self
+            .command(&["validate", "-", "-C", &ws], self.ws())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(text.as_bytes())
+            .unwrap();
+        Out(child.wait_with_output().unwrap())
+    }
+}
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+#[test]
+fn validate_accepts_the_cycle_example() {
+    let e = Env::new();
+    let path = repo_root().join("examples/cycle.yaml");
+    let out = e.run(&["validate", &path.to_string_lossy()]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    assert_eq!(out.stdout().lines().last(), Some("ok: cycle"));
+}
+
+#[test]
+fn validate_accepts_every_shipped_template() {
+    let e = Env::new();
+    let dir = repo_root().join("crates/whiphand-core/templates");
+    let mut seen = 0;
+    for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|x| x != "yaml") {
+            continue;
+        }
+        seen += 1;
+        let out = e.run(&["validate", &path.to_string_lossy()]);
+        assert_eq!(out.code(), 0, "{}: {}", path.display(), out.stdout());
+        assert!(
+            !out.stdout().contains("error:"),
+            "{}: {}",
+            path.display(),
+            out.stdout()
+        );
+        assert!(out.stdout().lines().last().unwrap().starts_with("ok: "));
+    }
+    assert!(seen > 0, "no templates in {}", dir.display());
+}
+
+#[test]
+fn validate_prints_each_semantic_problem_and_exits_1() {
+    let e = Env::new();
+    e.write(
+        "broken.yaml",
+        "name: broken\nsteps:\n  - id: a\n    kind: command\n    run: echo a\n  - id: a\n    kind: command\n    run: echo b\n  - id: l\n    kind: loop\n    until: nowhere\n    steps:\n      - id: b\n        kind: command\n        run: echo b\n",
+    );
+    let out = e.run(&["validate", "broken.yaml"]);
+    assert_eq!(out.code(), 1, "{}", out.stdout());
+    let stdout = out.stdout();
+    let lines: Vec<&str> = stdout.lines().collect();
+    let errors: Vec<&&str> = lines.iter().filter(|l| l.starts_with("error: ")).collect();
+    assert!(
+        errors.iter().any(|l| l.contains("duplicate step id 'a'")),
+        "{lines:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|l| l.contains("until 'nowhere' is not a step in its body")),
+        "{lines:?}"
+    );
+    assert_eq!(
+        lines.last().copied(),
+        Some(format!("{} problems", errors.len()).as_str())
+    );
+}
+
+#[test]
+fn validate_prints_a_schema_error_and_exits_1() {
+    let e = Env::new();
+    e.write(
+        "shape.yaml",
+        "name: shape\nsteps:\n  - id: a\n    kind: command\n    run: echo a\n    timeout_ms: soon\n",
+    );
+    let out = e.run(&["validate", "shape.yaml"]);
+    assert_eq!(out.code(), 1, "{}", out.stdout());
+    let stdout = out.stdout();
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.starts_with("error: ") && l.contains("step 'a': Timeout (ms)")),
+        "{stdout}"
+    );
+    assert_eq!(stdout.lines().last(), Some("1 problem"));
+}
+
+#[test]
+fn validate_reports_a_yaml_syntax_error_as_a_problem() {
+    let e = Env::new();
+    let out = e.validate_stdin("name: [unclosed\n");
+    assert_eq!(out.code(), 1, "{}{}", out.stdout(), out.stderr());
+    assert!(
+        out.stdout().starts_with("error: YAML parse error: "),
+        "{}",
+        out.stdout()
+    );
+    assert_eq!(out.stdout().lines().last(), Some("1 problem"));
+}
+
+#[test]
+fn validate_reads_stdin() {
+    let e = Env::new();
+    let out = e.validate_stdin("name: x\nsteps:\n  - id: a\n    kind: command\n    run: echo a\n");
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    assert_eq!(out.stdout(), "ok: x\n");
+    let out = e.validate_stdin("name: x\nsteps: []\n");
+    assert_eq!(out.code(), 1, "{}", out.stdout());
+}
+
+#[test]
+fn validate_warnings_alone_do_not_fail() {
+    let e = Env::new();
+    let out = e.validate_stdin(
+        "name: x\nsteps:\n  - id: sign\n    kind: approval\n    title: \"Ship it?\"\n    instructions: \"Look.\"\n    capture: review\n    output: feedback.md\n",
+    );
+    assert_eq!(out.code(), 0, "{}", out.stdout());
+    assert!(
+        out.stdout()
+            .lines()
+            .any(|l| l.starts_with("warning: ") && l.contains("outside a loop")),
+        "{}",
+        out.stdout()
+    );
+    assert_eq!(out.stdout().lines().last(), Some("ok: x"));
+}
+
+#[test]
+fn validate_resolves_a_workflow_by_name() {
+    let e = Env::new();
+    let init = e.run(&["init", "--storage", "local", "--workflows", "global"]);
+    assert_eq!(init.code(), 0, "{}", init.stderr());
+    let out = e.run(&["validate", "iterate"]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    assert_eq!(out.stdout().lines().last(), Some("ok: iterate"));
+    let out = e.run(&["validate", "global:iterate"]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+}
+
+#[test]
+fn validate_a_missing_file_is_a_usage_error() {
+    let e = Env::new();
+    let out = e.run(&["validate", "missing/nope.yaml"]);
+    assert_eq!(out.code(), 2, "{}{}", out.stdout(), out.stderr());
+    assert!(out.stdout().is_empty(), "{}", out.stdout());
+    assert!(out.stderr().contains("not found"), "{}", out.stderr());
+    let out = e.run(&["validate", "nope"]);
+    assert_eq!(out.code(), 2);
+    assert!(
+        out.stderr().contains("'nope' not found"),
+        "{}",
+        out.stderr()
+    );
+}

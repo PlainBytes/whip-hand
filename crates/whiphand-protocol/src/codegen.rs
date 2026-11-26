@@ -154,6 +154,7 @@ fn declarations() -> Vec<String> {
         WhiphandEventParams,
         RunStateChangedParams,
         PtyStartedParams,
+        PtyResizedParams,
         PtyDataParams,
         PtyExitParams,
         PtyAwaitParams,

@@ -742,6 +742,73 @@ mod tests {
         });
     }
 
+    async fn resize(agent: &Rc<Agent>, job_id: &str, client: u64, cols: u32, rows: u32) -> Value {
+        let ctx = crate::host::RequestCtx {
+            client_id: client,
+            kind: ClientKind::Desktop,
+        };
+        let p = json!({ "jobId": job_id, "cols": cols, "rows": rows });
+        crate::job_handlers::call(agent, ctx, "ptyResize", &p)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    fn pty_snapshot(agent: &Agent, job_id: &str) -> Value {
+        agent.scrollback.borrow().snapshot(job_id).unwrap()["pty"].clone()
+    }
+
+    fn size(pty: &Value) -> (Value, Value) {
+        (pty["cols"].clone(), pty["rows"].clone())
+    }
+
+    #[test]
+    fn a_resize_announces_the_applied_size_only_when_it_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        local(async {
+            let (agent, job, lines) = setup(dir.path());
+            let fe = AgentFrontend::new(agent.clone(), job.clone(), None);
+            let cancel = CancellationToken::new();
+            let id = job.job_id.clone();
+            let (a, l, c) = (agent.clone(), lines.clone(), cancel.clone());
+            let checks = tokio::task::spawn_local(async move {
+                while !text(&l).contains("hi") {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                let before = pty_snapshot(&a, &id);
+                assert_eq!(size(&before), (json!(80), json!(24)));
+
+                assert_eq!(resize(&a, &id, 1, 100, 30).await, json!({ "ok": true }));
+                // The same size again, and a larger watcher: the applied size holds.
+                resize(&a, &id, 1, 100, 30).await;
+                resize(&a, &id, 2, 120, 40).await;
+                // A narrower second watcher: the rows stay the first's.
+                resize(&a, &id, 2, 90, 40).await;
+                assert_eq!(
+                    of(&l, "ptyResized"),
+                    [
+                        json!({ "jobId": id, "cols": 100, "rows": 30 }),
+                        json!({ "jobId": id, "cols": 90, "rows": 30 }),
+                    ]
+                );
+                let after = pty_snapshot(&a, &id);
+                assert_eq!(size(&after), (json!(90), json!(30)));
+                assert_eq!(after["chunks"], before["chunks"]);
+                assert_eq!(after["baseIndex"], before["baseIndex"]);
+                c.cancel();
+            });
+            run(&fe, &spec("printf hi; sleep 30", json!({})), cancel).await;
+            checks.await.unwrap();
+
+            // No live session: nothing is announced, the exited snapshot keeps its size.
+            resize(&agent, &job.job_id, 1, 50, 20).await;
+            assert_eq!(of(&lines, "ptyResized").len(), 2);
+            let exited = pty_snapshot(&agent, &job.job_id);
+            assert_eq!(exited["exited"], true);
+            assert_eq!(size(&exited), (json!(90), json!(30)));
+        });
+    }
+
     #[test]
     fn a_cancel_ends_the_session() {
         let dir = tempfile::tempdir().unwrap();

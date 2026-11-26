@@ -1528,6 +1528,17 @@ pub struct PtyStartedParams {
     pub rows: u32,
 }
 
+/// The size a live terminal now has, after a `ptyResize` changed it. The
+/// smallest size any watcher reported wins, so it can differ from the size
+/// the caller asked for.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyResizedParams {
+    pub job_id: String,
+    pub cols: u32,
+    pub rows: u32,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PtyDataParams {
@@ -1760,6 +1771,7 @@ pub const NOTIFICATIONS: &[(&str, &str)] = &[
     ("whiphandEvent", "WhiphandEventParams"),
     ("runStateChanged", "RunStateChangedParams"),
     ("ptyStarted", "PtyStartedParams"),
+    ("ptyResized", "PtyResizedParams"),
     ("ptyData", "PtyDataParams"),
     ("ptyExit", "PtyExitParams"),
     ("ptyAwait", "PtyAwaitParams"),
@@ -1901,6 +1913,6 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), METHODS.len());
         assert_eq!(METHODS.len(), 53);
-        assert_eq!(NOTIFICATIONS.len(), 11);
+        assert_eq!(NOTIFICATIONS.len(), 12);
     }
 }

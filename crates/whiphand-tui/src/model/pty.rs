@@ -87,6 +87,13 @@ impl PtyRing {
         };
     }
 
+    /// `ptyResized`: the live terminal's new size. Output already buffered
+    /// stays as it was written.
+    pub fn resized(&mut self, cols: u32, rows: u32) {
+        self.cols = cols;
+        self.rows = rows;
+    }
+
     /// `ptyData`: one chunk, base64 as the agent sends it; its bytes.
     pub fn append(&mut self, data: &str, seq: Option<u64>) -> Vec<u8> {
         let bytes = decode(data);

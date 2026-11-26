@@ -396,6 +396,8 @@ export type RunStateChangedParams = { jobId: string, workdir?: string, identityK
 
 export type PtyStartedParams = { jobId: string, stepId: string, cols: number, rows: number, };
 
+export type PtyResizedParams = { jobId: string, cols: number, rows: number, };
+
 export type PtyDataParams = { jobId: string, 
 /**
  * Base64.
@@ -529,6 +531,7 @@ export interface NotificationMap {
   whiphandEvent: WhiphandEventParams;
   runStateChanged: RunStateChangedParams;
   ptyStarted: PtyStartedParams;
+  ptyResized: PtyResizedParams;
   ptyData: PtyDataParams;
   ptyExit: PtyExitParams;
   ptyAwait: PtyAwaitParams;

@@ -53,4 +53,25 @@ describe('code blocks', () => {
     fireEvent.click(screen.getByRole('button', { name: /copy/i }));
     expect(await screen.findByRole('button', { name: /copy failed/i })).toBeInTheDocument();
   });
+
+  it('copies through the textarea fallback when the clipboard API is missing', async () => {
+    // Remote access over plain HTTP: no secure context, so no navigator.clipboard.
+    Object.assign(navigator, { clipboard: undefined });
+    let copied: string | undefined;
+    const execCommand = vi.fn(() => {
+      copied = document.querySelector('textarea')?.value;
+      return true;
+    });
+    Object.defineProperty(document, 'execCommand', { value: execCommand, configurable: true, writable: true });
+    try {
+      const { container } = renderFence('```sh\nnpm test\n```');
+      fireEvent.click(screen.getByRole('button', { name: /copy/i }));
+      expect(await screen.findByRole('button', { name: /copied/i })).toBeInTheDocument();
+      expect(execCommand).toHaveBeenCalledWith('copy');
+      expect(copied).toBe('npm test\n');
+      expect(container.ownerDocument.querySelector('textarea')).toBeNull();
+    } finally {
+      Reflect.deleteProperty(document, 'execCommand');
+    }
+  });
 });

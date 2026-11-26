@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Button, Tooltip } from '@fluentui/react-components';
 import { Copy16Regular } from '@fluentui/react-icons';
 import { highlightCode } from '../files/highlight.ts';
+import { copyText } from '../lib/copy-text.ts';
 
 type CopyState = 'idle' | 'copied' | 'failed';
 
@@ -44,11 +45,11 @@ export function CodeBlock({ language, code, fallbackFor }: CodeBlockProps) {
   const copy = useCallback(() => {
     void (async () => {
       try {
-        await navigator.clipboard.writeText(code);
+        await copyText(code);
         setCopyState('copied');
       } catch {
-        // A webview can refuse clipboard access; say so rather than
-        // showing "Copied" over a clipboard that never changed.
+        // Both the clipboard API and the fallback refused; say so rather
+        // than showing "Copied" over a clipboard that never changed.
         setCopyState('failed');
       }
     })();

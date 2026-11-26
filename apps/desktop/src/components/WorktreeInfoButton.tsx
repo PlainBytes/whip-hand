@@ -15,6 +15,7 @@ import {
 import {
   BranchFork20Regular, Checkmark20Regular, Copy20Regular, ErrorCircle20Regular,
 } from '@fluentui/react-icons';
+import { copyText } from '../lib/copy-text.ts';
 
 type CopyState = 'idle' | 'copied' | 'failed';
 
@@ -43,11 +44,11 @@ function CopyRow({ title, value, copyLabel, testId }: CopyRowProps) {
   const copy = useCallback(() => {
     void (async () => {
       try {
-        await navigator.clipboard.writeText(value);
+        await copyText(value);
         setCopyState('copied');
       } catch {
-        // A webview can refuse clipboard access; say so rather than
-        // showing "Copied" over a clipboard that never changed.
+        // Both the clipboard API and the fallback refused; say so rather
+        // than showing "Copied" over a clipboard that never changed.
         setCopyState('failed');
       }
     })();

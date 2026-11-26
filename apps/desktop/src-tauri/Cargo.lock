@@ -5349,6 +5349,7 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-updater",
  "whiphand-agent",
+ "whiphand-core",
 ]
 
 [[package]]

@@ -573,8 +573,9 @@ token disconnects every device using the old link.
 
 The browser UI adapts to phone-sized screens: navigation moves into a menu, and
 artifacts and review show a list first, then the item you tap. A phone viewing an
-interactive session does not resize the host's terminal: it shows the session at
-its own size and scrolls sideways.
+interactive session is a guest in portrait and in landscape alike: it never resizes
+the host's terminal. It shows the session at the host's size, follows it when the
+host's window is resized, and scrolls sideways where the screen is narrower.
 
 Two differences from the desktop app:
 

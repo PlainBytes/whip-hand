@@ -719,6 +719,53 @@ describe('TerminalPanel', () => {
       expect(inputs.map(r => r.params.data)).toEqual([encodeToBase64('ls'), encodeToBase64('\x1b\r')]);
     });
 
+    describe('a ptyResized notification', () => {
+      /** The panel as RunDetailPage wires it: size from the store, fed by the agent's notifications. */
+      function renderFromStore(jobId: string, sizing: 'fit' | 'follow') {
+        const transport = new MockTransport();
+        const client = new AgentClient(transport);
+        const onResize = vi.fn();
+        function Wired() {
+          const job = useAppStore(state => state.jobs[jobId]);
+          return <TerminalPanel jobId={jobId} onResize={onResize} cols={job?.ptyCols} rows={job?.ptyRows} sizing={sizing} />;
+        }
+        const result = render(<AgentClientProvider client={client}><Wired /></AgentClientProvider>);
+        act(() => transport.emitLine({ method: 'ptyStarted', params: { jobId, stepId: 's1', cols: 80, rows: 24 } }));
+        const container = result.getByTestId('terminal-container');
+        Object.defineProperty(container, 'clientWidth', { value: 800, configurable: true });
+        Object.defineProperty(container, 'clientHeight', { value: 600, configurable: true });
+        return { transport, onResize };
+      }
+
+      it('resizes a follower to the new size, and it sends nothing back', () => {
+        const { transport, onResize } = renderFromStore('job-r1', 'follow');
+        expect([handle.term.cols, handle.term.rows]).toEqual([80, 24]);
+
+        act(() => transport.emitLine({ method: 'ptyResized', params: { jobId: 'job-r1', cols: 160, rows: 45 } }));
+
+        expect(handle.term.resize).toHaveBeenLastCalledWith(160, 45);
+        expect(handle.term.cols).toBe(160);
+        expect(handle.term.rows).toBe(45);
+        expect(onResize).not.toHaveBeenCalled();
+        expect(transport.sent.some(l => JSON.parse(l).method === 'ptyResize')).toBe(false);
+      });
+
+      it('leaves a fit panel alone: no resize, no fit, no report', () => {
+        const { transport, onResize } = renderFromStore('job-r2', 'fit');
+        const fits = handle.fitAddon.fit.mock.calls.length;
+        const reports = onResize.mock.calls.length;
+        handle.term.resize.mockClear();
+
+        act(() => transport.emitLine({ method: 'ptyResized', params: { jobId: 'job-r2', cols: 160, rows: 45 } }));
+
+        expect(useAppStore.getState().jobs['job-r2']).toMatchObject({ ptyCols: 160, ptyRows: 45 });
+        expect(handle.term.resize).not.toHaveBeenCalled();
+        expect(handle.fitAddon.fit.mock.calls.length).toBe(fits);
+        expect(onResize.mock.calls.length).toBe(reports);
+        expect(transport.sent.some(l => JSON.parse(l).method === 'ptyResize')).toBe(false);
+      });
+    });
+
     it('scrolls sideways inside the panel', () => {
       const { container } = renderSized('job-f5', { sizing: 'follow', cols: 80, rows: 24 });
       expect(container.parentElement).toHaveStyle({ overflowX: 'auto' });

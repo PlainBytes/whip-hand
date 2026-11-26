@@ -14,6 +14,7 @@ import type {
   PtyAwaitParams,
   AwaitReason,
   PtyStartedParams,
+  PtyResizedParams,
   RunStateChangedParams,
   StepLogParams,
   ManualRequestParams,
@@ -245,6 +246,11 @@ export interface JobState {
   hasNarrated: boolean;
   ptyActive: boolean;
   ptyStepId?: string;
+  /**
+   * The PTY's live size: set by ptyStarted, then followed through ptyResized.
+   * A snapshot or summary for the same step replaces it (it may carry a
+   * resize this client missed while disconnected); one for another step never does.
+   */
   ptyCols?: number;
   ptyRows?: number;
   /**
@@ -960,6 +966,12 @@ export interface AppState {
    */
   applyHighRateBatch: (items: readonly HighRateNotification[]) => void;
   applyPtyStarted: (params: PtyStartedParams) => void;
+  /**
+   * Follows a resize of the job's PTY session. Only the size changes — the
+   * buffer, exit and awaiting state stay. Ignored for an unknown job or one
+   * with no PTY session.
+   */
+  applyPtyResized: (params: PtyResizedParams) => void;
   applyPtyData: (params: PtyDataParams) => void;
   applyPtyExit: (params: PtyExitParams) => void;
   applyPtyAwait: (params: PtyAwaitParams) => void;
@@ -1070,8 +1082,13 @@ function withScrollbackSnapshot(job: JobState, snapshot: JobScrollback): JobStat
     next.ptyDataBaseIndex = merged.baseIndex;
     next.ptyDataTrimmed = merged.trimmed;
     next.ptyStepId = job.ptyStepId ?? snapshot.pty.stepId;
-    next.ptyCols = job.ptyCols ?? snapshot.pty.cols;
-    next.ptyRows = job.ptyRows ?? snapshot.pty.rows;
+    // The snapshot's size is current for its step — it may include a resize
+    // missed while disconnected — so it wins for that step; a snapshot of
+    // another step never touches the live step's size.
+    if (job.ptyStepId === undefined || job.ptyStepId === snapshot.pty.stepId) {
+      next.ptyCols = snapshot.pty.cols;
+      next.ptyRows = snapshot.pty.rows;
+    }
     // Live notifications are always more current than a snapshot, so an
     // exit already seen here is never un-set by one that predates it.
     if (!job.ptyExited && snapshot.pty.exited) {
@@ -1375,6 +1392,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     };
   }),
 
+  applyPtyResized: params => set(state => {
+    const job = state.jobs[params.jobId];
+    if (!job || job.ptyStepId === undefined) return state;
+    if (job.ptyCols === params.cols && job.ptyRows === params.rows) return state;
+    return {
+      jobs: { ...state.jobs, [params.jobId]: { ...job, ptyCols: params.cols, ptyRows: params.rows } },
+    };
+  }),
+
   applyPtyData: params => get().applyHighRateBatch([{ method: 'ptyData', params }]),
 
   applyPtyAwait: params => set(state => {
@@ -1457,8 +1483,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         identityKey: job.identityKey ?? summary.identityKey,
         ptyActive: job.ptyActive || summary.pty !== null,
         ptyStepId: job.ptyStepId ?? summary.pty?.stepId,
-        ptyCols: job.ptyCols ?? summary.pty?.cols,
-        ptyRows: job.ptyRows ?? summary.pty?.rows,
+        // Same rule as withScrollbackSnapshot: the summary's size wins for
+        // its own step, never for another one.
+        ...(summary.pty && (job.ptyStepId === undefined || job.ptyStepId === summary.pty.stepId)
+          ? { ptyCols: summary.pty.cols, ptyRows: summary.pty.rows }
+          : {}),
         pendingManual: job.pendingManual ?? summary.pendingManual,
       };
     }

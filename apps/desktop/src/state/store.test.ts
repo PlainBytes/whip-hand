@@ -365,6 +365,40 @@ describe('useAppStore reducers', () => {
     expect(useAppStore.getState().jobs.j1.ptyActive).toBe(false);
   });
 
+  it('applyPtyResized follows the new size and leaves buffer, exit and awaiting state alone', () => {
+    const s = useAppStore.getState;
+    s().applyPtyStarted({ jobId: 'j1', stepId: 'triage', cols: 80, rows: 24 });
+    s().applyPtyData({ jobId: 'j1', data: 'aGVsbG8=' });
+    s().applyPtyAwait({ jobId: 'j1', stepId: 'triage', awaiting: true, reason: 'turn' });
+    const before = s().jobs.j1;
+
+    s().applyPtyResized({ jobId: 'j1', cols: 160, rows: 45 });
+
+    expect(s().jobs.j1).toEqual({ ...before, ptyCols: 160, ptyRows: 45 });
+  });
+
+  it('applyPtyResized keeps an exit already seen', () => {
+    const s = useAppStore.getState;
+    s().applyPtyStarted({ jobId: 'j1', stepId: 'triage', cols: 80, rows: 24 });
+    s().applyPtyExit({ jobId: 'j1', exitCode: 0, reason: 'ended' });
+
+    s().applyPtyResized({ jobId: 'j1', cols: 160, rows: 45 });
+
+    expect(s().jobs.j1).toMatchObject({ ptyActive: false, ptyExited: true, ptyExitReason: 'ended', ptyCols: 160 });
+  });
+
+  it('applyPtyResized ignores an unknown job and a job with no PTY session', () => {
+    const s = useAppStore.getState;
+    s().applyStepLog({ jobId: 'headless', stream: 'stdout', line: 'x' });
+    const jobs = s().jobs;
+
+    s().applyPtyResized({ jobId: 'nope', cols: 160, rows: 45 });
+    s().applyPtyResized({ jobId: 'headless', cols: 160, rows: 45 });
+
+    expect(s().jobs).toBe(jobs);
+    expect(s().jobs.nope).toBeUndefined();
+  });
+
   it('applyPtyExit sets ptyExited and records the exit code', () => {
     useAppStore.getState().applyPtyStarted({ jobId: 'j1', stepId: 'triage', cols: 80, rows: 24 });
     useAppStore.getState().applyPtyExit({ jobId: 'j1', exitCode: 3 });

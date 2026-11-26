@@ -417,6 +417,64 @@ mod tests {
         assert_eq!(ok.command_line, "/v:off /d /s /c \"C:\\n\\x.cmd \"a b\"\"");
     }
 
+    fn win32_deps(path_dir: &std::path::Path) -> LaunchDeps {
+        let env = BTreeMap::from([
+            ("PATH".to_string(), path_dir.to_str().unwrap().to_string()),
+            ("PATHEXT".to_string(), ".COM;.EXE;.BAT;.CMD".to_string()),
+            (
+                "COMSPEC".to_string(),
+                "C:\\Windows\\system32\\cmd.exe".to_string(),
+            ),
+        ]);
+        LaunchDeps {
+            platform: Platform::Win32,
+            env: Env::Map(env),
+        }
+    }
+
+    #[test]
+    fn a_plain_cmd_script_on_path_runs_through_the_cmd_wrapper() {
+        let bin = tempfile::tempdir().unwrap();
+        // An editor launcher, not an npm node shim: nothing to bypass.
+        std::fs::write(
+            bin.path().join("code.cmd"),
+            "@echo off\r\nstart \"\" %*\r\n",
+        )
+        .unwrap();
+        let deps = win32_deps(bin.path());
+        let folder = "C:\\work\\my repo".to_string();
+        let plan = plan_launch(&["code".to_string(), folder.clone()], &deps).unwrap();
+        let invocation = plan.invocation.expect("a .cmd goes through cmd.exe");
+        assert_eq!(plan.file, "C:\\Windows\\system32\\cmd.exe");
+        assert_eq!(invocation.file, plan.file);
+        let resolved = win32_join(&[bin.path().to_str().unwrap(), "code.cmd"]);
+        assert!(
+            invocation.command_line.contains(&msvcrt_quote(&resolved)),
+            "{}",
+            invocation.command_line
+        );
+        assert!(
+            invocation.command_line.contains(&msvcrt_quote(&folder)),
+            "{}",
+            invocation.command_line
+        );
+    }
+
+    #[test]
+    fn an_exe_on_path_is_spawned_directly() {
+        let bin = tempfile::tempdir().unwrap();
+        std::fs::write(bin.path().join("zed.exe"), "").unwrap();
+        let deps = win32_deps(bin.path());
+        let folder = "C:\\work\\my repo".to_string();
+        let plan = plan_launch(&["zed".to_string(), folder.clone()], &deps).unwrap();
+        assert_eq!(plan.invocation, None);
+        assert_eq!(
+            plan.file,
+            win32_join(&[bin.path().to_str().unwrap(), "zed.exe"])
+        );
+        assert_eq!(plan.args, [folder]);
+    }
+
     #[test]
     fn crlf() {
         let mut f = CrlfToLf::default();

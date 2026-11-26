@@ -58,10 +58,15 @@ fn out_stdio(o: Out) -> Stdio {
     }
 }
 
-fn command_for(plan: &LaunchPlan) -> Command {
-    let mut cmd = Command::new(&plan.file);
+/// Turns a launch plan into a `Command` (std's, so a caller outside a tokio
+/// runtime can spawn it; `tokio::process::Command::from` lifts it). On
+/// Windows the cmd.exe wrapper's arguments are already quoted, so they go in
+/// with `raw_arg` rather than being quoted a second time.
+pub fn command_for_plan(plan: &LaunchPlan) -> std::process::Command {
+    let mut cmd = std::process::Command::new(&plan.file);
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
         if plan.invocation.is_some() {
             // The cmd.exe wrapper's arguments are already quoted for both parsers.
             for a in &plan.args {
@@ -91,7 +96,7 @@ pub fn spawn_runner(
     group: bool,
 ) -> io::Result<Child> {
     let plan = plan_launch(argv, &LaunchDeps::default()).map_err(io::Error::other)?;
-    let mut cmd = command_for(&plan);
+    let mut cmd = Command::from(command_for_plan(&plan));
     if let Some(cwd) = &opts.cwd {
         cmd.current_dir(cwd).env("PWD", pwd_for(cwd));
     }
@@ -224,7 +229,7 @@ pub async fn exec_runner(
         stderr: String::new(),
         message,
     })?;
-    let mut cmd = command_for(&plan);
+    let mut cmd = Command::from(command_for_plan(&plan));
     if let Some(cwd) = &opts.cwd {
         cmd.current_dir(cwd).env("PWD", pwd_for(cwd));
     }

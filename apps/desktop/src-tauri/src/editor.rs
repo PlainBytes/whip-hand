@@ -1,11 +1,18 @@
 // Opens a folder in the user's editor. This lives in the Tauri shell rather
 // than behind an agent RPC so a remote (browser) client gains no way to spawn
 // processes on the host. No shell is involved: the executable is spawned
-// directly and the folder is passed as exactly one argument.
+// directly and the folder is passed as exactly one argument. The one exception
+// is Windows, where a `.cmd`/`.bat` launcher (VS Code's `code.cmd`) can only
+// run through cmd.exe; core's launch planner finds it via PATH + PATHEXT and
+// wraps it with quoting that survives both parsers.
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use serde::Deserialize;
+use whiphand_core::process::exec::{
+    cmd_invocation, resolve_executable, LaunchDeps, LaunchPlan, Platform,
+};
+use whiphand_core::process::launch::command_for_plan;
 
 /// Mirror of the protocol's `EditorPreference` — the shell does not depend on
 /// `whiphand-protocol` for one enum.
@@ -41,10 +48,7 @@ fn resolve_dir(workdir: &str, rel_path: &str) -> Result<PathBuf, String> {
     let joined = Path::new(workdir).join(rel_path);
     match std::fs::canonicalize(&joined) {
         Ok(dir) if dir.is_dir() => Ok(dir),
-        _ => Err(format!(
-            "Folder no longer exists: {}",
-            joined.display()
-        )),
+        _ => Err(format!("Folder no longer exists: {}", joined.display())),
     }
 }
 
@@ -52,6 +56,39 @@ fn spawn_error(exe: &str, err: &std::io::Error) -> String {
     format!(
         "Couldn't start \"{exe}\": {err}. Is it on PATH? You can set a full path under Preferences → Editor → Custom command."
     )
+}
+
+/// How to start `exe` on `dir`: core's PATH + PATHEXT lookup and, on
+/// Windows, core's cmd.exe wrapper for a `.cmd`/`.bat`. This is `plan_launch`
+/// without its npm-shim bypass: VS Code's `code.cmd` (and Cursor's and
+/// Windsurf's) names a `cli.js` that has to run inside the editor's own
+/// executable, so the bypass, which would run it with `node` from PATH, would
+/// not open the editor.
+fn plan_editor_launch(exe: &str, dir: &Path, deps: &LaunchDeps) -> Result<LaunchPlan, String> {
+    let dir = dir
+        .to_str()
+        .ok_or_else(|| {
+            format!(
+                "Couldn't start \"{exe}\": the folder path is not valid Unicode ({}).",
+                dir.display()
+            )
+        })?
+        .to_string();
+    let resolved = resolve_executable(exe, deps);
+    if deps.platform != Platform::Win32 || !resolved.uses_shell {
+        return Ok(LaunchPlan {
+            file: resolved.file,
+            args: vec![dir],
+            invocation: None,
+        });
+    }
+    let invocation = cmd_invocation(&resolved.file, &[dir], &deps.env)
+        .map_err(|e| format!("Couldn't start \"{exe}\": {e}."))?;
+    Ok(LaunchPlan {
+        file: invocation.file.clone(),
+        args: invocation.args.clone(),
+        invocation: Some(invocation),
+    })
 }
 
 #[tauri::command]
@@ -65,9 +102,9 @@ pub fn open_in_editor(
     if exe.trim().is_empty() {
         return Err("No editor command is set. Choose one under Preferences → Editor.".to_string());
     }
-    let mut command = Command::new(exe);
+    let plan = plan_editor_launch(exe, &dir, &LaunchDeps::default())?;
+    let mut command = command_for_plan(&plan);
     command
-        .arg(&dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -141,10 +178,7 @@ mod tests {
     fn missing_directory_names_the_path() {
         let tmp = tempdir("missing");
         let err = resolve_dir(tmp.to_str().unwrap(), "gone").unwrap_err();
-        assert!(
-            err.starts_with("Folder no longer exists: "),
-            "{err}"
-        );
+        assert!(err.starts_with("Folder no longer exists: "), "{err}");
         assert!(err.contains("gone"), "{err}");
         std::fs::remove_dir_all(&tmp).unwrap();
     }
@@ -169,6 +203,85 @@ mod tests {
             msg.contains("Preferences → Editor → Custom command"),
             "{msg}"
         );
+    }
+
+    fn win32_deps(path_dir: &Path) -> LaunchDeps {
+        use std::collections::BTreeMap;
+        use whiphand_core::process::exec::Env;
+        LaunchDeps {
+            platform: Platform::Win32,
+            env: Env::Map(BTreeMap::from([
+                ("PATH".to_string(), path_dir.to_str().unwrap().to_string()),
+                ("PATHEXT".to_string(), ".COM;.EXE;.BAT;.CMD".to_string()),
+                (
+                    "COMSPEC".to_string(),
+                    "C:\\Windows\\system32\\cmd.exe".to_string(),
+                ),
+            ])),
+        }
+    }
+
+    #[test]
+    fn posix_launches_the_executable_with_the_folder() {
+        let deps = LaunchDeps {
+            platform: Platform::Posix,
+            env: whiphand_core::process::exec::Env::Map(Default::default()),
+        };
+        let plan = plan_editor_launch("code", Path::new("/work/my repo"), &deps).unwrap();
+        assert_eq!(plan.file, "code");
+        assert_eq!(plan.args, ["/work/my repo"]);
+        assert_eq!(plan.invocation, None);
+    }
+
+    #[test]
+    fn a_windows_exe_is_spawned_directly() {
+        let tmp = tempdir("zed");
+        std::fs::write(tmp.join("zed.exe"), "").unwrap();
+        let plan = plan_editor_launch("zed", Path::new("C:\\repo"), &win32_deps(&tmp)).unwrap();
+        assert_eq!(plan.invocation, None);
+        assert!(plan.file.ends_with("zed.exe"), "{}", plan.file);
+        assert_eq!(plan.args, ["C:\\repo"]);
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn vscodes_cmd_launcher_runs_through_cmd_not_node() {
+        // VS Code's layout: bin\code.cmd runs resources\app\out\cli.js inside
+        // Code.exe. A node.exe beside it would let plan_launch "bypass" the shim.
+        let tmp = tempdir("vscode");
+        let bin = tmp.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(tmp.join("resources/app/out")).unwrap();
+        std::fs::write(tmp.join("resources/app/out/cli.js"), "").unwrap();
+        std::fs::write(bin.join("node.exe"), "").unwrap();
+        std::fs::write(
+            bin.join("code.cmd"),
+            "@echo off\r\nsetlocal\r\nset ELECTRON_RUN_AS_NODE=1\r\n\
+             \"%~dp0..\\Code.exe\" \"%~dp0..\\resources\\app\\out\\cli.js\" %*\r\nendlocal\r\n",
+        )
+        .unwrap();
+        let deps = win32_deps(&bin);
+        let plan = plan_editor_launch("code", Path::new("C:\\my repo"), &deps).unwrap();
+        let invocation = plan.invocation.expect("code.cmd goes through cmd.exe");
+        assert_eq!(plan.file, "C:\\Windows\\system32\\cmd.exe");
+        assert!(
+            invocation.command_line.contains("code.cmd"),
+            "{}",
+            invocation.command_line
+        );
+        assert!(
+            invocation.command_line.ends_with(" \"C:\\my repo\"\""),
+            "{}",
+            invocation.command_line
+        );
+        // Why this module does not call plan_launch: it would run cli.js with node.
+        let generic = whiphand_core::process::exec::plan_launch(
+            &["code".to_string(), "C:\\my repo".to_string()],
+            &deps,
+        )
+        .unwrap();
+        assert!(generic.file.ends_with("node.exe"), "{generic:?}");
+        std::fs::remove_dir_all(&tmp).unwrap();
     }
 
     fn tempdir(tag: &str) -> PathBuf {

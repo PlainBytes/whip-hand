@@ -18,8 +18,8 @@ export interface TerminalPanelProps {
   /**
    * `fit` (default): xterm fills its box and the size is reported as ptyResize.
    * `follow`: a guest — xterm takes the PTY's own cols/rows, never reports a
-   * size, and the panel scrolls sideways. For narrow screens, where fitting
-   * would shrink the PTY the desktop is also showing.
+   * size, and the panel scrolls sideways. For phones, in either orientation,
+   * where fitting would shrink the PTY the desktop is also showing.
    */
   sizing?: 'fit' | 'follow';
 }

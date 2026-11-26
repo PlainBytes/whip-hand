@@ -118,6 +118,27 @@ describe('applyScrollbackSnapshot', () => {
     expect(store().jobs.j2!.logTail).toEqual([{ stream: 'stdout', line: 'live' }]);
   });
 
+  it('takes the size of a snapshot for the same step, which may carry a resize missed while disconnected', () => {
+    store().applyPtyStarted({ jobId: 'j1', stepId: 's1', cols: 80, rows: 24 });
+
+    store().applyScrollbackSnapshot('j1', ptySnapshot({ cols: 160, rows: 45 }));
+
+    expect(store().jobs.j1).toMatchObject({ ptyStepId: 's1', ptyCols: 160, ptyRows: 45 });
+  });
+
+  it('takes the snapshot size when the store has no step yet', () => {
+    store().applyScrollbackSnapshot('j1', ptySnapshot({ cols: 160, rows: 45 }));
+    expect(store().jobs.j1).toMatchObject({ ptyCols: 160, ptyRows: 45 });
+  });
+
+  it('never lets a snapshot of another step overwrite the live step\'s size', () => {
+    store().applyPtyStarted({ jobId: 'j1', stepId: 'live', cols: 120, rows: 40 });
+
+    store().applyScrollbackSnapshot('j1', ptySnapshot({ stepId: 'old', cols: 160, rows: 45 }));
+
+    expect(store().jobs.j1).toMatchObject({ ptyStepId: 'live', ptyCols: 120, ptyRows: 40 });
+  });
+
   it('carries a pending await through to a late attacher', () => {
     store().applyScrollbackSnapshot('j1', ptySnapshot({
       awaiting: { stepId: 's1', reason: 'permission' },
@@ -305,6 +326,21 @@ describe('applyJobSummaries', () => {
     const job = store().jobs.j1!;
     expect(job.ptyStepId).toBe('live-step');
     expect(job.ptyCols).toBe(120);
+    expect(job.ptyRows).toBe(40);
+  });
+
+  it('replaces a stale size with the summary\'s for the same step', () => {
+    store().applyPtyStarted({ jobId: 'j1', stepId: 's1', cols: 80, rows: 24 });
+    store().applyJobSummaries([summary]);
+
+    expect(store().jobs.j1).toMatchObject({ ptyStepId: 's1', ptyCols: 100, ptyRows: 30 });
+  });
+
+  it('keeps the size when a summary has no pty', () => {
+    store().applyPtyStarted({ jobId: 'j1', stepId: 's1', cols: 80, rows: 24 });
+    store().applyJobSummaries([{ ...summary, pty: null }]);
+
+    expect(store().jobs.j1).toMatchObject({ ptyCols: 80, ptyRows: 24 });
   });
 
   it('seeds runName from the summary for a client attaching mid-run', () => {

@@ -2254,3 +2254,30 @@ fn the_help_overlay_scrolls_with_the_movement_keys() {
     update(&mut model, key('x'));
     assert!(!model.help);
 }
+
+#[test]
+fn a_pty_resize_updates_the_known_ring_and_sends_nothing() {
+    let mut model = Model::new("/w".into(), 0.0);
+    running(&mut model, "j", "r");
+    update(
+        &mut model,
+        Msg::Agent(Notification::PtyStarted(p::PtyStartedParams {
+            job_id: "j".into(),
+            step_id: "chat".into(),
+            cols: 80,
+            rows: 24,
+        })),
+    );
+    let resized = |job: &str| {
+        Msg::Agent(Notification::PtyResized(p::PtyResizedParams {
+            job_id: job.into(),
+            cols: 100,
+            rows: 30,
+        }))
+    };
+    assert!(methods(&update(&mut model, resized("j"))).is_empty());
+    let ring = &model.jobs["j"].pty;
+    assert_eq!((ring.cols, ring.rows, ring.active), (100, 30, true));
+    assert!(methods(&update(&mut model, resized("other"))).is_empty());
+    assert!(!model.jobs.contains_key("other"));
+}

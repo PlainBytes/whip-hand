@@ -358,6 +358,13 @@
         "rows": 24
       }
     ],
+    "ptyResized": [
+      {
+        "jobId": "<UUID>",
+        "cols": 100,
+        "rows": 30
+      }
+    ],
     "ptyExit": [
       {
         "jobId": "<UUID>",

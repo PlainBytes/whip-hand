@@ -101,10 +101,18 @@ pub async fn call(agent: &Rc<Agent>, ctx: RequestCtx, method: &str, p: &Value) -
             // The smallest size any live watcher reported.
             let (cols, rows) =
                 agent.pty_sizes.borrow_mut().report(job_id, ctx.client_id, clamp(&p["cols"]), clamp(&p["rows"]));
+            let changed = (job.pty_cols.get(), job.pty_rows.get()) != (cols, rows);
             job.pty_cols.set(cols);
             job.pty_rows.set(rows);
-            if let Some(live) = job.session.borrow().as_ref() {
-                live.process.resize(cols, rows);
+            // Cloned out so the borrow ends before notify runs.
+            let process = job.session.borrow().as_ref().map(|live| live.process.clone());
+            // Without a live session there is nothing to announce: the next
+            // one's `ptyStarted` carries the size.
+            if let Some(process) = process {
+                process.resize(cols, rows);
+                if changed {
+                    agent.notify("ptyResized", json!({ "jobId": job_id, "cols": cols, "rows": rows }));
+                }
             }
             Ok(json!({ "ok": true }))
         }

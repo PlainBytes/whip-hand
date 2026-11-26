@@ -156,6 +156,15 @@ impl Scrollback {
                     p["rows"].as_u64().unwrap_or(24),
                 ));
             }
+            "ptyResized" => {
+                // Only the size changes: the chunks were written at the old
+                // one and stay as they are. No entry is created for it.
+                let (cols, rows) = (params["cols"].as_u64(), params["rows"].as_u64());
+                if let Some(pty) = self.entries.get_mut(&job_id).and_then(|e| e.pty.as_mut()) {
+                    pty.cols = cols.unwrap_or(pty.cols);
+                    pty.rows = rows.unwrap_or(pty.rows);
+                }
+            }
             "ptyData" => {
                 let data = params["data"].as_str().unwrap_or_default().to_string();
                 let entry = self.touch(&job_id);
@@ -330,6 +339,39 @@ mod tests {
         assert_eq!(
             snap["logs"]["lines"],
             json!([{ "stream": "stderr", "line": "x" }])
+        );
+    }
+
+    #[test]
+    fn a_resize_changes_only_the_tracked_size() {
+        let mut s = Scrollback::default();
+        rec(
+            &mut s,
+            "ptyResized",
+            json!({ "jobId": "none", "cols": 100, "rows": 30 }),
+        );
+        assert!(s.snapshot("none").is_none());
+        rec(
+            &mut s,
+            "ptyStarted",
+            json!({ "jobId": "j", "stepId": "a", "cols": 80, "rows": 24 }),
+        );
+        rec(&mut s, "ptyData", json!({ "jobId": "j", "data": "AA==" }));
+        rec(
+            &mut s,
+            "ptyResized",
+            json!({ "jobId": "j", "cols": 100, "rows": 30 }),
+        );
+        let pty = &s.snapshot("j").unwrap()["pty"];
+        assert_eq!(
+            (pty["cols"].clone(), pty["rows"].clone()),
+            (json!(100), json!(30))
+        );
+        assert_eq!(pty["chunks"], json!(["AA=="]));
+        assert_eq!(pty["baseIndex"], 0);
+        assert_eq!(
+            rec(&mut s, "ptyData", json!({ "jobId": "j", "data": "AQ==" }))["seq"],
+            1
         );
     }
 

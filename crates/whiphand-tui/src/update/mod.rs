@@ -697,6 +697,14 @@ fn on_notification(model: &mut Model, n: Notification) -> Vec<Cmd> {
             model.dirty = true;
             attach::auto(model, &s.job_id)
         }
+        Notification::PtyResized(r) => {
+            // Bookkeeping only, no redraw: answering with a `ptyResize`
+            // would chase the size this client itself may have caused.
+            if let Some(job) = model.jobs.get_mut(&r.job_id) {
+                job.pty.resized(r.cols, r.rows);
+            }
+            vec![]
+        }
         Notification::PtyData(d) => {
             let Some(job) = model.jobs.get_mut(&d.job_id) else {
                 return vec![];

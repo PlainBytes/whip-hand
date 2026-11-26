@@ -57,9 +57,8 @@ export function createHighRateQueue(apply: (items: HighRateNotification[]) => vo
 /**
  * Wires one AgentClient instance into the tree: syncs its connection status
  * into the zustand store, subscribes once to every store-relevant
- * notification (whiphandEvent, runStateChanged, stepLog, ptyStarted, ptyExit,
- * remoteAccessChanged) so
- * pages never each set up their own listener, and kicks off connect() once
+ * notification (whiphandEvent, runStateChanged, stepLog, ptyStarted, ptyResized,
+ * ptyExit, remoteAccessChanged) so pages never each set up their own listener, and kicks off connect() once
  * on mount. This is the testability seam pages rely on — production
  * (main.tsx) provides a client built on InProcessTransport, tests provide one
  * built on MockTransport, and page components never construct a client
@@ -72,6 +71,7 @@ export function AgentClientProvider({ client, children }: { client: AgentClient;
   const applyHighRateBatch = useAppStore(state => state.applyHighRateBatch);
   const applyRunStateChanged = useAppStore(state => state.applyRunStateChanged);
   const applyPtyStarted = useAppStore(state => state.applyPtyStarted);
+  const applyPtyResized = useAppStore(state => state.applyPtyResized);
   const applyPtyExit = useAppStore(state => state.applyPtyExit);
   const applyPtyAwait = useAppStore(state => state.applyPtyAwait);
   const applyManualRequest = useAppStore(state => state.applyManualRequest);
@@ -98,6 +98,7 @@ export function AgentClientProvider({ client, children }: { client: AgentClient;
       client.onNotification('runStateChanged', ordered(applyRunStateChanged)),
       client.onNotification('stepLog', params => highRate.push({ method: 'stepLog', params })),
       client.onNotification('ptyStarted', ordered(applyPtyStarted)),
+      client.onNotification('ptyResized', ordered(applyPtyResized)),
       client.onNotification('ptyData', params => highRate.push({ method: 'ptyData', params })),
       client.onNotification('ptyExit', ordered(applyPtyExit)),
       client.onNotification('ptyAwait', ordered(applyPtyAwait)),

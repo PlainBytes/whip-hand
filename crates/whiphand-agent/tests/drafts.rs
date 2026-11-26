@@ -56,11 +56,25 @@ impl Harness {
         self.dir.path().join("drafts")
     }
 
-    fn call(&mut self, method: &str, params: Value) -> Value {
+    /// Sends a request without waiting for its answer.
+    fn send(&mut self, method: &str, params: Value) -> u64 {
         self.next_id += 1;
         let id = self.next_id;
         self.client
             .send(json!({ "id": id, "method": method, "params": params }).to_string());
+        id
+    }
+
+    fn call(&mut self, method: &str, params: Value) -> Value {
+        let id = self.send(method, params);
+        self.answer(id)
+    }
+
+    /// The answer to request `id`, keeping what arrives before it.
+    fn answer(&mut self, id: u64) -> Value {
+        if let Some(i) = self.seen.iter().position(|m| m["id"] == id) {
+            return self.seen.remove(i);
+        }
         loop {
             let m = self
                 .lines
@@ -96,6 +110,28 @@ impl Harness {
             if m["method"] == "appStateChanged" {
                 return m["params"].clone();
             }
+        }
+    }
+
+    /// The `runStateChanged` that settles `job_id`.
+    fn settled(&mut self, job_id: &Value) -> Value {
+        let is_it = |m: &Value| {
+            m["method"] == "runStateChanged"
+                && m["params"]["jobId"] == *job_id
+                && m["params"]["status"] != "running"
+        };
+        if let Some(i) = self.seen.iter().position(is_it) {
+            return self.seen.remove(i)["params"].clone();
+        }
+        loop {
+            let m = self
+                .lines
+                .recv_timeout(Duration::from_secs(60))
+                .unwrap_or_else(|_| panic!("job {job_id} to settle; seen: {:?}", self.seen));
+            if is_it(&m) {
+                return m["params"].clone();
+            }
+            self.seen.push(m);
         }
     }
 
@@ -394,4 +430,142 @@ fn a_local_save_accepts_any_attachment_path() {
         h.state()["runDrafts"][0]["attachments"][0]["path"],
         elsewhere.to_string_lossy().as_ref()
     );
+}
+
+// ------------------------------------------------------- a run reading a stash
+
+fn git(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Forward slashes, which Git Bash on Windows also reads.
+fn sh_path(p: &Path) -> String {
+    p.to_string_lossy().replace('\\', "/")
+}
+
+/// A git workspace whose worktree workflow reads `attachments` and waits for
+/// `gate` to exist, then exits with the code written in it.
+fn gated_workspace(base: &Path, gate: &Path) -> PathBuf {
+    let ws = base.join("ws");
+    std::fs::create_dir_all(ws.join(".whiphand/workflows")).unwrap();
+    git(&ws, &["init", "-q"]);
+    git(&ws, &["config", "user.name", "T"]);
+    git(&ws, &["config", "user.email", "t@example.com"]);
+    std::fs::write(ws.join(".gitignore"), ".whiphand/\n").unwrap();
+    std::fs::write(ws.join("tracked.txt"), "x\n").unwrap();
+    std::fs::write(
+        ws.join(".whiphand/config.yaml"),
+        "runs:\n  auto_name: false\n",
+    )
+    .unwrap();
+    git(&ws, &["add", "."]);
+    git(&ws, &["commit", "-q", "-m", "init"]);
+    let gate = sh_path(gate);
+    let run = format!("until [ -f '{gate}' ]; do sleep 0.1; done; exit \"$(cat '{gate}')\"");
+    std::fs::write(
+        ws.join(".whiphand/workflows/wt.yaml"),
+        format!(
+            "name: wt\nworktree: true\nsteps:\n  - id: go\n    kind: command\n    inputs: [attachments]\n    run: {}\n    output: go.log\n",
+            serde_json::to_string(&run).unwrap()
+        ),
+    )
+    .unwrap();
+    ws
+}
+
+/// Waits for `path` to be gone: removal follows the job's end.
+fn gone_soon(path: &Path) -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
+        if !path.exists() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+/// Stashes a pasted image for `draft_id`, saves the draft naming it, starts a
+/// worktree run from it and queues `deleteRunDraft` right behind, as the form
+/// does. Returns the job id and the stash.
+fn start_and_delete(h: &mut Harness, ws: &Path, draft_id: &str, bytes: &[u8]) -> (Value, PathBuf) {
+    let r = h.ok(
+        "stashDraftAttachment",
+        json!({ "draftId": draft_id, "name": "pasted-1.png", "base64": b64(bytes) }),
+    );
+    let path = r["path"].as_str().unwrap().to_string();
+    h.ok(
+        "saveRunDraft",
+        json!({ "draft": draft(draft_id, "n", json!([{ "path": path, "pasted": true }])) }),
+    );
+    let start = h.send(
+        "startRun",
+        json!({ "workdir": ws.to_string_lossy(), "workflow": "wt", "attachments": [{ "path": path }] }),
+    );
+    let delete = h.send("deleteRunDraft", json!({ "id": draft_id }));
+    let started = h.answer(start);
+    assert!(started["error"].is_null(), "{started}");
+    let deleted = h.answer(delete);
+    assert!(deleted["error"].is_null(), "{deleted}");
+    (
+        started["result"]["jobId"].clone(),
+        h.drafts().join(draft_id),
+    )
+}
+
+#[test]
+fn a_stash_outlives_its_deleted_draft_until_the_run_that_reads_it_succeeds() {
+    let mut h = Harness::new(ClientKind::Desktop);
+    let base = h.dir.path().to_path_buf();
+    let gate = base.join("gate");
+    let ws = gated_workspace(&base, &gate);
+    let bytes = b"\x89PNG pasted bytes";
+    let (job, stash) = start_and_delete(&mut h, &ws, "d1", bytes);
+
+    // The draft leaves app state at once; its stash stays while the job runs.
+    assert_eq!(h.state()["runDrafts"], json!([]));
+    assert!(stash.join("pasted-1.png").exists());
+
+    // A draft no job reads loses its stash at once.
+    h.ok(
+        "stashDraftAttachment",
+        json!({ "draftId": "other", "name": "a.png", "base64": b64(b"x") }),
+    );
+    h.ok("deleteRunDraft", json!({ "id": "other" }));
+    assert!(!h.drafts().join("other").exists());
+    assert!(stash.join("pasted-1.png").exists());
+
+    std::fs::write(&gate, "0").unwrap();
+    let settled = h.settled(&job);
+    assert_eq!(settled["status"], "succeeded", "{settled} {:?}", h.seen);
+    let run_id = settled["runId"].as_str().unwrap();
+    let copied = ws
+        .join(".whiphand/runs")
+        .join(run_id)
+        .join("attachments/pasted-1.png");
+    assert_eq!(std::fs::read(&copied).unwrap(), bytes);
+    assert!(gone_soon(&stash), "stash kept after the run succeeded");
+}
+
+#[test]
+fn a_stash_kept_for_a_run_is_removed_when_the_run_fails() {
+    let mut h = Harness::new(ClientKind::Desktop);
+    let base = h.dir.path().to_path_buf();
+    let gate = base.join("gate");
+    let ws = gated_workspace(&base, &gate);
+    let (job, stash) = start_and_delete(&mut h, &ws, "d1", b"x");
+    assert!(stash.join("pasted-1.png").exists());
+    std::fs::write(&gate, "1").unwrap();
+    let settled = h.settled(&job);
+    assert_eq!(settled["status"], "failed", "{settled}");
+    assert!(gone_soon(&stash), "stash kept after the run failed");
 }

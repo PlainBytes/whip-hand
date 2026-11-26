@@ -51,6 +51,20 @@ pub fn is_inside(dir: &Path, path: &Path) -> bool {
     path.starts_with(dir) && path != dir && !path.components().any(|c| c == Component::ParentDir)
 }
 
+/// The draft stash `path` lies in, `drafts/<one segment>`, when it lies in
+/// one at all. Lexical, as `is_inside`.
+pub fn stash_of(drafts: &Path, path: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    if !is_inside(drafts, path) {
+        return None;
+    }
+    let mut rest = path.strip_prefix(drafts).ok()?.components();
+    match (rest.next(), rest.next()) {
+        (Some(Component::Normal(id)), Some(_)) => Some(drafts.join(id)),
+        _ => None,
+    }
+}
+
 /// `dir/name`, or `dir/stem-2.ext`, `-3`, … when that exists.
 pub fn free_name(dir: &Path, name: &str) -> PathBuf {
     let first = dir.join(name);

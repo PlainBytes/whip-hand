@@ -644,6 +644,12 @@ steps:
   `run.json` and cannot add or change files. A recorded file that is missing from the run
   directory (a copy that failed on a full disk, a hand that deleted it) refuses the resume
   — start a fresh run instead. Retention deletes attachments with their run.
+- **A pasted image's stash lives until its run ends.** The New Run form stashes a pasted
+  image in `drafts/<draftId>/` beside the app state and deletes the draft as soon as
+  `startRun` answers, but the run copies the file only once it has started (after its git
+  checks, for a worktree). So `deleteRunDraft` drops the draft from the app state at once and
+  removes the stash once every job started from it has ended, successfully or not; a stash no
+  running job reads goes at once. A crash in between leaves the directory to the startup sweep.
 - **The remote channel takes bytes only.** Over the LAN WebSocket, `startRun` accepts
   base64 attachments and refuses `path` ones, so "copy any file the agent can read into a
   run, then `readArtifact` it" is not a one-call read of the host's disk. There is no

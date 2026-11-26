@@ -4,6 +4,7 @@ import {
 import {
   ArrowDown20Regular, ArrowUp20Regular, ChevronDown20Regular, ChevronRight20Regular,
   Delete20Regular, FolderArrowRight20Regular, Pause20Regular, Play20Regular,
+  TextIndentDecreaseLtr20Regular, TextIndentIncreaseLtr20Regular,
 } from '@fluentui/react-icons';
 import type { LoopStep, StagesStep, Step, StepKind } from '../shared/types.ts';
 import { isContainerStep, isLoopStep, isStagesStep } from '../shared/steps.ts';
@@ -37,6 +38,14 @@ export interface StepCardProps {
   isFirst: boolean;
   isLast: boolean;
   onMove: (dir: -1 | 1) => void;
+  /** Moves the step out of its container, to just after it. Undefined hides the button (a top-level step). */
+  onMoveOut?: () => void;
+  /** Why "Move out of container" is refused, or undefined when it is allowed. */
+  moveOutBlocker?: string;
+  /** Moves the step to the end of the container just above it. Undefined hides the button (no container above). */
+  onMoveIn?: () => void;
+  /** Why "Move into container above" is refused, or undefined when it is allowed. */
+  moveInBlocker?: string;
   onInsertBelow: () => void;
   /** Set when this step is a loop's `until:` target — disable and remove both refuse, naming the loop. */
   guardedByLoopId?: string;
@@ -68,7 +77,8 @@ export interface StepCardProps {
  */
 export function StepCard({
   step, ordinal, earlierStepIds, idsInTree, endsLoop, dimmed, nested, inStages, collapsed, onToggleCollapsed,
-  bodyFolded, onToggleBodyFolded, isFirst, isLast, onMove, onInsertBelow, guardedByLoopId,
+  bodyFolded, onToggleBodyFolded, isFirst, isLast, onMove, onMoveOut, moveOutBlocker, onMoveIn, moveInBlocker,
+  onInsertBelow, guardedByLoopId,
   onToggleEnabled, onRemove, onUpdate, onRename, onIdError, readerNote, highlight, onReadsClick, onWritesClick,
   problemCount, fieldErrors, workflowServers,
 }: StepCardProps) {
@@ -128,6 +138,18 @@ export function StepCard({
             disabled={isFirst} onClick={() => onMove(-1)} />
           <Button appearance="subtle" size="small" icon={<ArrowDown20Regular />} aria-label="Move down"
             disabled={isLast} onClick={() => onMove(1)} />
+          {onMoveOut && (
+            <Tooltip content={moveOutBlocker ?? 'Move out of container'} relationship="label">
+              <Button appearance="subtle" size="small" icon={<TextIndentDecreaseLtr20Regular />}
+                aria-label="Move out of container" disabledFocusable={moveOutBlocker !== undefined} onClick={onMoveOut} />
+            </Tooltip>
+          )}
+          {onMoveIn && (
+            <Tooltip content={moveInBlocker ?? 'Move into container above'} relationship="label">
+              <Button appearance="subtle" size="small" icon={<TextIndentIncreaseLtr20Regular />}
+                aria-label="Move into container above" disabledFocusable={moveInBlocker !== undefined} onClick={onMoveIn} />
+            </Tooltip>
+          )}
           <Button appearance="subtle" size="small" icon={<FolderArrowRight20Regular />} aria-label="Insert step below"
             onClick={onInsertBelow} />
           <Tooltip content={guardTooltip ?? (isEnabled ? 'Disable' : 'Enable')} relationship="label">

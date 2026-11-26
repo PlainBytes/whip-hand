@@ -1174,3 +1174,126 @@ describe('WorkflowEditor on a narrow screen', () => {
     expect((req.params as { name: string }).name).toBe('feature-development');
   });
 });
+
+describe('WorkflowEditor: moving a step into and out of a container', () => {
+  function cardIds(): string[] {
+    return screen.getAllByTestId(/^step-card-/).map(c => c.dataset.testid!.replace(/^step-card-/, ''));
+  }
+  /** The indentation the editor gives the row wrapping this card. */
+  function indentOf(id: string): string {
+    return screen.getByTestId(`step-card-${id}`).parentElement!.style.marginLeft;
+  }
+  async function tooltipFor(button: HTMLElement): Promise<string> {
+    fireEvent.pointerEnter(button);
+    fireEvent.focus(button);
+    return (await screen.findByRole('tooltip')).textContent ?? '';
+  }
+
+  /** A stages step directly below a loop: indenting it would nest stages inside a loop. */
+  const LOOP_THEN_STAGES: Workflow = {
+    name: 'loop-then-stages',
+    steps: [
+      {
+        id: 'iterate', kind: 'loop', until: 'check',
+        steps: [{ id: 'check', kind: 'agent', runner: 'claude', mode: 'headless', writes: false, verdict: true, prompt: 'ok?', output: 'check.md' }],
+      },
+      {
+        id: 'build', kind: 'stages', items: 'plans/*.md',
+        steps: [{ id: 'impl', kind: 'command', run: 'make', output: 'impl.log' }],
+      },
+    ],
+  };
+
+  it('a top-level step has no "Move out of container"; a loop body step does', () => {
+    renderEditor(NESTED_WORKFLOW);
+    expect(within(screen.getByTestId('step-card-plan')).queryByLabelText('Move out of container')).not.toBeInTheDocument();
+    expect(within(screen.getByTestId('step-card-execute')).getByLabelText('Move out of container')).toBeInTheDocument();
+  });
+
+  it('"Move out of container" puts the step right after its loop, at the loop\'s depth', async () => {
+    const { transport } = renderEditor(NESTED_WORKFLOW);
+    expect(indentOf('execute')).toBe(indentOf('review'));
+    fireEvent.click(within(screen.getByTestId('step-card-execute')).getByLabelText('Move out of container'));
+    expect(cardIds()).toEqual([
+      'sync-base', 'branch', 'plan', 'human-review', 'do-review', 'review', 'execute', 'sign-off',
+      'stage', 'commit-message', 'commit',
+    ]);
+    expect(indentOf('execute')).toBe(indentOf('do-review'));
+    expect(indentOf('execute')).not.toBe(indentOf('review'));
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    const req = await lastRequest(transport, 'updateWorkflow');
+    const wf = (req.params as { workflow: Workflow }).workflow;
+    expect(wf.steps[3]).toMatchObject({
+      id: 'human-review',
+      steps: [{ id: 'do-review', steps: [{ id: 'review' }] }, { id: 'execute' }, { id: 'sign-off' }],
+    });
+  });
+
+  it('"Move into container above" appears only below a container, and makes the step its last body step', () => {
+    renderEditor(NESTED_WORKFLOW);
+    expect(within(screen.getByTestId('step-card-plan')).queryByLabelText('Move into container above')).not.toBeInTheDocument();
+    expect(within(screen.getByTestId('step-card-commit')).queryByLabelText('Move into container above')).not.toBeInTheDocument();
+    // sign-off sits right below do-review at the same level.
+    expect(within(screen.getByTestId('step-card-sign-off')).getByLabelText('Move into container above')).toBeInTheDocument();
+
+    fireEvent.click(within(screen.getByTestId('step-card-stage')).getByLabelText('Move into container above'));
+    expect(cardIds()).toEqual([
+      'sync-base', 'branch', 'plan', 'human-review', 'do-review', 'execute', 'review', 'sign-off',
+      'stage', 'commit-message', 'commit',
+    ]);
+    expect(indentOf('stage')).toBe(indentOf('sign-off'));
+    // commit-message now sits directly below human-review, so it gains the button.
+    expect(within(screen.getByTestId('step-card-commit-message')).getByLabelText('Move into container above')).toBeInTheDocument();
+  });
+
+  it('moving into a folded container unfolds it, so the moved card stays rendered', () => {
+    renderEditor(NESTED_WORKFLOW);
+    fireEvent.click(screen.getByTestId('body-fold-human-review'));
+    expect(screen.queryByTestId('step-card-sign-off')).not.toBeInTheDocument();
+    fireEvent.click(within(screen.getByTestId('step-card-stage')).getByLabelText('Move into container above'));
+    expect(screen.getByTestId('step-card-stage')).toBeInTheDocument();
+    expect(screen.getByTestId('step-card-sign-off')).toBeInTheDocument();
+    expect(screen.getByTestId('body-fold-human-review')).toHaveAccessibleName("Hide human-review's body");
+  });
+
+  it('a loop\'s until: step cannot move out — disabled, the tooltip names the loop, a click does nothing', async () => {
+    renderEditor(NESTED_WORKFLOW);
+    const before = cardIds();
+    const button = within(screen.getByTestId('step-card-sign-off')).getByLabelText('Move out of container');
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    expect(await tooltipFor(button)).toBe("'sign-off' ends loop 'human-review' — it cannot leave it");
+    fireEvent.click(button);
+    expect(cardIds()).toEqual(before);
+  });
+
+  it('a stages step directly below a loop cannot move into it — disabled, with the cannot-nest reason', async () => {
+    renderEditor(LOOP_THEN_STAGES);
+    const before = cardIds();
+    const button = within(screen.getByTestId('step-card-build')).getByLabelText('Move into container above');
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    expect(await tooltipFor(button)).toBe("'build' is a stages step — it cannot run inside a loop");
+    fireEvent.click(button);
+    expect(cardIds()).toEqual(before);
+  });
+
+  it('an allowed move\'s tooltip is the action name', async () => {
+    renderEditor(NESTED_WORKFLOW);
+    const button = within(screen.getByTestId('step-card-execute')).getByLabelText('Move out of container');
+    expect(button).not.toHaveAttribute('aria-disabled');
+    expect(button).not.toBeDisabled();
+    expect(await tooltipFor(button)).toBe('Move out of container');
+  });
+
+  it('keeps the moved card\'s expanded state across the move', () => {
+    renderEditor(NESTED_WORKFLOW);
+    fireEvent.click(screen.getByTestId('step-collapse-execute'));
+    expect(screen.getByTestId('step-collapse-execute')).toHaveAccessibleName('Collapse execute');
+    fireEvent.click(within(screen.getByTestId('step-card-execute')).getByLabelText('Move out of container'));
+    expect(screen.getByTestId('step-collapse-execute')).toHaveAccessibleName('Collapse execute');
+    expect(within(screen.getByTestId('step-card-execute')).getByLabelText(/^Prompt/)).toBeInTheDocument();
+    // And a collapsed card stays collapsed.
+    fireEvent.click(within(screen.getByTestId('step-card-stage')).getByLabelText('Move into container above'));
+    expect(screen.getByTestId('step-collapse-stage')).toHaveAccessibleName('Expand stage');
+  });
+});

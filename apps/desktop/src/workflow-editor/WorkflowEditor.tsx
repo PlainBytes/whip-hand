@@ -14,7 +14,9 @@ import { isContainerStep } from '../shared/steps.ts';
 import { untilTargetOf } from '../shared/enabled.ts';
 import type { ValidateWorkflowResult } from '../shared/protocol.gen.ts';
 import { readerNotes } from '../lib/disabled-copy.ts';
-import { referenceableIds } from '../lib/step-tree.ts';
+import {
+  indentTarget, moveBlocker, outdentTarget, referenceableIds, stepAt, type MoveDestination, type StepPath,
+} from '../lib/step-tree.ts';
 import { normalizeDraft } from '../lib/draft-normalize.ts';
 import { useWorkflowDraft } from './use-workflow-draft.ts';
 import { useHarnessCatalog } from './use-harness-catalog.ts';
@@ -184,6 +186,15 @@ export function WorkflowEditor({
     setRevealId(stepId);
   }
 
+  // "Move into container above": a folded destination body unfolds first, so
+  // the moved card stays on screen instead of vanishing into the fold.
+  function moveIntoContainer(path: StepPath, to: MoveDestination): void {
+    if (moveBlocker(draft.steps, path, to.parentPath) !== null) return;
+    const container = stepAt(draft.steps, to.parentPath);
+    if (container !== undefined && draftApi.isBodyFolded(container.id)) draftApi.toggleBodyFolded(container.id);
+    draftApi.moveStepTo(path, to);
+  }
+
   useEffect(() => {
     if (revealId === null) return;
     const el = cardRefs.current[revealId];
@@ -324,6 +335,8 @@ export function WorkflowEditor({
         {visibleRows.map(row => {
           const siblings = siblingsCount(rows, row);
           const guardLoop = untilTargetOf(draft.steps, row.step.id);
+          const outTo = outdentTarget(row.path);
+          const inTo = indentTarget(draft.steps, row.path);
           return (
             <div
               key={row.step.id}
@@ -352,6 +365,10 @@ export function WorkflowEditor({
                 isFirst={siblings.index === 0}
                 isLast={siblings.index === siblings.total - 1}
                 onMove={dir => draftApi.moveStep(row.path, dir)}
+                onMoveOut={outTo && (() => draftApi.moveStepTo(row.path, outTo))}
+                moveOutBlocker={outTo && (moveBlocker(draft.steps, row.path, outTo.parentPath) ?? undefined)}
+                onMoveIn={inTo && (() => moveIntoContainer(row.path, inTo))}
+                moveInBlocker={inTo && (moveBlocker(draft.steps, row.path, inTo.parentPath) ?? undefined)}
                 onInsertBelow={() => draftApi.insertStepBelow(row.path)}
                 guardedByLoopId={guardLoop?.id}
                 onToggleEnabled={() => draftApi.toggleEnabled(row.path)}

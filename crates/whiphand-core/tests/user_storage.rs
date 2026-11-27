@@ -57,6 +57,7 @@ fn options_for(
         continue_in: None,
         subdir: None,
         degradations: Vec::new(),
+        whiphand_bin: None,
     }
 }
 

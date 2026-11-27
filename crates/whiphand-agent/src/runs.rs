@@ -166,6 +166,7 @@ pub async fn run_job(agent: Rc<Agent>, job: Rc<Job>, params: StartParams, opened
             continue_in: params.continue_in,
             subdir: params.subdir,
             degradations: opened.degradations.clone(),
+            whiphand_bin: whiphand_core::whiphand_bin::resolve(),
         };
         let result = run_workflow(&opts, &frontend)
             .await
@@ -224,6 +225,7 @@ pub async fn resume_job(
             continue_in: None,
             subdir: None,
             degradations: opened.degradations.clone(),
+            whiphand_bin: whiphand_core::whiphand_bin::resolve(),
         };
         let result = run_workflow(&opts, &frontend)
             .await

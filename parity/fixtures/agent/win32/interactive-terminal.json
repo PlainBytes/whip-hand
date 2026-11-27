@@ -212,7 +212,9 @@
               "Read and follow the instructions in .whiphand/runs/<RUN>/.chat.prompt"
             ],
             "cwd": ".",
-            "env": {},
+            "env": {
+              "WHIPHAND_BIN": "<WHIPHAND_BIN>"
+            },
             "interactive": true,
             "files": [
               {
@@ -282,7 +284,9 @@
               "--allowedTools=Write"
             ],
             "cwd": ".",
-            "env": {},
+            "env": {
+              "WHIPHAND_BIN": "<WHIPHAND_BIN>"
+            },
             "interactive": false,
             "files": [
               {

@@ -23,6 +23,7 @@ const WHIPHAND_ENV_KEYS: &[&str] = &[
     "WHIPHAND_RUN_SLUG",
     "WHIPHAND_RUN_NAME",
     "WHIPHAND_STEP_ID",
+    "WHIPHAND_BIN",
 ];
 
 /// A summarized event, before it gets its `seq` and `ts`.

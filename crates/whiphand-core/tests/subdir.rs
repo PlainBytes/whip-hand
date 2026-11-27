@@ -80,6 +80,7 @@ fn options(ws: &Path, workflow: &str, subdir: Option<&str>) -> RunOptions {
         continue_in: None,
         subdir: subdir.map(str::to_string),
         degradations: Vec::new(),
+        whiphand_bin: None,
     }
 }
 

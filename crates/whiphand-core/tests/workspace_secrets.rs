@@ -61,6 +61,7 @@ fn options(yaml: &str, workdir: &Path) -> RunOptions {
         continue_in: None,
         subdir: None,
         degradations: Vec::new(),
+        whiphand_bin: None,
     }
 }
 

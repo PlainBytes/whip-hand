@@ -829,6 +829,7 @@ pub async fn run(a: RunArgs) -> CmdResult {
         continue_in: a.in_worktree.clone(),
         subdir: a.subdir.clone(),
         degradations: opened.degradations.clone(),
+        whiphand_bin: whiphand_core::whiphand_bin::resolve(),
     };
     let result = run_workflow(&opts, &tty).await;
     signals.abort();

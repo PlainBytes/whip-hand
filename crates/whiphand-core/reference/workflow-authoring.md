@@ -52,7 +52,7 @@ worktree:
 
 `worktree: true` = all defaults; `false` = never. Only `base`, `branch`, `sync` are allowed.
 `base`/`branch` may use only declared `{{ inputs.* }}` and `{{ run.id }}`, `{{ run.slug }}`,
-`{{ run.name }}` (not `run.dir`, `run.workdir`, `loop.*`, `stage.*`).
+`{{ run.name }}` (not `run.dir`, `run.workdir`, `run.whiphand`, `loop.*`, `stage.*`).
 
 ## Steps
 
@@ -240,6 +240,7 @@ earlier `writes: true` step, `interactive` opens a live session. Prefer an expli
 | `{{ run.id }}`, `{{ run.slug }}`, `{{ run.name }}` | Run id, slug, display name | everywhere templated |
 | `{{ run.dir }}` | Run folder, absolute | steps only |
 | `{{ run.workdir }}` | Execution tree (worktree or workspace), absolute | steps only |
+| `{{ run.whiphand }}` | The `whiphand` CLI, absolute (also `$WHIPHAND_BIN` in command steps and agent sessions); quote it in `run:` (`'"{{ run.whiphand }}" validate x.yaml'`). A step using it fails when no CLI was found | steps only |
 | `{{ loop.iteration }}`, `{{ loop.max_iterations }}` | 1-based iteration, budget of the nearest loop | inside a loop |
 | `{{ stage.index }}`, `{{ stage.total }}`, `{{ stage.id }}`, `{{ stage.title }}` | Current stage | inside a stages step |
 

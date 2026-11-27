@@ -48,6 +48,7 @@ fn options(ws: &Path, worktree: Option<bool>, dry_run: bool) -> RunOptions {
         continue_in: None,
         subdir: None,
         degradations: Vec::new(),
+        whiphand_bin: None,
     }
 }
 

@@ -167,6 +167,7 @@ fn run_ctx(raw: &Value) -> RunCtx {
                 .map(|p| rel(p))
                 .collect()
         }),
+        whiphand_bin: None,
     }
 }
 

@@ -112,6 +112,9 @@ pub struct RunOptions {
     pub subdir: Option<String>,
     /// `(capability, reason)` the frontend already knows.
     pub degradations: Vec<(String, String)>,
+    /// The `whiphand` CLI steps see as `{{ run.whiphand }}` / `WHIPHAND_BIN`, native;
+    /// a frontend passes `whiphand_bin::resolve()`. `None` when there is none.
+    pub whiphand_bin: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -565,6 +568,7 @@ pub async fn run_workflow<F: Frontend>(
         frame: None,
         resumed_step_ids: opts.resume.as_ref().map(|r| r.resumed_step_ids.clone()),
         attachments: None,
+        whiphand_bin: opts.whiphand_bin.clone(),
     };
     let attachment_paths: Vec<String> = match &opts.resume {
         None => attachments

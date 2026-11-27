@@ -46,6 +46,8 @@ pub struct RunCtx {
     pub resumed_step_ids: Option<HashSet<String>>,
     /// Absolute paths of the files attached to this run.
     pub attachments: Option<Vec<String>>,
+    /// The `whiphand` CLI steps get as `WHIPHAND_BIN` (`whiphand_bin::resolve`), native.
+    pub whiphand_bin: Option<String>,
 }
 
 impl RunCtx {
@@ -58,6 +60,7 @@ impl RunCtx {
             run_name: self.run_name.clone(),
             run_dir: Some(self.run_dir.clone()),
             run_workdir: Some(self.workdir.clone()),
+            run_whiphand: self.whiphand_bin.clone(),
             loop_frame: self.loop_frame.clone(),
             frame: self.frame.clone(),
         }

@@ -20,7 +20,7 @@ impl std::fmt::Display for TemplateError {
 
 /// The fields each built-in namespace has — what the placeholder pattern accepts.
 pub const PLACEHOLDER_FIELDS: [(&str, &[&str]); 3] = [
-    ("run", &["id", "slug", "name", "dir", "workdir"]),
+    ("run", &["id", "slug", "name", "dir", "workdir", "whiphand"]),
     ("stage", &["index", "total", "id", "title"]),
     ("loop", &["iteration", "max_iterations"]),
 ];
@@ -105,6 +105,8 @@ pub struct TemplateScope {
     pub run_dir: Option<String>,
     /// The execution tree, absolute: the workspace unless the run has a worktree.
     pub run_workdir: Option<String>,
+    /// The `whiphand` CLI, absolute (`whiphand_bin::resolve`); None when none was found.
+    pub run_whiphand: Option<String>,
     /// For a caller with no frame of its own; `frame` wins when both are set.
     pub loop_frame: Option<LoopFrame>,
     pub frame: Option<Frame>,
@@ -138,7 +140,7 @@ pub fn input_env_name(key: &str) -> String {
 static PLACEHOLDER: LazyLock<Regex> = LazyLock::new(|| {
     let ws = JS_WS_CLASS;
     Regex::new(&format!(
-        r"\{{\{{[{ws}]*(inputs\.[A-Za-z0-9_-]+|loop\.(?:iteration|max_iterations)|stage\.(?:index|total|id|title)|run\.(?:name|slug|id|dir|workdir))[{ws}]*\}}\}}"
+        r"\{{\{{[{ws}]*(inputs\.[A-Za-z0-9_-]+|loop\.(?:iteration|max_iterations)|stage\.(?:index|total|id|title)|run\.(?:name|slug|id|dir|workdir|whiphand))[{ws}]*\}}\}}"
     ))
     .unwrap()
 });
@@ -161,6 +163,7 @@ fn ref_env(r: &str) -> &'static str {
         "run.name" => "WHIPHAND_RUN_NAME",
         "run.dir" => "WHIPHAND_RUN_DIR",
         "run.workdir" => "WHIPHAND_WORKDIR",
+        "run.whiphand" => crate::whiphand_bin::ENV,
         "stage.index" => "WHIPHAND_STAGE_INDEX",
         "stage.total" => "WHIPHAND_STAGE_TOTAL",
         "stage.id" => "WHIPHAND_STAGE_ID",
@@ -222,6 +225,12 @@ fn bind(r: &str, scope: &TemplateScope) -> Result<Binding, TemplateError> {
             };
             return binding(ref_env(r), to_fwd_abs(dir));
         }
+        if r == "run.whiphand" {
+            let Some(bin) = &scope.run_whiphand else {
+                return Err(TemplateError(crate::whiphand_bin::MISSING.into()));
+            };
+            return binding(ref_env(r), to_fwd_abs(bin));
+        }
         // An unnamed run's name *is* its id, and WHIPHAND_RUN_NAME stays unset.
         let value = match (r, &scope.run_name) {
             ("run.name", None) => return binding("WHIPHAND_RUN_ID", scope.run_id.clone()),
@@ -259,6 +268,9 @@ pub fn bindings(scope: &TemplateScope) -> Result<Vec<Binding>, TemplateError> {
     }
     if scope.run_workdir.is_some() {
         refs.push("run.workdir".into());
+    }
+    if scope.run_whiphand.is_some() {
+        refs.push("run.whiphand".into());
     }
     if nearest_stage(scope.frame.as_ref()).is_some() {
         refs.extend(["stage.index", "stage.total", "stage.id", "stage.title"].map(String::from));
@@ -382,4 +394,153 @@ pub fn build_prompt(
         "{body}\n\n## Input artifacts (read these files first)\n{}",
         lines.join("\n")
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::command::command_spec;
+    use crate::jsval::ObjExt;
+    use crate::run_ctx::RunCtx;
+    use crate::schema::{check_workflow_text, parse_workflow};
+    use crate::types::CommandStep;
+
+    const BIN: &str = if cfg!(windows) {
+        r"C:\Program Files\Whiphand\whiphand.exe"
+    } else {
+        "/opt/whiphand/whiphand"
+    };
+    const BIN_FWD: &str = if cfg!(windows) {
+        "C:/Program Files/Whiphand/whiphand.exe"
+    } else {
+        "/opt/whiphand/whiphand"
+    };
+
+    fn scope(bin: Option<&str>) -> TemplateScope {
+        TemplateScope {
+            run_id: "r1".into(),
+            run_slug: "r1".into(),
+            run_whiphand: bin.map(str::to_string),
+            ..TemplateScope::default()
+        }
+    }
+
+    fn ctx(bin: Option<&str>) -> RunCtx {
+        RunCtx {
+            workspace: "/ws".into(),
+            workdir: "/ws".into(),
+            run_id: "r1".into(),
+            run_dir: "/ws/.whiphand/runs/r1".into(),
+            run_slug: "r1".into(),
+            shell: Some("/bin/sh".into()),
+            whiphand_bin: bin.map(str::to_string),
+            ..RunCtx::default()
+        }
+    }
+
+    fn step(run: &str) -> CommandStep {
+        CommandStep {
+            id: "v".into(),
+            inputs: None,
+            verdict: None,
+            enabled: None,
+            run: run.into(),
+            shell: None,
+            cwd: None,
+            env: None,
+            timeout_ms: None,
+            expect_exit: None,
+            output: None,
+        }
+    }
+
+    #[test]
+    fn run_whiphand_renders_as_the_absolute_path_in_a_prompt() {
+        let text = render_template("Check with {{ run.whiphand }} validate", &scope(Some(BIN)));
+        assert_eq!(text.unwrap(), format!("Check with {BIN_FWD} validate"));
+        let prompt = build_prompt("Run {{run.whiphand}}.", &[], &ctx(Some(BIN))).unwrap();
+        assert_eq!(prompt, format!("Run {BIN_FWD}."));
+    }
+
+    #[test]
+    fn run_whiphand_is_a_shell_variable_in_a_command() {
+        let (text, used) =
+            render_references(r#""{{ run.whiphand }}" --version"#, &scope(Some(BIN))).unwrap();
+        assert_eq!(text, r#""${WHIPHAND_BIN}" --version"#);
+        assert_eq!(
+            used,
+            vec![Binding {
+                r#ref: "run.whiphand".into(),
+                env_name: "WHIPHAND_BIN".into(),
+                value: BIN_FWD.into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_command_step_gets_whiphand_bin_in_its_environment() {
+        let spec = command_spec(
+            &step(r#""{{ run.whiphand }}" --version"#),
+            &ctx(Some(BIN)),
+            None,
+        )
+        .unwrap();
+        let env = spec.prop("env").as_obj().unwrap();
+        assert_eq!(env.prop("WHIPHAND_BIN").to_js_string(), BIN_FWD);
+        // Exported even when the step does not name it, like WHIPHAND_RUN_DIR.
+        let spec = command_spec(&step("echo hi"), &ctx(Some(BIN)), None).unwrap();
+        let env = spec.prop("env").as_obj().unwrap();
+        assert_eq!(env.prop("WHIPHAND_BIN").to_js_string(), BIN_FWD);
+    }
+
+    #[test]
+    fn run_whiphand_without_a_cli_fails_naming_the_remedy() {
+        let err = render_template("{{ run.whiphand }}", &scope(None)).unwrap_err();
+        assert!(err.0.contains("WHIPHAND_BIN"), "{err}");
+        assert!(err.0.contains("install the whiphand CLI"), "{err}");
+        let err = command_spec(&step(r#""{{ run.whiphand }}" -V"#), &ctx(None), None).unwrap_err();
+        assert!(err.0.contains("WHIPHAND_BIN"), "{err}");
+        // A step that does not use it is not affected, and nothing is exported.
+        let spec = command_spec(&step("echo hi"), &ctx(None), None).unwrap();
+        assert!(
+            spec.prop("env")
+                .as_obj()
+                .unwrap()
+                .prop("WHIPHAND_BIN")
+                .is_undefined()
+        );
+        assert!(
+            bindings(&scope(None))
+                .unwrap()
+                .iter()
+                .all(|b| b.r#ref != "run.whiphand")
+        );
+    }
+
+    #[test]
+    fn run_whiphand_passes_the_parse_time_check_and_unknown_run_fields_do_not() {
+        let doc = |run: &str| {
+            format!("name: w\nsteps:\n  - id: a\n    kind: command\n    run: '{run}'\n")
+        };
+        assert!(parse_workflow(&doc(r#""{{ run.whiphand }}" --version"#)).is_ok());
+        let problems = check_workflow_text(&doc("{{ run.whiphand_bin }}")).problems;
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(
+            problems[0].contains("unknown placeholder '{{ run.whiphand_bin }}'"),
+            "{problems:?}"
+        );
+        assert!(problems[0].contains("whiphand"), "{problems:?}");
+    }
+
+    #[test]
+    fn run_whiphand_is_not_available_to_the_worktree_base() {
+        let doc = "name: w\nworktree:\n  base: '{{ run.whiphand }}'\nsteps:\n  - id: a\n    kind: command\n    run: echo a\n";
+        let problems = check_workflow_text(doc).problems;
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("not available before the first step")),
+            "{problems:?}"
+        );
+    }
 }

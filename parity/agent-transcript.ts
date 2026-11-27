@@ -92,6 +92,10 @@ function baseEnv(ctx: Ctx): Record<string, string> {
     WHIPHAND_APP_STATE_FILE: path.join(ctx.root, 'app-state.json'),
     WHIPHAND_REMOTE_CONFIG_FILE: path.join(ctx.root, 'remote-access.json'),
     WHIPHAND_WEB_ROOT: webRoot,
+    // Pinned so every step's env carries it whether or not a CLI happens to
+    // sit beside the agent binary (it does in target/release, at a path of
+    // the machine's). No scenario runs it; the transcript shows the key only.
+    WHIPHAND_BIN: path.join(ctx.root, 'bin', process.platform === 'win32' ? 'whiphand.exe' : 'whiphand'),
   };
 }
 
@@ -264,6 +268,9 @@ function normalize(t: Transcript, root: string): Transcript {
     if (key === 'whiphandVersion' || (key === 'version' && 'protocolVersion' in this)) return '<VERSION>';
     // The Windows build `hello` reports ConPTY on: the runner image's, not ours.
     if (key === 'buildNumber' && 'backend' in this) return '<BUILD>';
+    // The CLI path baseEnv pins: native in a command step's env, forward
+    // slashes in an agent session's, so one token for both and every OS.
+    if (key === 'WHIPHAND_BIN' && typeof value === 'string') return '<WHIPHAND_BIN>';
     return value;
   };
   let text = JSON.stringify(t, replacer);

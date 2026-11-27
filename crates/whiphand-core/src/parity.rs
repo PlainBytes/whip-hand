@@ -117,6 +117,7 @@ fn scope_from_json(v: &Value) -> TemplateScope {
         run_name: text("runName"),
         run_dir: text("runDir"),
         run_workdir: text("runWorkdir"),
+        run_whiphand: text("runWhiphand"),
         loop_frame,
         frame: frame_from_json(&v["frame"]),
     }

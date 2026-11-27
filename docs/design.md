@@ -554,6 +554,7 @@ Every placeholder has one environment binding, from one table:
 | `run.name` | `WHIPHAND_RUN_NAME` (an unnamed run's name *is* its id, so it refers to `WHIPHAND_RUN_ID`) | when named |
 | `run.dir` | `WHIPHAND_RUN_DIR` — the run folder, absolute with forward slashes | always |
 | `run.workdir` | `WHIPHAND_WORKDIR` — the execution tree, absolute with forward slashes: the run's worktree, or the workspace when it has none | always |
+| `run.whiphand` | `WHIPHAND_BIN` — the `whiphand` CLI, absolute with forward slashes. Resolved once per run: `WHIPHAND_BIN` already in the environment; else the running executable when it is the CLI; else `whiphand[.exe]` beside it (the desktop's sidecar); else `whiphand[.exe]` on PATH. Agent sessions get it too. When none is found it is not exported, and a step that names `{{ run.whiphand }}` fails before spawn, naming `WHIPHAND_BIN` and installing the CLI | when found |
 | `stage.index` / `total` / `id` / `title` | `WHIPHAND_STAGE_*` | inside a stages step |
 | `loop.iteration` / `loop.max_iterations` | `WHIPHAND_LOOP_ITERATION` / `WHIPHAND_LOOP_MAX_ITERATIONS` | inside a loop |
 | `inputs.<key>` | `WHIPHAND_INPUT_<KEY>` (upper-cased, `-` → `_`) | **only when the step references it** |

@@ -5,10 +5,11 @@
 //! … }` in the order each adapter adds fields, because it is recorded
 //! verbatim in `events.ndjson` (see `engine::spec` for the typed view).
 
+use crate::jsval::ObjExt;
 use crate::jsval::{JsObject, JsValue};
 use crate::node_path;
 use crate::obj;
-use crate::path_form::{relative_within, to_workspace};
+use crate::path_form::{relative_within, to_fwd_abs, to_workspace};
 use crate::run_ctx::RunCtx;
 use crate::types::AgentStep;
 
@@ -41,8 +42,12 @@ pub fn add_dir_args(ctx: &RunCtx) -> Vec<String> {
         .collect()
 }
 
-/// `{ argv, cwd: ctx.workdir, env, interactive }`.
-pub fn spawn_spec(ctx: &RunCtx, argv: &[String], interactive: bool, env: JsObject) -> JsObject {
+/// `{ argv, cwd: ctx.workdir, env, interactive }`. The session gets `WHIPHAND_BIN`, the
+/// CLI's path, when one was found, so an agent can run `whiphand validate` and the like.
+pub fn spawn_spec(ctx: &RunCtx, argv: &[String], interactive: bool, mut env: JsObject) -> JsObject {
+    if let Some(bin) = &ctx.whiphand_bin {
+        env.set(crate::whiphand_bin::ENV, to_fwd_abs(bin));
+    }
     obj! { "argv" => strings(argv), "cwd" => ctx.workdir.as_str(), "env" => env, "interactive" => interactive }
 }
 
@@ -169,6 +174,29 @@ mod tests {
             add_dir_args(&outside),
             vec![format!("--add-dir={}", outside.run_dir)]
         );
+    }
+
+    #[test]
+    fn an_agent_session_gets_whiphand_bin_when_the_cli_was_found() {
+        let root = tempfile::tempdir().unwrap();
+        let mut c = ctx(root.path(), root.path());
+        let argv = vec!["claude".to_string()];
+        for interactive in [true, false] {
+            let spec = spawn_spec(&c, &argv, interactive, JsObject::new());
+            assert!(spec.prop("env").get("WHIPHAND_BIN").is_undefined());
+        }
+        let bin = if cfg!(windows) {
+            r"C:\w\whiphand.exe"
+        } else {
+            "/w/whiphand"
+        };
+        c.whiphand_bin = Some(bin.into());
+        for interactive in [true, false] {
+            let spec = spawn_spec(&c, &argv, interactive, obj! { "OTHER" => "y" });
+            let env = spec.prop("env");
+            assert_eq!(env.get("WHIPHAND_BIN").to_js_string(), to_fwd_abs(bin));
+            assert_eq!(env.get("OTHER").to_js_string(), "y");
+        }
     }
 
     #[test]

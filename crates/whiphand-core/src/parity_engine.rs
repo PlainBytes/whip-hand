@@ -206,6 +206,7 @@ fn run_workflow_op(op: &Value, repo: &Path) -> Value {
         continue_in: None,
         subdir: None,
         degradations: Vec::new(),
+        whiphand_bin: None,
     };
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -269,6 +270,7 @@ fn run_workflow_op(op: &Value, repo: &Path) -> Value {
                 continue_in: None,
                 subdir: None,
                 degradations: Vec::new(),
+                whiphand_bin: None,
             };
             match run_workflow(&again_opts, &frontend).await {
                 Ok(again) => {

@@ -52,6 +52,7 @@ async fn run(ws: &std::path::Path, escape: bool) -> RunResult {
         continue_in: None,
         subdir: None,
         degradations: Vec::new(),
+        whiphand_bin: None,
     };
     run_workflow(&opts, &Plain).await.unwrap()
 }

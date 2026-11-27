@@ -50,6 +50,7 @@ fn no_runner_records_a_workflow_servers_credentials() {
                 continue_in: None,
                 subdir: None,
                 degradations: Vec::new(),
+                whiphand_bin: None,
             },
             &Plain,
         )

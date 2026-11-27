@@ -43,6 +43,7 @@ fn options(ws: &Path, continue_in: Option<&str>, worktree: Option<bool>) -> RunO
         continue_in: continue_in.map(str::to_string),
         subdir: None,
         degradations: Vec::new(),
+        whiphand_bin: None,
     }
 }
 

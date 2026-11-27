@@ -97,6 +97,10 @@ export const uiActions: Record<string, Record<string, string>> = {
     // The dialog's Project/Workspace/Global choice, driving createWorkflow's `scope`.
     '--workspace': 'workflows:newWorkflowScopeChoice',
     '--global': 'workflows:newWorkflowScopeChoice',
+    // Saving a given file is how an authoring agent run ends; the desktop
+    // saves its own editor's draft through createWorkflow / updateWorkflow.
+    '--from': 'exempt:cli-only-an-authoring-agent-saves-its-file',
+    '--replace': 'exempt:cli-only-an-authoring-agent-saves-its-file',
   },
   // Removing a worktree on its own has no desktop button yet; deleting the run
   // removes its worktree too, and refuses while it holds uncommitted changes.

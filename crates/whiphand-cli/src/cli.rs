@@ -243,12 +243,26 @@ pub fn build_cli() -> Command {
         .subcommand(
             sub(
                 "new-workflow",
-                "scaffold a workflow into .whiphand/workflows/, the workspace's private dir with --workspace, or the global workflows dir with --global",
+                "scaffold a workflow into .whiphand/workflows/, the workspace's private dir with --workspace, or the global workflows dir with --global; \
+                 --from saves a given workflow file there instead",
             )
             .arg(
                 Arg::new("name")
                     .required(true)
                     .help("workflow name (lowercase, digits, - and _)"),
+            )
+            .arg(value(
+                "from",
+                "file",
+                "save this workflow file ('-' reads stdin) instead of scaffolding the iterate template; \
+                 it is validated first, nothing is written when it has problems, and its name: becomes <name> (the file still needs a valid name: of its own to pass)",
+            ))
+            .arg(
+                flag(
+                    "replace",
+                    "with --from, overwrite an existing workflow of that name in that scope",
+                )
+                .requires("from"),
             )
             .arg(flag(
                 "global",

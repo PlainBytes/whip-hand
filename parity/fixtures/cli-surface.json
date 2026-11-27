@@ -190,6 +190,18 @@
       ],
       "options": [
         {
+          "flags": "--from <file>",
+          "required": true,
+          "hasDefault": false,
+          "long": "--from"
+        },
+        {
+          "flags": "--replace",
+          "required": false,
+          "hasDefault": true,
+          "long": "--replace"
+        },
+        {
           "flags": "--global",
           "required": false,
           "hasDefault": true,

@@ -63,6 +63,7 @@ whiphand doctor                                                              # c
 whiphand init                                                                # set up this folder (asks where to keep data and the starter workflows)
 whiphand init --storage user --workflows global                              # keep data in ~/.whiphand, starter workflows shared by every workspace
 whiphand new-workflow review-pr                                              # scaffold .whiphand/workflows/review-pr.yaml
+whiphand new-workflow review-pr --from draft.yaml                            # save a written workflow there instead (validated; name: set; --replace overwrites; '-' reads stdin)
 whiphand validate examples/cycle.yaml                                        # check a workflow without running it (exit 0 ok, 1 problems; '-' reads stdin)
 whiphand workflow-reference                                                  # print the workflow format reference (for whoever, or whichever agent, writes one)
 whiphand run examples/cycle.yaml --dry-run --input feature=demo              # print every argv, spend nothing
@@ -130,7 +131,10 @@ for the next small step on the same branch. Anything already uncommitted when it
 its commit; a first step records it, so the review does not count it against the run. `develop` is for a larger feature: on `feature/<run slug>` in its own git worktree,
 brought up to your trunk's remote state, it cuts the plan into stages and builds, reviews, accepts
 and commits them one at a time, then pushes the branch (leave the push command blank to skip that).
-`whiphand new-workflow` scaffolds from `iterate`.
+`whiphand new-workflow` scaffolds from `iterate`. With `--from <file>` (or `--from -` for stdin) it
+saves that workflow file instead: it is validated first, and a file with problems prints them and
+writes nothing; its `name:` becomes the given name, its comments and layout are kept. An existing
+workflow of that name in that scope is refused unless `--replace` is given.
 
 **Running workflows side by side.** `develop` declares `worktree:`, so each run gets its own checkout
 under `<data dir>/wt/<suffix>-<short-slug>` (`<suffix>` is the run id's random tail; just that for an unnamed run) on a new branch, and your main checkout is never touched: start

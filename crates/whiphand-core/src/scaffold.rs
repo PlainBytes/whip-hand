@@ -11,7 +11,9 @@ use crate::config::{config_to_js, default_config};
 use crate::config_home::{global_workflows_dir, user_workspace_dir};
 use crate::engine::workflow_js::workflow_to_js;
 use crate::node_path;
-use crate::schema::{WorkflowError, parse_workflow, validate_workflow_semantics};
+use crate::schema::{
+    WorkflowError, check_workflow_text, parse_workflow, validate_workflow_semantics,
+};
 use crate::storage::{MARKER_NAME, Storage, resolve_layout, write_user_marker};
 use crate::types::{Scope, Workflow};
 use crate::workflow_name::assert_valid_workflow_name;
@@ -66,9 +68,12 @@ pub fn workflow_template(name: &str) -> String {
 }
 
 /// The error a write over an existing workflow raises; `init` skips those.
+/// `Invalid` carries the validator's problems, one per entry, for a text
+/// that was refused before anything was written.
 #[derive(Debug)]
 pub enum ScaffoldError {
     Exists(String),
+    Invalid(Vec<String>),
     Other(String),
 }
 
@@ -76,6 +81,9 @@ impl std::fmt::Display for ScaffoldError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ScaffoldError::Exists(m) | ScaffoldError::Other(m) => f.write_str(m),
+            ScaffoldError::Invalid(problems) => {
+                f.write_str(&WorkflowError::new(problems.clone()).to_string())
+            }
         }
     }
 }
@@ -109,6 +117,18 @@ fn write_exclusive(path: &str, content: &str) -> io::Result<bool> {
     }
 }
 
+/// `<scope's workflows dir>/<name>.yaml`, creating the dir if needed.
+fn workflow_target_path(
+    workdir: &str,
+    name: &str,
+    scope: Scope,
+    config_home: &Path,
+) -> Result<String, ScaffoldError> {
+    let dir = workflows_dir(workdir, scope, config_home);
+    std::fs::create_dir_all(&dir).map_err(|e| ScaffoldError::Other(e.to_string()))?;
+    Ok(node_path::join(&[&dir, &format!("{name}.yaml")]))
+}
+
 fn write_workflow_file(
     workdir: &str,
     name: &str,
@@ -117,9 +137,7 @@ fn write_workflow_file(
     config_home: &Path,
 ) -> Result<String, ScaffoldError> {
     assert_valid_workflow_name(name).map_err(ScaffoldError::Other)?;
-    let dir = workflows_dir(workdir, scope, config_home);
-    std::fs::create_dir_all(&dir).map_err(|e| ScaffoldError::Other(e.to_string()))?;
-    let path = node_path::join(&[&dir, &format!("{name}.yaml")]);
+    let path = workflow_target_path(workdir, name, scope, config_home)?;
     match write_exclusive(&path, content) {
         Ok(true) => Ok(path),
         Ok(false) => Err(ScaffoldError::Exists(format!(
@@ -137,6 +155,39 @@ pub fn create_workflow(
     config_home: &Path,
 ) -> Result<String, ScaffoldError> {
     write_workflow_file(workdir, name, &workflow_template(name), scope, config_home)
+}
+
+/// `new-workflow --from`: saves `text`, a whole workflow file, under `name`
+/// in `scope`'s workflows dir. The text is validated first and refused with
+/// its problems, writing nothing, when it has any. Its `name:` becomes
+/// `name`, merged onto the text so its comments and layout survive. An
+/// existing workflow of that name is refused unless `replace` is set, when
+/// it is overwritten with the new text (not merged onto the old file).
+pub fn create_workflow_from_text(
+    workdir: &str,
+    name: &str,
+    text: &str,
+    scope: Scope,
+    config_home: &Path,
+    replace: bool,
+) -> Result<String, ScaffoldError> {
+    assert_valid_workflow_name(name).map_err(ScaffoldError::Other)?;
+    let check = check_workflow_text(text);
+    if !check.problems.is_empty() {
+        return Err(ScaffoldError::Invalid(check.problems));
+    }
+    let parsed = parse_workflow(text).map_err(|e| ScaffoldError::Other(e.to_string()))?;
+    let renamed = Workflow {
+        name: name.to_string(),
+        ..parsed
+    };
+    let content = merge_workflow(text, &workflow_to_js(&renamed));
+    if !replace {
+        return write_workflow_file(workdir, name, &content, scope, config_home);
+    }
+    let path = workflow_target_path(workdir, name, scope, config_home)?;
+    std::fs::write(&path, content).map_err(|e| ScaffoldError::Other(e.to_string()))?;
+    Ok(path)
 }
 
 /// `updateWorkflow`: writes `workflow` under `name` (the name always wins
@@ -376,6 +427,64 @@ mod tests {
         assert!(again.created.is_empty());
         let err = create_workflow(&ws, "iterate", Scope::Project, &home).unwrap_err();
         assert!(matches!(err, ScaffoldError::Exists(_)), "{err}");
+    }
+
+    const AUTHORED: &str = "# drafted by an agent\nname: draft\n\nsteps:\n  # first\n  - id: a\n    kind: command\n    run: echo a\n";
+
+    #[test]
+    fn create_from_text_renames_and_keeps_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().to_string_lossy().into_owned();
+        let home = dir.path().join("home");
+        let path =
+            create_workflow_from_text(&ws, "demo", AUTHORED, Scope::Project, &home, false).unwrap();
+        assert!(path.ends_with("demo.yaml"), "{path}");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text, AUTHORED.replace("name: draft", "name: demo"));
+        assert_eq!(parse_workflow(&text).unwrap().name, "demo");
+    }
+
+    #[test]
+    fn create_from_text_refuses_an_existing_name_unless_replacing() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().to_string_lossy().into_owned();
+        let home = dir.path().join("home");
+        create_workflow_from_text(&ws, "demo", AUTHORED, Scope::Project, &home, false).unwrap();
+        let err = create_workflow_from_text(&ws, "demo", AUTHORED, Scope::Project, &home, false)
+            .unwrap_err();
+        assert!(matches!(err, ScaffoldError::Exists(_)), "{err}");
+        let other = AUTHORED.replace("echo a", "echo b");
+        let path =
+            create_workflow_from_text(&ws, "demo", &other, Scope::Project, &home, true).unwrap();
+        assert!(std::fs::read_to_string(path).unwrap().contains("echo b"));
+        // `replace` on a name that is not there yet just creates it.
+        create_workflow_from_text(&ws, "fresh", AUTHORED, Scope::Global, &home, true).unwrap();
+        assert!(home.join("workflows/fresh.yaml").is_file());
+    }
+
+    #[test]
+    fn create_from_text_refuses_invalid_text_and_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().to_string_lossy().into_owned();
+        let home = dir.path().join("home");
+        let err = create_workflow_from_text(
+            &ws,
+            "demo",
+            "name: x\nsteps: []\n",
+            Scope::Project,
+            &home,
+            true,
+        )
+        .unwrap_err();
+        let ScaffoldError::Invalid(problems) = err else {
+            panic!("{err}");
+        };
+        assert!(!problems.is_empty());
+        assert!(!dir.path().join(".whiphand").exists());
+        let err =
+            create_workflow_from_text(&ws, "Bad Name", AUTHORED, Scope::Project, &home, false)
+                .unwrap_err();
+        assert!(matches!(err, ScaffoldError::Other(_)), "{err}");
     }
 
     #[test]

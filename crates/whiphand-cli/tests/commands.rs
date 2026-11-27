@@ -620,6 +620,147 @@ fn init_then_new_workflow() {
     );
 }
 
+const AUTHORED: &str = "# drafted by an agent\nname: draft\n\nsteps:\n  # the only step\n  - id: a\n    kind: command\n    run: echo a\n";
+
+#[test]
+fn new_workflow_from_a_file_renames_it_and_keeps_its_comments() {
+    let e = Env::new();
+    e.write("x.yaml", AUTHORED);
+    let out = e.run(&["new-workflow", "demo", "--from", "x.yaml"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    let path = e.ws().join(".whiphand/workflows/demo.yaml");
+    // Compare as paths, not strings: the binary prints native separators
+    // (`\` on Windows) while `join` above keeps the `/` as written.
+    let stdout = out.stdout();
+    let printed = stdout
+        .strip_prefix("created ")
+        .and_then(|s| s.strip_suffix('\n'))
+        .unwrap_or_else(|| panic!("unexpected stdout: {stdout:?}"));
+    assert_eq!(Path::new(printed), path);
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(text, AUTHORED.replace("name: draft", "name: demo"));
+}
+
+#[test]
+fn new_workflow_from_a_file_writes_the_chosen_scope() {
+    let e = Env::new();
+    e.write("x.yaml", AUTHORED);
+    let out = e.run(&["new-workflow", "demo", "--from", "x.yaml", "--global"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    let global = e.home.path().join("workflows/demo.yaml");
+    assert!(global.is_file());
+    let out = e.run(&["new-workflow", "demo", "--from", "x.yaml", "--workspace"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    let written = out
+        .stdout()
+        .trim_end()
+        .strip_prefix("created ")
+        .unwrap()
+        .to_string();
+    let written = Path::new(&written);
+    assert!(written.is_file(), "{}", written.display());
+    assert!(written.starts_with(e.home.path()), "{}", written.display());
+    assert_ne!(written, global);
+    assert!(written.ends_with("workflows/demo.yaml"));
+    assert!(!e.ws().join(".whiphand/workflows/demo.yaml").exists());
+}
+
+#[test]
+fn new_workflow_from_refuses_an_existing_name_unless_replace() {
+    let e = Env::new();
+    e.write("x.yaml", AUTHORED);
+    assert_eq!(
+        e.run(&["new-workflow", "demo", "--from", "x.yaml"]).code(),
+        0
+    );
+    let out = e.run(&["new-workflow", "demo", "--from", "x.yaml"]);
+    assert_eq!(out.code(), 1);
+    assert!(
+        out.stderr()
+            .starts_with("Error: workflow 'demo' already exists at "),
+        "{}",
+        out.stderr()
+    );
+    e.write("y.yaml", &AUTHORED.replace("echo a", "echo b"));
+    let out = e.run(&["new-workflow", "demo", "--from", "y.yaml", "--replace"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    let text = std::fs::read_to_string(e.ws().join(".whiphand/workflows/demo.yaml")).unwrap();
+    assert!(
+        text.contains("echo b") && text.contains("name: demo"),
+        "{text}"
+    );
+    // --replace on a name that does not exist yet simply creates it.
+    let out = e.run(&["new-workflow", "other", "--from", "x.yaml", "--replace"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    assert!(e.ws().join(".whiphand/workflows/other.yaml").is_file());
+}
+
+#[test]
+fn new_workflow_from_an_invalid_file_prints_problems_and_writes_nothing() {
+    let e = Env::new();
+    e.write("bad.yaml", "name: bad\nsteps: []\n");
+    let out = e.run(&["new-workflow", "demo", "--from", "bad.yaml", "--replace"]);
+    assert_eq!(out.code(), 1, "{}{}", out.stdout(), out.stderr());
+    assert!(out.stdout().is_empty(), "{}", out.stdout());
+    assert!(out.stderr().starts_with("error: "), "{}", out.stderr());
+    assert!(out.stderr().contains("nothing written"), "{}", out.stderr());
+    assert!(!e.ws().join(".whiphand").exists());
+    e.write("syntax.yaml", "name: [unclosed\n");
+    let out = e.run(&["new-workflow", "demo", "--from", "syntax.yaml"]);
+    assert_eq!(out.code(), 1);
+    assert!(
+        out.stderr().contains("YAML parse error"),
+        "{}",
+        out.stderr()
+    );
+    assert!(!e.ws().join(".whiphand").exists());
+}
+
+#[test]
+fn new_workflow_from_refuses_an_invalid_name_and_a_missing_file() {
+    let e = Env::new();
+    e.write("x.yaml", AUTHORED);
+    let out = e.run(&["new-workflow", "Bad Name", "--from", "x.yaml"]);
+    assert_eq!(out.code(), 1);
+    assert!(out.stderr().starts_with("Error: "), "{}", out.stderr());
+    assert_eq!(
+        out.stderr(),
+        e.run(&["new-workflow", "Bad Name"]).stderr(),
+        "the same refusal as without --from"
+    );
+    let out = e.run(&["new-workflow", "demo", "--from", "nope.yaml"]);
+    assert_eq!(out.code(), 2);
+    assert!(out.stderr().contains("no such file"), "{}", out.stderr());
+    assert!(!e.ws().join(".whiphand").exists());
+    // --replace means nothing without --from.
+    assert_ne!(e.run(&["new-workflow", "demo", "--replace"]).code(), 0);
+    assert!(!e.ws().join(".whiphand").exists());
+}
+
+#[test]
+fn new_workflow_from_stdin() {
+    use std::io::Write;
+    let e = Env::new();
+    let ws = e.ws().to_string_lossy().into_owned();
+    let mut child = e
+        .command(&["new-workflow", "demo", "--from", "-", "-C", &ws], e.ws())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(AUTHORED.as_bytes())
+        .unwrap();
+    let out = Out(child.wait_with_output().unwrap());
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    let text = std::fs::read_to_string(e.ws().join(".whiphand/workflows/demo.yaml")).unwrap();
+    assert_eq!(text, AUTHORED.replace("name: draft", "name: demo"));
+}
+
 #[test]
 fn rename_run_sets_and_clears_a_name() {
     let e = Env::new();

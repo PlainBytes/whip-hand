@@ -24,7 +24,8 @@ use whiphand_core::js::number_to_string;
 use whiphand_core::node_path;
 use whiphand_core::process::container::Container;
 use whiphand_core::scaffold::{
-    InitOptions, InitWorkflows, create_workflow, existing_storage, init_workspace,
+    InitOptions, InitWorkflows, ScaffoldError, create_workflow, create_workflow_from_text,
+    existing_storage, init_workspace,
 };
 use whiphand_core::schema::{
     WorkflowError, check_workflow_text, parse_workflow, unattended_problems,
@@ -167,7 +168,38 @@ pub fn init(storage: Option<&str>, workflows: Option<&str>, dir: &str) -> CmdRes
     Ok(0)
 }
 
-pub fn new_workflow(name: &str, global: bool, workspace: bool, dir: &str) -> CmdResult {
+/// The text `new-workflow --from` saves: stdin for `-`, otherwise the file,
+/// relative to the working folder as `validate`'s paths are.
+fn read_from_source(from: &str, workdir: &str) -> Result<String, String> {
+    if from == "-" {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        std::io::stdin()
+            .read_to_end(&mut bytes)
+            .map_err(|e| format!("cannot read stdin: {e}"))?;
+        return Ok(String::from_utf8_lossy(&bytes).into_owned());
+    }
+    let path = Path::new(workdir).join(from);
+    std::fs::read(&path)
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .map_err(|e| {
+            whiphand_core::process::launch::node_error_message(&e, &path.to_string_lossy())
+        })
+}
+
+/// `whiphand new-workflow <name> [--from <file> [--replace]]`. Without
+/// `--from` it scaffolds the `iterate` template. With it, the file is
+/// validated and saved under `name`; a file with problems prints them on
+/// stderr and exits 1 with nothing written, and an unreadable one is a
+/// usage error.
+pub fn new_workflow(
+    name: &str,
+    from: Option<&str>,
+    replace: bool,
+    global: bool,
+    workspace: bool,
+    dir: &str,
+) -> CmdResult {
     let scope = if global {
         Scope::Global
     } else if workspace {
@@ -175,10 +207,39 @@ pub fn new_workflow(name: &str, global: bool, workspace: bool, dir: &str) -> Cmd
     } else {
         Scope::Project
     };
-    let path = create_workflow(&node_path::resolve(dir), name, scope, &host_config_home())
-        .map_err(|e| Thrown::error(e.to_string()))?;
-    out_line(&format!("created {path}"));
-    Ok(0)
+    let workdir = node_path::resolve(dir);
+    let home = host_config_home();
+    let Some(from) = from else {
+        let path = create_workflow(&workdir, name, scope, &home)
+            .map_err(|e| Thrown::error(e.to_string()))?;
+        out_line(&format!("created {path}"));
+        return Ok(0);
+    };
+    let text = match read_from_source(from, &workdir) {
+        Ok(text) => text,
+        Err(message) => {
+            err_line(&format!("✘ {message}"));
+            return Ok(USAGE_ERROR);
+        }
+    };
+    match create_workflow_from_text(&workdir, name, &text, scope, &home, replace) {
+        Ok(path) => {
+            out_line(&format!("created {path}"));
+            Ok(0)
+        }
+        Err(ScaffoldError::Invalid(problems)) => {
+            let n = problems.len();
+            let mut lines: Vec<String> = problems.iter().map(|p| format!("error: {p}")).collect();
+            lines.push(format!(
+                "✘ {} — {n} problem{}; nothing written",
+                if from == "-" { "stdin" } else { from },
+                if n == 1 { "" } else { "s" }
+            ));
+            err_line(&lines.join("\n"));
+            Ok(1)
+        }
+        Err(e) => Err(Thrown::error(e.to_string())),
+    }
 }
 
 // ---------------------------------------------------------------- rename-run

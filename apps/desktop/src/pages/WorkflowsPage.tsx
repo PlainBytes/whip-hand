@@ -14,7 +14,7 @@ import {
   RadioGroup,
   Text,
 } from '@fluentui/react-components';
-import { Add20Regular } from '@fluentui/react-icons';
+import { Add20Regular, ArrowReset20Regular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
 import { Page } from '../components/Page.tsx';
@@ -22,12 +22,25 @@ import { WorkflowLane, isWorkflowFile } from '../components/workflow-lane/Workfl
 import { DeleteWorkflowDialog } from '../components/DeleteWorkflowDialog.tsx';
 import { CloneWorkflowDialog } from '../components/CloneWorkflowDialog.tsx';
 import { NewWorkflowDialog } from '../components/NewWorkflowDialog.tsx';
+import { RestoreWorkflowsDialog } from '../components/RestoreWorkflowsDialog.tsx';
 import type { WorkflowEntry } from '../components/workflow-lane/WorkflowLane.tsx';
 import type { Scope } from '../shared/types.ts';
 import type { InitStorage, InitWorkflowsMode } from '../shared/protocol.gen.ts';
 import { SCOPE_ORDER } from '../components/workflow-name-problem.ts';
 import { WorkflowEditor } from '../workflow-editor/WorkflowEditor.tsx';
 import { errorMessage } from '../lib/error-message.ts';
+
+/**
+ * Where the restore dialog points first: the scope set-up copied the starter
+ * workflows into. Local storage puts them in the project, user storage in
+ * the workspace folder; the list already tells the two apart, so no extra
+ * request is needed. With neither present (global-only, or nothing yet),
+ * the workspace folder is the safe default — it never touches the repo.
+ */
+function restoreDefaultScope(workflows: WorkflowEntry[]): Scope {
+  if (workflows.some(w => w.source === 'project')) return 'project';
+  return 'workspace';
+}
 
 export interface WorkflowsPageProps {
   /**
@@ -62,6 +75,7 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
   const [setupWorkflows, setSetupWorkflows] = useState<InitWorkflowsMode>('local');
 
   const [newWorkflowOpen, setNewWorkflowOpen] = useState(false);
+  const [restoreOpen, setRestoreOpen] = useState(false);
 
   const [editing, setEditing] = useState<{ name: string; source: Scope } | null>(null);
   /** The card awaiting delete confirmation; null when no dialog is open. */
@@ -202,9 +216,14 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
           <Text weight="semibold" size={500}>
             Workflows{workflows.length > 0 && ` — ${workflows.length} workflow${workflows.length === 1 ? '' : 's'}`}
           </Text>
-          <Button appearance="primary" icon={<Add20Regular />} onClick={() => setNewWorkflowOpen(true)}>
-            New workflow
-          </Button>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <Button icon={<ArrowReset20Regular />} onClick={() => setRestoreOpen(true)}>
+              Restore built-in workflows…
+            </Button>
+            <Button appearance="primary" icon={<Add20Regular />} onClick={() => setNewWorkflowOpen(true)}>
+              New workflow
+            </Button>
+          </div>
         </div>
       }
     >
@@ -250,6 +269,17 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
             setReloadKey(k => k + 1);
           }}
           onDismiss={() => setNewWorkflowOpen(false)}
+        />
+      )}
+      {restoreOpen && (
+        <RestoreWorkflowsDialog
+          workdir={workspacePath}
+          defaultScope={restoreDefaultScope(workflows)}
+          onRestored={() => {
+            setRestoreOpen(false);
+            setReloadKey(k => k + 1);
+          }}
+          onDismiss={() => setRestoreOpen(false)}
         />
       )}
       {deleting && (

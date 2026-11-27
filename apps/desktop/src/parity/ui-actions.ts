@@ -102,16 +102,19 @@ export const uiActions: Record<string, Record<string, string>> = {
     '--from': 'exempt:cli-only-an-authoring-agent-saves-its-file',
     '--replace': 'exempt:cli-only-an-authoring-agent-saves-its-file',
   },
-  // The agent's listShippedWorkflows / restoreWorkflows are in place; the
-  // desktop's Restore starter workflows dialog that calls them is not yet,
-  // so the command and its options stay exempt until it lands.
   'restore-workflows': {
-    _command: 'exempt:desktop-restore-dialog-not-built-yet',
-    '<names>': 'exempt:desktop-restore-dialog-not-built-yet',
-    '--replace': 'exempt:desktop-restore-dialog-not-built-yet',
-    '--list': 'exempt:desktop-restore-dialog-not-built-yet',
-    '--global': 'exempt:desktop-restore-dialog-not-built-yet',
-    '--workspace': 'exempt:desktop-restore-dialog-not-built-yet',
+    // WorkflowsPage's "Restore built-in workflows…" header button, opening
+    // RestoreWorkflowsDialog, which drives restoreWorkflows.
+    _command: 'workflows:restoreBuiltInButton',
+    // The dialog's checkbox per template, driving restoreWorkflows' `names`.
+    '<names>': 'workflows:restoreTemplateCheckboxes',
+    // Ticking a Modified template (after a confirmation naming it) drives `replace`.
+    '--replace': 'workflows:restoreTemplateCheckboxes',
+    // The dialog lists every template with its status from listShippedWorkflows.
+    '--list': 'workflows:restoreTemplateList',
+    // The dialog's Project/Workspace/Global choice, driving the RPCs' `scope`.
+    '--global': 'workflows:restoreScopeChoice',
+    '--workspace': 'workflows:restoreScopeChoice',
     '-C': 'sidebar:workspaceSwitcher',
   },
   // Removing a worktree on its own has no desktop button yet; deleting the run

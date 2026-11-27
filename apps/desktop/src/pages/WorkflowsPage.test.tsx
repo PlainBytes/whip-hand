@@ -311,6 +311,63 @@ describe('WorkflowsPage', () => {
   });
 });
 
+describe('WorkflowsPage - restoring built-in workflows', () => {
+  beforeEach(() => {
+    useAppStore.setState({ workspacePath: '/ws', workflows: [] });
+  });
+
+  afterEach(() => {
+    useAppStore.setState({ workspacePath: null, workflows: [] });
+  });
+
+  it('offers the action when the workspace already has workflows', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    expect(await screen.findByText('feature')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /restore built-in workflows/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /set up this workspace/i })).not.toBeInTheDocument();
+  });
+
+  it('opens on the project scope when the workspace keeps project workflows', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    fireEvent.click(await screen.findByRole('button', { name: /restore built-in workflows/i }));
+    const req = await lastRequest(transport, 'listShippedWorkflows');
+    expect(req.params).toEqual({ workdir: '/ws', scope: 'project' });
+  });
+
+  it('opens on the workspace scope when the workflows live in the user folder', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [{ ...FEATURE_WORKFLOW, source: 'workspace' }]);
+    fireEvent.click(await screen.findByRole('button', { name: /restore built-in workflows/i }));
+    const req = await lastRequest(transport, 'listShippedWorkflows');
+    expect(req.params).toEqual({ workdir: '/ws', scope: 'workspace' });
+  });
+
+  it('a missing-only restore closes the dialog and reloads the list', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    fireEvent.click(await screen.findByRole('button', { name: /restore built-in workflows/i }));
+    await respond(transport, 'listShippedWorkflows', {
+      workflows: [
+        { name: 'feature', description: 'd', status: 'stock' },
+        { name: 'bugfix', description: 'd', status: 'missing' },
+      ],
+    });
+    fireEvent.click(await within(screen.getByRole('dialog')).findByRole('button', { name: 'Restore' }));
+    const req = await lastRequest(transport, 'restoreWorkflows');
+    expect(req.params).toEqual({ workdir: '/ws', scope: 'project', names: ['bugfix'], replace: [] });
+    await respond(transport, 'restoreWorkflows', { results: [{ name: 'bugfix', outcome: 'added' }] });
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW, { ...FEATURE_WORKFLOW, name: 'bugfix' }]);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(await screen.findByText('bugfix')).toBeInTheDocument();
+  });
+});
+
 
 async function lastRequest(transport: MockTransport, method: string) {
   return waitFor(() => {

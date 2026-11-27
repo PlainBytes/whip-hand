@@ -202,6 +202,18 @@ export const SCENES = [
     },
   },
   {
+    // Opened, never confirmed: nothing is restored.
+    name: 'restore-workflows-dialog',
+    status: 'clean',
+    async prepare(page) {
+      await goTo(page, 'Workflows');
+      await tap(page.getByRole('button', { name: 'Restore built-in workflows…' }));
+      const dialog = page.getByRole('dialog');
+      await dialog.waitFor();
+      await dialog.getByRole('group', { name: 'Starter workflows' }).waitFor();
+    },
+  },
+  {
     name: 'workflow-editor',
     status: 'clean',
     async prepare(page) {

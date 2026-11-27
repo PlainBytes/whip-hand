@@ -509,6 +509,13 @@ pub fn params(method: &str) -> Option<S> {
             "workdir" => StrMin1, "name" => WorkflowName, "newName" => WorkflowName, "scope" => o(SCOPE),
         },
         "validateWorkflow" => object! { "draft" => Unknown },
+        "listShippedWorkflows" => object! { "workdir" => StrMin1, "scope" => SCOPE },
+        "restoreWorkflows" => object! {
+            "workdir" => StrMin1,
+            "scope" => SCOPE,
+            "names" => o(Arr(b(StrMin1))),
+            "replace" => o(Arr(b(StrMin1))),
+        },
         "doctor" => Default(b(object! { "workdir" => o(StrMin1) }), empty),
         "listMcpServers" | "listPlugins" => {
             object!(Strictness::Strict; "workdir" => StrMin1, "refresh" => o(Bool))

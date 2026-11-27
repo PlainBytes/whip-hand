@@ -169,6 +169,24 @@
       }
     },
     {
+      "step": "listShippedWorkflows {\"workdir\":\"w\"}",
+      "response": {
+        "error": {
+          "code": -32602,
+          "message": "invalid params: scope: Invalid option: expected one of \"project\"|\"workspace\"|\"global\""
+        }
+      }
+    },
+    {
+      "step": "restoreWorkflows {\"workdir\":\"w\",\"scope\":\"nowhere\",\"names\":[\"\"],\"replace\":\"all\"}",
+      "response": {
+        "error": {
+          "code": -32602,
+          "message": "invalid params: scope: Invalid option: expected one of \"project\"|\"workspace\"|\"global\"; names.0: Too small: expected string to have >=1 characters; replace: Invalid input: expected array, received string"
+        }
+      }
+    },
+    {
       "step": "doctor {\"workdir\":\"\"}",
       "response": {
         "error": {

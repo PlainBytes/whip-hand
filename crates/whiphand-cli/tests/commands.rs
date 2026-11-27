@@ -716,6 +716,122 @@ fn new_workflow_from_an_invalid_file_prints_problems_and_writes_nothing() {
     assert!(!e.ws().join(".whiphand").exists());
 }
 
+const STOCK_ITERATE: &str = include_str!("../../whiphand-core/templates/iterate.yaml");
+const STOCK_DEVELOP: &str = include_str!("../../whiphand-core/templates/develop.yaml");
+
+/// The `<name>  <text>` lines `restore-workflows` printed, as pairs.
+fn restore_rows(out: &Out) -> Vec<(String, String)> {
+    out.stdout()
+        .lines()
+        .map(|l| {
+            let (name, text) = l.split_once(' ').unwrap();
+            (name.to_string(), text.trim_start().to_string())
+        })
+        .collect()
+}
+
+#[test]
+fn restore_workflows_brings_back_a_deleted_one_and_keeps_the_rest() {
+    let e = Env::new();
+    assert_eq!(e.run(&["init"]).code(), 0);
+    let wf = e.ws().join(".whiphand/workflows");
+    std::fs::remove_file(wf.join("develop.yaml")).unwrap();
+    let out = e.run(&["restore-workflows"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    let rows = restore_rows(&out);
+    assert_eq!(rows.len(), 3, "{}", out.stdout());
+    assert_eq!(rows[0].0, "iterate");
+    assert!(rows[0].1.starts_with("kept"), "{}", out.stdout());
+    assert_eq!(rows[1], ("develop".into(), "added".into()));
+    assert_eq!(rows[2].0, "research");
+    assert!(rows[2].1.starts_with("kept"), "{}", out.stdout());
+    assert_eq!(
+        std::fs::read_to_string(wf.join("develop.yaml")).unwrap(),
+        STOCK_DEVELOP
+    );
+}
+
+#[test]
+fn restore_workflows_lists_keeps_and_replaces_an_edited_one() {
+    let e = Env::new();
+    assert_eq!(e.run(&["init"]).code(), 0);
+    let iterate = e.ws().join(".whiphand/workflows/iterate.yaml");
+    let edited = STOCK_ITERATE.replace("description:", "description: edited.");
+    std::fs::write(&iterate, &edited).unwrap();
+
+    let out = e.run(&["restore-workflows", "--list"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    assert_eq!(
+        restore_rows(&out),
+        [
+            ("iterate".into(), "modified".into()),
+            ("develop".into(), "stock".into()),
+            ("research".into(), "stock".into())
+        ]
+    );
+
+    let out = e.run(&["restore-workflows"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    assert!(restore_rows(&out)[0].1.starts_with("kept"));
+    assert_eq!(std::fs::read_to_string(&iterate).unwrap(), edited);
+
+    let out = e.run(&["restore-workflows", "iterate", "--replace"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    assert_eq!(restore_rows(&out), [("iterate".into(), "replaced".into())]);
+    assert_eq!(std::fs::read_to_string(&iterate).unwrap(), STOCK_ITERATE);
+    let out = e.run(&["restore-workflows", "--list", "iterate"]);
+    assert_eq!(restore_rows(&out), [("iterate".into(), "stock".into())]);
+}
+
+#[test]
+fn restore_workflows_global_and_workspace_act_on_their_scope_only() {
+    let e = Env::new();
+    let out = e.run(&["restore-workflows", "--global"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    assert!(restore_rows(&out).iter().all(|(_, t)| t == "added"));
+    assert_eq!(
+        names(&e.home.path().join("workflows")),
+        ["develop.yaml", "iterate.yaml", "research.yaml"]
+    );
+    assert!(names(e.ws()).is_empty());
+    let out = e.run(&["restore-workflows", "--list"]);
+    assert!(restore_rows(&out).iter().all(|(_, t)| t == "missing"));
+
+    let out = e.run(&["restore-workflows", "research", "--workspace"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    assert_eq!(restore_rows(&out), [("research".into(), "added".into())]);
+    assert!(names(e.ws()).is_empty());
+    let out = e.run(&["restore-workflows", "--list", "--workspace"]);
+    assert_eq!(
+        restore_rows(&out),
+        [
+            ("iterate".into(), "missing".into()),
+            ("develop".into(), "missing".into()),
+            ("research".into(), "stock".into())
+        ]
+    );
+    // The global dir still holds only what the first restore wrote.
+    assert_eq!(names(&e.home.path().join("workflows")).len(), 3);
+}
+
+#[test]
+fn restore_workflows_refuses_an_unknown_name_and_writes_nothing() {
+    let e = Env::new();
+    let out = e.run(&["restore-workflows", "develop", "nope"]);
+    assert_eq!(out.code(), 2, "{}{}", out.stdout(), out.stderr());
+    assert!(out.stdout().is_empty(), "{}", out.stdout());
+    assert!(
+        out.stderr()
+            .contains("'nope'; the shipped workflows are: iterate, develop, research"),
+        "{}",
+        out.stderr()
+    );
+    assert!(names(e.ws()).is_empty());
+    assert!(!e.home.path().join("workflows").exists());
+    let out = e.run(&["restore-workflows", "--list", "--replace"]);
+    assert_ne!(out.code(), 0);
+}
+
 #[test]
 fn new_workflow_from_refuses_an_invalid_name_and_a_missing_file() {
     let e = Env::new();

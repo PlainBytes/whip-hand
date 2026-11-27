@@ -276,6 +276,39 @@ pub fn build_cli() -> Command {
             .arg(extra()),
         )
         .subcommand(
+            sub(
+                "restore-workflows",
+                "bring back the starter workflows into .whiphand/workflows/ (the workspace's private dir with --workspace, \
+                 the global workflows dir with --global): missing ones are written, existing ones are kept unless --replace",
+            )
+            .arg(
+                Arg::new("names")
+                    .num_args(0..)
+                    .action(ArgAction::Append)
+                    .help("starter workflows to restore (default: all of them)"),
+            )
+            .arg(flag(
+                "replace",
+                "reset the named (or all) starter workflows that exist to stock, discarding edits to them",
+            ))
+            .arg(
+                flag(
+                    "list",
+                    "print each starter workflow's status there (missing, stock or modified) and write nothing",
+                )
+                .conflicts_with("replace"),
+            )
+            .arg(flag(
+                "global",
+                "act on the user-level workflows dir, shared by every workspace",
+            ))
+            .arg(flag(
+                "workspace",
+                "act on this workspace's private workflows dir under the user folder",
+            ))
+            .arg(dir_option("working folder")),
+        )
+        .subcommand(
             sub("worktree", "manage the git worktrees runs were made in")
                 .subcommand_required(true)
                 .subcommand(
@@ -403,7 +436,8 @@ fn declared_positionals(cmd: &Command) -> usize {
 pub fn too_many_arguments(root: &Command, matches: &ArgMatches) -> Option<String> {
     let mut path = Vec::new();
     let m = leaf(matches, &mut path);
-    let extras = m.get_many::<String>(EXTRA)?.count();
+    // A command whose own last positional is variadic has no EXTRA to collect.
+    let extras = m.try_get_many::<String>(EXTRA).ok()??.count();
     if extras == 0 {
         return None;
     }

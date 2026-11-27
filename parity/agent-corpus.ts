@@ -53,6 +53,7 @@ const BAD_PARAMS: Array<[string, unknown]> = [
   ['createWorkflow', { workdir: 'w' }], ['updateWorkflow', { workdir: 'w', name: 'n', workflow: { name: 'x', steps: [{ id: 'a' }] } }],
   ['deleteWorkflow', { workdir: 'w', name: 'a/b' }], ['cloneWorkflow', { workdir: 'w', name: 'a', newName: '' }],
   ['validateWorkflow', {}], ['initWorkspace', { workdir: 3 }],
+  ['listShippedWorkflows', { workdir: 'w' }], ['restoreWorkflows', { workdir: 'w', scope: 'nowhere', names: [''], replace: 'all' }],
   ['doctor', { workdir: '' }], ['listModels', { refresh: 'yes' }],
   ['listMcpServers', {}], ['listMcpServers', { workdir: 'w', refresh: 'yes' }],
   ['listPlugins', {}], ['listPlugins', { workdir: 'w', extra: 1 }],
@@ -174,6 +175,32 @@ export const SCENARIOS: Scenario[] = [
       { call: 'initWorkspace', params: (c: Ctx) => ({ workdir: c.ws }) },
       { call: 'initWorkspace', params: (c: Ctx) => ({ workdir: c.ws }), label: 'initWorkspace again' },
       { call: 'listWorkflows', params: (c: Ctx) => ({ workdir: c.ws }), label: 'listWorkflows after init' },
+    ],
+  },
+  {
+    name: 'restore shipped workflows',
+    files: {
+      // An edited iterate, and develop left out, in the project scope.
+      [`${WF}/iterate.yaml`]: workflow('iterate', '  - id: a\n    kind: command\n    run: echo mine\n    output: a.log\n'),
+      [`${WF}/research.yaml`]: workflow('research', '  - id: r\n    kind: command\n    run: echo r\n    output: r.log\n'),
+    },
+    steps: [
+      { call: 'listShippedWorkflows', params: (c: Ctx) => ({ workdir: c.ws, scope: 'project' }) },
+      { call: 'listShippedWorkflows', params: (c: Ctx) => ({ workdir: c.ws, scope: 'global' }), label: 'listShippedWorkflows global' },
+      { call: 'restoreWorkflows', params: (c: Ctx) => ({ workdir: c.ws, scope: 'project' }) },
+      { call: 'listShippedWorkflows', params: (c: Ctx) => ({ workdir: c.ws, scope: 'project' }), label: 'listShippedWorkflows after restore' },
+      {
+        call: 'restoreWorkflows', label: 'restoreWorkflows replace iterate',
+        params: (c: Ctx) => ({ workdir: c.ws, scope: 'project', names: ['iterate'], replace: ['iterate'] }),
+      },
+      { call: 'listShippedWorkflows', params: (c: Ctx) => ({ workdir: c.ws, scope: 'project' }), label: 'listShippedWorkflows after replace' },
+      {
+        call: 'restoreWorkflows', label: 'restoreWorkflows unknown name',
+        params: (c: Ctx) => ({ workdir: c.ws, scope: 'global', names: ['develop', 'nope'] }),
+      },
+      { call: 'listShippedWorkflows', params: (c: Ctx) => ({ workdir: c.ws, scope: 'global' }), label: 'listShippedWorkflows global still empty' },
+      { call: 'restoreWorkflows', params: (c: Ctx) => ({ workdir: c.ws, scope: 'workspace', names: ['research'] }), label: 'restoreWorkflows workspace' },
+      { call: 'listWorkflows', params: (c: Ctx) => ({ workdir: c.ws }), label: 'listWorkflows after restores' },
     ],
   },
   {

@@ -24,8 +24,9 @@ use whiphand_core::js::number_to_string;
 use whiphand_core::node_path;
 use whiphand_core::process::container::Container;
 use whiphand_core::scaffold::{
-    InitOptions, InitWorkflows, ScaffoldError, create_workflow, create_workflow_from_text,
-    existing_storage, init_workspace,
+    InitOptions, InitWorkflows, ScaffoldError, check_shipped_names, create_workflow,
+    create_workflow_from_text, existing_storage, init_workspace, restore_workflows as restore,
+    shipped_workflow_status,
 };
 use whiphand_core::schema::{
     WorkflowError, check_workflow_text, parse_workflow, unattended_problems,
@@ -240,6 +241,77 @@ pub fn new_workflow(
         }
         Err(e) => Err(Thrown::error(e.to_string())),
     }
+}
+
+/// `whiphand restore-workflows [name…] [--replace | --list] [--global | --workspace]`:
+/// writes the named (or all) starter workflows missing from the scope's
+/// workflows dir, resets existing ones to stock only with `--replace`, and
+/// prints one line per template. `--list` prints each one's status instead
+/// and writes nothing. An unknown name is a usage error, with nothing written.
+pub fn restore_workflows(
+    names: &[String],
+    replace: bool,
+    list: bool,
+    global: bool,
+    workspace: bool,
+    dir: &str,
+) -> CmdResult {
+    let scope = if global {
+        Scope::Global
+    } else if workspace {
+        Scope::Workspace
+    } else {
+        Scope::Project
+    };
+    if let Err(e) = check_shipped_names(names) {
+        err_line(&format!("✘ {e}"));
+        return Ok(USAGE_ERROR);
+    }
+    let workdir = node_path::resolve(dir);
+    let home = host_config_home();
+    let wanted = |name: &str| names.is_empty() || names.iter().any(|n| n == name);
+    let rows: Vec<(&str, String)> = if list {
+        shipped_workflow_status(&workdir, &home, scope)
+            .map_err(|e| Thrown::error(e.to_string()))?
+            .into_iter()
+            .filter(|w| wanted(w.name))
+            .map(|w| (w.name, w.status.as_str().to_string()))
+            .collect()
+    } else {
+        let targets = (!names.is_empty()).then_some(names);
+        let all: Vec<String>;
+        let replaced: &[String] = match (replace, targets) {
+            (false, _) => &[],
+            (true, Some(named)) => named,
+            (true, None) => {
+                all = whiphand_core::scaffold::shipped_workflow_names()
+                    .into_iter()
+                    .map(String::from)
+                    .collect();
+                &all
+            }
+        };
+        restore(&workdir, &home, scope, targets, replaced)
+            .map_err(|e| Thrown::error(e.to_string()))?
+            .into_iter()
+            .map(|r| {
+                let outcome = r.outcome.as_str();
+                let text = if outcome == "kept" {
+                    "kept (exists; --replace resets it to stock)".to_string()
+                } else {
+                    outcome.to_string()
+                };
+                (r.name, text)
+            })
+            .collect()
+    };
+    let width = rows.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
+    let lines: Vec<String> = rows
+        .iter()
+        .map(|(name, text)| format!("{name:<width$}  {text}"))
+        .collect();
+    out_line(&lines.join("\n"));
+    Ok(0)
 }
 
 // ---------------------------------------------------------------- rename-run

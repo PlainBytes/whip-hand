@@ -85,6 +85,14 @@ async fn dispatch(matches: ArgMatches) -> CmdResult {
             flag(m, "workspace"),
             &dir(m),
         ),
+        "restore-workflows" => commands::restore_workflows(
+            &strings(m, "names"),
+            flag(m, "replace"),
+            flag(m, "list"),
+            flag(m, "global"),
+            flag(m, "workspace"),
+            &dir(m),
+        ),
         "worktree" => {
             let (_, m) = m.subcommand().expect("a worktree subcommand is required");
             commands::worktree_remove(

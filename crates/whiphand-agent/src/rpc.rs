@@ -20,6 +20,9 @@ pub const REMOTE_METHODS: &[&str] = &[
     "hello",
     "listWorkflows",
     "createWorkflow",
+    // Restoring a starter workflow writes a workflow file, as createWorkflow does.
+    "listShippedWorkflows",
+    "restoreWorkflows",
     "updateWorkflow",
     "deleteWorkflow",
     "cloneWorkflow",
@@ -163,6 +166,20 @@ mod tests {
         for method in ["listSecrets", "setSecret", "deleteSecret"] {
             assert!(!REMOTE_METHODS.contains(&method), "{method}");
             assert!(crate::schema::params(method).is_some(), "{method}");
+        }
+    }
+
+    #[test]
+    fn restoring_starter_workflows_is_as_remote_as_creating_one() {
+        let create = REMOTE_METHODS.contains(&"createWorkflow");
+        for method in ["listShippedWorkflows", "restoreWorkflows"] {
+            assert_eq!(REMOTE_METHODS.contains(&method), create, "{method}");
+            assert_eq!(
+                crate::schema::remote_params(method).is_some(),
+                crate::schema::remote_params("createWorkflow").is_some(),
+                "{method}"
+            );
+            assert!(crate::handlers::exists(method), "{method}");
         }
     }
 

@@ -279,6 +279,175 @@ pub fn clone_workflow(
     write_workflow_file(workdir, to, &content, scope, config_home)
 }
 
+/// How a shipped workflow's file in a scope compares to its template.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShippedStatus {
+    /// No `<name>.yaml` (or `.yml`) in that scope.
+    Missing,
+    /// The file's text is the template's (line endings aside).
+    Stock,
+    /// The file is there but differs from the template.
+    Modified,
+}
+
+impl ShippedStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ShippedStatus::Missing => "missing",
+            ShippedStatus::Stock => "stock",
+            ShippedStatus::Modified => "modified",
+        }
+    }
+}
+
+/// One shipped workflow and how it stands in a scope.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShippedWorkflow {
+    pub name: &'static str,
+    /// The template's `description:`, empty when it has none.
+    pub description: String,
+    pub status: ShippedStatus,
+}
+
+/// What `restore_workflows` did with one template.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestoreOutcome {
+    /// It was missing and has been written.
+    Added,
+    /// It was there and has been overwritten with the template.
+    Replaced,
+    /// It was there and has been left alone.
+    Kept,
+}
+
+impl RestoreOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RestoreOutcome::Added => "added",
+            RestoreOutcome::Replaced => "replaced",
+            RestoreOutcome::Kept => "kept",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RestoreResult {
+    pub name: &'static str,
+    pub outcome: RestoreOutcome,
+}
+
+/// The names of the shipped workflows, in `SHIPPED_TEMPLATES` order.
+pub fn shipped_workflow_names() -> Vec<&'static str> {
+    SHIPPED_TEMPLATES.iter().map(|(n, _)| *n).collect()
+}
+
+/// Refuses any of `names` that is not a shipped workflow, listing the valid ones.
+pub fn check_shipped_names<'a>(
+    names: impl IntoIterator<Item = &'a String>,
+) -> Result<(), ScaffoldError> {
+    let unknown: Vec<&str> = names
+        .into_iter()
+        .map(String::as_str)
+        .filter(|n| !SHIPPED_TEMPLATES.iter().any(|(t, _)| t == n))
+        .collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    let quoted: Vec<String> = unknown.iter().map(|n| format!("'{n}'")).collect();
+    Err(ScaffoldError::Other(format!(
+        "no shipped workflow named {}; the shipped workflows are: {}",
+        quoted.join(", "),
+        shipped_workflow_names().join(", ")
+    )))
+}
+
+/// The file a shipped workflow has in `dir`: `name.yaml`, else `name.yml`,
+/// with its text. `None` when neither is there.
+fn existing_workflow_file(
+    dir: &str,
+    name: &str,
+) -> Result<Option<(String, String)>, ScaffoldError> {
+    for ext in ["yaml", "yml"] {
+        let path = node_path::join(&[dir, &format!("{name}.{ext}")]);
+        match std::fs::read(&path) {
+            Ok(bytes) => return Ok(Some((path, String::from_utf8_lossy(&bytes).into_owned()))),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(ScaffoldError::Other(e.to_string())),
+        }
+    }
+    Ok(None)
+}
+
+fn template_description(text: &str) -> String {
+    parse_workflow(text)
+        .ok()
+        .and_then(|wf| wf.description)
+        .unwrap_or_default()
+}
+
+/// Each shipped workflow's status in `scope`'s workflows dir only (a copy in
+/// another scope does not count), in `SHIPPED_TEMPLATES` order. Writes nothing.
+pub fn shipped_workflow_status(
+    workdir: &str,
+    config_home: &Path,
+    scope: Scope,
+) -> Result<Vec<ShippedWorkflow>, ScaffoldError> {
+    let dir = workflows_dir(workdir, scope, config_home);
+    SHIPPED_TEMPLATES
+        .iter()
+        .map(|(name, template)| {
+            let status = match existing_workflow_file(&dir, name)? {
+                None => ShippedStatus::Missing,
+                Some((_, text)) if text.replace("\r\n", "\n") == *template => ShippedStatus::Stock,
+                Some(_) => ShippedStatus::Modified,
+            };
+            Ok(ShippedWorkflow {
+                name,
+                description: template_description(template),
+                status,
+            })
+        })
+        .collect()
+}
+
+/// Brings the shipped workflows back into `scope`'s workflows dir: each of
+/// `names` (every one when `None`) that is missing there is written from its
+/// template; one that is there is overwritten with the template when it is
+/// also in `replace`, and kept otherwise. An unknown name in either list
+/// is refused before anything is written. Results follow
+/// `SHIPPED_TEMPLATES` order. `init_workspace` is unaffected.
+pub fn restore_workflows(
+    workdir: &str,
+    config_home: &Path,
+    scope: Scope,
+    names: Option<&[String]>,
+    replace: &[String],
+) -> Result<Vec<RestoreResult>, ScaffoldError> {
+    check_shipped_names(names.unwrap_or_default().iter().chain(replace))?;
+    let dir = workflows_dir(workdir, scope, config_home);
+    let mut results = Vec::new();
+    for (name, template) in SHIPPED_TEMPLATES {
+        if names.is_some_and(|ns| !ns.iter().any(|n| n == name)) {
+            continue;
+        }
+        let outcome = match existing_workflow_file(&dir, name)? {
+            Some((path, _)) if replace.iter().any(|n| n == name) => {
+                std::fs::write(&path, template).map_err(io_err)?;
+                RestoreOutcome::Replaced
+            }
+            Some(_) => RestoreOutcome::Kept,
+            None => match write_workflow_file(workdir, name, template, scope, config_home) {
+                Ok(_) => RestoreOutcome::Added,
+                // Appeared since the check: leave it, as for any existing one.
+                Err(ScaffoldError::Exists(_)) => RestoreOutcome::Kept,
+                Err(e) => return Err(e),
+            },
+        };
+        results.push(RestoreResult { name, outcome });
+    }
+    Ok(results)
+}
+
 /// Where `init` puts the shipped workflows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InitWorkflows {
@@ -673,6 +842,153 @@ mod tests {
             names_in(&layout.user_dir),
             ["config.yaml", "workspace.yaml"]
         );
+    }
+
+    fn statuses(r: &Rig, scope: Scope) -> Vec<(&'static str, &'static str)> {
+        shipped_workflow_status(&r.ws, &r.home, scope)
+            .unwrap()
+            .into_iter()
+            .map(|w| (w.name, w.status.as_str()))
+            .collect()
+    }
+
+    fn outcomes(results: Vec<RestoreResult>) -> Vec<(&'static str, &'static str)> {
+        results
+            .into_iter()
+            .map(|r| (r.name, r.outcome.as_str()))
+            .collect()
+    }
+
+    fn owned(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    #[test]
+    fn shipped_status_tells_missing_stock_and_modified() {
+        let r = rig();
+        assert_eq!(
+            statuses(&r, Scope::Project),
+            [
+                ("iterate", "missing"),
+                ("develop", "missing"),
+                ("research", "missing")
+            ]
+        );
+        init_workspace(&r.ws, &r.home, InitOptions::default()).unwrap();
+        let dir = Path::new(&r.ws).join(".whiphand/workflows");
+        std::fs::remove_file(dir.join("develop.yaml")).unwrap();
+        std::fs::write(dir.join("iterate.yaml"), "name: iterate\n").unwrap();
+        // CRLF line endings (a Windows checkout) still read as stock.
+        let research = read_template("research").replace('\n', "\r\n");
+        std::fs::write(dir.join("research.yaml"), research).unwrap();
+        assert_eq!(
+            statuses(&r, Scope::Project),
+            [
+                ("iterate", "modified"),
+                ("develop", "missing"),
+                ("research", "stock")
+            ]
+        );
+        let listed = shipped_workflow_status(&r.ws, &r.home, Scope::Project).unwrap();
+        assert!(listed.iter().all(|w| !w.description.is_empty()));
+        // The global scope is its own: nothing there yet.
+        assert!(
+            statuses(&r, Scope::Global)
+                .iter()
+                .all(|(_, s)| *s == "missing")
+        );
+    }
+
+    #[test]
+    fn restore_adds_the_missing_and_keeps_the_rest() {
+        let r = rig();
+        init_workspace(&r.ws, &r.home, InitOptions::default()).unwrap();
+        let dir = Path::new(&r.ws).join(".whiphand/workflows");
+        std::fs::remove_file(dir.join("develop.yaml")).unwrap();
+        std::fs::write(dir.join("iterate.yaml"), "mine").unwrap();
+        let out = restore_workflows(&r.ws, &r.home, Scope::Project, None, &[]).unwrap();
+        assert_eq!(
+            outcomes(out),
+            [
+                ("iterate", "kept"),
+                ("develop", "added"),
+                ("research", "kept")
+            ]
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("develop.yaml")).unwrap(),
+            read_template("develop")
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("iterate.yaml")).unwrap(),
+            "mine"
+        );
+    }
+
+    #[test]
+    fn restore_replaces_only_what_it_is_told_to() {
+        let r = rig();
+        init_workspace(&r.ws, &r.home, InitOptions::default()).unwrap();
+        let dir = Path::new(&r.ws).join(".whiphand/workflows");
+        std::fs::write(dir.join("iterate.yaml"), "mine").unwrap();
+        std::fs::write(dir.join("research.yaml"), "mine too").unwrap();
+        let only = owned(&["iterate"]);
+        let out = restore_workflows(&r.ws, &r.home, Scope::Project, Some(&only), &only).unwrap();
+        assert_eq!(outcomes(out), [("iterate", "replaced")]);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("iterate.yaml")).unwrap(),
+            read_template("iterate")
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("research.yaml")).unwrap(),
+            "mine too"
+        );
+    }
+
+    #[test]
+    fn restore_overwrites_a_yml_in_place() {
+        let r = rig();
+        let dir = Path::new(&r.ws).join(".whiphand/workflows");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("research.yml"), "old").unwrap();
+        let names = owned(&["research"]);
+        assert_eq!(statuses(&r, Scope::Project)[2], ("research", "modified"));
+        let out = restore_workflows(&r.ws, &r.home, Scope::Project, Some(&names), &names).unwrap();
+        assert_eq!(outcomes(out), [("research", "replaced")]);
+        assert_eq!(names_in(&dir), ["research.yml"]);
+        assert_eq!(statuses(&r, Scope::Project)[2], ("research", "stock"));
+    }
+
+    #[test]
+    fn restore_acts_on_its_scope_only() {
+        let r = rig();
+        let out = restore_workflows(&r.ws, &r.home, Scope::Global, None, &[]).unwrap();
+        assert!(out.iter().all(|x| x.outcome == RestoreOutcome::Added));
+        assert_eq!(names_in(&r.home.join("workflows")), TEMPLATE_FILES);
+        assert!(names_in(Path::new(&r.ws)).is_empty());
+        let out = restore_workflows(&r.ws, &r.home, Scope::Workspace, None, &[]).unwrap();
+        assert!(out.iter().all(|x| x.outcome == RestoreOutcome::Added));
+        let private = user_workspace_dir(&r.home, Path::new(&r.ws)).join("workflows");
+        assert_eq!(names_in(&private), TEMPLATE_FILES);
+        assert!(names_in(Path::new(&r.ws)).is_empty());
+    }
+
+    #[test]
+    fn restore_refuses_an_unknown_name_and_writes_nothing() {
+        let r = rig();
+        for (names, replace) in [
+            (Some(owned(&["develop", "nope"])), vec![]),
+            (None, owned(&["Bad"])),
+        ] {
+            let err = restore_workflows(&r.ws, &r.home, Scope::Project, names.as_deref(), &replace)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("the shipped workflows are: iterate, develop, research"),
+                "{err}"
+            );
+        }
+        assert!(names_in(Path::new(&r.ws)).is_empty());
     }
 
     #[test]

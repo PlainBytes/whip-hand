@@ -64,6 +64,8 @@ whiphand init                                                                # s
 whiphand init --storage user --workflows global                              # keep data in ~/.whiphand, starter workflows shared by every workspace
 whiphand new-workflow review-pr                                              # scaffold .whiphand/workflows/review-pr.yaml
 whiphand new-workflow review-pr --from draft.yaml                            # save a written workflow there instead (validated; name: set; --replace overwrites; '-' reads stdin)
+whiphand restore-workflows                                                   # bring back deleted starter workflows (existing ones are kept and reported)
+whiphand restore-workflows iterate --replace                                 # reset an edited starter workflow to stock (--list shows missing/stock/modified)
 whiphand validate examples/cycle.yaml                                        # check a workflow without running it (exit 0 ok, 1 problems; '-' reads stdin)
 whiphand workflow-reference                                                  # print the workflow format reference (for whoever, or whichever agent, writes one)
 whiphand run examples/cycle.yaml --dry-run --input feature=demo              # print every argv, spend nothing
@@ -135,6 +137,16 @@ and commits them one at a time, then pushes the branch (leave the push command b
 saves that workflow file instead: it is validated first, and a file with problems prints them and
 writes nothing; its `name:` becomes the given name, its comments and layout are kept. An existing
 workflow of that name in that scope is refused unless `--replace` is given.
+
+`whiphand init` only adds starter workflows that are missing, and only where it was told to put
+them. To get one back after deleting it, or to undo your edits to one, run `whiphand
+restore-workflows [name…]`: it writes the named starter workflows (all of them by default) that are
+missing from the project's `.whiphand/workflows/` (`--workspace`: the workspace's private dir,
+`--global`: the global one), and keeps and reports the ones already there. `--replace` resets the
+named (or all) existing ones to stock, discarding your edits to them; `--list` prints each one's
+status — `missing`, `stock` or `modified` — and writes nothing. An unknown name is refused, with the
+valid names listed, before anything is written. Restoring is also how a workspace set up by an
+earlier version picks up a starter workflow added since.
 
 **Running workflows side by side.** `develop` declares `worktree:`, so each run gets its own checkout
 under `<data dir>/wt/<suffix>-<short-slug>` (`<suffix>` is the run id's random tail; just that for an unnamed run) on a new branch, and your main checkout is never touched: start

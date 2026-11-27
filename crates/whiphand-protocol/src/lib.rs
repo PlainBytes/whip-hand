@@ -257,6 +257,67 @@ pub struct CloneWorkflowParams {
     pub scope: Option<Scope>,
 }
 
+/// How a shipped (starter) workflow's file in one scope compares to its template.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum ShippedWorkflowStatus {
+    Missing,
+    Stock,
+    Modified,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct ListShippedWorkflowsParams {
+    pub workdir: String,
+    pub scope: Scope,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct ShippedWorkflowEntry {
+    pub name: String,
+    pub description: String,
+    pub status: ShippedWorkflowStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct ListShippedWorkflowsResult {
+    pub workflows: Vec<ShippedWorkflowEntry>,
+}
+
+/// Writes the shipped workflows among `names` (all when absent) missing from
+/// `scope`'s workflows dir; an existing one is overwritten with its template
+/// only when it is in `replace`. An unknown name fails the call, writing nothing.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct RestoreWorkflowsParams {
+    pub workdir: String,
+    pub scope: Scope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub names: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub replace: Option<Vec<String>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum RestoreOutcome {
+    Added,
+    Replaced,
+    Kept,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct RestoredWorkflow {
+    pub name: String,
+    pub outcome: RestoreOutcome,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct RestoreWorkflowsResult {
+    pub results: Vec<RestoredWorkflow>,
+}
+
 /// New in Phase 3: the editor validates a draft through the agent instead
 /// of running core's validator in the webview.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -1660,6 +1721,16 @@ pub const METHODS: &[(&str, &str, &str)] = &[
         "InitWorkspaceParams",
         "InitWorkspaceResult",
     ),
+    (
+        "listShippedWorkflows",
+        "ListShippedWorkflowsParams",
+        "ListShippedWorkflowsResult",
+    ),
+    (
+        "restoreWorkflows",
+        "RestoreWorkflowsParams",
+        "RestoreWorkflowsResult",
+    ),
     ("doctor", "DoctorParams", "DoctorResult"),
     ("listModels", "ListModelsParams", "ListModelsResult"),
     (
@@ -1912,7 +1983,7 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), METHODS.len());
-        assert_eq!(METHODS.len(), 53);
+        assert_eq!(METHODS.len(), 55);
         assert_eq!(NOTIFICATIONS.len(), 12);
     }
 }

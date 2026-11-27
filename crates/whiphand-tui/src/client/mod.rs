@@ -106,6 +106,9 @@ pub const DESKTOP_ONLY: &[&str] = &[
     "listSecrets",
     "setSecret",
     "deleteSecret",
+    // The desktop's Restore starter workflows dialog.
+    "listShippedWorkflows",
+    "restoreWorkflows",
 ];
 
 /// A request as `update` describes it: no id yet, and what to do with the

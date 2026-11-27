@@ -63,6 +63,22 @@ export type DeleteWorkflowResult = { deleted: boolean, };
 
 export type CloneWorkflowParams = { workdir: string, name: string, newName: string, scope?: Scope, };
 
+export type ShippedWorkflowStatus = "missing" | "stock" | "modified";
+
+export type ListShippedWorkflowsParams = { workdir: string, scope: Scope, };
+
+export type ShippedWorkflowEntry = { name: string, description: string, status: ShippedWorkflowStatus, };
+
+export type ListShippedWorkflowsResult = { workflows: Array<ShippedWorkflowEntry>, };
+
+export type RestoreWorkflowsParams = { workdir: string, scope: Scope, names?: Array<string>, replace?: Array<string>, };
+
+export type RestoreOutcome = "added" | "replaced" | "kept";
+
+export type RestoredWorkflow = { name: string, outcome: RestoreOutcome, };
+
+export type RestoreWorkflowsResult = { results: Array<RestoredWorkflow>, };
+
 export type ValidateWorkflowParams = { draft: unknown, };
 
 export type ValidateWorkflowResult = { workflow?: Workflow, problems: Array<string>, fieldProblems: Array<WorkflowFieldProblem>, };
@@ -478,6 +494,8 @@ export interface MethodMap {
   cloneWorkflow: { params: CloneWorkflowParams; result: CloneWorkflowResult };
   validateWorkflow: { params: ValidateWorkflowParams; result: ValidateWorkflowResult };
   initWorkspace: { params: InitWorkspaceParams; result: InitWorkspaceResult };
+  listShippedWorkflows: { params: ListShippedWorkflowsParams; result: ListShippedWorkflowsResult };
+  restoreWorkflows: { params: RestoreWorkflowsParams; result: RestoreWorkflowsResult };
   doctor: { params: DoctorParams; result: DoctorResult };
   listModels: { params: ListModelsParams; result: ListModelsResult };
   listMcpServers: { params: ListMcpServersParams; result: ListMcpServersResult };

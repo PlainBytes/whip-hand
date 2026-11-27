@@ -222,6 +222,47 @@
       ]
     },
     {
+      "name": "restore-workflows",
+      "args": [
+        {
+          "name": "names",
+          "required": false
+        }
+      ],
+      "options": [
+        {
+          "flags": "--replace",
+          "required": false,
+          "hasDefault": true,
+          "long": "--replace"
+        },
+        {
+          "flags": "--list",
+          "required": false,
+          "hasDefault": true,
+          "long": "--list"
+        },
+        {
+          "flags": "--global",
+          "required": false,
+          "hasDefault": true,
+          "long": "--global"
+        },
+        {
+          "flags": "--workspace",
+          "required": false,
+          "hasDefault": true,
+          "long": "--workspace"
+        },
+        {
+          "flags": "-C <dir>",
+          "required": true,
+          "hasDefault": true,
+          "short": "-C"
+        }
+      ]
+    },
+    {
       "name": "worktree remove",
       "args": [
         {

@@ -27,7 +27,7 @@ use whiphand_core::node_path;
 use whiphand_core::raw::Raw;
 use whiphand_core::scaffold::{
     InitOptions, InitWorkflows, clone_workflow, create_workflow, delete_workflow, existing_storage,
-    init_workspace, update_workflow,
+    init_workspace, restore_workflows, shipped_workflow_status, update_workflow,
 };
 use whiphand_core::schema::{parse_workflow, shape, validate_workflow_draft};
 use whiphand_core::storage::{Storage, resolve_layout};
@@ -58,6 +58,8 @@ const METHODS: &[&str] = &[
     "cloneWorkflow",
     "validateWorkflow",
     "initWorkspace",
+    "listShippedWorkflows",
+    "restoreWorkflows",
     "doctor",
     "listModels",
     "listMcpServers",
@@ -178,6 +180,33 @@ pub async fn call(agent: &Rc<Agent>, ctx: RequestCtx, method: &str, p: Value) ->
             Ok(json!({ "path": path }))
         }
         "validateWorkflow" => Ok(validate_workflow(&p["draft"])),
+        "listShippedWorkflows" => {
+            let list = shipped_workflow_status(&workdir(&p), &home(), scope(&p))
+                .map_err(|e| e.to_string())?;
+            let workflows: Vec<Value> = list
+                .iter()
+                .map(|w| {
+                    json!({
+                        "name": w.name,
+                        "description": w.description,
+                        "status": w.status.as_str(),
+                    })
+                })
+                .collect();
+            Ok(json!({ "workflows": workflows }))
+        }
+        "restoreWorkflows" => {
+            let names = string_list(&p["names"]);
+            let replace = string_list(&p["replace"]).unwrap_or_default();
+            let results =
+                restore_workflows(&workdir(&p), &home(), scope(&p), names.as_deref(), &replace)
+                    .map_err(|e| e.to_string())?;
+            let results: Vec<Value> = results
+                .iter()
+                .map(|r| json!({ "name": r.name, "outcome": r.outcome.as_str() }))
+                .collect();
+            Ok(json!({ "results": results }))
+        }
         "initWorkspace" => {
             let workdir = workdir(&p);
             let storage = match p["storage"].as_str() {
@@ -397,6 +426,16 @@ fn home() -> PathBuf {
 /// `path.resolve(workdir)`.
 fn workdir(p: &Value) -> String {
     node_path::resolve(s(p, "workdir"))
+}
+
+/// An optional array of strings, already validated: `None` when absent.
+fn string_list(v: &Value) -> Option<Vec<String>> {
+    v.as_array().map(|items| {
+        items
+            .iter()
+            .filter_map(|s| s.as_str().map(String::from))
+            .collect()
+    })
 }
 
 fn scope(p: &Value) -> Scope {

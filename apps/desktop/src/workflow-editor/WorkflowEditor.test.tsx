@@ -1174,3 +1174,62 @@ describe('WorkflowEditor on a narrow screen', () => {
     expect((req.params as { name: string }).name).toBe('feature-development');
   });
 });
+
+describe('WorkflowEditor: Edit with AI', () => {
+  const SIMPLE: Workflow = {
+    name: 'simple',
+    steps: [{ id: 'plan', kind: 'agent', runner: 'claude', mode: 'headless', writes: false, prompt: 'p', output: 'plan.md' }],
+  };
+
+  function renderWithAI(workflow: Workflow) {
+    const transport = new MockTransport();
+    answerValidation(transport);
+    const client = new AgentClient(transport);
+    const onEditWithAI = vi.fn();
+    const props = {
+      name: 'simple', source: 'project' as const, workdir: '/ws', uncovers: null,
+      onSaved: vi.fn(), onCancel: vi.fn(), onDeleted: vi.fn(), onEditWithAI,
+    };
+    const view = render(
+      <AgentClientProvider client={client}>
+        <WorkflowEditor workflow={workflow} {...props} />
+      </AgentClientProvider>,
+    );
+    const rerenderWith = (next: Workflow) => view.rerender(
+      <AgentClientProvider client={client}>
+        <WorkflowEditor workflow={next} {...props} />
+      </AgentClientProvider>,
+    );
+    return { onEditWithAI, rerenderWith };
+  }
+
+  it('has no button when the page offers no Edit with AI', () => {
+    renderEditor(SIMPLE);
+    expect(screen.queryByRole('button', { name: /edit with ai/i })).not.toBeInTheDocument();
+  });
+
+  it('is enabled on a saved workflow and hands it over on click', () => {
+    const { onEditWithAI } = renderWithAI(SIMPLE);
+    const button = screen.getByRole('button', { name: /edit with ai/i });
+    expect(button).not.toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(button);
+    expect(onEditWithAI).toHaveBeenCalledTimes(1);
+  });
+
+  it('is disabled with "Save first" while the draft is dirty, and enabled again once saved', () => {
+    const { onEditWithAI, rerenderWith } = renderWithAI(SIMPLE);
+    fireEvent.click(screen.getByRole('button', { name: /add step/i }));
+    const button = screen.getByRole('button', { name: /edit with ai/i });
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    expect(button).toHaveAccessibleDescription('Save first');
+    fireEvent.click(button);
+    expect(onEditWithAI).not.toHaveBeenCalled();
+
+    // Saved: the file on disk now holds what the draft holds.
+    rerenderWith({
+      ...SIMPLE,
+      steps: [...SIMPLE.steps, { kind: 'agent', id: 'step-2', runner: 'claude', mode: 'headless', writes: false, prompt: '' } as Step],
+    });
+    expect(screen.getByRole('button', { name: /edit with ai/i })).not.toHaveAttribute('aria-disabled', 'true');
+  });
+});

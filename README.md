@@ -530,6 +530,14 @@ attention doesn't require a detour through the Activity grid; waiting jobs sort 
 top. It's capped at 5 rows, with a "+N more" row into Activity, and can be turned off
 from Preferences.
 
+The Workflows page can hand a workflow to `author-workflow`. "Design with AI" opens
+New run on it with `goal`, `name` and `scope` to fill in. "Edit with AI", in a workflow's
+editor, attaches that workflow's saved file and fills in its `name` and `scope`, leaving
+only the goal ("What should change?"). It is disabled until unsaved changes are saved.
+If no scope has `author-workflow`, either action first offers to add it, the way
+"Restore built-in workflows…" would. Once the run's `save` step has succeeded, its run
+page shows "Open in editor", which opens the saved workflow in the Workflows editor.
+
 The Files tab reaches the filesystem through Tauri's fs plugin, whose scope
 starts empty and is extended at runtime to directories you explicitly open, pick in a
 folder dialog, or drop on the window; the agent's RPC surface has no file methods.

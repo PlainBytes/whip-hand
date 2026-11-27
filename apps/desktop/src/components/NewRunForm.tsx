@@ -40,6 +40,7 @@ import type { Workflow } from '../shared/types.ts';
 import type { ListWorkDirsResult, ListWorkflowsResult } from '../shared/protocol.gen.ts';
 import type { RunSummary } from '../shared/core-types.ts';
 import { errorMessage } from '../lib/error-message.ts';
+import { authorInputPlaceholder } from '../lib/author-workflow.ts';
 import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
 
 type WorkflowEntry = ListWorkflowsResult[number];
@@ -697,11 +698,13 @@ export function NewRunForm({ draftId, visible = true }: NewRunFormProps) {
                 {input.multiline === false ? (
                   <Input
                     style={fit}
+                    placeholder={authorInputPlaceholder(selectedEntry?.name, key, attachments.length)}
                     value={values[key] ?? ''}
                     onChange={(_e, data) => updateDraft(draftId, current => ({ values: { ...current.values, [key]: data.value } }))}
                   />
                 ) : (
                   <AutoGrowTextarea
+                    placeholder={authorInputPlaceholder(selectedEntry?.name, key, attachments.length)}
                     value={values[key] ?? ''}
                     onChange={(_e, data) => updateDraft(draftId, current => ({ values: { ...current.values, [key]: data.value } }))}
                   />

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge, Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle,
-  MessageBar, MessageBarBody, Spinner, Text,
+  MessageBar, MessageBarBody, Spinner, Text, Tooltip,
 } from '@fluentui/react-components';
-import { Add20Regular, Delete20Regular, Dismiss20Regular, Save20Regular } from '@fluentui/react-icons';
+import { Add20Regular, Delete20Regular, Dismiss20Regular, Save20Regular, Sparkle20Regular } from '@fluentui/react-icons';
 import { useNarrowLayout } from '../lib/use-narrow-layout.ts';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { DeleteWorkflowDialog } from '../components/DeleteWorkflowDialog.tsx';
@@ -34,6 +34,24 @@ export interface WorkflowEditorProps {
   onCancel: () => void;
   /** The workflow's file is gone. Any unsaved draft goes with it — the delete confirmation covers that. */
   onDeleted: () => void;
+  /**
+   * "Edit with AI": hand the saved workflow to an `author-workflow` run. The
+   * run reads the file on disk, so the button waits for unsaved changes to be
+   * saved. Absent, there is no button.
+   */
+  onEditWithAI?: () => void;
+}
+
+/**
+ * JSON with every object's keys sorted, so two drafts that differ only in key
+ * order (an edit re-spreads a step, appending what it set) compare equal.
+ */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) => (
+    v !== null && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : v
+  ));
 }
 
 /** The rows left once every row inside a folded container's body (loop or stages) is hidden. */
@@ -67,7 +85,7 @@ const NO_PROBLEMS: DraftValidation = { problems: [], fieldProblems: [] };
 const REVALIDATE_MS = 250;
 
 export function WorkflowEditor({
-  workflow, name, source, workdir, uncovers, onSaved, onCancel, onDeleted,
+  workflow, name, source, workdir, uncovers, onSaved, onCancel, onDeleted, onEditWithAI,
 }: WorkflowEditorProps) {
   const narrow = useNarrowLayout();
   const client = useAgentClient();
@@ -100,6 +118,9 @@ export function WorkflowEditor({
   const [revealId, setRevealId] = useState<string | null>(null);
 
   const normalized = useMemo(() => normalizeDraft(draft), [draft]);
+  const savedJson = useMemo(() => canonicalJson(normalizeDraft(workflow)), [workflow]);
+  // What is on disk is what "Edit with AI" attaches, so any difference from it counts.
+  const dirty = useMemo(() => canonicalJson(normalized) !== savedJson, [normalized, savedJson]);
   // The agent's validator (validateWorkflow) is the only one. It runs at
   // Save, and again after each edit once problems are on screen, so they
   // clear as they get fixed. `validated` is the draft the result describes;
@@ -273,6 +294,22 @@ export function WorkflowEditor({
             >
               Delete
             </DangerButton>
+            {onEditWithAI && (
+              <Tooltip
+                content={dirty ? 'Save first' : 'Change this workflow with an AI session'}
+                relationship="description"
+              >
+                <Button
+                  appearance="secondary"
+                  icon={<Sparkle20Regular />}
+                  // Focusable while disabled, so the tooltip saying why still shows.
+                  disabledFocusable={dirty || saving}
+                  onClick={onEditWithAI}
+                >
+                  Edit with AI
+                </Button>
+              </Tooltip>
+            )}
             <Button appearance="secondary" icon={<Dismiss20Regular />} onClick={onCancel}>Cancel</Button>
             <Button
               appearance="primary"

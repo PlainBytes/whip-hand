@@ -29,7 +29,7 @@ import {
   Tooltip,
 } from '@fluentui/react-components';
 import {
-  ArrowDown20Regular, BranchFork20Regular, Copy20Regular, Delete20Regular, DocumentFolder48Regular,
+  ArrowDown20Regular, BranchFork20Regular, Copy20Regular, Delete20Regular, DocumentFolder48Regular, Edit20Regular,
   LockClosed20Regular, LockOpen20Regular,
   PlayCircle20Regular, PlugDisconnected20Regular, PlugDisconnected48Regular, Prompt48Regular,
   MoreHorizontal20Regular, Open20Regular, Rename20Regular, Stop20Regular, Replay20Regular, TextBulletListSquare48Regular,
@@ -73,6 +73,7 @@ import { parsePositiveInt } from '../lib/parse-number.ts';
 import { useOpenExternal } from '../lib/open-external.tsx';
 import type { FileComment, ManualChoice, Scope } from '../shared/types.ts';
 import { errorMessage } from '../lib/error-message.ts';
+import { savedWorkflowOf } from '../lib/author-workflow.ts';
 import { useCapabilities } from '../capabilities.tsx';
 import { DEFAULT_EDITOR, editorLabel, openRunInEditor } from '../lib/editor.ts';
 import { useShortcut } from '../lib/use-global-shortcut.ts';
@@ -103,6 +104,12 @@ export interface RunDetailPageProps {
    * re-targeting RunsPage does with `onStarted` for a freshly started run.
    */
   onResumed: (target: { jobId: string; runId: string }) => void;
+  /**
+   * "Open in editor" on a finished `author-workflow` run that saved its
+   * workflow: show that workflow in the Workflows page's editor. Absent,
+   * there is no such action.
+   */
+  onOpenWorkflow?: (name: string, source: Scope) => void;
 }
 
 /**
@@ -303,7 +310,9 @@ function logRowKey(row: LogRow): string {
   return `${row.seq} ${row.ts} ${row.kind} ${row.text}`;
 }
 
-export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWorktree, onResumed }: RunDetailPageProps) {
+export function RunDetailPage({
+  jobId, runId, onBack, onRunAgain, onContinueInWorktree, onResumed, onOpenWorkflow,
+}: RunDetailPageProps) {
   const client = useAgentClient();
   const workspacePath = useAppStore(state => state.workspacePath);
   const boundJob = useAppStore(state => {
@@ -411,6 +420,31 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
    * so the polling effect does not re-subscribe on every new manifest object.
    */
   const pollMs = isRunning ? RUN_POLL_INTERVAL_MS : canResume ? IDLE_POLL_INTERVAL_MS : null;
+
+  // The workflow a finished author-workflow run saved. Its button waits for a
+  // fresh list to confirm the workflow is still there: it may have been
+  // deleted or renamed since the run.
+  const saved = isRunning || onOpenWorkflow === undefined ? null : savedWorkflowOf(manifest);
+  const savedName = saved?.name;
+  const savedScope = saved?.scope;
+  const [savedExists, setSavedExists] = useState(false);
+  useEffect(() => {
+    setSavedExists(false);
+    if (savedName === undefined || savedScope === undefined || !workspacePath) return;
+    let cancelled = false;
+    client
+      .request('listWorkflows', { workdir: workspacePath })
+      .then(list => {
+        if (cancelled) return;
+        setSavedExists(list.some(w => w.name === savedName && w.source === savedScope && w.workflow !== undefined));
+      })
+      .catch(() => {
+        // Not knowing means not offering: the Workflows page still has it.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, workspacePath, savedName, savedScope]);
 
   /**
    * The clock every live duration on this page is measured against — the run's
@@ -1314,6 +1348,18 @@ export function RunDetailPage({ jobId, runId, onBack, onRunAgain, onContinueInWo
                   </DialogBody>
                 </DialogSurface>
               </Dialog>
+            )}
+            {saved && savedExists && onOpenWorkflow && (
+              <Tooltip content={`Open ${saved.name} in the workflow editor`} relationship="description">
+                <Button
+                  appearance="secondary"
+                  icon={<Edit20Regular />}
+                  data-testid="open-saved-workflow-button"
+                  onClick={() => onOpenWorkflow(saved.name, saved.scope)}
+                >
+                  Open in editor
+                </Button>
+              </Tooltip>
             )}
             {!narrow && !isRunning && typeof manifest?.workflow === 'string' && (
               <Tooltip content="Run again" relationship="label">

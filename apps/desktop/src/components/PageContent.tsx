@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Text } from '@fluentui/react-components';
 import { useAppStore } from '../state/store.ts';
 import { useCapabilities } from '../capabilities.tsx';
@@ -16,6 +17,7 @@ import type { RunAgain } from '../lib/new-run-draft.ts';
 import { RunDetailPage } from '../pages/RunDetailPage.tsx';
 import { WelcomePage } from '../pages/WelcomePage.tsx';
 import { Page } from './Page.tsx';
+import type { Scope } from '../shared/types.ts';
 
 export interface PageContentProps {
   page: PageId;
@@ -72,6 +74,8 @@ function PageBody({ page, onNavigate }: PageContentProps) {
   const tabs = useAppStore(state => state.tabs);
   const activeTabKey = useAppStore(state => state.activeTabKey);
   const { localFiles } = useCapabilities();
+  // "Open in editor" on a run: the Workflows page opens this once its list has loaded.
+  const [editRequest, setEditRequest] = useState<{ name: string; source: Scope } | null>(null);
 
   // Which pages survive without a workspace is nav.ts's `requiresWorkspace`
   // column, not a condition spelled out here.
@@ -122,6 +126,10 @@ function PageBody({ page, onNavigate }: PageContentProps) {
               const ref = workflow === undefined ? undefined : source === 'global' ? `global:${workflow}` : workflow;
               newDraft(ref === undefined ? undefined : { workflow: ref, inputs: {} }, sourceId);
             }}
+            onOpenWorkflow={(name, source) => {
+              setEditRequest({ name, source });
+              onNavigate('workflows');
+            }}
           />
         ) : (
           <RunsPage
@@ -147,6 +155,12 @@ function PageBody({ page, onNavigate }: PageContentProps) {
             const ref = source === 'global' ? `global:${workflow}` : workflow;
             newDraft({ workflow: ref, inputs: {} });
           }}
+          onOpenDraft={draftId => {
+            useAppStore.getState().openDraftTab(draftId);
+            onNavigate('runs');
+          }}
+          editRequest={editRequest}
+          onEditRequestHandled={() => setEditRequest(null)}
         />
       )}
       {page === 'files' && (localFiles ? <FilesPage /> : <LocalFilesUnavailable />)}

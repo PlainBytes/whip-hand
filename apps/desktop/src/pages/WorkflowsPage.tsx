@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Button,
   Dialog,
@@ -12,9 +12,10 @@ import {
   MessageBarBody,
   Radio,
   RadioGroup,
+  Spinner,
   Text,
 } from '@fluentui/react-components';
-import { Add20Regular, ArrowReset20Regular } from '@fluentui/react-icons';
+import { Add20Regular, ArrowReset20Regular, Sparkle20Regular } from '@fluentui/react-icons';
 import { useAgentClient } from '../agent/agent-context.tsx';
 import { useAppStore } from '../state/store.ts';
 import { Page } from '../components/Page.tsx';
@@ -29,6 +30,8 @@ import type { InitStorage, InitWorkflowsMode } from '../shared/protocol.gen.ts';
 import { SCOPE_ORDER } from '../components/workflow-name-problem.ts';
 import { WorkflowEditor } from '../workflow-editor/WorkflowEditor.tsx';
 import { errorMessage } from '../lib/error-message.ts';
+import { AUTHOR_WORKFLOW, findAuthorWorkflow } from '../lib/author-workflow.ts';
+import { refFor } from '../lib/new-run-draft.ts';
 
 /**
  * Where the restore dialog points first: the scope set-up copied the starter
@@ -49,7 +52,28 @@ export interface WorkflowsPageProps {
    * card from a project one sharing the same name — see `findEntry`.
    */
   onRunWorkflow: (name: string, source: Scope) => void;
+  /**
+   * Show this draft's tab on the Runs page. "Design with AI" and "Edit with
+   * AI" create an `author-workflow` draft here and hand it over.
+   */
+  onOpenDraft: (draftId: string) => void;
+  /**
+   * A workflow to open in the editor as soon as the page's own list has
+   * loaded ("Open in editor" on a run that saved one). Opens nothing when
+   * that workflow is not in the fresh list.
+   */
+  editRequest?: { name: string; source: Scope } | null;
+  /** The edit request was looked at, whether or not it opened anything. */
+  onEditRequestHandled?: () => void;
 }
+
+/**
+ * What the Workflows page is about to start once `author-workflow` is
+ * there: a fresh design, or a change to a saved workflow.
+ */
+type AuthorIntent =
+  | { kind: 'design' }
+  | { kind: 'edit'; name: string; source: Scope; path: string };
 
 /**
  * The workflow list, and the editor for one workflow at a time. The editor
@@ -58,7 +82,7 @@ export interface WorkflowsPageProps {
  * `name` + `source`, never the workflow's own possibly-mismatched `name:`
  * field — and reloads the list once a save or a delete lands.
  */
-export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
+export function WorkflowsPage({ onRunWorkflow, onOpenDraft, editRequest, onEditRequestHandled }: WorkflowsPageProps) {
   const client = useAgentClient();
   const workspacePath = useAppStore(state => state.workspacePath);
   const workflows = useAppStore(state => state.workflows);
@@ -83,6 +107,15 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
   /** The card being cloned; null when no dialog is open. */
   const [cloning, setCloning] = useState<{ name: string; source: Scope } | null>(null);
 
+  /** Waiting on the offer to add `author-workflow` first; null when no offer is up. */
+  const [authorOffer, setAuthorOffer] = useState<AuthorIntent | null>(null);
+  const [addingAuthor, setAddingAuthor] = useState(false);
+  const [authorError, setAuthorError] = useState<string | null>(null);
+
+  // Read once, on the first list this page loads itself: the store's list may
+  // be older than the run that just saved the workflow.
+  const pendingEdit = useRef(editRequest ?? null);
+
   useEffect(() => {
     if (!workspacePath) return;
     let cancelled = false;
@@ -91,10 +124,24 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
     client
       .request('listWorkflows', { workdir: workspacePath })
       .then(result => {
-        if (!cancelled) setWorkflows(result);
+        if (cancelled) return;
+        setWorkflows(result);
+        const request = pendingEdit.current;
+        if (request) {
+          pendingEdit.current = null;
+          onEditRequestHandled?.();
+          const found = result.find(w => w.name === request.name && w.source === request.source);
+          if (found?.workflow) setEditing({ name: found.name, source: found.source });
+        }
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(errorMessage(err));
+        if (cancelled) return;
+        setError(errorMessage(err));
+        // No list, nothing to open: the request is not kept for a later visit.
+        if (pendingEdit.current) {
+          pendingEdit.current = null;
+          onEditRequestHandled?.();
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -128,6 +175,67 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
     setEditing({ name: entry.name, source: entry.source });
   }
 
+  /**
+   * Starts `intent` as a New Run draft of `author-workflow`, opened on the Runs
+   * page. "Design with AI" leaves every input to the person; "Edit with AI"
+   * fills `name` and `scope` from the workflow and attaches its saved file,
+   * leaving only `goal`.
+   */
+  function openAuthorDraft(intent: AuthorIntent, list: readonly WorkflowEntry[]): void {
+    const { workspaceIdentityKey, createDraft, updateDraft } = useAppStore.getState();
+    const entry = findAuthorWorkflow(list);
+    if (!workspacePath || !entry) return;
+    const ref = refFor(entry);
+    if (intent.kind === 'design') {
+      onRunWorkflow(entry.name, entry.source);
+      return;
+    }
+    const draftId = createDraft({
+      workdir: workspacePath,
+      identityKey: workspaceIdentityKey ?? undefined,
+      runAgain: { workflow: ref, inputs: { name: intent.name, scope: intent.source } },
+    });
+    // The file itself, by path, as "Add files…" would attach it: core copies
+    // it into the run when the run starts, and names it by its file name.
+    updateDraft(draftId, { attachments: [{ key: 0, path: intent.path }] });
+    onOpenDraft(draftId);
+  }
+
+  /** Starts `intent`, or first offers to add `author-workflow` when no scope has a usable one. */
+  function startAuthor(intent: AuthorIntent): void {
+    setAuthorError(null);
+    if (findAuthorWorkflow(workflows)) openAuthorDraft(intent, workflows);
+    else setAuthorOffer(intent);
+  }
+
+  async function addAuthorAndStart(intent: AuthorIntent): Promise<void> {
+    if (!workspacePath) return;
+    setAddingAuthor(true);
+    setAuthorError(null);
+    try {
+      await client.request('restoreWorkflows', {
+        workdir: workspacePath, scope: restoreDefaultScope(workflows), names: [AUTHOR_WORKFLOW],
+      });
+      const fresh = await client.request('listWorkflows', { workdir: workspacePath });
+      setWorkflows(fresh);
+      setAuthorOffer(null);
+      const entry = findAuthorWorkflow(fresh);
+      if (entry) openAuthorDraft(intent, fresh);
+      else {
+        // A broken copy in that scope is kept, not replaced, by a plain restore.
+        const broken = fresh.find(w => w.name === AUTHOR_WORKFLOW && w.error);
+        setAuthorError(broken?.error
+          ? `${AUTHOR_WORKFLOW} could not be loaded: ${broken.error}`
+          : `${AUTHOR_WORKFLOW} is still not available after adding it.`);
+      }
+    } catch (err) {
+      setAuthorError(errorMessage(err));
+      setAuthorOffer(null);
+    } finally {
+      setAddingAuthor(false);
+    }
+  }
+
   /** The next lower scope holding a same-named workflow that deleting this one uncovers, if any. */
   function uncovers(name: string, source: Scope): Scope | null {
     return SCOPE_ORDER.slice(SCOPE_ORDER.indexOf(source) + 1)
@@ -149,6 +257,11 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
           source={editing.source}
           workdir={workspacePath}
           onCancel={() => setEditing(null)}
+          onEditWithAI={() => {
+            // Leaves the editor the way Cancel does; the draft has no unsaved changes to lose.
+            setEditing(null);
+            startAuthor({ kind: 'edit', name: editing.name, source: editing.source, path: entry.path });
+          }}
           uncovers={uncovers(editing.name, editing.source)}
           onSaved={() => {
             setEditing(null);
@@ -220,6 +333,9 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
             <Button icon={<ArrowReset20Regular />} onClick={() => setRestoreOpen(true)}>
               Restore built-in workflows…
             </Button>
+            <Button icon={<Sparkle20Regular />} onClick={() => startAuthor({ kind: 'design' })}>
+              Design with AI
+            </Button>
             <Button appearance="primary" icon={<Add20Regular />} onClick={() => setNewWorkflowOpen(true)}>
               New workflow
             </Button>
@@ -227,7 +343,38 @@ export function WorkflowsPage({ onRunWorkflow }: WorkflowsPageProps) {
         </div>
       }
     >
+      {authorError && (
+        <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{authorError}</MessageBarBody></MessageBar>
+      )}
       {body}
+      {authorOffer && (
+        <Dialog open onOpenChange={(_e, data) => { if (!data.open && !addingAuthor) setAuthorOffer(null); }}>
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>Add the {AUTHOR_WORKFLOW} workflow?</DialogTitle>
+              <DialogContent>
+                <Text>
+                  {authorOffer.kind === 'edit' ? 'Edit with AI' : 'Design with AI'} runs the built-in
+                  {' '}<code>{AUTHOR_WORKFLOW}</code> workflow, which this workspace doesn't have. Add it
+                  {restoreDefaultScope(workflows) === 'project' ? ' to this project' : ' to the workspace folder'}
+                  {' '}and continue?
+                </Text>
+              </DialogContent>
+              <DialogActions>
+                <Button
+                  appearance="primary"
+                  disabled={addingAuthor}
+                  icon={addingAuthor ? <Spinner size="tiny" /> : undefined}
+                  onClick={() => void addAuthorAndStart(authorOffer)}
+                >
+                  {addingAuthor ? 'Adding…' : 'Add and continue'}
+                </Button>
+                <Button disabled={addingAuthor} onClick={() => setAuthorOffer(null)}>Cancel</Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
+      )}
       {setupOpen && (
         <Dialog open onOpenChange={(_e, data) => { if (!data.open) setSetupOpen(false); }}>
           <DialogSurface>

@@ -3,6 +3,7 @@ import {
   fireEvent, render, screen, waitFor, within,
 } from '@testing-library/react';
 import { WorkflowsPage } from './WorkflowsPage.tsx';
+import { NewRunForm } from '../components/NewRunForm.tsx';
 import { AgentClient } from '../agent/client.ts';
 import { MockTransport } from '../agent/transport.ts';
 import { AgentClientProvider } from '../agent/agent-context.tsx';
@@ -50,17 +51,24 @@ function respondFactory() {
   };
 }
 
-function renderWorkflowsPage() {
+function renderWorkflowsPage(editRequest: { name: string; source: 'project' | 'workspace' | 'global' } | null = null) {
   const transport = new MockTransport();
   answerValidation(transport);
   const client = new AgentClient(transport);
   const onRunWorkflow = vi.fn();
+  const onOpenDraft = vi.fn();
+  const onEditRequestHandled = vi.fn();
   render(
     <AgentClientProvider client={client}>
-      <WorkflowsPage onRunWorkflow={onRunWorkflow} />
+      <WorkflowsPage
+        onRunWorkflow={onRunWorkflow}
+        onOpenDraft={onOpenDraft}
+        editRequest={editRequest}
+        onEditRequestHandled={onEditRequestHandled}
+      />
     </AgentClientProvider>,
   );
-  return { transport, client, onRunWorkflow };
+  return { transport, client, onRunWorkflow, onOpenDraft, onEditRequestHandled };
 }
 
 describe('WorkflowsPage', () => {
@@ -724,5 +732,188 @@ describe('WorkflowsPage - cloning a workflow', () => {
     fireEvent.click(within(dialog()).getByRole('button', { name: /^cancel$/i }));
     await waitFor(() => expect(screen.queryByText('Clone workflow')).not.toBeInTheDocument());
     expect(sentMethods(transport)).not.toContain('cloneWorkflow');
+  });
+});
+
+const AUTHOR_WORKFLOW = {
+  name: 'author-workflow',
+  path: '/ws/.whiphand/workflows/author-workflow.yaml',
+  source: 'project' as const,
+  workflow: {
+    name: 'author-workflow',
+    inputs: {
+      goal: { required: true, multiline: true, prompt: 'What should the workflow do?' },
+      name: { required: true, multiline: false, prompt: 'Workflow name to save as' },
+      scope: { required: false, default: 'project', multiline: false, prompt: 'Where to save it' },
+    },
+    steps: [
+      {
+        id: 'design', kind: 'agent', runner: 'claude', mode: 'interactive', writes: false,
+        inputs: ['attachments'], prompt: 'p', output: 'design.md',
+      },
+      { id: 'save', kind: 'command', run: 'whiphand new-workflow', output: 'save.log' },
+    ],
+  },
+};
+
+describe('WorkflowsPage: AI entry points', () => {
+  beforeEach(() => {
+    useAppStore.setState({ workspacePath: '/ws', workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null });
+  });
+
+  afterEach(() => {
+    useAppStore.setState({ workspacePath: null, workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null });
+  });
+
+  function methods(transport: MockTransport): string[] {
+    return transport.sent.map(line => (JSON.parse(line) as { method: string }).method);
+  }
+
+  it('Design with AI starts a run of author-workflow when it is there', async () => {
+    const respond = respondFactory();
+    const { transport, onRunWorkflow } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW, AUTHOR_WORKFLOW]);
+    fireEvent.click(await screen.findByRole('button', { name: /design with ai/i }));
+    expect(onRunWorkflow).toHaveBeenCalledWith('author-workflow', 'project');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('opens New Run on author-workflow with its three inputs to fill', async () => {
+    // What onRunWorkflow does in the app: a draft with the workflow preselected.
+    useAppStore.setState({ workflows: [AUTHOR_WORKFLOW] as never });
+    const { createDraft, openDraftTab } = useAppStore.getState();
+    const draftId = createDraft({ workdir: '/ws', runAgain: { workflow: 'author-workflow', inputs: {} } });
+    openDraftTab(draftId);
+    const transport = new MockTransport();
+    render(
+      <AgentClientProvider client={new AgentClient(transport)}>
+        <NewRunForm draftId={draftId} />
+      </AgentClientProvider>,
+    );
+    expect(await screen.findByLabelText('What should the workflow do?', { exact: false })).toHaveValue('');
+    expect(screen.getByLabelText('Workflow name to save as', { exact: false })).toHaveValue('');
+    expect(screen.getByLabelText('Where to save it', { exact: false })).toHaveValue('project');
+    // A fresh design has nothing to change, so no "what should change" prompt.
+    expect(screen.getByLabelText('What should the workflow do?', { exact: false })).not.toHaveAttribute('placeholder');
+  });
+
+  it('offers to add author-workflow when no scope has it, then restores it and starts the run', async () => {
+    const respond = respondFactory();
+    const { transport, onRunWorkflow } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    fireEvent.click(await screen.findByRole('button', { name: /design with ai/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/add the author-workflow workflow/i)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: /add and continue/i }));
+    const req = await lastRequest(transport, 'restoreWorkflows');
+    // The restore dialog's own default: project, since this workspace's workflows live there.
+    expect(req.params).toEqual({ workdir: '/ws', scope: 'project', names: ['author-workflow'] });
+    expect(onRunWorkflow).not.toHaveBeenCalled();
+    await respond(transport, 'restoreWorkflows', { results: [{ name: 'author-workflow', outcome: 'added' }] });
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW, AUTHOR_WORKFLOW]);
+    await waitFor(() => expect(onRunWorkflow).toHaveBeenCalledWith('author-workflow', 'project'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('restores into the workspace folder when the workflows live there', async () => {
+    const respond = respondFactory();
+    const { transport } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [{ ...FEATURE_WORKFLOW, source: 'workspace' }]);
+    fireEvent.click(await screen.findByRole('button', { name: /design with ai/i }));
+    fireEvent.click(await within(await screen.findByRole('dialog')).findByRole('button', { name: /add and continue/i }));
+    const req = await lastRequest(transport, 'restoreWorkflows');
+    expect(req.params).toEqual({ workdir: '/ws', scope: 'workspace', names: ['author-workflow'] });
+  });
+
+  it('declining the offer does nothing', async () => {
+    const respond = respondFactory();
+    const { transport, onRunWorkflow, onOpenDraft } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    fireEvent.click(await screen.findByRole('button', { name: /design with ai/i }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(methods(transport)).not.toContain('restoreWorkflows');
+    expect(onRunWorkflow).not.toHaveBeenCalled();
+    expect(onOpenDraft).not.toHaveBeenCalled();
+    expect(Object.keys(useAppStore.getState().drafts)).toEqual([]);
+  });
+
+  it('Edit with AI leaves the editor for an author-workflow draft that attaches the saved file', async () => {
+    const respond = respondFactory();
+    const { transport, client, onOpenDraft } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW, AUTHOR_WORKFLOW]);
+    const featureLane = (await screen.findAllByRole('button', { name: /^edit$/i }))[0];
+    fireEvent.click(featureLane);
+    await screen.findByText(/edit workflow: feature/i);
+    fireEvent.click(screen.getByRole('button', { name: /edit with ai/i }));
+
+    // Left the editor, as Cancel does.
+    expect(await screen.findByRole('button', { name: /new workflow/i })).toBeInTheDocument();
+    expect(onOpenDraft).toHaveBeenCalledTimes(1);
+    const draftId = onOpenDraft.mock.calls[0][0] as string;
+    const draft = useAppStore.getState().drafts[draftId];
+    expect(draft).toMatchObject({
+      workdir: '/ws',
+      workflowRef: 'author-workflow',
+      values: { goal: '', name: 'feature', scope: 'project' },
+      attachments: [{ key: 0, path: '/ws/.whiphand/workflows/feature.yaml' }],
+    });
+
+    // The draft as New Run shows it: goal left to fill, with its prompt, then Start.
+    useAppStore.getState().openDraftTab(draftId);
+    render(
+      <AgentClientProvider client={client}>
+        <NewRunForm draftId={draftId} />
+      </AgentClientProvider>,
+    );
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW, AUTHOR_WORKFLOW]);
+    const goal = await screen.findByLabelText('What should the workflow do?', { exact: false });
+    expect(goal).toHaveAttribute('placeholder', 'What should change?');
+    expect(screen.getByLabelText('Workflow name to save as', { exact: false })).toHaveValue('feature');
+    fireEvent.change(goal, { target: { value: 'Add a lint step' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    const start = await lastRequest(transport, 'startRun');
+    expect(start.params).toMatchObject({
+      workdir: '/ws',
+      workflow: 'author-workflow',
+      inputs: { goal: 'Add a lint step', name: 'feature', scope: 'project' },
+      attachments: [{ path: '/ws/.whiphand/workflows/feature.yaml' }],
+    });
+  });
+
+  it('Edit with AI on a workspace workflow fills scope: workspace and asks first when author-workflow is missing', async () => {
+    const respond = respondFactory();
+    const MINE = { ...FEATURE_WORKFLOW, name: 'mine', source: 'workspace' as const, path: '/home/u/.whiphand/ws/workflows/mine.yaml' };
+    const { transport, onOpenDraft } = renderWorkflowsPage();
+    await respond(transport, 'listWorkflows', [MINE]);
+    fireEvent.click(await screen.findByRole('button', { name: /^edit$/i }));
+    await screen.findByText(/edit workflow: mine/i);
+    fireEvent.click(screen.getByRole('button', { name: /edit with ai/i }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /add and continue/i }));
+    await respond(transport, 'restoreWorkflows', { results: [{ name: 'author-workflow', outcome: 'added' }] });
+    await respond(transport, 'listWorkflows', [MINE, { ...AUTHOR_WORKFLOW, source: 'workspace' }]);
+    await waitFor(() => expect(onOpenDraft).toHaveBeenCalledTimes(1));
+    const draft = useAppStore.getState().drafts[onOpenDraft.mock.calls[0][0] as string];
+    expect(draft).toMatchObject({
+      values: { name: 'mine', scope: 'workspace' },
+      attachments: [{ path: '/home/u/.whiphand/ws/workflows/mine.yaml' }],
+    });
+  });
+
+  it('opens a requested workflow in the editor once its own list has loaded', async () => {
+    const respond = respondFactory();
+    const { transport, onEditRequestHandled } = renderWorkflowsPage({ name: 'feature', source: 'project' });
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    expect(await screen.findByText(/edit workflow: feature/i)).toBeInTheDocument();
+    expect(onEditRequestHandled).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens nothing for a requested workflow that no longer exists', async () => {
+    const respond = respondFactory();
+    const { transport, onEditRequestHandled } = renderWorkflowsPage({ name: 'gone', source: 'project' });
+    await respond(transport, 'listWorkflows', [FEATURE_WORKFLOW]);
+    expect(await screen.findByRole('button', { name: /new workflow/i })).toBeInTheDocument();
+    expect(screen.queryByText(/edit workflow/i)).not.toBeInTheDocument();
+    expect(onEditRequestHandled).toHaveBeenCalledTimes(1);
   });
 });

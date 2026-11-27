@@ -1552,3 +1552,41 @@ describe('NewRunForm on a narrow screen', () => {
     });
   });
 });
+
+describe('NewRunForm: author-workflow goal', () => {
+  const AUTHOR = {
+    name: 'author-workflow',
+    path: '/ws/.whiphand/workflows/author-workflow.yaml',
+    source: 'project',
+    workflow: {
+      name: 'author-workflow',
+      inputs: {
+        goal: { required: true, multiline: true, prompt: 'What should the workflow do?' },
+        name: { required: true, multiline: false, prompt: 'Workflow name to save as' },
+      },
+      steps: [{
+        id: 'design', kind: 'agent', runner: 'claude', mode: 'interactive', writes: false,
+        inputs: ['attachments'], prompt: 'p', output: 'design.md',
+      }],
+    },
+  };
+
+  beforeEach(() => {
+    useAppStore.setState({ workspacePath: '/ws', workflows: [AUTHOR] as never, appState: null, drafts: {}, tabs: [], activeTabKey: null });
+  });
+
+  afterEach(() => {
+    useAppStore.setState({ workspacePath: null, workflows: [], appState: null, drafts: {}, tabs: [], activeTabKey: null });
+  });
+
+  it('asks "What should change?" when a workflow file is attached, and nothing otherwise', async () => {
+    const draftId = openDraft({ runAgain: { workflow: 'author-workflow', inputs: { name: 'feature' } } });
+    renderNewRunForm(draftId);
+    const goal = await screen.findByLabelText('What should the workflow do?', { exact: false });
+    expect(goal).not.toHaveAttribute('placeholder');
+    act(() => {
+      useAppStore.getState().updateDraft(draftId, { attachments: [{ key: 0, path: '/ws/.whiphand/workflows/feature.yaml' }] });
+    });
+    expect(goal).toHaveAttribute('placeholder', 'What should change?');
+  });
+});

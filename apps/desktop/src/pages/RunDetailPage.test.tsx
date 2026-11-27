@@ -3263,3 +3263,90 @@ describe('RunDetailPage on a narrow screen', () => {
     expect(panel.queryByRole('heading', { name: 'Plan' })).not.toBeInTheDocument();
   });
 });
+
+describe('RunDetailPage: Open in editor', () => {
+  const SAVED_RUN = {
+    runId: 'r-author', runDir: '/ws/.whiphand/runs/r-author', status: 'succeeded',
+    workflow: 'author-workflow', workflowSource: 'project', artifacts: [],
+    inputs: { goal: 'Add a lint step', name: 'feature', scope: 'workspace' },
+    steps: [
+      { id: 'design', kind: 'agent', runner: 'claude', mode: 'interactive', status: 'done' },
+      { id: 'sign-off', kind: 'approval', status: 'done', verdict: 'pass' },
+      { id: 'save', kind: 'command', status: 'done', exitCode: 0 },
+    ],
+  };
+  const FEATURE_ENTRY = {
+    name: 'feature', path: '/home/u/.whiphand/ws/workflows/feature.yaml', source: 'workspace',
+    workflow: { name: 'feature', steps: [] },
+  };
+
+  beforeEach(() => {
+    useAppStore.setState({ workspacePath: '/ws' });
+  });
+
+  afterEach(() => {
+    useAppStore.setState({ workspacePath: null });
+  });
+
+  function renderWithOpen() {
+    const transport = new MockTransport();
+    const client = new AgentClient(transport);
+    const onOpenWorkflow = vi.fn();
+    render(
+      <AgentClientProvider client={client}>
+        <RunDetailPage runId="r-author" onBack={vi.fn()} onRunAgain={vi.fn()}
+          onContinueInWorktree={vi.fn()} onResumed={vi.fn()} onOpenWorkflow={onOpenWorkflow} />
+      </AgentClientProvider>,
+    );
+    return { transport, onOpenWorkflow };
+  }
+
+  async function respondListWorkflows(transport: MockTransport, result: unknown) {
+    const req = await waitFor(() => {
+      const index = transport.sent.findIndex(line => (JSON.parse(line) as { method: string }).method === 'listWorkflows');
+      if (index === -1) throw new Error('listWorkflows not sent yet');
+      return transport.sentRequest(index);
+    });
+    expect(req.params).toEqual({ workdir: '/ws' });
+    transport.emitLine({ id: req.id, result });
+  }
+
+  function sentListWorkflows(transport: MockTransport): boolean {
+    return transport.sent.some(line => (JSON.parse(line) as { method: string }).method === 'listWorkflows');
+  }
+
+  it('opens the saved workflow, in its scope, from a done run whose save succeeded', async () => {
+    const { transport, onOpenWorkflow } = renderWithOpen();
+    await respondGetRun(transport, SAVED_RUN);
+    await respondListWorkflows(transport, [FEATURE_ENTRY]);
+    fireEvent.click(await screen.findByRole('button', { name: /open in editor/i }));
+    expect(onOpenWorkflow).toHaveBeenCalledWith('feature', 'workspace');
+  });
+
+  it('is hidden when the saved workflow no longer exists', async () => {
+    const { transport } = renderWithOpen();
+    await respondGetRun(transport, SAVED_RUN);
+    await respondListWorkflows(transport, [{ ...FEATURE_ENTRY, source: 'project' }]);
+    await screen.findByTestId('step-card-save');
+    await act(async () => {});
+    expect(screen.queryByRole('button', { name: /open in editor/i })).not.toBeInTheDocument();
+  });
+
+  it('is hidden, without asking for the list, when save did not succeed or the run is another workflow', async () => {
+    const failed = renderWithOpen();
+    await respondGetRun(failed.transport, {
+      ...SAVED_RUN, status: 'failed',
+      steps: [...SAVED_RUN.steps.slice(0, 2), { id: 'save', kind: 'command', status: 'failed', exitCode: 2 }],
+    });
+    await screen.findByTestId('step-card-save');
+    expect(screen.queryByRole('button', { name: /open in editor/i })).not.toBeInTheDocument();
+    expect(sentListWorkflows(failed.transport)).toBe(false);
+    cleanup();
+
+    const other = renderWithOpen();
+    await respondGetRun(other.transport, { ...SAVED_RUN, workflow: 'feature' });
+    await screen.findByTestId('step-card-save');
+    expect(screen.queryByRole('button', { name: /open in editor/i })).not.toBeInTheDocument();
+    expect(sentListWorkflows(other.transport)).toBe(false);
+  });
+});

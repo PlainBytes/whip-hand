@@ -505,6 +505,14 @@ pub fn validate(reference: &str, dir: &str) -> CmdResult {
     Ok(if n == 0 { 0 } else { 1 })
 }
 
+// ---------------------------------------------------------------- workflow-reference
+
+/// `whiphand workflow-reference`: the compiled-in format reference on stdout.
+pub fn workflow_reference() -> CmdResult {
+    out_raw(whiphand_core::reference::workflow_reference());
+    Ok(0)
+}
+
 // ---------------------------------------------------------------- run
 
 #[derive(Default)]

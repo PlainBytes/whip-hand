@@ -402,6 +402,7 @@ layer 1 quietly weaker than it looks without layer 2 to still catch the result.
 ## Workflow format
 
 A workflow is a `<name>.yaml` file in one of three scopes (see [Storage and scopes](#storage-and-scopes)).
+`whiphand workflow-reference` prints a compact authoring reference compiled into the binary (`crates/whiphand-core/reference/workflow-authoring.md`).
 Every step declares a `kind`; a step with no `kind` defaults to `agent`.
 
 ### Step kinds

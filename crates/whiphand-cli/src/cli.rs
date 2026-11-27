@@ -194,6 +194,14 @@ pub fn build_cli() -> Command {
             .arg(extra()),
         )
         .subcommand(
+            sub(
+                "workflow-reference",
+                "print the workflow format reference (markdown) for whoever is writing a workflow, \
+                 such as an authoring agent",
+            )
+            .arg(extra()),
+        )
+        .subcommand(
             sub("rename-run", "set or clear a run's display label")
                 .arg(
                     Arg::new("runId")

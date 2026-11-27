@@ -66,6 +66,7 @@ async fn dispatch(matches: ArgMatches) -> CmdResult {
             .await
         }
         "validate" => commands::validate(&string(m, "workflow").unwrap_or_default(), &dir(m)),
+        "workflow-reference" => commands::workflow_reference(),
         "rename-run" => commands::rename(
             &string(m, "runId").unwrap_or_default(),
             &string(m, "name").unwrap_or_default(),

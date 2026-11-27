@@ -64,6 +64,7 @@ whiphand init                                                                # s
 whiphand init --storage user --workflows global                              # keep data in ~/.whiphand, starter workflows shared by every workspace
 whiphand new-workflow review-pr                                              # scaffold .whiphand/workflows/review-pr.yaml
 whiphand validate examples/cycle.yaml                                        # check a workflow without running it (exit 0 ok, 1 problems; '-' reads stdin)
+whiphand workflow-reference                                                  # print the workflow format reference (for whoever, or whichever agent, writes one)
 whiphand run examples/cycle.yaml --dry-run --input feature=demo              # print every argv, spend nothing
 whiphand run examples/feature.yaml --input feature="oauth support"           # the real thing
 whiphand run examples/cycle.yaml --input feature=x --max-iterations 5 --yes  # override the loop budget; don't ask

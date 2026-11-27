@@ -1750,3 +1750,17 @@ fn validate_a_missing_file_is_a_usage_error() {
         out.stderr()
     );
 }
+
+// ------------------------------------------------------------ workflow-reference
+
+#[test]
+fn workflow_reference_prints_the_compiled_in_reference() {
+    let e = Env::new();
+    // It takes no `-C`: the reference does not depend on a workspace.
+    let out = Out(e.command(&["workflow-reference"], e.ws()).output().unwrap());
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    assert!(out.stderr().is_empty(), "{}", out.stderr());
+    assert_eq!(out.stdout(), whiphand_core::reference::workflow_reference());
+    assert!(out.stdout().starts_with("# Whiphand workflow format"));
+    assert!(out.stdout().contains("whiphand validate"));
+}

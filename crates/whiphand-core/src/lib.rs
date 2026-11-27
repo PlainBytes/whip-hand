@@ -27,6 +27,7 @@ pub mod process;
 pub mod process_id;
 pub mod random;
 pub mod raw;
+pub mod reference;
 pub mod run_ctx;
 pub mod run_tree;
 pub mod scaffold;

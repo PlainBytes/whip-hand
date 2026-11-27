@@ -64,6 +64,11 @@ export const uiActions: Record<string, Record<string, string>> = {
     '<workflow>': 'exempt:cli-only',
     '-C': 'sidebar:workspaceSwitcher',
   },
+  // `whiphand workflow-reference` prints the format reference for an
+  // authoring agent in a terminal; the desktop editor needs no copy of it.
+  'workflow-reference': {
+    _command: 'exempt:cli-only-a-reference-for-authoring-agents',
+  },
   'rename-run': {
     // RunDetailPage's "Rename" button beside Lock/Delete, opening the rename
     // dialog that drives the renameRun RPC.

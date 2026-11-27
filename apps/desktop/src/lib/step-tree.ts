@@ -56,8 +56,8 @@ export function removeAt(steps: Step[], path: StepPath): Step[] {
  * row the list actually shows next), which is also what makes a fresh
  * container populatable in one click.
  * Any other card — including a container's last body step — inserts as the next
- * sibling at its own depth; move stays sibling-only and this does not change
- * that.
+ * sibling at its own depth — insert-below never escapes the list the card
+ * sits in.
  */
 export function insertAfter(steps: Step[], path: StepPath, step: Step): Step[] {
   const target = stepAt(steps, path);
@@ -140,7 +140,11 @@ export function appendAt(steps: Step[], parentPath: StepPath, step: Step): Step[
   return mapList(steps, parentPath, list => [...list, step]);
 }
 
-/** Moves a step within its own list. Deliberately never across lists: dragging a step into or out of a container changes what it means, so that stays an explicit remove + add. */
+/**
+ * Swaps a step with its previous (`-1`) or next (`1`) sibling — the up/down
+ * buttons. Sibling-only by design; moving a step into or out of a container
+ * is `moveTo`, gated by `moveBlocker`.
+ */
 export function moveAt(steps: Step[], path: StepPath, dir: -1 | 1): Step[] {
   const index = path[path.length - 1];
   return mapList(steps, path.slice(0, -1), list => {
@@ -150,6 +154,116 @@ export function moveAt(steps: Step[], path: StepPath, dir: -1 | 1): Step[] {
     [copy[index], copy[target]] = [copy[target], copy[index]];
     return copy;
   });
+}
+
+/** A slot in some list of the tree: `index` within the list `parentPath` addresses (`[]` = top level). */
+export interface MoveDestination {
+  parentPath: StepPath;
+  index: number;
+}
+
+function isPrefix(prefix: StepPath, path: StepPath): boolean {
+  return prefix.length <= path.length && prefix.every((v, i) => v === path[i]);
+}
+
+function samePath(a: StepPath, b: StepPath): boolean {
+  return a.length === b.length && isPrefix(a, b);
+}
+
+/** `[]` (the top level) or a path to a container step — anything else has no list to insert into. */
+function addressesList(steps: Step[], parentPath: StepPath): boolean {
+  if (parentPath.length === 0) return true;
+  const step = stepAt(steps, parentPath);
+  return step !== undefined && isContainerStep(step);
+}
+
+/**
+ * Moves the step at `from` to `to`, anywhere in the tree — into or out of a
+ * `loop` / `stages` body included. `to.index` is a slot in the destination
+ * list *as it is before the move*; when source and destination share a list
+ * and the source sits earlier, the removal shift is accounted for here. The
+ * step keeps its id, fields and whole body, and nothing else is rewritten
+ * (`inputs:` / `until:` references stay as they are — the save-time
+ * validator judges them).
+ *
+ * Returns `steps` itself for a no-op move and for a structurally impossible
+ * one (`from` addresses nothing, the destination is not a list, or lies
+ * inside the moved step). It does not apply the editor's rules — ask
+ * `moveBlocker` first.
+ */
+export function moveTo(steps: Step[], from: StepPath, to: MoveDestination): Step[] {
+  const step = stepAt(steps, from);
+  if (step === undefined || !addressesList(steps, to.parentPath) || isPrefix(from, to.parentPath)) return steps;
+  const fromParent = from.slice(0, -1);
+  const fromIndex = from[from.length - 1];
+  const sameList = samePath(fromParent, to.parentPath);
+  if (sameList && (to.index === fromIndex || to.index === fromIndex + 1)) return steps;
+
+  // Removing the source shifts every later sibling in its list down by one:
+  // that is the destination slot itself when both share a list, or the
+  // ancestor of the destination list that sits in the source's list.
+  const parentPath = to.parentPath.slice();
+  let index = to.index;
+  if (sameList) {
+    if (fromIndex < index) index -= 1;
+  } else if (isPrefix(fromParent, parentPath) && parentPath[fromParent.length] > fromIndex) {
+    parentPath[fromParent.length] -= 1;
+  }
+
+  const removed = removeAt(steps, from);
+  return mapList(removed, parentPath, list => {
+    const at = Math.max(0, Math.min(index, list.length));
+    return [...list.slice(0, at), step, ...list.slice(at)];
+  });
+}
+
+/**
+ * Why the step at `from` may not move into the list at `toParentPath`, as a
+ * short user-facing reason — or `null` when it may. The one place the
+ * editor's move rules live (buttons and drag-and-drop both ask here):
+ *
+ * - a `stages` step only runs at the top level — core refuses one inside a
+ *   loop or inside another `stages` step;
+ * - a container cannot go into itself or any of its own descendants;
+ * - a loop's `until:` target cannot leave that loop's direct body;
+ * - the destination must be the top level or a container.
+ *
+ * Reference direction (an `inputs:` entry that would now point forward) is
+ * not checked: the save-time validator remains the authority for that.
+ */
+export function moveBlocker(steps: Step[], from: StepPath, toParentPath: StepPath): string | null {
+  const step = stepAt(steps, from);
+  if (step === undefined) return 'There is no step to move';
+  if (!addressesList(steps, toParentPath)) return 'Steps can only be placed at the top level or inside a loop or stages body';
+  if (isPrefix(from, toParentPath)) return `'${step.id}' cannot be moved inside itself`;
+  if (isStagesStep(step) && toParentPath.length > 0) {
+    const into = stepAt(steps, toParentPath);
+    const where = into !== undefined && isStagesStep(into) ? 'another stages step' : 'a loop';
+    return `'${step.id}' is a stages step — it cannot run inside ${where}`;
+  }
+  const fromParent = from.slice(0, -1);
+  const parent = stepAt(steps, fromParent);
+  if (parent !== undefined && isLoopStep(parent) && parent.until === step.id && !samePath(fromParent, toParentPath)) {
+    return `'${step.id}' ends loop '${parent.id}' — it cannot leave it`;
+  }
+  return null;
+}
+
+/** "Outdent": the slot just after the step's parent container, or `undefined` for a top-level step. */
+export function outdentTarget(path: StepPath): MoveDestination | undefined {
+  if (path.length < 2) return undefined;
+  return { parentPath: path.slice(0, -2), index: path[path.length - 2] + 1 };
+}
+
+/** "Indent": the end of the previous sibling's body when that sibling is a container, else `undefined`. */
+export function indentTarget(steps: Step[], path: StepPath): MoveDestination | undefined {
+  if (path.length === 0) return undefined;
+  const parentPath = path.slice(0, -1);
+  const index = path[path.length - 1];
+  if (index < 1) return undefined;
+  const prev = siblingsAt(steps, parentPath)[index - 1];
+  if (prev === undefined || !isContainerStep(prev)) return undefined;
+  return { parentPath: [...parentPath, index - 1], index: prev.steps.length };
 }
 
 /**

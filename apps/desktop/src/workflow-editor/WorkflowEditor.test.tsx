@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { WorkflowEditor } from './WorkflowEditor.tsx';
 import { convertStep } from './StepRail.tsx';
@@ -1172,5 +1172,294 @@ describe('WorkflowEditor on a narrow screen', () => {
     const plan = (req.params as { workflow: Workflow }).workflow.steps.find(s => s.id === 'plan') as AgentStep;
     expect(plan.allow_commits).toBe(true);
     expect((req.params as { name: string }).name).toBe('feature-development');
+  });
+});
+
+describe('WorkflowEditor: moving a step into and out of a container', () => {
+  function cardIds(): string[] {
+    return screen.getAllByTestId(/^step-card-/).map(c => c.dataset.testid!.replace(/^step-card-/, ''));
+  }
+  /** The indentation the editor gives the row wrapping this card. */
+  function indentOf(id: string): string {
+    return screen.getByTestId(`step-card-${id}`).parentElement!.style.marginLeft;
+  }
+  async function tooltipFor(button: HTMLElement): Promise<string> {
+    fireEvent.pointerEnter(button);
+    fireEvent.focus(button);
+    return (await screen.findByRole('tooltip')).textContent ?? '';
+  }
+
+  /** A stages step directly below a loop: indenting it would nest stages inside a loop. */
+  const LOOP_THEN_STAGES: Workflow = {
+    name: 'loop-then-stages',
+    steps: [
+      {
+        id: 'iterate', kind: 'loop', until: 'check',
+        steps: [{ id: 'check', kind: 'agent', runner: 'claude', mode: 'headless', writes: false, verdict: true, prompt: 'ok?', output: 'check.md' }],
+      },
+      {
+        id: 'build', kind: 'stages', items: 'plans/*.md',
+        steps: [{ id: 'impl', kind: 'command', run: 'make', output: 'impl.log' }],
+      },
+    ],
+  };
+
+  it('a top-level step has no "Move out of container"; a loop body step does', () => {
+    renderEditor(NESTED_WORKFLOW);
+    expect(within(screen.getByTestId('step-card-plan')).queryByLabelText('Move out of container')).not.toBeInTheDocument();
+    expect(within(screen.getByTestId('step-card-execute')).getByLabelText('Move out of container')).toBeInTheDocument();
+  });
+
+  it('"Move out of container" puts the step right after its loop, at the loop\'s depth', async () => {
+    const { transport } = renderEditor(NESTED_WORKFLOW);
+    expect(indentOf('execute')).toBe(indentOf('review'));
+    fireEvent.click(within(screen.getByTestId('step-card-execute')).getByLabelText('Move out of container'));
+    expect(cardIds()).toEqual([
+      'sync-base', 'branch', 'plan', 'human-review', 'do-review', 'review', 'execute', 'sign-off',
+      'stage', 'commit-message', 'commit',
+    ]);
+    expect(indentOf('execute')).toBe(indentOf('do-review'));
+    expect(indentOf('execute')).not.toBe(indentOf('review'));
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    const req = await lastRequest(transport, 'updateWorkflow');
+    const wf = (req.params as { workflow: Workflow }).workflow;
+    expect(wf.steps[3]).toMatchObject({
+      id: 'human-review',
+      steps: [{ id: 'do-review', steps: [{ id: 'review' }] }, { id: 'execute' }, { id: 'sign-off' }],
+    });
+  });
+
+  it('"Move into container above" appears only below a container, and makes the step its last body step', () => {
+    renderEditor(NESTED_WORKFLOW);
+    expect(within(screen.getByTestId('step-card-plan')).queryByLabelText('Move into container above')).not.toBeInTheDocument();
+    expect(within(screen.getByTestId('step-card-commit')).queryByLabelText('Move into container above')).not.toBeInTheDocument();
+    // sign-off sits right below do-review at the same level.
+    expect(within(screen.getByTestId('step-card-sign-off')).getByLabelText('Move into container above')).toBeInTheDocument();
+
+    fireEvent.click(within(screen.getByTestId('step-card-stage')).getByLabelText('Move into container above'));
+    expect(cardIds()).toEqual([
+      'sync-base', 'branch', 'plan', 'human-review', 'do-review', 'execute', 'review', 'sign-off',
+      'stage', 'commit-message', 'commit',
+    ]);
+    expect(indentOf('stage')).toBe(indentOf('sign-off'));
+    // commit-message now sits directly below human-review, so it gains the button.
+    expect(within(screen.getByTestId('step-card-commit-message')).getByLabelText('Move into container above')).toBeInTheDocument();
+  });
+
+  it('moving into a folded container unfolds it, so the moved card stays rendered', () => {
+    renderEditor(NESTED_WORKFLOW);
+    fireEvent.click(screen.getByTestId('body-fold-human-review'));
+    expect(screen.queryByTestId('step-card-sign-off')).not.toBeInTheDocument();
+    fireEvent.click(within(screen.getByTestId('step-card-stage')).getByLabelText('Move into container above'));
+    expect(screen.getByTestId('step-card-stage')).toBeInTheDocument();
+    expect(screen.getByTestId('step-card-sign-off')).toBeInTheDocument();
+    expect(screen.getByTestId('body-fold-human-review')).toHaveAccessibleName("Hide human-review's body");
+  });
+
+  it('a loop\'s until: step cannot move out — disabled, the tooltip names the loop, a click does nothing', async () => {
+    renderEditor(NESTED_WORKFLOW);
+    const before = cardIds();
+    const button = within(screen.getByTestId('step-card-sign-off')).getByLabelText('Move out of container');
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    expect(await tooltipFor(button)).toBe("'sign-off' ends loop 'human-review' — it cannot leave it");
+    fireEvent.click(button);
+    expect(cardIds()).toEqual(before);
+  });
+
+  it('a stages step directly below a loop cannot move into it — disabled, with the cannot-nest reason', async () => {
+    renderEditor(LOOP_THEN_STAGES);
+    const before = cardIds();
+    const button = within(screen.getByTestId('step-card-build')).getByLabelText('Move into container above');
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    expect(await tooltipFor(button)).toBe("'build' is a stages step — it cannot run inside a loop");
+    fireEvent.click(button);
+    expect(cardIds()).toEqual(before);
+  });
+
+  it('an allowed move\'s tooltip is the action name', async () => {
+    renderEditor(NESTED_WORKFLOW);
+    const button = within(screen.getByTestId('step-card-execute')).getByLabelText('Move out of container');
+    expect(button).not.toHaveAttribute('aria-disabled');
+    expect(button).not.toBeDisabled();
+    expect(await tooltipFor(button)).toBe('Move out of container');
+  });
+
+  it('keeps the moved card\'s expanded state across the move', () => {
+    renderEditor(NESTED_WORKFLOW);
+    fireEvent.click(screen.getByTestId('step-collapse-execute'));
+    expect(screen.getByTestId('step-collapse-execute')).toHaveAccessibleName('Collapse execute');
+    fireEvent.click(within(screen.getByTestId('step-card-execute')).getByLabelText('Move out of container'));
+    expect(screen.getByTestId('step-collapse-execute')).toHaveAccessibleName('Collapse execute');
+    expect(within(screen.getByTestId('step-card-execute')).getByLabelText(/^Prompt/)).toBeInTheDocument();
+    // And a collapsed card stays collapsed.
+    fireEvent.click(within(screen.getByTestId('step-card-stage')).getByLabelText('Move into container above'));
+    expect(screen.getByTestId('step-collapse-stage')).toHaveAccessibleName('Expand stage');
+  });
+});
+
+describe('WorkflowEditor: drag and drop', () => {
+  // The keyboard sensor scrolls the picked-up row into view; jsdom has no layout and no scrollIntoView.
+  const hadScrollIntoView = 'scrollIntoView' in Element.prototype;
+  beforeAll(() => {
+    if (!hadScrollIntoView) Element.prototype.scrollIntoView = () => {};
+  });
+  afterAll(() => {
+    if (!hadScrollIntoView) delete (Element.prototype as Partial<Element>).scrollIntoView;
+  });
+
+  /** a, then loop `fix` (until `check`, then `note`), then d. */
+  const LOOP_WORKFLOW: Workflow = {
+    name: 'drag',
+    steps: [
+      { id: 'a', kind: 'command', run: 'echo a', output: 'a.log' },
+      {
+        id: 'fix', kind: 'loop', until: 'check',
+        steps: [
+          { id: 'check', kind: 'agent', runner: 'claude', mode: 'headless', writes: false, verdict: true, prompt: 'ok?', output: 'check.md' },
+          { id: 'note', kind: 'command', run: 'echo note', output: 'note.log' },
+        ],
+      },
+      { id: 'd', kind: 'command', run: 'echo d', output: 'd.log' },
+    ],
+  };
+
+  function cardIds(): string[] {
+    return screen.getAllByTestId(/^step-card-/).map(c => c.dataset.testid!.replace(/^step-card-/, ''));
+  }
+  function indentOf(id: string): string {
+    return screen.getByTestId(`step-card-${id}`).parentElement!.style.marginLeft;
+  }
+  /** The keyboard sensor starts listening for keys one tick after the pick-up. */
+  async function tick(): Promise<void> {
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  }
+  async function pickUp(id: string): Promise<HTMLElement> {
+    const handle = screen.getByLabelText(`Drag to move ${id}`);
+    handle.focus();
+    fireEvent.keyDown(handle, { code: 'Space', key: ' ' });
+    await tick();
+    return handle;
+  }
+  async function key(code: string): Promise<void> {
+    fireEvent.keyDown(document.activeElement ?? document.body, { code, key: code === 'Space' ? ' ' : code });
+    await tick();
+  }
+  async function savedSteps(transport: MockTransport): Promise<Step[]> {
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    const req = await lastRequest(transport, 'updateWorkflow');
+    return (req.params as { workflow: Workflow }).workflow.steps;
+  }
+
+  it('every card has a drag handle labelled with its id', () => {
+    renderEditor(NESTED_WORKFLOW);
+    for (const id of cardIds()) {
+      expect(within(screen.getByTestId(`step-card-${id}`)).getByLabelText(`Drag to move ${id}`)).toBeInTheDocument();
+    }
+  });
+
+  it('pressing a header button or typing in a field does not start a drag', () => {
+    renderEditor(LOOP_WORKFLOW);
+    fireEvent.click(screen.getByTestId('step-collapse-check'));
+    const prompt = within(screen.getByTestId('step-card-check')).getByLabelText(/^Prompt/);
+    fireEvent.keyDown(prompt, { code: 'Space', key: ' ' });
+    fireEvent.change(prompt, { target: { value: 'still ok?' } });
+    expect(prompt).toHaveValue('still ok?');
+    expect(screen.queryByTestId('drag-overlay')).not.toBeInTheDocument();
+    // The header's buttons still click: Move up moves d above the loop.
+    fireEvent.click(within(screen.getByTestId('step-card-d')).getByLabelText('Move up'));
+    expect(cardIds()).toEqual(['a', 'd', 'fix', 'check', 'note']);
+    expect(screen.queryByTestId('drag-overlay')).not.toBeInTheDocument();
+  });
+
+  it('keyboard: Space, ArrowDown past a loop header, ArrowRight, Space makes a top-level step the loop\'s first body step', async () => {
+    const { transport } = renderEditor(LOOP_WORKFLOW);
+    await pickUp('a');
+    expect(screen.getByTestId('drag-overlay')).toHaveTextContent('a');
+    await key('ArrowDown');
+    await key('ArrowRight');
+    const line = screen.getByTestId('drop-indicator');
+    expect(line).toHaveAttribute('data-blocked', 'false');
+    await key('Space');
+    expect(screen.queryByTestId('drag-overlay')).not.toBeInTheDocument();
+    expect(cardIds()).toEqual(['fix', 'a', 'check', 'note', 'd']);
+    expect(indentOf('a')).toBe(indentOf('check'));
+    expect((await savedSteps(transport))[0]).toMatchObject({ id: 'fix', steps: [{ id: 'a' }, { id: 'check' }, { id: 'note' }] });
+  });
+
+  it('keyboard: a loop body step, Space, ArrowLeft, Space becomes a top-level step right after the loop', async () => {
+    const { transport } = renderEditor(LOOP_WORKFLOW);
+    await pickUp('note');
+    await key('ArrowLeft');
+    await key('Space');
+    expect(cardIds()).toEqual(['a', 'fix', 'check', 'note', 'd']);
+    expect(indentOf('note')).toBe(indentOf('fix'));
+    const steps = await savedSteps(transport);
+    expect(steps.map(s => s.id)).toEqual(['a', 'fix', 'note', 'd']);
+    expect(steps[1]).toMatchObject({ steps: [{ id: 'check' }] });
+  });
+
+  it('keyboard: a loop\'s until: step dragged out shows a blocked drop line with the reason, and the drop changes nothing', async () => {
+    const { transport } = renderEditor(NESTED_WORKFLOW);
+    await pickUp('sign-off');
+    await key('ArrowLeft');
+    const line = screen.getByTestId('drop-indicator');
+    expect(line).toHaveAttribute('data-blocked', 'true');
+    expect(line).toHaveTextContent("Cannot drop here: 'sign-off' ends loop 'human-review' — it cannot leave it");
+    await key('Space');
+    expect(screen.queryByTestId('drop-indicator')).not.toBeInTheDocument();
+    expect(await savedSteps(transport)).toEqual(NESTED_WORKFLOW.steps);
+  });
+
+  it('an allowed drop line is not marked blocked and carries no reason', async () => {
+    renderEditor(LOOP_WORKFLOW);
+    await pickUp('d');
+    await key('ArrowUp');
+    const line = screen.getByTestId('drop-indicator');
+    expect(line).toHaveAttribute('data-blocked', 'false');
+    expect(line).not.toHaveTextContent(/cannot drop/i);
+  });
+
+  it('Escape during a keyboard drag leaves the draft unchanged', async () => {
+    const { transport } = renderEditor(LOOP_WORKFLOW);
+    await pickUp('a');
+    await key('ArrowDown');
+    await key('ArrowRight');
+    await key('Escape');
+    expect(screen.queryByTestId('drag-overlay')).not.toBeInTheDocument();
+    expect(cardIds()).toEqual(['a', 'fix', 'check', 'note', 'd']);
+    expect(await savedSteps(transport)).toEqual(LOOP_WORKFLOW.steps);
+  });
+
+  it('a dragged container\'s body rows are hidden during the drag and come back, moved with it, after the drop', async () => {
+    const { transport } = renderEditor(LOOP_WORKFLOW);
+    await pickUp('fix');
+    expect(cardIds()).toEqual(['a', 'fix', 'd']);
+    await key('ArrowDown');
+    await key('Space');
+    expect(cardIds()).toEqual(['a', 'd', 'fix', 'check', 'note']);
+    expect(indentOf('check')).not.toBe(indentOf('fix'));
+    const steps = await savedSteps(transport);
+    expect(steps.map(s => s.id)).toEqual(['a', 'd', 'fix']);
+    expect(steps[2]).toMatchObject({ steps: [{ id: 'check' }, { id: 'note' }] });
+  });
+
+  it('announces the pick-up and the drop for screen readers', async () => {
+    renderEditor(LOOP_WORKFLOW);
+    await pickUp('a');
+    await waitFor(() => expect(document.body).toHaveTextContent("Picked up step 'a'."));
+    await key('ArrowDown');
+    await key('Space');
+    await waitFor(() => expect(document.body).toHaveTextContent("Dropped 'a' into loop 'fix', position 1."));
+  });
+
+  it('announces a refused drop with its reason', async () => {
+    renderEditor(NESTED_WORKFLOW);
+    await pickUp('sign-off');
+    await key('ArrowLeft');
+    await key('Space');
+    await waitFor(() => expect(document.body).toHaveTextContent(
+      "'sign-off' was not moved: 'sign-off' ends loop 'human-review' — it cannot leave it",
+    ));
   });
 });

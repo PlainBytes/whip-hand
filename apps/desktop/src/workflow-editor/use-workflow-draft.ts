@@ -2,8 +2,8 @@ import { useCallback, useMemo, useState } from 'react';
 import type { Step, Workflow } from '../shared/types.ts';
 import { flattenSteps } from '../shared/steps.ts';
 import {
-  appendAt, insertAfter, moveAt, removeStep as removeStepById, renameStep as renameStepById, stepAt, updateAt,
-  type StepPath,
+  appendAt, insertAfter, moveAt, moveBlocker, moveTo, removeStep as removeStepById, renameStep as renameStepById, stepAt, updateAt,
+  type MoveDestination, type StepPath,
 } from '../lib/step-tree.ts';
 import { editorRows, wiring } from '../lib/editor-model.ts';
 
@@ -68,6 +68,19 @@ export function useWorkflowDraft(initial: Workflow) {
 
   function moveStep(path: StepPath, dir: -1 | 1): void {
     setDraft(d => ({ ...d, steps: moveAt(d.steps, path, dir) }));
+  }
+
+  /**
+   * Moves a step anywhere in the tree (into or out of a container). A move
+   * `moveBlocker` refuses, or one that changes nothing, leaves the draft
+   * untouched — same object, no re-render.
+   */
+  function moveStepTo(from: StepPath, to: MoveDestination): void {
+    setDraft(d => {
+      if (moveBlocker(d.steps, from, to.parentPath) !== null) return d;
+      const steps = moveTo(d.steps, from, to);
+      return steps === d.steps ? d : { ...d, steps };
+    });
   }
 
   /** Insert-below: a container card's next row is its own first body child; any other card inserts as the next sibling. */
@@ -173,6 +186,7 @@ export function useWorkflowDraft(initial: Workflow) {
     updateWorkflowSettings,
     updateStep,
     moveStep,
+    moveStepTo,
     insertStepBelow,
     appendStep,
     removeStepAt,

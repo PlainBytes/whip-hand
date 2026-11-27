@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
-  appendAt, insertAfter, moveAt, referenceableIds, removeAt, removeStep, renameStep, siblingsAt, stepAt, updateAt,
+  appendAt, indentTarget, insertAfter, moveAt, moveBlocker, moveTo, outdentTarget, referenceableIds, removeAt,
+  removeStep, renameStep, siblingsAt, stepAt, updateAt,
 } from './step-tree.ts';
 import { stagesRule } from './step-describe.ts';
-import type { CommandStep, LoopStep, StagesStep, Step } from '../shared/types.ts';
+import type { CommandStep, LoopStep, StagesStep, Step, Workflow } from '../shared/types.ts';
+import { act, renderHook } from '@testing-library/react';
+import { useWorkflowDraft } from '../workflow-editor/use-workflow-draft.ts';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -265,5 +268,194 @@ describe('a stages body', () => {
       offers[reader.id] = referenceableIds(steps, path);
     }
     expect(offers).toEqual(fixture.offers);
+  });
+});
+
+// a | fix(until c)[b, c] | build(stages)[impl] | outer(until x)[x, inner(until y)[y]] | d
+const wide = (): Step[] => [
+  cmd('a'),
+  { kind: 'loop', id: 'fix', until: 'c', steps: [cmd('b'), cmd('c')] } as LoopStep,
+  { kind: 'stages', id: 'build', items: 'plans/*.md', steps: [cmd('impl')] } as StagesStep,
+  {
+    kind: 'loop', id: 'outer', until: 'x',
+    steps: [cmd('x'), { kind: 'loop', id: 'inner', until: 'y', steps: [cmd('y')] } as LoopStep],
+  } as LoopStep,
+  cmd('d'),
+];
+
+const ids = (list: Step[]): string[] => list.map(s => s.id);
+const body = (list: Step[], path: number[]): string[] => ids((stepAt(list, path) as LoopStep | StagesStep).steps);
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object') {
+    for (const v of Object.values(value)) deepFreeze(v);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+describe('moveTo', () => {
+  it('moves a top-level step into a loop body (the loop shifts up as the source leaves)', () => {
+    const next = moveTo(wide(), [0], { parentPath: [1], index: 1 });
+    expect(ids(next)).toEqual(['fix', 'build', 'outer', 'd']);
+    expect(body(next, [0])).toEqual(['b', 'a', 'c']);
+  });
+
+  it('moves a loop body step out to the top level', () => {
+    const next = moveTo(wide(), [1, 0], { parentPath: [], index: 4 });
+    expect(ids(next)).toEqual(['a', 'fix', 'build', 'outer', 'b', 'd']);
+    expect(body(next, [1])).toEqual(['c']);
+  });
+
+  it('moves a step between two different containers', () => {
+    const next = moveTo(wide(), [1, 0], { parentPath: [2], index: 0 });
+    expect(body(next, [1])).toEqual(['c']);
+    expect(body(next, [2])).toEqual(['b', 'impl']);
+  });
+
+  it('moves a deeply nested step into a container earlier in the tree', () => {
+    const next = moveTo(wide(), [3, 1, 0], { parentPath: [1], index: 2 });
+    expect(body(next, [1])).toEqual(['b', 'c', 'y']);
+    expect(body(next, [3, 1])).toEqual([]);
+  });
+
+  it('moves a step forwards within one list, landing at the intended slot', () => {
+    // Slot 3 is "just before outer" in the list as it was before the move.
+    expect(ids(moveTo(wide(), [0], { parentPath: [], index: 3 }))).toEqual(['fix', 'build', 'a', 'outer', 'd']);
+    expect(ids(moveTo(wide(), [0], { parentPath: [], index: 5 }))).toEqual(['fix', 'build', 'outer', 'd', 'a']);
+    expect(body(moveTo(wide(), [1, 0], { parentPath: [1], index: 2 }), [1])).toEqual(['c', 'b']);
+  });
+
+  it('moves a step backwards within one list', () => {
+    expect(ids(moveTo(wide(), [4], { parentPath: [], index: 1 }))).toEqual(['a', 'd', 'fix', 'build', 'outer']);
+    expect(ids(moveTo(wide(), [4], { parentPath: [], index: 0 }))).toEqual(['d', 'a', 'fix', 'build', 'outer']);
+  });
+
+  it('moves a container with its whole body, keeping id and fields', () => {
+    const original = wide();
+    const next = moveTo(original, [3], { parentPath: [2], index: 1 });
+    expect(ids(next)).toEqual(['a', 'fix', 'build', 'd']);
+    expect(body(next, [2])).toEqual(['impl', 'outer']);
+    expect(stepAt(next, [2, 1])).toBe(original[3]);
+    expect(body(next, [2, 1])).toEqual(['x', 'inner']);
+    expect(body(next, [2, 1, 1])).toEqual(['y']);
+  });
+
+  it('returns the input itself for a no-op move', () => {
+    const original = wide();
+    expect(moveTo(original, [1], { parentPath: [], index: 1 })).toBe(original);
+    expect(moveTo(original, [1], { parentPath: [], index: 2 })).toBe(original);
+    expect(moveTo(original, [1, 1], { parentPath: [1], index: 2 })).toBe(original);
+  });
+
+  it('returns the input itself for a structurally impossible move', () => {
+    const original = wide();
+    expect(moveTo(original, [3], { parentPath: [3, 1], index: 0 })).toBe(original);
+    expect(moveTo(original, [3], { parentPath: [3], index: 0 })).toBe(original);
+    expect(moveTo(original, [0], { parentPath: [4], index: 0 })).toBe(original);
+    expect(moveTo(original, [9], { parentPath: [], index: 0 })).toBe(original);
+  });
+
+  it('does not mutate its input', () => {
+    const original = deepFreeze(wide());
+    const snapshot = structuredClone(original);
+    moveTo(original, [0], { parentPath: [1], index: 1 });
+    moveTo(original, [3, 1, 0], { parentPath: [], index: 0 });
+    moveTo(original, [3], { parentPath: [2], index: 0 });
+    moveTo(original, [0], { parentPath: [], index: 4 });
+    expect(original).toEqual(snapshot);
+  });
+});
+
+describe('moveBlocker', () => {
+  it('refuses a stages step into a loop', () => {
+    expect(moveBlocker(wide(), [2], [1])).toBe("'build' is a stages step — it cannot run inside a loop");
+  });
+
+  it('refuses a stages step into another stages step', () => {
+    const steps = [...wide(), { kind: 'stages', id: 'more', items: '*.md', steps: [] } as StagesStep];
+    expect(moveBlocker(steps, [5], [2])).toBe("'more' is a stages step — it cannot run inside another stages step");
+  });
+
+  it('refuses a loop into its own body or a grandchild loop of itself', () => {
+    expect(moveBlocker(wide(), [3], [3])).toBe("'outer' cannot be moved inside itself");
+    expect(moveBlocker(wide(), [3], [3, 1])).toBe("'outer' cannot be moved inside itself");
+  });
+
+  it("refuses a loop's until: target leaving that loop, naming the loop", () => {
+    expect(moveBlocker(wide(), [1, 1], [])).toBe("'c' ends loop 'fix' — it cannot leave it");
+    expect(moveBlocker(wide(), [1, 1], [2])).toBe("'c' ends loop 'fix' — it cannot leave it");
+    expect(moveBlocker(wide(), [3, 1, 0], [3])).toBe("'y' ends loop 'inner' — it cannot leave it");
+  });
+
+  it('refuses a destination that is not a container', () => {
+    expect(moveBlocker(wide(), [0], [4])).not.toBeNull();
+    expect(moveBlocker(wide(), [0], [1, 0])).not.toBeNull();
+    expect(moveBlocker(wide(), [0], [9])).not.toBeNull();
+  });
+
+  it('allows ordinary legal moves', () => {
+    expect(moveBlocker(wide(), [0], [1])).toBeNull();          // top level into a loop
+    expect(moveBlocker(wide(), [1, 0], [])).toBeNull();        // loop body out to top level
+    expect(moveBlocker(wide(), [1, 0], [2])).toBeNull();       // between containers
+    expect(moveBlocker(wide(), [1, 1], [1])).toBeNull();       // until: target reordered within its own loop
+    expect(moveBlocker(wide(), [3], [2])).toBeNull();          // a loop into a stages body
+    expect(moveBlocker(wide(), [1], [3, 1])).toBeNull();       // a loop into another loop
+    expect(moveBlocker(wide(), [2], [])).toBeNull();           // stages step within the top level
+    expect(moveBlocker(wide(), [3, 0], [3])).toBeNull();       // outer's until: target stays in outer
+  });
+});
+
+describe('outdentTarget / indentTarget', () => {
+  it('outdents to just after the parent container', () => {
+    expect(outdentTarget([1, 0])).toEqual({ parentPath: [], index: 2 });
+    expect(outdentTarget([3, 1, 0])).toEqual({ parentPath: [3], index: 2 });
+  });
+
+  it('has no outdent target for a top-level step', () => {
+    expect(outdentTarget([2])).toBeUndefined();
+    expect(outdentTarget([])).toBeUndefined();
+  });
+
+  it('indents to the end of the previous sibling container', () => {
+    expect(indentTarget(wide(), [2])).toEqual({ parentPath: [1], index: 2 });
+    expect(indentTarget(wide(), [4])).toEqual({ parentPath: [3], index: 2 });
+    expect(indentTarget(wide(), [3])).toEqual({ parentPath: [2], index: 1 });
+  });
+
+  it('has no indent target when the previous sibling is missing or not a container', () => {
+    expect(indentTarget(wide(), [0])).toBeUndefined();
+    expect(indentTarget(wide(), [1])).toBeUndefined();
+    expect(indentTarget(wide(), [3, 0])).toBeUndefined();
+    expect(indentTarget(wide(), [])).toBeUndefined();
+  });
+
+  it('round-trips: indent then outdent puts a step back where it was', () => {
+    const start = wide();
+    const into = indentTarget(start, [4])!;
+    const indented = moveTo(start, [4], into);
+    expect(body(indented, [3])).toEqual(['x', 'inner', 'd']);
+    const back = moveTo(indented, [3, 2], outdentTarget([3, 2])!);
+    expect(ids(back)).toEqual(ids(start));
+  });
+});
+
+describe('useWorkflowDraft().moveStepTo', () => {
+  const workflow = (): Workflow => ({ name: 'wf', steps: wide() });
+
+  it('applies a legal move', () => {
+    const { result } = renderHook(() => useWorkflowDraft(workflow()));
+    act(() => result.current.moveStepTo([0], { parentPath: [1], index: 0 }));
+    expect(ids(result.current.draft.steps)).toEqual(['fix', 'build', 'outer', 'd']);
+    expect(body(result.current.draft.steps, [0])).toEqual(['a', 'b', 'c']);
+  });
+
+  it('leaves the draft untouched when the move is blocked', () => {
+    const { result } = renderHook(() => useWorkflowDraft(workflow()));
+    const before = result.current.draft;
+    act(() => result.current.moveStepTo([2], { parentPath: [1], index: 0 }));   // stages into a loop
+    act(() => result.current.moveStepTo([1, 1], { parentPath: [], index: 0 })); // until: target out of its loop
+    act(() => result.current.moveStepTo([3], { parentPath: [3, 1], index: 0 })); // into itself
+    expect(result.current.draft).toBe(before);
   });
 });

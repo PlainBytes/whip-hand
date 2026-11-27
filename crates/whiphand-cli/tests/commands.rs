@@ -544,7 +544,12 @@ fn init_without_a_terminal_defaults_to_local_storage_and_workflows() {
     assert!(e.ws().join(".whiphand/config.yaml").is_file());
     assert_eq!(
         names(&e.ws().join(".whiphand/workflows")),
-        ["develop.yaml", "iterate.yaml", "research.yaml"]
+        [
+            "author-workflow.yaml",
+            "develop.yaml",
+            "iterate.yaml",
+            "research.yaml"
+        ]
     );
     assert!(!e.home.path().join("workflows").exists());
     assert!(out.stdout().contains("data: "), "{}", out.stdout());
@@ -564,7 +569,12 @@ fn init_user_storage_with_global_workflows() {
     );
     assert_eq!(
         names(&e.home.path().join("workflows")),
-        ["develop.yaml", "iterate.yaml", "research.yaml"]
+        [
+            "author-workflow.yaml",
+            "develop.yaml",
+            "iterate.yaml",
+            "research.yaml"
+        ]
     );
     // a re-run keeps the storage and creates nothing; the other mode is refused
     let again = e.run(&["init", "--workflows", "global"]);
@@ -739,12 +749,14 @@ fn restore_workflows_brings_back_a_deleted_one_and_keeps_the_rest() {
     let out = e.run(&["restore-workflows"]);
     assert_eq!(out.code(), 0, "{}", out.stderr());
     let rows = restore_rows(&out);
-    assert_eq!(rows.len(), 3, "{}", out.stdout());
+    assert_eq!(rows.len(), 4, "{}", out.stdout());
     assert_eq!(rows[0].0, "iterate");
     assert!(rows[0].1.starts_with("kept"), "{}", out.stdout());
     assert_eq!(rows[1], ("develop".into(), "added".into()));
     assert_eq!(rows[2].0, "research");
     assert!(rows[2].1.starts_with("kept"), "{}", out.stdout());
+    assert_eq!(rows[3].0, "author-workflow");
+    assert!(rows[3].1.starts_with("kept"), "{}", out.stdout());
     assert_eq!(
         std::fs::read_to_string(wf.join("develop.yaml")).unwrap(),
         STOCK_DEVELOP
@@ -766,7 +778,8 @@ fn restore_workflows_lists_keeps_and_replaces_an_edited_one() {
         [
             ("iterate".into(), "modified".into()),
             ("develop".into(), "stock".into()),
-            ("research".into(), "stock".into())
+            ("research".into(), "stock".into()),
+            ("author-workflow".into(), "stock".into())
         ]
     );
 
@@ -791,7 +804,12 @@ fn restore_workflows_global_and_workspace_act_on_their_scope_only() {
     assert!(restore_rows(&out).iter().all(|(_, t)| t == "added"));
     assert_eq!(
         names(&e.home.path().join("workflows")),
-        ["develop.yaml", "iterate.yaml", "research.yaml"]
+        [
+            "author-workflow.yaml",
+            "develop.yaml",
+            "iterate.yaml",
+            "research.yaml"
+        ]
     );
     assert!(names(e.ws()).is_empty());
     let out = e.run(&["restore-workflows", "--list"]);
@@ -807,11 +825,12 @@ fn restore_workflows_global_and_workspace_act_on_their_scope_only() {
         [
             ("iterate".into(), "missing".into()),
             ("develop".into(), "missing".into()),
-            ("research".into(), "stock".into())
+            ("research".into(), "stock".into()),
+            ("author-workflow".into(), "missing".into())
         ]
     );
     // The global dir still holds only what the first restore wrote.
-    assert_eq!(names(&e.home.path().join("workflows")).len(), 3);
+    assert_eq!(names(&e.home.path().join("workflows")).len(), 4);
 }
 
 #[test]
@@ -821,8 +840,9 @@ fn restore_workflows_refuses_an_unknown_name_and_writes_nothing() {
     assert_eq!(out.code(), 2, "{}{}", out.stdout(), out.stderr());
     assert!(out.stdout().is_empty(), "{}", out.stdout());
     assert!(
-        out.stderr()
-            .contains("'nope'; the shipped workflows are: iterate, develop, research"),
+        out.stderr().contains(
+            "'nope'; the shipped workflows are: iterate, develop, research, author-workflow"
+        ),
         "{}",
         out.stderr()
     );
@@ -2020,4 +2040,173 @@ fn workflow_reference_prints_the_compiled_in_reference() {
     assert_eq!(out.stdout(), whiphand_core::reference::workflow_reference());
     assert!(out.stdout().starts_with("# Whiphand workflow format"));
     assert!(out.stdout().contains("whiphand validate"));
+}
+
+// ------------------------------------------------------- author-workflow template
+
+const STOCK_AUTHOR: &str = include_str!("../../whiphand-core/templates/author-workflow.yaml");
+
+#[test]
+fn restore_workflows_adds_author_workflow_to_a_workspace_set_up_before_it() {
+    let e = Env::new();
+    assert_eq!(e.run(&["init"]).code(), 0);
+    let file = e.ws().join(".whiphand/workflows/author-workflow.yaml");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), STOCK_AUTHOR);
+    // A workspace initialized before the template shipped lacks it.
+    std::fs::remove_file(&file).unwrap();
+    let out = e.run(&["restore-workflows", "author-workflow"]);
+    assert_eq!(out.code(), 0, "{}", out.stderr());
+    assert_eq!(
+        restore_rows(&out),
+        [("author-workflow".into(), "added".into())]
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), STOCK_AUTHOR);
+    let out = e.run(&["validate", "author-workflow"]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+}
+
+/// The JSON events `run --dry-run --json` printed, one per line.
+fn events(out: &Out) -> Vec<serde_json::Value> {
+    out.stdout()
+        .lines()
+        .filter(|l| l.starts_with('{'))
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+#[test]
+fn author_workflow_dry_run_points_the_session_at_the_cli_and_the_draft() {
+    let e = Env::new();
+    let wf = e.write("author.yaml", STOCK_AUTHOR);
+    let wf = wf.to_string_lossy().into_owned();
+    let out = e.run(&[
+        "run",
+        &wf,
+        "--dry-run",
+        "--json",
+        "--input",
+        "goal=a test-fix loop",
+        "--input",
+        "name=demo",
+    ]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    let events = events(&out);
+    let run_id = events[0]["runId"].as_str().unwrap().to_string();
+    let spawn = |id: &str| {
+        events
+            .iter()
+            .find(|v| v["type"] == "step:spawn" && v["stepId"] == id)
+            .unwrap_or_else(|| panic!("no spawn of {id}"))["spec"]
+            .clone()
+    };
+    let design = spawn("design");
+    let bin = design["env"]["WHIPHAND_BIN"].as_str().unwrap().to_string();
+    assert!(Path::new(&bin).is_absolute(), "{bin}");
+    let prompt = design["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["path"].as_str().unwrap().ends_with(".design.prompt"))
+        .unwrap()["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        prompt.contains(&format!("\"{bin}\" workflow-reference")),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains(&format!("\"{bin}\" validate \"")),
+        "{prompt}"
+    );
+    let draft = prompt
+        .lines()
+        .find_map(|l| l.strip_prefix("Keep the draft in exactly one file: "))
+        .unwrap();
+    assert!(Path::new(draft).is_absolute(), "{draft}");
+    assert!(draft.contains(&run_id), "{draft}");
+    assert!(draft.ends_with("workflow.yaml"), "{draft}");
+    // The commands reach the CLI and the inputs through variables only.
+    for id in ["check", "save"] {
+        let argv = spawn(id)["argv"].to_string();
+        assert!(argv.contains("${WHIPHAND_BIN}"), "{id}: {argv}");
+        assert!(!argv.contains("{{"), "{id}: {argv}");
+        assert!(!argv.contains(&bin), "{id}: {argv}");
+    }
+    let save = spawn("save")["argv"].to_string();
+    assert!(save.contains(r#"\"${WHIPHAND_INPUT_NAME}\""#), "{save}");
+    assert!(save.contains(r#"\"${WHIPHAND_INPUT_SCOPE}\""#), "{save}");
+}
+
+/// The author-workflow template with everything before `save` replaced by a
+/// command step that writes `draft` where the design session would.
+fn author_save_only(e: &Env, draft: &str) -> String {
+    let steps = STOCK_AUTHOR.find("\nsteps:\n").unwrap();
+    let save = STOCK_AUTHOR.find("\n  - id: save\n").unwrap();
+    let text = format!(
+        "{}\nsteps:\n  - id: draft\n    kind: command\n    env:\n      DRAFT: {draft:?}\n    \
+         run: printf '%s' \"$DRAFT\" > \"$WHIPHAND_RUN_DIR/workflow.yaml\"\n{}",
+        &STOCK_AUTHOR[..steps],
+        &STOCK_AUTHOR[save..],
+    );
+    e.write("save-only.yaml", &text)
+        .to_string_lossy()
+        .into_owned()
+}
+
+const DRAFT: &str = "name: draft\nsteps:\n  - id: a\n    kind: command\n    run: echo a\n";
+
+#[test]
+fn author_workflow_save_refuses_an_unknown_scope_and_writes_nothing() {
+    let e = Env::new();
+    let wf = author_save_only(&e, DRAFT);
+    let out = e.run(&[
+        "run",
+        &wf,
+        "--input",
+        "goal=x",
+        "--input",
+        "name=demo",
+        "--input",
+        "scope=team",
+    ]);
+    assert_ne!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    let log = std::fs::read_to_string(e.only_run().join("save.log")).unwrap();
+    assert!(
+        log.contains("scope must be one of project, workspace, global (got 'team')"),
+        "{log}"
+    );
+    assert!(!e.ws().join(".whiphand/workflows").exists());
+    assert!(!e.home.path().join("workflows").exists());
+}
+
+#[test]
+fn author_workflow_save_writes_the_draft_under_the_name_in_the_scope() {
+    let e = Env::new();
+    let wf = author_save_only(&e, DRAFT);
+    let out = e.run(&["run", &wf, "--input", "goal=x", "--input", "name=demo"]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    let saved = e.ws().join(".whiphand/workflows/demo.yaml");
+    assert_eq!(
+        std::fs::read_to_string(&saved).unwrap(),
+        DRAFT.replace("name: draft", "name: demo")
+    );
+    let log = std::fs::read_to_string(e.only_run().join("save.log")).unwrap();
+    assert!(log.contains("demo.yaml"), "{log}");
+
+    let e = Env::new();
+    let wf = author_save_only(&e, DRAFT);
+    let out = e.run(&[
+        "run",
+        &wf,
+        "--input",
+        "goal=x",
+        "--input",
+        "name=demo",
+        "--input",
+        "scope=global",
+    ]);
+    assert_eq!(out.code(), 0, "{}{}", out.stdout(), out.stderr());
+    assert!(e.home.path().join("workflows/demo.yaml").is_file());
+    assert!(!e.ws().join(".whiphand/workflows").exists());
 }

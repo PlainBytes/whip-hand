@@ -68,6 +68,7 @@ whiphand restore-workflows                                                   # b
 whiphand restore-workflows iterate --replace                                 # reset an edited starter workflow to stock (--list shows missing/stock/modified)
 whiphand validate examples/cycle.yaml                                        # check a workflow without running it (exit 0 ok, 1 problems; '-' reads stdin)
 whiphand workflow-reference                                                  # print the workflow format reference (for whoever, or whichever agent, writes one)
+whiphand run author-workflow --input goal="plan, build, review" --input name=pbr  # design a workflow with an AI session, check it, sign it off, save it
 whiphand run examples/cycle.yaml --dry-run --input feature=demo              # print every argv, spend nothing
 whiphand run examples/feature.yaml --input feature="oauth support"           # the real thing
 whiphand run examples/cycle.yaml --input feature=x --max-iterations 5 --yes  # override the loop budget; don't ask
@@ -124,7 +125,8 @@ path-length problems that deep repository paths can cause. `~/.whiphand` is repl
 **Terminal UI.** `whiphand` on its own (or `whiphand tui`) drives runs from a terminal, tmux or an
 SSH session, beside the desktop app. See [Terminal UI](#terminal-ui).
 
-`whiphand init` ships three starter workflows. The two that build something end the same way: a
+`whiphand init` ships four starter workflows: `iterate`, `develop`, `research` and
+`author-workflow`. The two that build something end the same way: a
 human gate that can send the work back with comments for another cycle, not just ship it or kill
 it. `iterate` works on the branch you are on, in your own checkout: it plans once, interactively,
 then implements and reviews in a cycle until the sign-off approves it, and commits the signed-off
@@ -146,7 +148,8 @@ missing from the project's `.whiphand/workflows/` (`--workspace`: the workspace'
 named (or all) existing ones to stock, discarding your edits to them; `--list` prints each one's
 status — `missing`, `stock` or `modified` — and writes nothing. An unknown name is refused, with the
 valid names listed, before anything is written. Restoring is also how a workspace set up by an
-earlier version picks up a starter workflow added since.
+earlier version picks up a starter workflow added since, such as `author-workflow`
+(`whiphand restore-workflows author-workflow`).
 
 **Running workflows side by side.** `develop` declares `worktree:`, so each run gets its own checkout
 under `<data dir>/wt/<suffix>-<short-slug>` (`<suffix>` is the run id's random tail; just that for an unnamed run) on a new branch, and your main checkout is never touched: start
@@ -174,6 +177,17 @@ work directory it started in.
 agent investigates and writes a report whose every claim carries a `file:line` or a URL, a second
 agent checks it against your question and spot-checks its sources, and you read the result: accept
 it, or send it round again with a comment.
+
+**Designing a workflow with AI.** `author-workflow` builds a workflow, not code. Give it a `goal`
+and the `name` to save it as (and `scope`: `project`, the default, `workspace` or `global`). An
+interactive session reads `whiphand workflow-reference`, works the steps, runners, loops, gates and
+inputs out with you one question at a time, and keeps the draft in the run folder, validating it
+before it ends. A `check` step then runs `whiphand validate` on the draft and prints it: a draft
+with problems goes back to the session with the log attached. You read the YAML at the sign-off and
+approve it, or request changes and the session reopens with your comments; once approved, `save`
+writes it with `whiphand new-workflow <name> --from <draft> --replace`. To change an existing
+workflow instead, attach it: `whiphand run author-workflow --attach .whiphand/workflows/x.yaml
+--input goal="add a test gate" --input name=x`. Nothing in the repository changes until `save`.
 
 A run can carry a **name** (`--name`, the desktop's New run dialog, or later with
 `whiphand rename-run`, where `''` clears it), shown in place of its id in the UI and

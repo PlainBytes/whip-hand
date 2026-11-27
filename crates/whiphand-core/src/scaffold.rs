@@ -21,10 +21,14 @@ use crate::workflow_write::merge_workflow;
 use crate::yaml_emit::stringify_yaml;
 
 /// Every shipped template, in the order `init_workspace` writes them.
-pub const SHIPPED_TEMPLATES: [(&str, &str); 3] = [
+pub const SHIPPED_TEMPLATES: [(&str, &str); 4] = [
     ("iterate", include_str!("../templates/iterate.yaml")),
     ("develop", include_str!("../templates/develop.yaml")),
     ("research", include_str!("../templates/research.yaml")),
+    (
+        "author-workflow",
+        include_str!("../templates/author-workflow.yaml"),
+    ),
 ];
 
 fn read_template(name: &str) -> &'static str {
@@ -723,6 +727,76 @@ mod tests {
     }
 
     #[test]
+    fn author_workflow_designs_checks_signs_off_and_saves() {
+        use crate::types::{Step, StepMode};
+        let text = read_template("author-workflow");
+        let wf = parse_workflow(text).unwrap();
+        assert!(wf.description.is_some());
+        let inputs = wf.inputs.as_ref().unwrap();
+        for name in ["goal", "name"] {
+            assert!(inputs.get(name).unwrap().required, "{name}");
+        }
+        assert_eq!(
+            inputs.get("scope").unwrap().default.as_deref(),
+            Some("project")
+        );
+        let ids: Vec<&str> = wf.steps.iter().map(Step::id).collect();
+        assert_eq!(ids, ["human-review", "save"]);
+        let Step::Loop(review) = &wf.steps[0] else {
+            panic!("human-review is not a loop")
+        };
+        assert_eq!(
+            (review.until.as_str(), review.max_iterations),
+            ("sign-off", Some(5))
+        );
+        let Step::Loop(valid) = &review.steps[0] else {
+            panic!("valid is not a loop")
+        };
+        assert_eq!(
+            (valid.until.as_str(), valid.max_iterations),
+            ("check", Some(3))
+        );
+        let Step::Agent(design) = &valid.steps[0] else {
+            panic!("design is not an agent step")
+        };
+        assert_eq!(design.mode, StepMode::Interactive);
+        assert!(!design.writes);
+        assert_eq!(
+            design.inputs.as_deref(),
+            Some(&["attachments".into(), "check".into(), "sign-off".into()][..])
+        );
+        assert!(
+            design
+                .prompt
+                .contains("\"{{ run.whiphand }}\" workflow-reference")
+        );
+        assert!(design.prompt.contains("{{ run.dir }}/workflow.yaml"));
+        let Step::Command(check) = &valid.steps[1] else {
+            panic!("check is not a command")
+        };
+        assert_eq!(check.verdict, Some(true));
+        assert!(check.run.contains("\"{{ run.whiphand }}\" validate"));
+        let Step::Approval(sign_off) = &review.steps[1] else {
+            panic!("sign-off is not an approval")
+        };
+        assert_eq!(sign_off.verdict, Some(true));
+        let Step::Command(save) = &wf.steps[1] else {
+            panic!("save is not a command")
+        };
+        assert!(
+            save.run
+                .contains("new-workflow \"{{ inputs.name }}\" --from")
+        );
+        assert!(save.run.contains("--replace"));
+        // Never eval'd, never pasted unquoted: every input is a quoted variable.
+        assert!(!save.run.contains("eval"));
+        assert_eq!(
+            save.run.matches("{{ inputs.").count(),
+            save.run.matches("\"{{ inputs.").count() + save.run.matches("'{{ inputs.").count()
+        );
+    }
+
+    #[test]
     fn init_writes_the_worktree_templates() {
         let dir = tempfile::tempdir().unwrap();
         let ws = dir.path().to_string_lossy().into_owned();
@@ -762,7 +836,12 @@ mod tests {
         v
     }
 
-    const TEMPLATE_FILES: [&str; 3] = ["develop.yaml", "iterate.yaml", "research.yaml"];
+    const TEMPLATE_FILES: [&str; 4] = [
+        "author-workflow.yaml",
+        "develop.yaml",
+        "iterate.yaml",
+        "research.yaml",
+    ];
 
     #[test]
     fn init_local_storage_global_workflows() {
@@ -772,7 +851,7 @@ mod tests {
             workflows: InitWorkflows::Global,
         };
         let out = init_workspace(&r.ws, &r.home, opts).unwrap();
-        assert_eq!(out.created.len(), 1 + 3);
+        assert_eq!(out.created.len(), 1 + SHIPPED_TEMPLATES.len());
         assert_eq!(
             names_in(&Path::new(&r.ws).join(".whiphand")),
             ["config.yaml"]
@@ -805,11 +884,11 @@ mod tests {
         assert_eq!(names_in(&layout.user_dir.join("workflows")), TEMPLATE_FILES);
         assert!(!r.home.join("workflows").exists());
         let listed = crate::workspace::list_workflows(Path::new(&r.ws), &r.home);
-        assert_eq!(listed.len(), 3);
+        assert_eq!(listed.len(), SHIPPED_TEMPLATES.len());
         assert!(listed.iter().all(|e| e.source == Scope::Workspace));
         // marker and workflows are outside the workspace: reported absolutely
         assert!(out.created.iter().all(|p| Path::new(p).is_absolute()));
-        assert_eq!(out.created.len(), 5);
+        assert_eq!(out.created.len(), 2 + SHIPPED_TEMPLATES.len());
         assert!(
             init_workspace(&r.ws, &r.home, opts)
                 .unwrap()
@@ -835,8 +914,8 @@ mod tests {
             "mine"
         );
         assert_eq!(names_in(&global), TEMPLATE_FILES);
-        // marker + config + the two templates that were missing
-        assert_eq!(out.created.len(), 4);
+        // marker + config + the templates that were missing (all but iterate)
+        assert_eq!(out.created.len(), 2 + SHIPPED_TEMPLATES.len() - 1);
         let layout = resolve_layout(Path::new(&r.ws), &r.home);
         assert_eq!(
             names_in(&layout.user_dir),
@@ -871,7 +950,8 @@ mod tests {
             [
                 ("iterate", "missing"),
                 ("develop", "missing"),
-                ("research", "missing")
+                ("research", "missing"),
+                ("author-workflow", "missing")
             ]
         );
         init_workspace(&r.ws, &r.home, InitOptions::default()).unwrap();
@@ -886,7 +966,8 @@ mod tests {
             [
                 ("iterate", "modified"),
                 ("develop", "missing"),
-                ("research", "stock")
+                ("research", "stock"),
+                ("author-workflow", "stock")
             ]
         );
         let listed = shipped_workflow_status(&r.ws, &r.home, Scope::Project).unwrap();
@@ -912,7 +993,8 @@ mod tests {
             [
                 ("iterate", "kept"),
                 ("develop", "added"),
-                ("research", "kept")
+                ("research", "kept"),
+                ("author-workflow", "kept")
             ]
         );
         assert_eq!(
@@ -984,7 +1066,9 @@ mod tests {
                 .unwrap_err()
                 .to_string();
             assert!(
-                err.contains("the shipped workflows are: iterate, develop, research"),
+                err.contains(
+                    "the shipped workflows are: iterate, develop, research, author-workflow"
+                ),
                 "{err}"
             );
         }

@@ -1,0 +1,113 @@
+# author-workflow — design a workflow with an AI session, check it with
+# `whiphand validate` in a cycle until it passes, get your sign-off, then save it
+# under the name you chose. Reference: `whiphand workflow-reference`
+# To change an existing workflow instead, attach it:
+#   whiphand run author-workflow --attach .whiphand/workflows/<name>.yaml \
+#     --input goal="what to change" --input name=<name>
+# The draft lives in the run folder until 'save'; nothing in the repository changes.
+name: author-workflow
+description: Design or change a workflow with an AI session, validate it, sign it off, and save it.
+inputs:
+  goal:
+    required: true
+    multiline: true
+    prompt: What should the workflow do?
+  name:
+    required: true
+    multiline: false
+    prompt: Workflow name to save as (lowercase, digits, - and _)
+  scope:
+    required: false
+    default: project
+    multiline: false
+    prompt: Where to save it (project, workspace or global)
+steps:
+  # Repeats until 'sign-off' is approved. Requesting changes there hands the
+  # feedback ('sign-off' as a forward reference) back to 'design'.
+  - id: human-review
+    kind: loop
+    until: sign-off
+    max_iterations: 5
+    steps:
+      # Repeats until the draft validates, handing the failing check log back
+      # to 'design' each time.
+      - id: valid
+        kind: loop
+        until: check
+        max_iterations: 3
+        steps:
+          - id: design        # live terminal chat; artifact harvested afterwards
+            runner: claude
+            model: opus
+            mode: interactive
+            writes: false
+            # 'check' and 'sign-off' are later steps of the enclosing loops, so
+            # they mean the previous round's log and feedback; both are skipped
+            # when there is nothing yet to read.
+            inputs: [attachments, check, sign-off]
+            output: design.md
+            prompt: |
+              We are designing a Whiphand workflow named '{{ inputs.name }}'. Its goal:
+              {{ inputs.goal }}
+
+              First run `"{{ run.whiphand }}" workflow-reference` and read all of it: it is the
+              complete format, with worked examples. Follow it, not your memory.
+              If a workflow YAML file is attached, it is the workflow being changed: start from
+              it and keep what the goal does not ask to change.
+              Then work it out with me, one question at a time: the steps and what each does,
+              which runner and model each agent step uses, which loops and verdicts repeat work,
+              where a human gate goes, and which inputs the workflow asks for.
+
+              Keep the draft in exactly one file: {{ run.dir }}/workflow.yaml
+              That file is in the run folder, which is exempt from this step's read-only rule.
+              The file-edit tools are switched off here, so write it with a shell command, for
+              example a quoted heredoc (`cat > "<path>" <<'EOF'` … `EOF`). Its `name:` is
+              `{{ inputs.name }}`. Write nothing anywhere else.
+              Before you end the session, run
+                  "{{ run.whiphand }}" validate "{{ run.dir }}/workflow.yaml"
+              and fix every `error:` it prints, re-running it until it prints `ok:`.
+              If a check log is attached, the previous draft failed validation: fix every
+              problem it lists. If sign-off feedback is attached, the human asked for changes:
+              make every one of them.
+              The artifact you write is a short summary of the design as it now stands, the
+              steps and why they are shaped that way, not the YAML and not a transcript.
+
+          # Validates the draft and prints it, so the log carries both the
+          # verdict and the content the human signs off on.
+          - id: check
+            kind: command
+            verdict: true
+            run: |
+              "{{ run.whiphand }}" validate "$WHIPHAND_RUN_DIR/workflow.yaml"
+              status=$?
+              echo
+              echo "--- $WHIPHAND_RUN_DIR/workflow.yaml ---"
+              cat "$WHIPHAND_RUN_DIR/workflow.yaml" 2>/dev/null || echo "(no draft written)"
+              exit $status
+            output: check.log
+
+      - id: sign-off
+        kind: approval
+        verdict: true
+        inputs: [design, check]
+        title: "Save workflow '{{ inputs.name }}'?"
+        instructions: |
+          The check log holds the validated workflow YAML; the design summary says why it
+          is shaped that way. Approve to save it as '{{ inputs.name }}', or request changes
+          with comments: the design session reopens with them attached.
+        capture: review
+        output: feedback.md
+
+  # Saves the signed-off draft. --replace: the human has just approved this
+  # exact content under this name.
+  - id: save
+    kind: command
+    run: |
+      case "{{ inputs.scope }}" in
+        project) set -- ;;
+        workspace) set -- --workspace ;;
+        global) set -- --global ;;
+        *) echo "scope must be one of project, workspace, global (got '{{ inputs.scope }}')" >&2; exit 2 ;;
+      esac
+      "{{ run.whiphand }}" new-workflow "{{ inputs.name }}" --from "$WHIPHAND_RUN_DIR/workflow.yaml" --replace "$@"
+    output: save.log

@@ -12,6 +12,8 @@
     "build:web": "vite build --config vite.web.config.ts"
   },
   "dependencies": {
+    "@dnd-kit/core": "6.3.1",
+    "@dnd-kit/utilities": "3.2.2",
     "@fluentui/react-components": "^9.74.7",
     "@fluentui/react-icons": "^2.0.339",
     "@tanstack/react-virtual": "^3.14.13",

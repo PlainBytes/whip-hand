@@ -1,9 +1,10 @@
+import type { HTMLAttributes, Ref } from 'react';
 import {
   Button, Dropdown, Field, Input, Option, Textarea, Tooltip,
 } from '@fluentui/react-components';
 import {
   ArrowDown20Regular, ArrowUp20Regular, ChevronDown20Regular, ChevronRight20Regular,
-  Delete20Regular, FolderArrowRight20Regular, Pause20Regular, Play20Regular,
+  Delete20Regular, FolderArrowRight20Regular, Pause20Regular, Play20Regular, ReOrderDotsVertical20Regular,
   TextIndentDecreaseLtr20Regular, TextIndentIncreaseLtr20Regular,
 } from '@fluentui/react-icons';
 import type { LoopStep, StagesStep, Step, StepKind } from '../shared/types.ts';
@@ -15,6 +16,16 @@ import { useStepLayoutStyles } from './step-layout.ts';
 import { nonNegativeOrUndefined, numberOrUndefined } from './number-field.ts';
 import { DangerButton } from '../components/DangerButton.tsx';
 import { DismissibleWarning } from '../components/DismissibleWarning.tsx';
+
+/**
+ * What the drag layer hands a card for its drag handle: the activator ref plus
+ * `@dnd-kit`'s attributes and listeners, spread onto the handle alone — so
+ * only the handle starts a drag and the card's fields and buttons keep
+ * their own pointer and keyboard behaviour.
+ */
+export interface DragHandleProps extends HTMLAttributes<HTMLElement> {
+  ref: Ref<HTMLElement>;
+}
 
 const KIND_OPTIONS: StepKind[] = ['agent', 'command', 'manual', 'approval', 'loop', 'stages'];
 
@@ -66,6 +77,8 @@ export interface StepCardProps {
   fieldErrors?: Record<string, string>;
   /** Names of the workflow's own MCP servers, offered in the step's MCP picker. */
   workflowServers?: string[];
+  /** The drag handle's ref, attributes and listeners; undefined renders no handle. */
+  dragHandle?: DragHandleProps;
 }
 
 /**
@@ -80,7 +93,7 @@ export function StepCard({
   bodyFolded, onToggleBodyFolded, isFirst, isLast, onMove, onMoveOut, moveOutBlocker, onMoveIn, moveInBlocker,
   onInsertBelow, guardedByLoopId,
   onToggleEnabled, onRemove, onUpdate, onRename, onIdError, readerNote, highlight, onReadsClick, onWritesClick,
-  problemCount, fieldErrors, workflowServers,
+  problemCount, fieldErrors, workflowServers, dragHandle,
 }: StepCardProps) {
   const styles = useStepLayoutStyles();
   const isEnabled = step.enabled !== false;
@@ -102,6 +115,24 @@ export function StepCard({
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', flexWrap: 'wrap' }}>
+        {dragHandle && (
+          <span
+            {...dragHandle}
+            ref={dragHandle.ref as Ref<HTMLSpanElement>}
+            data-testid={`drag-handle-${step.id}`}
+            aria-label={`Drag to move ${step.id}`}
+            title={`Drag to move ${step.id}`}
+            style={{
+              display: 'inline-flex', alignItems: 'center', padding: 2, borderRadius: 4,
+              color: 'var(--colorNeutralForeground3)', cursor: 'grab',
+              // Touch drags start from a press-and-hold (TouchSensor's delay);
+              // until then a swipe on the handle still pans the page.
+              touchAction: 'manipulation',
+            }}
+          >
+            <ReOrderDotsVertical20Regular />
+          </span>
+        )}
         <Button
           appearance="subtle"
           size="small"

@@ -1616,6 +1616,30 @@ that a run with many stages fits on screen and looks the same at any window size
   or close latches the following off for that run, and from then on stages neither fold nor
   steal focus as the run moves on. Reopening a run starts following again.
 
+**Moving steps in the workflow editor.** The editor shows the step tree as one flat,
+indented list, and a step moves three ways. Move up / Move down swap it with a neighbour in
+its own list. Move out of container puts it right after its loop or `stages` step. Move into
+container above makes it the last body step of the container just above it. The third way
+is to drag the handle at the start of the card's header. The drag uses `@dnd-kit`'s pointer
+events rather than native HTML5 drag-and-drop: the Tauri window keeps `dragDropEnabled` on
+for attachment file drops, which blocks HTML5 drag events in WebView2. The row under the
+pointer picks the gap, and the sideways distance, in indent widths, picks the depth: drag
+right to go into the body of the container above, left to leave a body. A line marks the
+drop at its projected depth. Touch drags start from a press-and-hold, so a plain swipe
+still scrolls. From the keyboard: Space or Enter picks the step up, Up/Down move between
+gaps, Left/Right change depth, Space or Enter drops, and Escape cancels. A dragged
+container takes its whole body with it. Buttons and drag share one set of rules, and a
+refused move leaves the draft untouched. The disabled button's tooltip, or the dashed red
+drop line, gives the reason:
+
+- a `stages` step cannot nest: it cannot go into a loop or into another `stages` body;
+- a container cannot go into itself or any of its own descendants;
+- a loop's `until:` step cannot leave that loop's direct body.
+
+Reference order is not checked when a step moves. A move that leaves an `inputs:` entry
+pointing at a later step is still reported at Save by the agent's validator, like any
+other broken reference.
+
 ## Out of scope
 
 DAG or parallel steps, `codex`/`gemini` adapters, per-step git worktree isolation, merging a run's branch back, and

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { WorkflowEditor } from './WorkflowEditor.tsx';
 import { convertStep } from './StepRail.tsx';
@@ -1295,5 +1295,171 @@ describe('WorkflowEditor: moving a step into and out of a container', () => {
     // And a collapsed card stays collapsed.
     fireEvent.click(within(screen.getByTestId('step-card-stage')).getByLabelText('Move into container above'));
     expect(screen.getByTestId('step-collapse-stage')).toHaveAccessibleName('Expand stage');
+  });
+});
+
+describe('WorkflowEditor: drag and drop', () => {
+  // The keyboard sensor scrolls the picked-up row into view; jsdom has no layout and no scrollIntoView.
+  const hadScrollIntoView = 'scrollIntoView' in Element.prototype;
+  beforeAll(() => {
+    if (!hadScrollIntoView) Element.prototype.scrollIntoView = () => {};
+  });
+  afterAll(() => {
+    if (!hadScrollIntoView) delete (Element.prototype as Partial<Element>).scrollIntoView;
+  });
+
+  /** a, then loop `fix` (until `check`, then `note`), then d. */
+  const LOOP_WORKFLOW: Workflow = {
+    name: 'drag',
+    steps: [
+      { id: 'a', kind: 'command', run: 'echo a', output: 'a.log' },
+      {
+        id: 'fix', kind: 'loop', until: 'check',
+        steps: [
+          { id: 'check', kind: 'agent', runner: 'claude', mode: 'headless', writes: false, verdict: true, prompt: 'ok?', output: 'check.md' },
+          { id: 'note', kind: 'command', run: 'echo note', output: 'note.log' },
+        ],
+      },
+      { id: 'd', kind: 'command', run: 'echo d', output: 'd.log' },
+    ],
+  };
+
+  function cardIds(): string[] {
+    return screen.getAllByTestId(/^step-card-/).map(c => c.dataset.testid!.replace(/^step-card-/, ''));
+  }
+  function indentOf(id: string): string {
+    return screen.getByTestId(`step-card-${id}`).parentElement!.style.marginLeft;
+  }
+  /** The keyboard sensor starts listening for keys one tick after the pick-up. */
+  async function tick(): Promise<void> {
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  }
+  async function pickUp(id: string): Promise<HTMLElement> {
+    const handle = screen.getByLabelText(`Drag to move ${id}`);
+    handle.focus();
+    fireEvent.keyDown(handle, { code: 'Space', key: ' ' });
+    await tick();
+    return handle;
+  }
+  async function key(code: string): Promise<void> {
+    fireEvent.keyDown(document.activeElement ?? document.body, { code, key: code === 'Space' ? ' ' : code });
+    await tick();
+  }
+  async function savedSteps(transport: MockTransport): Promise<Step[]> {
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    const req = await lastRequest(transport, 'updateWorkflow');
+    return (req.params as { workflow: Workflow }).workflow.steps;
+  }
+
+  it('every card has a drag handle labelled with its id', () => {
+    renderEditor(NESTED_WORKFLOW);
+    for (const id of cardIds()) {
+      expect(within(screen.getByTestId(`step-card-${id}`)).getByLabelText(`Drag to move ${id}`)).toBeInTheDocument();
+    }
+  });
+
+  it('pressing a header button or typing in a field does not start a drag', () => {
+    renderEditor(LOOP_WORKFLOW);
+    fireEvent.click(screen.getByTestId('step-collapse-check'));
+    const prompt = within(screen.getByTestId('step-card-check')).getByLabelText(/^Prompt/);
+    fireEvent.keyDown(prompt, { code: 'Space', key: ' ' });
+    fireEvent.change(prompt, { target: { value: 'still ok?' } });
+    expect(prompt).toHaveValue('still ok?');
+    expect(screen.queryByTestId('drag-overlay')).not.toBeInTheDocument();
+    // The header's buttons still click: Move up moves d above the loop.
+    fireEvent.click(within(screen.getByTestId('step-card-d')).getByLabelText('Move up'));
+    expect(cardIds()).toEqual(['a', 'd', 'fix', 'check', 'note']);
+    expect(screen.queryByTestId('drag-overlay')).not.toBeInTheDocument();
+  });
+
+  it('keyboard: Space, ArrowDown past a loop header, ArrowRight, Space makes a top-level step the loop\'s first body step', async () => {
+    const { transport } = renderEditor(LOOP_WORKFLOW);
+    await pickUp('a');
+    expect(screen.getByTestId('drag-overlay')).toHaveTextContent('a');
+    await key('ArrowDown');
+    await key('ArrowRight');
+    const line = screen.getByTestId('drop-indicator');
+    expect(line).toHaveAttribute('data-blocked', 'false');
+    await key('Space');
+    expect(screen.queryByTestId('drag-overlay')).not.toBeInTheDocument();
+    expect(cardIds()).toEqual(['fix', 'a', 'check', 'note', 'd']);
+    expect(indentOf('a')).toBe(indentOf('check'));
+    expect((await savedSteps(transport))[0]).toMatchObject({ id: 'fix', steps: [{ id: 'a' }, { id: 'check' }, { id: 'note' }] });
+  });
+
+  it('keyboard: a loop body step, Space, ArrowLeft, Space becomes a top-level step right after the loop', async () => {
+    const { transport } = renderEditor(LOOP_WORKFLOW);
+    await pickUp('note');
+    await key('ArrowLeft');
+    await key('Space');
+    expect(cardIds()).toEqual(['a', 'fix', 'check', 'note', 'd']);
+    expect(indentOf('note')).toBe(indentOf('fix'));
+    const steps = await savedSteps(transport);
+    expect(steps.map(s => s.id)).toEqual(['a', 'fix', 'note', 'd']);
+    expect(steps[1]).toMatchObject({ steps: [{ id: 'check' }] });
+  });
+
+  it('keyboard: a loop\'s until: step dragged out shows a blocked drop line with the reason, and the drop changes nothing', async () => {
+    const { transport } = renderEditor(NESTED_WORKFLOW);
+    await pickUp('sign-off');
+    await key('ArrowLeft');
+    const line = screen.getByTestId('drop-indicator');
+    expect(line).toHaveAttribute('data-blocked', 'true');
+    expect(line).toHaveTextContent("Cannot drop here: 'sign-off' ends loop 'human-review' — it cannot leave it");
+    await key('Space');
+    expect(screen.queryByTestId('drop-indicator')).not.toBeInTheDocument();
+    expect(await savedSteps(transport)).toEqual(NESTED_WORKFLOW.steps);
+  });
+
+  it('an allowed drop line is not marked blocked and carries no reason', async () => {
+    renderEditor(LOOP_WORKFLOW);
+    await pickUp('d');
+    await key('ArrowUp');
+    const line = screen.getByTestId('drop-indicator');
+    expect(line).toHaveAttribute('data-blocked', 'false');
+    expect(line).not.toHaveTextContent(/cannot drop/i);
+  });
+
+  it('Escape during a keyboard drag leaves the draft unchanged', async () => {
+    const { transport } = renderEditor(LOOP_WORKFLOW);
+    await pickUp('a');
+    await key('ArrowDown');
+    await key('ArrowRight');
+    await key('Escape');
+    expect(screen.queryByTestId('drag-overlay')).not.toBeInTheDocument();
+    expect(cardIds()).toEqual(['a', 'fix', 'check', 'note', 'd']);
+    expect(await savedSteps(transport)).toEqual(LOOP_WORKFLOW.steps);
+  });
+
+  it('a dragged container\'s body rows are hidden during the drag and come back, moved with it, after the drop', async () => {
+    const { transport } = renderEditor(LOOP_WORKFLOW);
+    await pickUp('fix');
+    expect(cardIds()).toEqual(['a', 'fix', 'd']);
+    await key('ArrowDown');
+    await key('Space');
+    expect(cardIds()).toEqual(['a', 'd', 'fix', 'check', 'note']);
+    expect(indentOf('check')).not.toBe(indentOf('fix'));
+    const steps = await savedSteps(transport);
+    expect(steps.map(s => s.id)).toEqual(['a', 'd', 'fix']);
+    expect(steps[2]).toMatchObject({ steps: [{ id: 'check' }, { id: 'note' }] });
+  });
+
+  it('announces the pick-up and the drop for screen readers', async () => {
+    renderEditor(LOOP_WORKFLOW);
+    await pickUp('a');
+    await waitFor(() => expect(document.body).toHaveTextContent("Picked up step 'a'."));
+    await key('ArrowDown');
+    await key('Space');
+    await waitFor(() => expect(document.body).toHaveTextContent("Dropped 'a' into loop 'fix', position 1."));
+  });
+
+  it('announces a refused drop with its reason', async () => {
+    renderEditor(NESTED_WORKFLOW);
+    await pickUp('sign-off');
+    await key('ArrowLeft');
+    await key('Space');
+    await waitFor(() => expect(document.body).toHaveTextContent(
+      "'sign-off' was not moved: 'sign-off' ends loop 'human-review' — it cannot leave it",
+    ));
   });
 });

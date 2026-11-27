@@ -2125,7 +2125,7 @@ fn author_workflow_dry_run_points_the_session_at_the_cli_and_the_draft() {
         .unwrap();
     assert!(Path::new(draft).is_absolute(), "{draft}");
     assert!(draft.contains(&run_id), "{draft}");
-    assert!(draft.ends_with("workflow.yaml"), "{draft}");
+    assert!(draft.ends_with("draft.yaml"), "{draft}");
     // The commands reach the CLI and the inputs through variables only.
     for id in ["check", "save"] {
         let argv = spawn(id)["argv"].to_string();
@@ -2145,7 +2145,7 @@ fn author_save_only(e: &Env, draft: &str) -> String {
     let save = STOCK_AUTHOR.find("\n  - id: save\n").unwrap();
     let text = format!(
         "{}\nsteps:\n  - id: draft\n    kind: command\n    env:\n      DRAFT: {draft:?}\n    \
-         run: printf '%s' \"$DRAFT\" > \"$WHIPHAND_RUN_DIR/workflow.yaml\"\n{}",
+         run: printf '%s' \"$DRAFT\" > \"$WHIPHAND_RUN_DIR/draft.yaml\"\n{}",
         &STOCK_AUTHOR[..steps],
         &STOCK_AUTHOR[save..],
     );
@@ -2193,6 +2193,17 @@ fn author_workflow_save_writes_the_draft_under_the_name_in_the_scope() {
     );
     let log = std::fs::read_to_string(e.only_run().join("save.log")).unwrap();
     assert!(log.contains("demo.yaml"), "{log}");
+    // The draft has its own file: the run's workflow snapshot, which resume
+    // reads, still holds the save-only workflow that ran.
+    let snapshot = std::fs::read_to_string(e.only_run().join("workflow.yaml")).unwrap();
+    // (The draft text also appears there, indented, as the stand-in step's env.)
+    assert_ne!(snapshot, DRAFT);
+    assert!(
+        snapshot.lines().any(|l| l == "name: author-workflow"),
+        "{snapshot}"
+    );
+    assert!(!snapshot.lines().any(|l| l == "name: draft"), "{snapshot}");
+    assert!(snapshot.contains("  - id: save\n"), "{snapshot}");
 
     let e = Env::new();
     let wf = author_save_only(&e, DRAFT);

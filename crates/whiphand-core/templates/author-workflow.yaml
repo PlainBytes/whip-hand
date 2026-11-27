@@ -58,13 +58,13 @@ steps:
               which runner and model each agent step uses, which loops and verdicts repeat work,
               where a human gate goes, and which inputs the workflow asks for.
 
-              Keep the draft in exactly one file: {{ run.dir }}/workflow.yaml
+              Keep the draft in exactly one file: {{ run.dir }}/draft.yaml
               That file is in the run folder, which is exempt from this step's read-only rule.
               The file-edit tools are switched off here, so write it with a shell command, for
               example a quoted heredoc (`cat > "<path>" <<'EOF'` … `EOF`). Its `name:` is
               `{{ inputs.name }}`. Write nothing anywhere else.
               Before you end the session, run
-                  "{{ run.whiphand }}" validate "{{ run.dir }}/workflow.yaml"
+                  "{{ run.whiphand }}" validate "{{ run.dir }}/draft.yaml"
               and fix every `error:` it prints, re-running it until it prints `ok:`.
               If a check log is attached, the previous draft failed validation: fix every
               problem it lists. If sign-off feedback is attached, the human asked for changes:
@@ -78,11 +78,11 @@ steps:
             kind: command
             verdict: true
             run: |
-              "{{ run.whiphand }}" validate "$WHIPHAND_RUN_DIR/workflow.yaml"
+              "{{ run.whiphand }}" validate "$WHIPHAND_RUN_DIR/draft.yaml"
               status=$?
               echo
-              echo "--- $WHIPHAND_RUN_DIR/workflow.yaml ---"
-              cat "$WHIPHAND_RUN_DIR/workflow.yaml" 2>/dev/null || echo "(no draft written)"
+              echo "--- $WHIPHAND_RUN_DIR/draft.yaml ---"
+              cat "$WHIPHAND_RUN_DIR/draft.yaml" 2>/dev/null || echo "(no draft written)"
               exit $status
             output: check.log
 
@@ -109,5 +109,5 @@ steps:
         global) set -- --global ;;
         *) echo "scope must be one of project, workspace, global (got '{{ inputs.scope }}')" >&2; exit 2 ;;
       esac
-      "{{ run.whiphand }}" new-workflow "{{ inputs.name }}" --from "$WHIPHAND_RUN_DIR/workflow.yaml" --replace "$@"
+      "{{ run.whiphand }}" new-workflow "{{ inputs.name }}" --from "$WHIPHAND_RUN_DIR/draft.yaml" --replace "$@"
     output: save.log

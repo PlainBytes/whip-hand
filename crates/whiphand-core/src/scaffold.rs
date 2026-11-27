@@ -671,6 +671,23 @@ mod tests {
     }
 
     #[test]
+    fn no_shipped_template_writes_over_the_run_snapshot() {
+        use crate::store::markers::WORKFLOW_SNAPSHOT_NAME;
+        let forbidden = [
+            format!("{{{{ run.dir }}}}/{WORKFLOW_SNAPSHOT_NAME}"),
+            format!("$WHIPHAND_RUN_DIR/{WORKFLOW_SNAPSHOT_NAME}"),
+        ];
+        for (name, text) in SHIPPED_TEMPLATES {
+            for path in &forbidden {
+                assert!(
+                    !text.contains(path.as_str()),
+                    "{name} refers to {path}, the run's workflow snapshot"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn develop_runs_in_a_worktree() {
         use crate::types::WorktreeSetting;
         let text = read_template("develop");
@@ -770,7 +787,7 @@ mod tests {
                 .prompt
                 .contains("\"{{ run.whiphand }}\" workflow-reference")
         );
-        assert!(design.prompt.contains("{{ run.dir }}/workflow.yaml"));
+        assert!(design.prompt.contains("{{ run.dir }}/draft.yaml"));
         let Step::Command(check) = &valid.steps[1] else {
             panic!("check is not a command")
         };

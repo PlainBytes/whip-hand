@@ -330,14 +330,14 @@
                           "model": "opus",
                           "mode": "interactive",
                           "writes": false,
-                          "prompt": "We are designing a Whiphand workflow named '{{ inputs.name }}'. Its goal:\n{{ inputs.goal }}\n\nFirst run `\"{{ run.whiphand }}\" workflow-reference` and read all of it: it is the\ncomplete format, with worked examples. Follow it, not your memory.\nIf a workflow YAML file is attached, it is the workflow being changed: start from\nit and keep what the goal does not ask to change.\nThen work it out with me, one question at a time: the steps and what each does,\nwhich runner and model each agent step uses, which loops and verdicts repeat work,\nwhere a human gate goes, and which inputs the workflow asks for.\n\nKeep the draft in exactly one file: {{ run.dir }}/workflow.yaml\nThat file is in the run folder, which is exempt from this step's read-only rule.\nThe file-edit tools are switched off here, so write it with a shell command, for\nexample a quoted heredoc (`cat > \"<path>\" <<'EOF'` … `EOF`). Its `name:` is\n`{{ inputs.name }}`. Write nothing anywhere else.\nBefore you end the session, run\n    \"{{ run.whiphand }}\" validate \"{{ run.dir }}/workflow.yaml\"\nand fix every `error:` it prints, re-running it until it prints `ok:`.\nIf a check log is attached, the previous draft failed validation: fix every\nproblem it lists. If sign-off feedback is attached, the human asked for changes:\nmake every one of them.\nThe artifact you write is a short summary of the design as it now stands, the\nsteps and why they are shaped that way, not the YAML and not a transcript.\n",
+                          "prompt": "We are designing a Whiphand workflow named '{{ inputs.name }}'. Its goal:\n{{ inputs.goal }}\n\nFirst run `\"{{ run.whiphand }}\" workflow-reference` and read all of it: it is the\ncomplete format, with worked examples. Follow it, not your memory.\nIf a workflow YAML file is attached, it is the workflow being changed: start from\nit and keep what the goal does not ask to change.\nThen work it out with me, one question at a time: the steps and what each does,\nwhich runner and model each agent step uses, which loops and verdicts repeat work,\nwhere a human gate goes, and which inputs the workflow asks for.\n\nKeep the draft in exactly one file: {{ run.dir }}/draft.yaml\nThat file is in the run folder, which is exempt from this step's read-only rule.\nThe file-edit tools are switched off here, so write it with a shell command, for\nexample a quoted heredoc (`cat > \"<path>\" <<'EOF'` … `EOF`). Its `name:` is\n`{{ inputs.name }}`. Write nothing anywhere else.\nBefore you end the session, run\n    \"{{ run.whiphand }}\" validate \"{{ run.dir }}/draft.yaml\"\nand fix every `error:` it prints, re-running it until it prints `ok:`.\nIf a check log is attached, the previous draft failed validation: fix every\nproblem it lists. If sign-off feedback is attached, the human asked for changes:\nmake every one of them.\nThe artifact you write is a short summary of the design as it now stands, the\nsteps and why they are shaped that way, not the YAML and not a transcript.\n",
                           "output": "design.md"
                         },
                         {
                           "id": "check",
                           "verdict": true,
                           "kind": "command",
-                          "run": "\"{{ run.whiphand }}\" validate \"$WHIPHAND_RUN_DIR/workflow.yaml\"\nstatus=$?\necho\necho \"--- $WHIPHAND_RUN_DIR/workflow.yaml ---\"\ncat \"$WHIPHAND_RUN_DIR/workflow.yaml\" 2>/dev/null || echo \"(no draft written)\"\nexit $status\n",
+                          "run": "\"{{ run.whiphand }}\" validate \"$WHIPHAND_RUN_DIR/draft.yaml\"\nstatus=$?\necho\necho \"--- $WHIPHAND_RUN_DIR/draft.yaml ---\"\ncat \"$WHIPHAND_RUN_DIR/draft.yaml\" 2>/dev/null || echo \"(no draft written)\"\nexit $status\n",
                           "output": "check.log"
                         }
                       ],
@@ -364,7 +364,7 @@
                 {
                   "id": "save",
                   "kind": "command",
-                  "run": "case \"{{ inputs.scope }}\" in\n  project) set -- ;;\n  workspace) set -- --workspace ;;\n  global) set -- --global ;;\n  *) echo \"scope must be one of project, workspace, global (got '{{ inputs.scope }}')\" >&2; exit 2 ;;\nesac\n\"{{ run.whiphand }}\" new-workflow \"{{ inputs.name }}\" --from \"$WHIPHAND_RUN_DIR/workflow.yaml\" --replace \"$@\"\n",
+                  "run": "case \"{{ inputs.scope }}\" in\n  project) set -- ;;\n  workspace) set -- --workspace ;;\n  global) set -- --global ;;\n  *) echo \"scope must be one of project, workspace, global (got '{{ inputs.scope }}')\" >&2; exit 2 ;;\nesac\n\"{{ run.whiphand }}\" new-workflow \"{{ inputs.name }}\" --from \"$WHIPHAND_RUN_DIR/draft.yaml\" --replace \"$@\"\n",
                   "output": "save.log"
                 }
               ]

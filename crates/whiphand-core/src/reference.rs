@@ -77,6 +77,25 @@ mod tests {
         );
     }
 
+    /// The reference warns authors off the run folder's bookkeeping names, and
+    /// names them as the store spells them.
+    #[test]
+    fn reference_names_reserved_run_folder_files() {
+        use crate::store::markers::{RUN_LOG_NAME, WORKFLOW_SNAPSHOT_NAME};
+        let text = workflow_reference();
+        for name in [
+            WORKFLOW_SNAPSHOT_NAME,
+            RUN_LOG_NAME,
+            "run.json",
+            "events.ndjson",
+        ] {
+            assert!(
+                text.contains(&format!("`{name}`")),
+                "the reference never names the reserved run-folder file `{name}`"
+            );
+        }
+    }
+
     /// Every key `schema/shape.rs` accepts, and every enum value. Adding a
     /// field to the schema means documenting it here and in the reference.
     #[test]

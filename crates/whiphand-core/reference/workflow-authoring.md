@@ -244,6 +244,11 @@ earlier `writes: true` step, `interactive` opens a live session. Prefer an expli
 | `{{ loop.iteration }}`, `{{ loop.max_iterations }}` | 1-based iteration, budget of the nearest loop | inside a loop |
 | `{{ stage.index }}`, `{{ stage.total }}`, `{{ stage.id }}`, `{{ stage.title }}` | Current stage | inside a stages step |
 
+The top of the run folder holds Whiphand's own files: `workflow.yaml` (the run's copy of
+its workflow, which resume executes), `run.json`, `events.ndjson` and `run.log`. Steps must
+not write those names there; overwriting one corrupts the run or changes what a resumed run
+does. Give drafts and scratch files another name or a subfolder (`draft.yaml`, `plans/`).
+
 Templated fields: agent `prompt`, `allow_paths`; command `run` (as shell variables), `cwd`,
 `env` values; manual/approval `title`, `instructions`; stages `items`; `worktree.base`,
 `worktree.branch`. An unknown `run.*`, `loop.*` or `stage.*` field is refused. Other `{{ }}`
